@@ -1,0 +1,9 @@
+node_modules/
+web/dist/
+dist/
+coverage/
+*.log
+.env
+.env.*
+data/*.json
+!.gitkeep
