@@ -4,23 +4,34 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import {
   applySessionCookie,
+  archiveAgent,
   completeOnboardingStep,
+  createAgent,
+  createProvider,
   getActivationDetail,
+  getAgent,
   getOnboarding,
   getPrivateBootstrap,
   getPublicActivationSummary,
   getWorkspaceActivityDetail,
   getSessionPayload,
   listPublicActivationSummaries,
+  listAgentRuns,
+  listAgents,
+  listProviders,
   listWorkspaceActivities,
   login,
   logout,
   register,
   requireAuthenticatedContext,
   restoreSession,
+  runAgent,
+  updateAgent,
+  updateProvider,
   updateProfile,
   updateWorkspace,
 } from "./taskloom-services.js";
+import { workflowRoutes } from "./workflow-routes.js";
 
 const app = new Hono();
 
@@ -165,6 +176,88 @@ app.get("/api/app/activity/:id", (c) => {
   }
 });
 
+app.get("/api/app/agents", (c) => {
+  try {
+    return c.json(listAgents(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agents", async (c) => {
+  try {
+    return c.json(createAgent(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/agents/:agentId", (c) => {
+  try {
+    return c.json(getAgent(requireAuthenticatedContext(c), c.req.param("agentId")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.patch("/api/app/agents/:agentId", async (c) => {
+  try {
+    return c.json(updateAgent(requireAuthenticatedContext(c), c.req.param("agentId"), await readJsonBody(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.delete("/api/app/agents/:agentId", (c) => {
+  try {
+    return c.json(archiveAgent(requireAuthenticatedContext(c), c.req.param("agentId")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agents/:agentId/runs", (c) => {
+  try {
+    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId")), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/providers", (c) => {
+  try {
+    return c.json(listProviders(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/providers", async (c) => {
+  try {
+    return c.json(createProvider(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.patch("/api/app/providers/:providerId", async (c) => {
+  try {
+    return c.json(updateProvider(requireAuthenticatedContext(c), c.req.param("providerId"), await readJsonBody(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/agent-runs", (c) => {
+  try {
+    return c.json(listAgentRuns(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.route("/api/app/workflow", workflowRoutes);
+
 if (existsSync("./web/dist/index.html")) {
   app.use("/*", serveStatic({ root: "./web/dist" }));
   app.get("*", serveStatic({ path: "./web/dist/index.html" }));
@@ -178,4 +271,15 @@ serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);
   return c.json({ error: (error as Error).message });
+}
+
+async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.includes("application/json")) return {};
+  try {
+    const body = await c.req.json();
+    return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  } catch {
+    throw Object.assign(new Error("request body must be valid JSON"), { status: 400 });
+  }
 }

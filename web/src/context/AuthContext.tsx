@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = async () => {
     await api.signOut();
     setSessionState(null);
-    navigate("/sign-in", { replace: true });
+    navigate("/", { replace: true });
   };
 
   useEffect(() => {

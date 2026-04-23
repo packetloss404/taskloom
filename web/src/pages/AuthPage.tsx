@@ -1,7 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { KeyRound, Sparkles } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { brand } from "@/config/brand";
+
+const showSeedAccounts = import.meta.env.DEV && import.meta.env.VITE_SHOW_SEED_ACCOUNTS === "true";
 
 export default function AuthPage({ mode }: { mode: "sign-in" | "sign-up" }) {
   const navigate = useNavigate();
@@ -33,92 +35,89 @@ export default function AuthPage({ mode }: { mode: "sign-in" | "sign-up" }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-6 py-10 text-ink-100">
-      <div className="grid w-full max-w-5xl gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-        <section className="rounded-[28px] border border-ink-800/80 bg-ink-900/50 p-8 shadow-card backdrop-blur-sm lg:p-10">
-          <div className="inline-flex items-center gap-2 rounded-full border border-accent-400/30 bg-accent-500/10 px-3 py-1 text-xs font-medium text-accent-400">
-            <Sparkles className="h-3.5 w-3.5" /> Workspace access
-          </div>
-          <h1 className="mt-5 text-3xl font-semibold tracking-tight text-ink-100">Use the real Taskloom workspace shell.</h1>
-          <p className="mt-3 max-w-xl text-sm leading-6 text-ink-300">
-            Sign in to manage the current workspace, continue onboarding, review activation progress, and update settings without falling back to the public demo surface.
-          </p>
-          <div className="mt-8 grid gap-4 sm:grid-cols-3">
-            <Feature title="Workspace auth" body="Cookie sessions, file-backed users, and private workspace bootstrap." />
-            <Feature title="Activation tracking" body="The imported engine now drives onboarding, progress, and risk views." />
-            <Feature title="Activity feed" body="Workspace actions and activation transitions are visible inside the app." />
-          </div>
-        </section>
+    <div className="flex min-h-screen items-center justify-center bg-[#32342f] px-5 py-10 text-zinc-100">
+      <section className="w-full max-w-md rounded-2xl border border-black/30 bg-[#3b3d38] p-7 shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_18px_50px_rgba(0,0,0,0.18)]">
+        <Link to="/" className="inline-flex items-center">
+          <img src={brand.logoPath} alt={brand.name} className="h-8 w-auto" />
+        </Link>
+        <h1 className="mt-6 text-3xl font-semibold tracking-tight text-zinc-100">
+          {mode === "sign-up" ? "Create account" : "Log in"}
+        </h1>
+        <p className="mt-2 text-sm text-zinc-400">
+          {mode === "sign-up" ? "Create an account to use your own agents." : "Sign in to use your agents."}
+        </p>
 
-        <section className="card p-8">
-          <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-500/15 text-accent-400">
-            <KeyRound className="h-5 w-5" />
-          </div>
-          <h2 className="mt-5 text-2xl font-semibold tracking-tight text-ink-100">
-            {mode === "sign-up" ? "Create your account" : "Welcome back"}
-          </h2>
-          <p className="mt-2 text-sm text-ink-400">
-            Demo accounts are seeded too: `alpha@taskloom.local`, `beta@taskloom.local`, `gamma@taskloom.local` with password `demo12345`.
-          </p>
-
-          <form className="mt-8 space-y-4" onSubmit={submit}>
-            {mode === "sign-up" && (
-              <Field label="Display name">
-                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="field-input" placeholder="New Owner" required />
-              </Field>
-            )}
-
-            <Field label="Email">
-              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="field-input" placeholder="alpha@taskloom.local" required />
+        <form className="mt-8 space-y-4" onSubmit={submit}>
+          {mode === "sign-up" && (
+            <Field label="Display name">
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="field-input" placeholder="New Owner" required />
             </Field>
+          )}
 
-            <Field label="Password">
-              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="field-input" placeholder="demo12345" required />
-            </Field>
+          <Field label="Email">
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="field-input" placeholder="you@example.com" autoComplete="email" required />
+          </Field>
 
-            {error && <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
+          <Field label="Password">
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="field-input"
+              placeholder="Password"
+              autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
+              required
+            />
+          </Field>
 
-            <button type="submit" className="btn-primary w-full justify-center" disabled={submitting}>
-              {submitting ? (mode === "sign-up" ? "Creating account…" : "Signing in…") : mode === "sign-up" ? "Create account" : "Sign in"}
-            </button>
-          </form>
+          {error && <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
 
-          <p className="mt-5 text-sm text-ink-400">
-            {mode === "sign-up" ? "Already have an account?" : "Need an account?"}{" "}
-            <Link to={mode === "sign-up" ? "/sign-in" : "/sign-up"} className="font-medium text-accent-400 hover:text-accent-300">
-              {mode === "sign-up" ? "Sign in" : "Create one"}
-            </Link>
-          </p>
-        </section>
-      </div>
+          <button
+            type="submit"
+            className="w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-[#32342f] transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            disabled={submitting}
+          >
+            {submitting ? (mode === "sign-up" ? "Creating account..." : "Logging in...") : mode === "sign-up" ? "Create account" : "Log in"}
+          </button>
+        </form>
+
+        <p className="mt-5 text-center text-sm text-zinc-400">
+          {mode === "sign-up" ? "Already have an account?" : "Need an account?"}{" "}
+          <Link to={mode === "sign-up" ? "/sign-in" : "/sign-up"} className="font-medium text-zinc-100 hover:text-white">
+            {mode === "sign-up" ? "Log in" : "Create one"}
+          </Link>
+        </p>
+
+        {showSeedAccounts && (
+          <details className="mt-5 rounded-xl border border-black/25 bg-black/10 px-4 py-3 text-xs text-zinc-400">
+            <summary className="cursor-pointer select-none font-medium text-zinc-300">Development accounts</summary>
+            <p className="mt-2 leading-5">
+              Local seed accounts are available for contributors: <code>alpha@taskloom.local</code>,{" "}
+              <code>beta@taskloom.local</code>, or <code>gamma@taskloom.local</code> with password{" "}
+              <code>demo12345</code>.
+            </p>
+          </details>
+        )}
+      </section>
 
       <style>{`
         .field-input {
           width: 100%;
-          background: rgb(11 11 18 / 0.6);
-          border: 1px solid rgb(38 40 56);
+          background: rgb(0 0 0 / 0.14);
+          border: 1px solid rgb(0 0 0 / 0.26);
           border-radius: 12px;
           padding: 10px 12px;
           font-size: 14px;
-          color: rgb(230 231 240);
+          color: rgb(244 244 245);
           outline: none;
           transition: border-color 150ms, box-shadow 150ms;
         }
-        .field-input::placeholder { color: rgb(107 110 133); }
+        .field-input::placeholder { color: rgb(161 161 170); }
         .field-input:focus {
-          border-color: rgb(167 139 250 / 0.5);
-          box-shadow: 0 0 0 3px rgb(167 139 250 / 0.15);
+          border-color: rgb(244 244 245 / 0.42);
+          box-shadow: 0 0 0 3px rgb(244 244 245 / 0.12);
         }
       `}</style>
-    </div>
-  );
-}
-
-function Feature({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
-      <div className="text-sm font-medium text-ink-100">{title}</div>
-      <p className="mt-2 text-sm leading-6 text-ink-400">{body}</p>
     </div>
   );
 }
@@ -126,7 +125,7 @@ function Feature({ title, body }: { title: string; body: string }) {
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <div className="mb-1.5 text-sm font-medium text-ink-200">{label}</div>
+      <div className="mb-1.5 text-sm font-medium text-zinc-200">{label}</div>
       {children}
     </label>
   );
