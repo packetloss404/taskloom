@@ -6,12 +6,24 @@ import { deriveActivationStatus } from "./activation/service";
 import { buildActivationSummaryCard } from "./activation/view-model";
 import {
   defaultWorkspaceIdForUser,
+  findAgent,
+  findProvider,
+  listAgentRunsForAgent,
+  listAgentRunsForWorkspace,
+  listAgentsForWorkspace,
+  listProvidersForWorkspace,
   loadStore,
   mutateStore,
   nextIncompleteStep,
   type ActivityRecord,
+  type AgentRecord,
+  type AgentStatus,
+  type ProviderKind,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
+  upsertAgent,
+  upsertAgentRun,
+  upsertProvider,
 } from "./taskloom-store";
 import {
   buildSessionCookieValue,
@@ -351,6 +363,305 @@ export function getWorkspaceActivityDetail(context: AuthenticatedContext, activi
     previous: index > 0 ? activities[index - 1] : null,
     next: index < activities.length - 1 ? activities[index + 1] : null,
   };
+}
+
+export function listAgents(context: AuthenticatedContext) {
+  const data = loadStore();
+  return {
+    agents: listAgentsForWorkspace(data, context.workspace.id).map((agent) => decorateAgent(data, agent)),
+  };
+}
+
+export function getAgent(context: AuthenticatedContext, agentId: string) {
+  const data = loadStore();
+  const agent = findAgent(data, agentId);
+  if (!agent || agent.workspaceId !== context.workspace.id || agent.status === "archived") {
+    throw httpError(404, "agent not found");
+  }
+
+  return {
+    agent: decorateAgent(data, agent),
+    runs: listAgentRunsForAgent(data, context.workspace.id, agent.id).slice(0, 20),
+  };
+}
+
+export function createAgent(context: AuthenticatedContext, input: AgentInput) {
+  const normalized = normalizeAgentInput(input);
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    validateProvider(data, context.workspace.id, normalized.providerId);
+
+    const agent = upsertAgent(data, {
+      workspaceId: context.workspace.id,
+      name: normalized.name,
+      description: normalized.description,
+      instructions: normalized.instructions,
+      providerId: normalized.providerId,
+      model: normalized.model,
+      tools: normalized.tools,
+      schedule: normalized.schedule,
+      status: normalized.status,
+      createdByUserId: context.user.id,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Agent created: ${agent.name}`, agentId: agent.id }, timestamp));
+
+    return { agent: decorateAgent(data, agent) };
+  });
+}
+
+export function updateAgent(context: AuthenticatedContext, agentId: string, input: Partial<AgentInput>) {
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const existing = findAgent(data, agentId);
+    if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
+      throw httpError(404, "agent not found");
+    }
+
+    const normalized = normalizeAgentInput({ ...existing, ...input });
+    validateProvider(data, context.workspace.id, normalized.providerId);
+
+    const agent = upsertAgent(data, {
+      ...existing,
+      name: normalized.name,
+      description: normalized.description,
+      instructions: normalized.instructions,
+      providerId: normalized.providerId,
+      model: normalized.model,
+      tools: normalized.tools,
+      schedule: normalized.schedule,
+      status: normalized.status,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Agent updated: ${agent.name}`, agentId: agent.id }, timestamp));
+
+    return { agent: decorateAgent(data, agent) };
+  });
+}
+
+export function archiveAgent(context: AuthenticatedContext, agentId: string) {
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const existing = findAgent(data, agentId);
+    if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
+      throw httpError(404, "agent not found");
+    }
+
+    const agent = upsertAgent(data, {
+      ...existing,
+      status: "archived",
+      archivedAt: timestamp,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.archived", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Agent archived: ${agent.name}`, agentId: agent.id }, timestamp));
+
+    return { agent: decorateAgent(data, agent) };
+  });
+}
+
+export function runAgent(context: AuthenticatedContext, agentId: string) {
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const agent = findAgent(data, agentId);
+    if (!agent || agent.workspaceId !== context.workspace.id || agent.status === "archived") {
+      throw httpError(404, "agent not found");
+    }
+
+    const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
+    const providerReady = !provider || provider.status === "connected";
+    const run = upsertAgentRun(data, {
+      workspaceId: context.workspace.id,
+      agentId: agent.id,
+      title: providerReady ? `${agent.name} run completed` : `${agent.name} run failed`,
+      status: providerReady ? "success" : "failed",
+      startedAt: timestamp,
+      completedAt: timestamp,
+      output: providerReady ? "Run recorded locally. SDK execution adapter can be attached here." : undefined,
+      error: providerReady ? undefined : "Provider API key is not configured.",
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status }, timestamp));
+
+    return { run };
+  });
+}
+
+export function listProviders(context: AuthenticatedContext) {
+  const data = loadStore();
+  return { providers: listProvidersForWorkspace(data, context.workspace.id) };
+}
+
+export function createProvider(context: AuthenticatedContext, input: ProviderInput) {
+  const normalized = normalizeProviderInput(input);
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const provider = upsertProvider(data, {
+      workspaceId: context.workspace.id,
+      ...normalized,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "provider.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Provider connected: ${provider.name}`, providerId: provider.id }, timestamp));
+
+    return { provider };
+  });
+}
+
+export function updateProvider(context: AuthenticatedContext, providerId: string, input: Partial<ProviderInput>) {
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const existing = findProvider(data, providerId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "provider not found");
+    }
+
+    const normalized = normalizeProviderInput({ ...existing, ...input });
+    const provider = upsertProvider(data, {
+      ...existing,
+      ...normalized,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "provider.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Provider updated: ${provider.name}`, providerId: provider.id }, timestamp));
+
+    return { provider };
+  });
+}
+
+export function listAgentRuns(context: AuthenticatedContext) {
+  const data = loadStore();
+  return { runs: listAgentRunsForWorkspace(data, context.workspace.id).slice(0, 50) };
+}
+
+type AgentInput = {
+  name?: string;
+  description?: string;
+  instructions?: string;
+  providerId?: string | null;
+  model?: string | null;
+  tools?: string[] | string;
+  schedule?: string | null;
+  status?: AgentStatus;
+};
+
+type ProviderInput = {
+  name?: string;
+  kind?: ProviderKind;
+  defaultModel?: string;
+  baseUrl?: string | null;
+  apiKeyConfigured?: boolean;
+  status?: "connected" | "missing_key" | "disabled";
+};
+
+function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord) {
+  const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
+  return {
+    ...agent,
+    provider: provider
+      ? {
+          id: provider.id,
+          name: provider.name,
+          kind: provider.kind,
+          defaultModel: provider.defaultModel,
+          status: provider.status,
+          apiKeyConfigured: provider.apiKeyConfigured,
+        }
+      : null,
+  };
+}
+
+function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status">> &
+  Pick<AgentRecord, "providerId" | "model" | "schedule"> {
+  const name = String(input.name ?? "").trim();
+  if (name.length < 2) throw httpError(400, "agent name must be at least 2 characters");
+  if (name.length > 80) throw httpError(400, "agent name must be 80 characters or fewer");
+
+  const instructions = String(input.instructions ?? "").trim();
+  if (instructions.length < 10) throw httpError(400, "instructions must be at least 10 characters");
+
+  const description = String(input.description ?? "").trim();
+  const tools = Array.isArray(input.tools)
+    ? input.tools
+    : String(input.tools ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+  const status = input.status && ["active", "paused", "archived"].includes(input.status) ? input.status : "active";
+
+  return {
+    name,
+    description,
+    instructions,
+    providerId: stringOrUndefined(input.providerId),
+    model: stringOrUndefined(input.model),
+    tools: tools.slice(0, 12),
+    schedule: stringOrUndefined(input.schedule),
+    status,
+  };
+}
+
+function validateProvider(data: ReturnType<typeof loadStore>, workspaceId: string, providerId?: string) {
+  if (!providerId) return;
+  const provider = findProvider(data, providerId);
+  if (!provider || provider.workspaceId !== workspaceId) {
+    throw httpError(400, "provider does not exist in this workspace");
+  }
+}
+
+function normalizeProviderInput(input: ProviderInput) {
+  const name = String(input.name ?? "").trim();
+  if (name.length < 2) throw httpError(400, "provider name must be at least 2 characters");
+  const defaultModel = String(input.defaultModel ?? "").trim();
+  if (defaultModel.length < 2) throw httpError(400, "default model is required");
+  const kind = input.kind && ["openai", "anthropic", "azure_openai", "ollama", "custom"].includes(input.kind)
+    ? input.kind
+    : "custom";
+  const apiKeyConfigured = Boolean(input.apiKeyConfigured);
+  const status = input.status && ["connected", "missing_key", "disabled"].includes(input.status)
+    ? input.status
+    : apiKeyConfigured || kind === "ollama" ? "connected" : "missing_key";
+
+  return {
+    name,
+    kind,
+    defaultModel,
+    baseUrl: stringOrUndefined(input.baseUrl),
+    apiKeyConfigured,
+    status,
+  };
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  const next = String(value ?? "").trim();
+  return next || undefined;
 }
 
 function createSessionRecord(userId: string, timestamp: string) {

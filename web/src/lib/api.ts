@@ -1,10 +1,29 @@
 import type {
   ActivityDetailPayload,
   ActivityRecord,
+  AgentRecord,
+  AgentRunRecord,
   ActivationDetailPayload,
   BootstrapPayload,
+  ConfirmWorkflowReleaseInput,
+  ProviderRecord,
   PublicDashboardPayload,
+  SaveAgentInput,
+  SaveProviderInput,
+  SaveWorkflowBlockerInput,
+  SaveWorkflowBriefInput,
+  SaveWorkflowPlanItemInput,
+  SaveWorkflowQuestionInput,
+  SaveWorkflowRequirementInput,
+  SaveWorkflowValidationEvidenceInput,
   Session,
+  WorkflowBlocker,
+  WorkflowBrief,
+  WorkflowPlanItem,
+  WorkflowQuestion,
+  WorkflowReleaseConfirmation,
+  WorkflowRequirement,
+  WorkflowValidationEvidence,
 } from "@/lib/types";
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
@@ -42,4 +61,42 @@ export const api = {
   updateWorkspace: (body: { name: string; website: string; automationGoal: string }) => j<{ workspace: Session["workspace"] }>("/api/app/workspace", { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.workspace),
   listActivity: () => j<{ activities: ActivityRecord[] }>("/api/app/activity").then((payload) => payload.activities),
   getActivityDetail: (id: string) => j<ActivityDetailPayload>(`/api/app/activity/${id}`),
+  listAgents: () => j<{ agents: AgentRecord[] }>("/api/app/agents").then((payload) => payload.agents),
+  getAgent: (id: string) => j<{ agent: AgentRecord; runs: AgentRunRecord[] }>(`/api/app/agents/${id}`),
+  createAgent: (body: SaveAgentInput) => j<{ agent: AgentRecord }>("/api/app/agents", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
+  updateAgent: (id: string, body: Partial<SaveAgentInput>) =>
+    j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.agent),
+  archiveAgent: (id: string) => j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "DELETE" }).then((payload) => payload.agent),
+  runAgent: (id: string) => j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST" }).then((payload) => payload.run),
+  listProviders: () => j<{ providers: ProviderRecord[] }>("/api/app/providers").then((payload) => payload.providers),
+  createProvider: (body: SaveProviderInput) =>
+    j<{ provider: ProviderRecord }>("/api/app/providers", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.provider),
+  updateProvider: (id: string, body: Partial<SaveProviderInput>) =>
+    j<{ provider: ProviderRecord }>(`/api/app/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.provider),
+  listAgentRuns: () => j<{ runs: AgentRunRecord[] }>("/api/app/agent-runs").then((payload) => payload.runs),
+  getWorkflowBrief: () => j<WorkflowBrief>("/api/app/workflow/brief"),
+  saveWorkflowBrief: (body: SaveWorkflowBriefInput) => j<WorkflowBrief>("/api/app/workflow/brief", { method: "PUT", body: JSON.stringify(body) }),
+  listWorkflowRequirements: () => j<WorkflowRequirement[]>("/api/app/workflow/requirements"),
+  saveWorkflowRequirements: (requirements: SaveWorkflowRequirementInput[]) =>
+    j<WorkflowRequirement[]>("/api/app/workflow/requirements", { method: "PUT", body: JSON.stringify(requirements) }),
+  listWorkflowPlanItems: () => j<WorkflowPlanItem[]>("/api/app/workflow/plan-items"),
+  createWorkflowPlanItem: (body: SaveWorkflowPlanItemInput) => j<WorkflowPlanItem>("/api/app/workflow/plan-items", { method: "POST", body: JSON.stringify(body) }),
+  updateWorkflowPlanItem: (itemId: string, body: Partial<SaveWorkflowPlanItemInput>) =>
+    j<WorkflowPlanItem>(`/api/app/workflow/plan-items/${itemId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  listWorkflowBlockers: () => j<WorkflowBlocker[]>("/api/app/workflow/blockers"),
+  createWorkflowBlocker: (body: SaveWorkflowBlockerInput) => j<WorkflowBlocker>("/api/app/workflow/blockers", { method: "POST", body: JSON.stringify(body) }),
+  updateWorkflowBlocker: (blockerId: string, body: Partial<SaveWorkflowBlockerInput>) =>
+    j<WorkflowBlocker>(`/api/app/workflow/blockers/${blockerId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  listWorkflowQuestions: () => j<WorkflowQuestion[]>("/api/app/workflow/questions"),
+  createWorkflowQuestion: (body: SaveWorkflowQuestionInput) => j<WorkflowQuestion>("/api/app/workflow/questions", { method: "POST", body: JSON.stringify(body) }),
+  updateWorkflowQuestion: (questionId: string, body: Partial<SaveWorkflowQuestionInput>) =>
+    j<WorkflowQuestion>(`/api/app/workflow/questions/${questionId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  listWorkflowValidationEvidence: () => j<WorkflowValidationEvidence[]>("/api/app/workflow/validation-evidence"),
+  createWorkflowValidationEvidence: (body: SaveWorkflowValidationEvidenceInput) =>
+    j<WorkflowValidationEvidence>("/api/app/workflow/validation-evidence", { method: "POST", body: JSON.stringify(body) }),
+  updateWorkflowValidationEvidence: (evidenceId: string, body: Partial<SaveWorkflowValidationEvidenceInput>) =>
+    j<WorkflowValidationEvidence>(`/api/app/workflow/validation-evidence/${evidenceId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  getWorkflowReleaseConfirmation: () => j<WorkflowReleaseConfirmation>("/api/app/workflow/release-confirmation"),
+  confirmWorkflowRelease: (body: ConfirmWorkflowReleaseInput) =>
+    j<WorkflowReleaseConfirmation>("/api/app/workflow/release-confirmation", { method: "POST", body: JSON.stringify(body) }),
 };

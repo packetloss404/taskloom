@@ -138,8 +138,8 @@ export default function SettingsPage() {
         }
         .field-input::placeholder { color: rgb(107 110 133); }
         .field-input:focus {
-          border-color: rgb(167 139 250 / 0.5);
-          box-shadow: 0 0 0 3px rgb(167 139 250 / 0.15);
+          border-color: rgb(161 161 170 / 0.5);
+          box-shadow: 0 0 0 3px rgb(161 161 170 / 0.14);
         }
       `}</style>
     </>

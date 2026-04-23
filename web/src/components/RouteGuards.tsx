@@ -20,7 +20,6 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 
   if (loading) return <FullScreenLoader />;
   if (!session) return <Navigate to={`/sign-in?next=${next}`} replace />;
-  if (!session.onboarding.completed) return <Navigate to={`/onboarding?next=${next}`} replace />;
   return <>{children}</>;
 }
 
@@ -31,10 +30,9 @@ export function PublicOnly({ children }: { children: ReactNode }) {
   const requestedNext = search.get("next");
 
   if (loading) return <FullScreenLoader />;
-  if (session?.onboarding.completed) {
-    return <Navigate to={requestedNext && requestedNext.startsWith("/") ? requestedNext : "/"} replace />;
+  if (session) {
+    return <Navigate to={requestedNext && requestedNext.startsWith("/") ? requestedNext : "/dashboard"} replace />;
   }
-  if (session) return <Navigate to="/onboarding" replace />;
   return <>{children}</>;
 }
 

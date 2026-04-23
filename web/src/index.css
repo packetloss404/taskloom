@@ -15,7 +15,7 @@
   }
 
   ::selection {
-    background: rgba(139, 92, 246, 0.35);
+    background: rgba(161, 161, 170, 0.28);
   }
 }
 
@@ -34,7 +34,5 @@
 }
 
 .sidebar-glow {
-  background:
-    radial-gradient(600px 300px at -10% -10%, rgba(139, 92, 246, 0.08), transparent 60%),
-    radial-gradient(400px 200px at 50% 110%, rgba(124, 58, 237, 0.05), transparent 60%);
+  background: rgb(10 10 10 / 0.82);
 }

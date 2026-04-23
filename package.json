@@ -13,6 +13,8 @@
     "build": "npm run build:web && npm run typecheck && npm test",
     "build:web": "vite build --config web/vite.config.ts",
     "start": "node --import tsx src/server.ts",
+    "jobs:recompute-activation": "node --import tsx src/jobs.ts recompute-activation",
+    "jobs:cleanup-sessions": "node --import tsx src/jobs.ts cleanup-sessions",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "test": "node --import tsx --test src/**/*.test.ts"
   },
