@@ -128,6 +128,7 @@ export interface AgentRecord {
   tools: string[];
   enabledTools?: string[];
   routeKey?: string;
+  webhookToken?: string;
   schedule?: string;
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];

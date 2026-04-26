@@ -22,6 +22,14 @@ function safeStringify(value: unknown, max = 4000): string {
   }
 }
 
+function extractScreenshotPath(output: unknown): string | null {
+  if (!output || typeof output !== "object") return null;
+  const candidate = (output as { path?: unknown }).path;
+  if (typeof candidate !== "string") return null;
+  if (!/\.(png|jpg|jpeg)$/i.test(candidate)) return null;
+  return "/" + candidate.replace(/^\/+/, "");
+}
+
 export default function ToolCallTimeline({ calls }: { calls: AgentRunToolCall[] | undefined }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   if (!calls || calls.length === 0) return null;
@@ -52,6 +60,14 @@ export default function ToolCallTimeline({ calls }: { calls: AgentRunToolCall[] 
                   <div>
                     <div className="kicker mb-1.5">OUTPUT</div>
                     <pre className="overflow-x-auto border border-ink-700 bg-ink-950 p-2 font-mono text-[11px] leading-5 text-ink-200">{safeStringify(call.output)}</pre>
+                    {(() => {
+                      const path = extractScreenshotPath(call.output);
+                      return path ? (
+                        <a href={path} target="_blank" rel="noreferrer" className="mt-2 block border border-ink-700 bg-ink-950">
+                          <img src={path} alt="screenshot" className="block w-full max-w-md" />
+                        </a>
+                      ) : null;
+                    })()}
                   </div>
                 )}
               </div>

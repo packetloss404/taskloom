@@ -55,6 +55,8 @@ export default function AgentEditorPage() {
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [availableTools, setAvailableTools] = useState<AvailableTool[]>([]);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
+  const [webhookBusy, setWebhookBusy] = useState(false);
+  const [recordingRunId, setRecordingRunId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -162,6 +164,51 @@ export default function AgentEditorPage() {
       setError((archiveError as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const rotateWebhook = async () => {
+    if (!agent) return;
+    setWebhookBusy(true);
+    setError(null);
+    try {
+      const token = await api.rotateAgentWebhook(agent.id);
+      setAgent({ ...agent, webhookToken: token });
+      setMessage("Webhook token rotated.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setWebhookBusy(false);
+    }
+  };
+
+  const removeWebhook = async () => {
+    if (!agent) return;
+    setWebhookBusy(true);
+    setError(null);
+    try {
+      await api.removeAgentWebhook(agent.id);
+      setAgent({ ...agent, webhookToken: undefined });
+      setMessage("Webhook removed.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setWebhookBusy(false);
+    }
+  };
+
+  const recordAsPlaybook = async (runId: string) => {
+    setRecordingRunId(runId);
+    setError(null);
+    try {
+      const updatedAgent = await api.recordRunAsPlaybook(runId);
+      setAgent(updatedAgent);
+      setPlaybook(updatedAgent.playbook ?? []);
+      setMessage("Run captured as playbook.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRecordingRunId(null);
     }
   };
 
@@ -317,6 +364,27 @@ export default function AgentEditorPage() {
                 </div>
               </div>
             </div>
+            {!isNew && agent && (
+              <div className="mt-5 border-t border-ink-700 pt-4">
+                <div className="kicker mb-2">WEBHOOK TRIGGER</div>
+                {agent.webhookToken ? (
+                  <div className="grid gap-2">
+                    <div className="break-all border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-[11px] text-ink-200">
+                      POST {window.location.origin}/api/public/webhooks/agents/{agent.webhookToken}
+                    </div>
+                    <p className="font-mono text-[10px] text-ink-500">
+                      Body is forwarded as the run's `inputs`. Trigger kind = webhook.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className="btn-ghost" onClick={rotateWebhook} disabled={webhookBusy}>↺ Rotate token</button>
+                      <button type="button" className="btn-ghost" onClick={removeWebhook} disabled={webhookBusy}>× Remove</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" className="btn-ghost" onClick={rotateWebhook} disabled={webhookBusy}>+ Generate webhook URL</button>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="section-band">
@@ -437,7 +505,17 @@ export default function AgentEditorPage() {
                           <RunTranscript steps={runRecord.transcript} />
                           {runRecord.toolCalls && runRecord.toolCalls.length > 0 && (
                             <div>
-                              <div className="kicker mb-1.5">TOOL CALLS · {runRecord.toolCalls.length}</div>
+                              <div className="mb-1.5 flex items-center justify-between">
+                                <div className="kicker">TOOL CALLS · {runRecord.toolCalls.length}</div>
+                                <button
+                                  type="button"
+                                  className="font-mono text-[10px] uppercase tracking-wider text-ink-400 hover:text-signal-amber"
+                                  onClick={() => recordAsPlaybook(runRecord.id)}
+                                  disabled={recordingRunId === runRecord.id}
+                                >
+                                  {recordingRunId === runRecord.id ? "RECORDING…" : "▣ RECORD AS PLAYBOOK"}
+                                </button>
+                              </div>
                               <ToolCallTimeline calls={runRecord.toolCalls} />
                             </div>
                           )}

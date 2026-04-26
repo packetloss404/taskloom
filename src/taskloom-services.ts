@@ -593,8 +593,10 @@ async function runAgentWithToolLoop(args: {
 }): Promise<{ run: AgentRunRecord }> {
   const { context, agent, inputs, triggerKind, timestamp } = args;
   const { runAgentLoop } = await import("./tools/agent-loop.js");
+  const { closeBrowserSession } = await import("./tools/browser-runtime.js");
   const enabledTools = agent.enabledTools ?? [];
   const routeKey = agent.routeKey || "agent.reasoning";
+  const runId = generateId();
 
   const userPromptParts = [agent.instructions];
   if (Object.keys(inputs).length > 0) {
@@ -617,6 +619,7 @@ async function runAgentWithToolLoop(args: {
     loopResult = await runAgentLoop({
       workspaceId: context.workspace.id,
       userId: context.user.id,
+      runId,
       agentId: agent.id,
       routeKey,
       systemPrompt: "You are a workspace agent. Use the supplied tools to complete the user's task. When finished, return a concise final answer.",
@@ -627,6 +630,8 @@ async function runAgentWithToolLoop(args: {
   } catch (error) {
     loopError = (error as Error).message;
     logs.push({ at: new Date().toISOString(), level: "error", message: `Loop crashed: ${loopError}` });
+  } finally {
+    try { await closeBrowserSession(runId); } catch { /* ignore */ }
   }
 
   const completedAt = new Date().toISOString();
@@ -819,6 +824,25 @@ export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
     }, { title: `Run canceled: ${updated.title}`, agentId: updated.agentId, runId: updated.id }, timestamp));
 
     return { run: decorateRun(updated) };
+  });
+}
+
+export function recordRunAsPlaybook(context: AuthenticatedContext, runId: string) {
+  return mutateStore((data) => {
+    const run = data.agentRuns.find((r) => r.id === runId && r.workspaceId === context.workspace.id);
+    if (!run) throw httpError(404, "agent run not found");
+    if (!run.agentId) throw httpError(400, "this run is not linked to an agent");
+    const agent = findAgent(data, run.agentId);
+    if (!agent || agent.workspaceId !== context.workspace.id) throw httpError(404, "agent not found");
+    if (!run.toolCalls || run.toolCalls.length === 0) throw httpError(400, "run has no tool calls to record");
+    const playbook: AgentPlaybookStep[] = run.toolCalls.map((call, index) => ({
+      id: generateId(),
+      title: `${index + 1}. ${call.toolName}`,
+      instruction: `Call ${call.toolName} with: ${JSON.stringify(call.input).slice(0, 380)}`,
+    }));
+    agent.playbook = playbook.slice(0, 20);
+    agent.updatedAt = now();
+    return { agent };
   });
 }
 
