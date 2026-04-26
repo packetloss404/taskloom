@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, HelpCircle, History, Loader2, RefreshCw, Rocket, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
+import StreamingTextDemo from "@/components/StreamingTextDemo";
+import UsageSummaryCard from "@/components/UsageSummaryCard";
 import { relative } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import type {
@@ -496,6 +498,10 @@ export default function OperationsPage() {
         }
         .ops-input:disabled { opacity: 0.65; cursor: not-allowed; }
       `}</style>
+      <div className="mt-6 grid gap-6 xl:grid-cols-2">
+        <UsageSummaryCard />
+        <StreamingTextDemo />
+      </div>
     </>
   );
 }

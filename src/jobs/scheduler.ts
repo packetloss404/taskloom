@@ -1,0 +1,122 @@
+import type { JobRecord } from "../taskloom-store.js";
+import { claimNextJob, enqueueJob, findJob, sweepStaleRunningJobs, updateJob } from "./store.js";
+import { nextAfter } from "./cron.js";
+
+export interface JobHandlerContext {
+  signal: AbortSignal;
+}
+
+export interface JobHandler {
+  type: string;
+  handle(job: JobRecord, ctx: JobHandlerContext): Promise<unknown>;
+}
+
+const BACKOFF_BASE_MS = 30_000;
+const BACKOFF_CAP_MS = 60 * 60 * 1000;
+
+function backoffMs(attempt: number): number {
+  return Math.min(BACKOFF_BASE_MS * Math.pow(2, attempt - 1), BACKOFF_CAP_MS);
+}
+
+export class JobScheduler {
+  private handlers = new Map<string, JobHandler>();
+  private polling = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private inFlight = new Map<string, AbortController>();
+  private pollIntervalMs: number;
+  private cancelWatchMs: number;
+
+  constructor(opts: { pollIntervalMs?: number; cancelWatchMs?: number } = {}) {
+    this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
+    this.cancelWatchMs = opts.cancelWatchMs ?? 500;
+  }
+
+  register(handler: JobHandler): void {
+    this.handlers.set(handler.type, handler);
+  }
+
+  start(): void {
+    if (this.polling) return;
+    this.polling = true;
+    sweepStaleRunningJobs();
+    this.scheduleNext(0);
+  }
+
+  async stop(): Promise<void> {
+    this.polling = false;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    for (const ctrl of this.inFlight.values()) ctrl.abort();
+    const cutoff = Date.now() + 30_000;
+    while (this.inFlight.size > 0 && Date.now() < cutoff) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  private scheduleNext(ms: number): void {
+    if (!this.polling) return;
+    this.timer = setTimeout(() => { void this.tick(); }, ms);
+  }
+
+  private async tick(): Promise<void> {
+    if (!this.polling) return;
+    try {
+      const job = await claimNextJob(new Date());
+      if (job) {
+        void this.runJob(job);
+        this.scheduleNext(0);
+        return;
+      }
+    } catch { /* ignore */ }
+    this.scheduleNext(this.pollIntervalMs);
+  }
+
+  private async runJob(job: JobRecord): Promise<void> {
+    const handler = this.handlers.get(job.type);
+    const ctrl = new AbortController();
+    this.inFlight.set(job.id, ctrl);
+    const cancelWatcher = setInterval(() => {
+      const fresh = findJob(job.id);
+      if (fresh?.cancelRequested) ctrl.abort();
+    }, this.cancelWatchMs);
+    try {
+      if (!handler) {
+        updateJob(job.id, { status: "failed", error: `no handler registered for type "${job.type}"`, completedAt: new Date().toISOString() });
+        return;
+      }
+      const result = await handler.handle(job, { signal: ctrl.signal });
+      if (ctrl.signal.aborted) {
+        updateJob(job.id, { status: "canceled", completedAt: new Date().toISOString() });
+        return;
+      }
+      updateJob(job.id, { status: "success", result, completedAt: new Date().toISOString() });
+      if (job.cron) {
+        try {
+          const next = nextAfter(job.cron, new Date());
+          enqueueJob({
+            workspaceId: job.workspaceId,
+            type: job.type,
+            payload: job.payload,
+            cron: job.cron,
+            scheduledAt: next.toISOString(),
+            maxAttempts: job.maxAttempts,
+          });
+        } catch { /* invalid cron => stop recurring */ }
+      }
+    } catch (error) {
+      const fresh = findJob(job.id);
+      if (fresh?.cancelRequested || ctrl.signal.aborted) {
+        updateJob(job.id, { status: "canceled", error: (error as Error).message, completedAt: new Date().toISOString() });
+        return;
+      }
+      if (job.attempts < job.maxAttempts) {
+        const next = new Date(Date.now() + backoffMs(job.attempts));
+        updateJob(job.id, { status: "queued", error: (error as Error).message, scheduledAt: next.toISOString(), startedAt: undefined });
+      } else {
+        updateJob(job.id, { status: "failed", error: (error as Error).message, completedAt: new Date().toISOString() });
+      }
+    } finally {
+      clearInterval(cancelWatcher);
+      this.inFlight.delete(job.id);
+    }
+  }
+}

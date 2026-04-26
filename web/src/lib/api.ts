@@ -33,6 +33,13 @@ import type {
   WorkflowTemplate,
   WorkflowTemplateApplyResult,
   WorkflowValidationEvidence,
+  ApiKeyProviderName,
+  MaskedApiKey,
+  UsageSummary,
+  ProviderCallRecord,
+  JobRecord,
+  PlanModeResult,
+  PlanModePlanItem,
 } from "@/lib/types";
 import { pushExternalToast } from "@/context/ToastContext";
 
@@ -155,4 +162,17 @@ export const api = {
     j<WorkflowTemplateApplyResult>(`/api/app/workflow/templates/${templateId}/apply`, { method: "POST" }),
   generateWorkflowFromPrompt: (body: { prompt: string; apply?: boolean }) =>
     j<WorkflowDraftResult>("/api/app/workflow/generate-from-prompt", { method: "POST", body: JSON.stringify(body) }),
+  listApiKeys: () => j<{ apiKeys: MaskedApiKey[] }>("/api/app/api-keys").then((payload) => payload.apiKeys),
+  createApiKey: (body: { provider: ApiKeyProviderName; label: string; value: string }) =>
+    j<{ apiKey: MaskedApiKey }>("/api/app/api-keys", { method: "POST", body: JSON.stringify(body) }).then((p) => p.apiKey),
+  deleteApiKey: (id: string) => j<{ ok: boolean }>(`/api/app/api-keys/${id}`, { method: "DELETE" }),
+  getUsageSummary: () => j<{ summary: UsageSummary }>("/api/app/usage/summary").then((payload) => payload.summary),
+  listProviderCalls: (limit = 100) => j<{ calls: ProviderCallRecord[] }>(`/api/app/usage/calls?limit=${limit}`).then((payload) => payload.calls),
+  listJobs: (limit = 50) => j<{ jobs: JobRecord[] }>(`/api/app/jobs?limit=${limit}`).then((payload) => payload.jobs),
+  enqueueJob: (body: { type: string; payload: Record<string, unknown>; cron?: string; scheduledAt?: string; maxAttempts?: number }) =>
+    j<{ job: JobRecord }>("/api/app/jobs", { method: "POST", body: JSON.stringify(body) }).then((p) => p.job),
+  cancelJob: (id: string) => j<{ ok: boolean }>(`/api/app/jobs/${id}/cancel`, { method: "POST" }),
+  requestPlanMode: () => j<PlanModeResult>("/api/app/workflow/plan-mode", { method: "POST", body: "{}" }),
+  applyPlanMode: (planItems: PlanModePlanItem[]) =>
+    j<{ planItems: WorkflowPlanItem[] }>("/api/app/workflow/plan-mode/apply", { method: "POST", body: JSON.stringify({ planItems }) }).then((p) => p.planItems),
 };

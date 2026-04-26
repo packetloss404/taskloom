@@ -5,6 +5,8 @@ import {
   generateAndApplyWorkflowDraft,
   listWorkflowTemplates,
 } from "./workflow-prompt-service.js";
+import { llmDraftWorkflow, llmPlanMode } from "./workflow-llm-service.js";
+import { replacePlanItems } from "./workflow-service.js";
 
 type AuthenticatedContext = ReturnType<typeof requireAuthenticatedContext>;
 type WorkflowServiceFunction = (context: AuthenticatedContext, input?: unknown) => unknown;
@@ -112,11 +114,42 @@ workflowRoutes.post("/generate-from-prompt", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
     const body = (await readJsonBody(c)) as { prompt?: string; apply?: boolean } | undefined;
-    const result = await generateAndApplyWorkflowDraft(context, {
-      prompt: body?.prompt ?? "",
-      apply: Boolean(body?.apply),
-    });
+    const prompt = body?.prompt ?? "";
+    const apply = Boolean(body?.apply);
+    const llm = await llmDraftWorkflow({ workspaceId: context.workspace.id, prompt });
+    if (!apply) {
+      return c.json({ draft: llm.draft, applied: false, modelUsed: llm.modelUsed, costUsd: llm.costUsd });
+    }
+    const applied = await generateAndApplyWorkflowDraft(context, { prompt, apply: false });
+    applied.draft = llm.draft;
+    return c.json({ ...await generateAndApplyWorkflowDraft(context, { prompt, apply: true }), modelUsed: llm.modelUsed, costUsd: llm.costUsd });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+workflowRoutes.post("/plan-mode", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    const result = await llmPlanMode(context);
     return c.json(result);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+workflowRoutes.post("/plan-mode/apply", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    const body = (await readJsonBody(c)) as { planItems?: { summary: string; status?: string }[] } | undefined;
+    const items = (body?.planItems ?? []).map((p) => {
+      const raw = String(p.status ?? "todo");
+      const status: "todo" | "in_progress" | "done" =
+        raw === "in_progress" || raw === "doing" ? "in_progress" : raw === "done" ? "done" : "todo";
+      return { title: p.summary, description: "", status };
+    }).filter((p) => p.title.length > 0);
+    const planItems = replacePlanItems(context, items);
+    return c.json({ planItems });
   } catch (error) {
     return errorResponse(c, error);
   }

@@ -314,6 +314,58 @@ export interface WorkspaceEnvVarRecord {
   updatedAt: string;
 }
 
+export type ApiKeyProvider = "anthropic" | "openai" | "minimax" | "ollama";
+
+export interface ApiKeyRecord {
+  id: string;
+  workspaceId: string;
+  provider: ApiKeyProvider;
+  label: string;
+  encryptedValue: string;
+  iv: string;
+  authTag: string;
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderCallRecord {
+  id: string;
+  workspaceId: string;
+  routeKey: string;
+  provider: "anthropic" | "openai" | "minimax" | "ollama" | "stub";
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  durationMs: number;
+  status: "success" | "error" | "canceled";
+  errorMessage?: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export type JobStatus = "queued" | "running" | "success" | "failed" | "canceled";
+
+export interface JobRecord {
+  id: string;
+  workspaceId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: JobStatus;
+  attempts: number;
+  maxAttempts: number;
+  scheduledAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  cron?: string;
+  result?: unknown;
+  error?: string;
+  cancelRequested?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TaskloomData {
   users: UserRecord[];
   sessions: SessionRecord[];
@@ -332,6 +384,9 @@ export interface TaskloomData {
   providers: ProviderRecord[];
   agentRuns: AgentRunRecord[];
   workspaceEnvVars: WorkspaceEnvVarRecord[];
+  apiKeys: ApiKeyRecord[];
+  providerCalls: ProviderCallRecord[];
+  jobs: JobRecord[];
   activationFacts: Record<string, WorkspaceActivationFacts>;
   activationMilestones: Record<string, ActivationMilestoneRecord[]>;
   activationReadModels: Record<string, ActivationStatusDto>;
@@ -391,6 +446,9 @@ function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
       logs: Array.isArray(entry.logs) ? entry.logs : [],
     })),
     workspaceEnvVars: data.workspaceEnvVars ?? [],
+    apiKeys: data.apiKeys ?? [],
+    providerCalls: data.providerCalls ?? [],
+    jobs: data.jobs ?? [],
     activationFacts: data.activationFacts ?? {},
     activationMilestones: data.activationMilestones ?? {},
     activationReadModels: data.activationReadModels ?? {},
@@ -1044,6 +1102,9 @@ function seedStore(): TaskloomData {
     providers,
     agentRuns,
     workspaceEnvVars,
+    apiKeys: [],
+    providerCalls: [],
+    jobs: [],
     activationFacts,
     activationMilestones: {},
     activationReadModels: {},

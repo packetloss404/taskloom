@@ -41,6 +41,14 @@ import {
   updateWorkspaceEnvVar,
 } from "./taskloom-services.js";
 import { workflowRoutes } from "./workflow-routes.js";
+import { apiKeyRoutes } from "./api-key-routes.js";
+import { usageRoutes } from "./usage-routes.js";
+import { llmStreamRoutes } from "./llm-stream-routes.js";
+import { jobRoutes } from "./job-routes.js";
+import { JobScheduler } from "./jobs/scheduler.js";
+import { registerDefaultProviders } from "./providers/bootstrap.js";
+
+registerDefaultProviders();
 
 const app = new Hono();
 
@@ -349,6 +357,16 @@ app.get("/api/app/release-history", (c) => {
 });
 
 app.route("/api/app/workflow", workflowRoutes);
+app.route("/api/app/api-keys", apiKeyRoutes);
+app.route("/api/app/usage", usageRoutes);
+app.route("/api/app/llm", llmStreamRoutes);
+app.route("/api/app/jobs", jobRoutes);
+
+const scheduler = new JobScheduler();
+scheduler.start();
+const shutdown = async () => { await scheduler.stop(); process.exit(0); };
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 if (existsSync("./web/dist/index.html")) {
   app.use("/*", serveStatic({ root: "./web/dist" }));
