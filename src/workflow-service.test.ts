@@ -3,12 +3,16 @@ import test from "node:test";
 import { login } from "./taskloom-services";
 import { loadStore, resetStoreForTests } from "./taskloom-store";
 import {
+  applyWorkspaceBriefTemplate,
   getWorkflowOverview,
+  listWorkspaceBriefHistory,
+  listWorkspaceBriefTemplates,
   readWorkspaceBrief,
   replaceBlockersAndQuestions,
   replacePlanItems,
   replaceRequirements,
   replaceValidationEvidence,
+  restoreWorkspaceBriefVersion,
   updateReleaseConfirmation,
   updateWorkspaceBrief,
 } from "./workflow-service";
@@ -72,6 +76,73 @@ test("workflow surfaces update activation facts and overview", () => {
   assert.equal(facts.blockerCount, 1);
   assert.equal(facts.dependencyBlockerCount, 1);
   assert.equal(facts.openQuestionCount, 1);
+});
+
+test("brief saves snapshot a version with manual source", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  updateWorkspaceBrief(auth.context, {
+    summary: "First brief draft.",
+    goals: ["initial goal"],
+  });
+  updateWorkspaceBrief(auth.context, {
+    summary: "Second brief draft.",
+    goals: ["refined goal"],
+  });
+
+  const versions = listWorkspaceBriefHistory(auth.context);
+  assert.equal(versions.length, 2);
+  assert.equal(versions[0].versionNumber, 2);
+  assert.equal(versions[0].summary, "Second brief draft.");
+  assert.equal(versions[0].source, "manual");
+  assert.equal(versions[1].versionNumber, 1);
+  assert.equal(versions[1].summary, "First brief draft.");
+});
+
+test("brief templates populate the brief and snapshot a template version", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const templates = listWorkspaceBriefTemplates();
+  assert.ok(templates.length > 0);
+
+  const template = templates[0];
+  const brief = applyWorkspaceBriefTemplate(auth.context, { templateId: template.id });
+
+  assert.equal(brief.summary, template.brief.summary);
+  const versions = listWorkspaceBriefHistory(auth.context);
+  assert.equal(versions[0].source, "template");
+  assert.equal(versions[0].sourceLabel, template.name);
+  assert.equal(versions[0].summary, template.brief.summary);
+
+  assert.throws(
+    () => applyWorkspaceBriefTemplate(auth.context, { templateId: "nope" }),
+    /brief template not found/,
+  );
+});
+
+test("restoring a brief version updates the brief and adds a restore version", () => {
+  resetStoreForTests();
+  const auth = login({ email: "beta@taskloom.local", password: "demo12345" });
+
+  updateWorkspaceBrief(auth.context, { summary: "Original brief." });
+  updateWorkspaceBrief(auth.context, { summary: "Pivoted brief direction." });
+  const history = listWorkspaceBriefHistory(auth.context);
+  const original = history.find((entry) => entry.summary === "Original brief.");
+  assert.ok(original);
+
+  const restored = restoreWorkspaceBriefVersion(auth.context, { versionId: original!.id });
+  assert.equal(restored.summary, "Original brief.");
+
+  const updated = listWorkspaceBriefHistory(auth.context);
+  assert.equal(updated[0].source, "restore");
+  assert.equal(updated[0].summary, "Original brief.");
+  assert.equal(updated.length, 3);
+
+  assert.throws(
+    () => restoreWorkspaceBriefVersion(auth.context, { versionId: "missing" }),
+    /brief version not found/,
+  );
 });
 
 test("workflow validation rejects invalid surface input", () => {

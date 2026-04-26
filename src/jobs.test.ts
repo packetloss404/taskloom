@@ -67,6 +67,7 @@ function makeStore(): TaskloomData {
     ],
     memberships: [],
     workspaceBriefs: [],
+    workspaceBriefVersions: [],
     requirements: [],
     implementationPlanItems: [],
     workflowConcerns: [],

@@ -143,6 +143,32 @@ export interface WorkflowBrief {
   updatedAt: string;
 }
 
+export interface WorkflowBriefVersion {
+  id: string;
+  workspaceId: string;
+  versionNumber: number;
+  summary: string;
+  goals: string[];
+  audience: string;
+  constraints: string;
+  problemStatement: string;
+  targetCustomers: string[];
+  desiredOutcome: string;
+  successMetrics: string[];
+  source: "manual" | "template" | "restore";
+  sourceLabel?: string;
+  createdByUserId?: string;
+  createdByDisplayName?: string;
+  createdAt: string;
+}
+
+export interface WorkflowBriefTemplate {
+  id: string;
+  name: string;
+  description: string;
+  brief: SaveWorkflowBriefInput;
+}
+
 export interface WorkflowRequirement {
   id: string;
   workspaceId: string;

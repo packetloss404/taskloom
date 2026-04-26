@@ -14,6 +14,10 @@ const workflowServiceFunctions = {
   getOverview: ["getWorkflowOverview", "getOverview"],
   getBrief: ["getWorkflowBrief", "readWorkspaceBrief", "getBrief"],
   saveBrief: ["saveWorkflowBrief", "updateWorkspaceBrief", "updateWorkflowBrief", "upsertWorkflowBrief"],
+  listBriefVersions: ["listWorkspaceBriefHistory", "listBriefVersions"],
+  restoreBriefVersion: ["restoreWorkspaceBriefVersion", "restoreBriefVersion"],
+  listBriefTemplates: ["listWorkspaceBriefTemplates", "listBriefTemplates"],
+  applyBriefTemplate: ["applyWorkspaceBriefTemplate", "applyBriefTemplate"],
   getRequirements: ["getWorkflowRequirements", "listRequirements", "getRequirements"],
   saveRequirements: ["saveWorkflowRequirements", "replaceRequirements", "updateWorkflowRequirements", "upsertWorkflowRequirements"],
   listPlanItems: ["listWorkflowPlanItems", "listPlanItems", "getWorkflowPlanItems"],
@@ -44,6 +48,16 @@ workflowRoutes.get("/", (c) => runWorkflowOperation(c, "getOverview"));
 
 workflowRoutes.get("/brief", (c) => runWorkflowOperation(c, "getBrief"));
 workflowRoutes.put("/brief", (c) => runWorkflowOperation(c, "saveBrief", readJsonBody));
+
+workflowRoutes.get("/brief/templates", (c) => runWorkflowOperation(c, "listBriefTemplates"));
+workflowRoutes.post("/brief/templates/:templateId/apply", (c) =>
+  runWorkflowOperation(c, "applyBriefTemplate", readJsonBody, ["templateId"]),
+);
+
+workflowRoutes.get("/brief/versions", (c) => runWorkflowOperation(c, "listBriefVersions"));
+workflowRoutes.post("/brief/versions/:versionId/restore", (c) =>
+  runWorkflowOperation(c, "restoreBriefVersion", readJsonBody, ["versionId"]),
+);
 
 workflowRoutes.get("/requirements", (c) => runWorkflowOperation(c, "getRequirements"));
 workflowRoutes.put("/requirements", (c) => runWorkflowOperation(c, "saveRequirements", readJsonBody));
