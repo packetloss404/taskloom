@@ -2,25 +2,43 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { ClipboardList, Layers, Loader2, Plus, RefreshCw, Save } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
+import LineageGraphView from "@/components/LineageGraph";
+import { buildLineageGraph, lineageNeighbors, type LineageNode } from "@/lib/lineage";
 import type {
   SaveWorkflowPlanItemInput,
   SaveWorkflowRequirementInput,
+  WorkflowBlocker,
   WorkflowBrief,
   WorkflowPlanItem,
   WorkflowPlanItemStatus,
+  WorkflowQuestion,
+  WorkflowReleaseConfirmation,
   WorkflowRequirement,
   WorkflowRequirementPriority,
   WorkflowRequirementStatus,
   WorkflowTemplate,
+  WorkflowValidationEvidence,
 } from "@/lib/types";
 
 interface WorkflowState {
   brief: WorkflowBrief | null;
   requirements: WorkflowRequirement[];
   planItems: WorkflowPlanItem[];
+  validationEvidence: WorkflowValidationEvidence[];
+  release: WorkflowReleaseConfirmation | null;
+  blockers: WorkflowBlocker[];
+  questions: WorkflowQuestion[];
 }
 
-const EMPTY_STATE: WorkflowState = { brief: null, requirements: [], planItems: [] };
+const EMPTY_STATE: WorkflowState = {
+  brief: null,
+  requirements: [],
+  planItems: [],
+  validationEvidence: [],
+  release: null,
+  blockers: [],
+  questions: [],
+};
 
 export default function WorkflowPage() {
   const [state, setState] = useState<WorkflowState>(EMPTY_STATE);
@@ -30,17 +48,30 @@ export default function WorkflowPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
   const [applyingTemplateId, setApplyingTemplateId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const loadWorkflow = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [brief, requirements, planItems] = await Promise.all([
+      const [brief, requirements, planItems, validationEvidence, release, blockers, questions] = await Promise.all([
         api.getWorkflowBrief(),
         api.listWorkflowRequirements(),
         api.listWorkflowPlanItems(),
+        api.listWorkflowValidationEvidence().catch(() => []),
+        api.getWorkflowReleaseConfirmation().catch(() => null),
+        api.listWorkflowBlockers().catch(() => []),
+        api.listWorkflowQuestions().catch(() => []),
       ]);
-      setState({ brief, requirements, planItems });
+      setState({
+        brief,
+        requirements,
+        planItems,
+        validationEvidence,
+        release,
+        blockers,
+        questions,
+      });
     } catch (loadError) {
       setError((loadError as Error).message);
       setState(EMPTY_STATE);
@@ -82,6 +113,38 @@ export default function WorkflowPage() {
       done: state.planItems.filter((entry) => entry.status === "done").length,
     };
   }, [state]);
+
+  const lineageGraph = useMemo(
+    () =>
+      buildLineageGraph({
+        brief: state.brief,
+        requirements: state.requirements,
+        planItems: state.planItems,
+        validationEvidence: state.validationEvidence,
+        release: state.release,
+        blockers: state.blockers,
+        questions: state.questions,
+      }),
+    [state],
+  );
+
+  const selectedNode = useMemo<LineageNode | null>(() => {
+    if (!selectedNodeId) return null;
+    return lineageGraph.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  }, [lineageGraph, selectedNodeId]);
+
+  const selectedDetail = useMemo(() => {
+    if (!selectedNode) return null;
+    const { upstream, downstream } = lineageNeighbors(lineageGraph, selectedNode.id);
+    const lookup = (id: string) => lineageGraph.nodes.find((node) => node.id === id);
+    return {
+      node: selectedNode,
+      upstream: upstream.map(lookup).filter((value): value is LineageNode => Boolean(value)),
+      downstream: downstream.map(lookup).filter((value): value is LineageNode => Boolean(value)),
+      blockers: relatedBlockers(state, selectedNode),
+      questions: relatedQuestions(state, selectedNode),
+    };
+  }, [lineageGraph, selectedNode, state]);
 
   const runUpdate = async (label: string, action: () => Promise<WorkflowState | void>) => {
     setSaving(label);
@@ -222,6 +285,17 @@ export default function WorkflowPage() {
               </article>
             ))}
           </div>
+        </section>
+      )}
+
+      {!loading && (
+        <section className="mb-6 grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+          <LineageGraphView
+            graph={lineageGraph}
+            selectedNodeId={selectedNodeId}
+            onSelect={(node) => setSelectedNodeId(node?.id ?? null)}
+          />
+          <LineageDetail detail={selectedDetail} onClear={() => setSelectedNodeId(null)} />
         </section>
       )}
 
@@ -405,6 +479,115 @@ function Status({ tone, children }: { tone: "error" | "success"; children: React
     : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200";
   return <div className={`mb-6 rounded-xl border px-4 py-3 text-sm ${classes}`}>{children}</div>;
 }
+
+function LineageDetail({
+  detail,
+  onClear,
+}: {
+  detail: LineageDetailValue | null;
+  onClear: () => void;
+}) {
+  if (!detail) {
+    return (
+      <div className="card flex h-full flex-col justify-center gap-2 p-6 text-sm text-ink-400">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Block detail</h3>
+        <p>Select a node in the lineage graph to inspect its inputs, outputs, and tied blockers or questions.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <span className="rounded-full border border-ink-700 bg-ink-900/40 px-2 py-0.5 text-[10px] uppercase tracking-wider text-ink-500">
+            {detail.node.stage}
+          </span>
+          <h3 className="mt-2 text-sm font-semibold text-ink-100">{detail.node.label}</h3>
+          {detail.node.sublabel && <p className="mt-1 text-sm text-ink-400">{detail.node.sublabel}</p>}
+          {detail.node.meta && <p className="mt-1 text-xs text-ink-500">Updated {relative(detail.node.meta)}</p>}
+        </div>
+        <button className="btn-ghost" type="button" onClick={onClear}>Close</button>
+      </div>
+
+      <DetailGroup title="Inputs" nodes={detail.upstream} emptyText="No upstream inputs." />
+      <DetailGroup title="Outputs" nodes={detail.downstream} emptyText="Nothing downstream yet." />
+
+      {(detail.blockers.length > 0 || detail.questions.length > 0) && (
+        <div className="mt-4 space-y-2">
+          <h4 className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">Tied concerns</h4>
+          {detail.blockers.map((blocker) => (
+            <div key={blocker.id} className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              Blocker: {blocker.title}
+            </div>
+          ))}
+          {detail.questions.map((question) => (
+            <div key={question.id} className="rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              Question: {question.prompt}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailGroup({ title, nodes, emptyText }: { title: string; nodes: LineageNode[]; emptyText: string }) {
+  return (
+    <div className="mt-4">
+      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">{title}</h4>
+      {nodes.length === 0 ? (
+        <p className="mt-1 text-xs text-ink-500">{emptyText}</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {nodes.map((node) => (
+            <li key={node.id} className="rounded-xl border border-ink-800 bg-ink-950/35 px-3 py-2 text-xs text-ink-200">
+              <span className="text-[10px] uppercase tracking-wider text-ink-500">{node.stage}</span>
+              <div className="mt-0.5 text-sm text-ink-100">{node.label}</div>
+              {node.sublabel && <div className="mt-0.5 text-xs text-ink-400">{node.sublabel}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function relatedBlockers(state: WorkflowState, node: LineageNode): WorkflowBlocker[] {
+  if (node.stage === "plan") {
+    const planId = node.id.replace(/^plan:/, "");
+    return state.blockers.filter((blocker) => blocker.relatedPlanItemId === planId);
+  }
+  if (node.stage === "requirements") {
+    const requirementId = node.id.replace(/^req:/, "");
+    return state.blockers.filter((blocker) => blocker.relatedRequirementId === requirementId);
+  }
+  return [];
+}
+
+function relatedQuestions(state: WorkflowState, node: LineageNode): WorkflowQuestion[] {
+  if (node.stage === "plan") {
+    const planId = node.id.replace(/^plan:/, "");
+    return state.questions.filter(
+      (question) => (question as unknown as { relatedPlanItemId?: string }).relatedPlanItemId === planId,
+    );
+  }
+  if (node.stage === "requirements") {
+    const requirementId = node.id.replace(/^req:/, "");
+    return state.questions.filter(
+      (question) => (question as unknown as { relatedRequirementId?: string }).relatedRequirementId === requirementId,
+    );
+  }
+  return [];
+}
+
+type LineageDetailValue = {
+  node: LineageNode;
+  upstream: LineageNode[];
+  downstream: LineageNode[];
+  blockers: WorkflowBlocker[];
+  questions: WorkflowQuestion[];
+};
 
 function requirementToInput(requirement: WorkflowRequirement): SaveWorkflowRequirementInput {
   return {

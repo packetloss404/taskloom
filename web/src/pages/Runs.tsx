@@ -3,7 +3,8 @@ import { Activity, CheckCircle2, Clock, Loader2, Timer, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { ActivityRecord, AgentRunRecord, AgentRunStatus } from "@/lib/types";
+import RunTelemetry from "@/components/RunTelemetry";
+import type { ActivityRecord, AgentRecord, AgentRunRecord, AgentRunStatus } from "@/lib/types";
 
 const STATUS_TONE: Record<AgentRunStatus, "good" | "danger" | "warn" | "muted"> = {
   success: "good",
@@ -16,16 +17,18 @@ const STATUS_TONE: Record<AgentRunStatus, "good" | "danger" | "warn" | "muted"> 
 export default function RunsPage() {
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
   const [activities, setActivities] = useState<ActivityRecord[]>([]);
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | AgentRunStatus>("all");
 
   useEffect(() => {
-    Promise.all([api.listAgentRuns(), api.listActivity()])
-      .then(([nextRuns, nextActivities]) => {
+    Promise.all([api.listAgentRuns(), api.listActivity(), api.listAgents()])
+      .then(([nextRuns, nextActivities, nextAgents]) => {
         setRuns(nextRuns);
         setActivities(nextActivities);
+        setAgents(nextAgents);
       })
       .catch((loadError) => setError((loadError as Error).message))
       .finally(() => setLoading(false));
@@ -86,6 +89,10 @@ export default function RunsPage() {
       {loading ? (
         <div className="flex items-center gap-3 text-sm text-ink-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading runs...</div>
       ) : (
+        <>
+        <div className="mb-6">
+          <RunTelemetry runs={runs} agents={agents} />
+        </div>
         <div className="grid gap-6 xl:grid-cols-2">
           <section>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -152,6 +159,7 @@ export default function RunsPage() {
             )}
           </section>
         </div>
+        </>
       )}
 
       {selectedRun && <RunDetailDrawer run={selectedRun} onClose={() => setSelectedRunId(null)} />}
