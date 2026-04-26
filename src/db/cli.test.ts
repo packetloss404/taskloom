@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillAppDatabase, migrateDatabase, readAppData, resetAppDatabase, resetDatabase, seedAppDatabase, seedDatabase } from "./cli";
+import { backfillAppDatabase, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase } from "./cli";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -87,6 +87,51 @@ test("migrateDatabase creates runtime app tables", () => {
   }
 });
 
+test("migrationStatus reports pending and applied migrations without creating a database", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "missing.sqlite");
+
+    const missing = migrationStatus({ dbPath });
+    assert.equal(missing.exists, false);
+    assert.deepEqual(missing.pending, expectedMigrations);
+
+    migrateDatabase({ dbPath });
+    const migrated = migrationStatus({ dbPath });
+
+    assert.equal(migrated.exists, true);
+    assert.deepEqual(migrated.applied, expectedMigrations);
+    assert.deepEqual(migrated.pending, []);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backupDatabase copies a migrated database and restoreDatabase validates before replacing", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    const backupPath = join(tempDir, "taskloom.backup.sqlite");
+    seedAppDatabase({ dbPath });
+
+    const backup = backupDatabase({ dbPath, backupPath });
+    resetDatabase({ dbPath });
+    const empty = readAppData({ dbPath });
+
+    assert.equal(backup.backupPath, backupPath);
+    assert.equal(empty, null);
+
+    const restore = restoreDatabase({ dbPath, backupPath });
+    const restored = readAppData({ dbPath });
+
+    assert.equal(restore.backupPath, backupPath);
+    assert.deepEqual(migrationStatus({ dbPath }).pending, []);
+    assert.equal(restored?.workspaces.length, 3);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("seedAppDatabase writes the full seed store and activation rows", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
   try {
@@ -99,6 +144,7 @@ test("seedAppDatabase writes the full seed store and activation rows", () => {
     assert.equal(data?.workspaces.length, 3);
     assert.equal(data?.users.length, 3);
     assert.equal(data?.agents.some((agent) => agent.id === "agent_alpha_support"), true);
+    assert.ok((data?.activationSignals.length ?? 0) > 0);
 
     const db = new DatabaseSync(dbPath);
     try {

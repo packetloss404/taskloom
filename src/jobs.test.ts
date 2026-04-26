@@ -103,6 +103,69 @@ test("snapshotForWorkspace derives activation from durable workflow records befo
   assert.equal(snapshot.releasedAt, "2026-04-22T10:00:00.000Z");
 });
 
+test("snapshotForWorkspace maps durable retry and scope-change signals before legacy counters", () => {
+  const data = makeStore();
+  data.activationFacts.alpha = {
+    now: "2026-04-23T10:00:00.000Z",
+    retryCount: 5,
+    scopeChangeCount: 5,
+  };
+  data.activationSignals = [
+    {
+      id: "signal_alpha_retry",
+      workspaceId: "alpha",
+      kind: "retry",
+      source: "agent_run",
+      sourceId: "run_alpha_failed",
+      createdAt: "2026-04-22T10:00:00.000Z",
+      updatedAt: "2026-04-22T10:00:00.000Z",
+    },
+    {
+      id: "signal_alpha_scope",
+      workspaceId: "alpha",
+      kind: "scope_change",
+      source: "workflow",
+      createdAt: "2026-04-22T11:00:00.000Z",
+      updatedAt: "2026-04-22T11:00:00.000Z",
+    },
+  ];
+
+  const snapshot = snapshotForWorkspace(data, "alpha");
+
+  assert.equal(snapshot.retryCount, 1);
+  assert.equal(snapshot.scopeChangeCount, 1);
+});
+
+test("snapshotForWorkspace maps activation retry and scope-change activities as durable signals", () => {
+  const data = makeStore();
+  delete data.activationFacts.alpha;
+  data.activities = [
+    {
+      id: "activity_retry",
+      workspaceId: "alpha",
+      scope: "activation",
+      event: "agent.run.retry",
+      actor: { type: "user", id: "user_alpha" },
+      data: { activationSignalKind: "retry" },
+      occurredAt: "2026-04-22T10:00:00.000Z",
+    },
+    {
+      id: "activity_scope",
+      workspaceId: "alpha",
+      scope: "activation",
+      event: "workflow.scope_changed",
+      actor: { type: "user", id: "user_alpha" },
+      data: { activationSignalKind: "scope_change" },
+      occurredAt: "2026-04-22T11:00:00.000Z",
+    },
+  ];
+
+  const snapshot = snapshotForWorkspace(data, "alpha");
+
+  assert.equal(snapshot.retryCount, 1);
+  assert.equal(snapshot.scopeChangeCount, 1);
+});
+
 test("repairActivationReadModels repairs stale activation read models", async () => {
   const data = makeStore();
   data.activationReadModels.alpha = {
@@ -162,6 +225,7 @@ function makeStore(): TaskloomData {
     releaseConfirmations: [],
     onboardingStates: [],
     activities: [],
+    activationSignals: [],
     activationFacts: {
       alpha: {
         now: "2026-04-23T10:00:00.000Z",

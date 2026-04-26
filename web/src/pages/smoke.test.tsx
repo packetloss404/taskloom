@@ -138,3 +138,28 @@ test("Share tokens are wired through API, settings, and public routes", () => {
   assert.match(publicShare, /shared\.scope === "brief" \|\| shared\.scope === "overview"/);
   assert.match(publicShare, /shared\.scope === "plan" \|\| shared\.scope === "overview"/);
 });
+
+test("Member management is wired through typed API methods and settings UI", () => {
+  const api = readFileSync(fileURLToPath(new URL("../lib/api.ts", import.meta.url)), "utf8");
+  const types = readFileSync(fileURLToPath(new URL("../lib/types.ts", import.meta.url)), "utf8");
+  const settings = pageSource("Settings.tsx");
+
+  assert.match(types, /export interface WorkspaceMemberRecord/);
+  assert.match(types, /export interface WorkspaceInvitationRecord/);
+  assert.match(types, /export interface WorkspaceMembersPayload/);
+  assert.match(api, /listWorkspaceMembers: \(\) => j<WorkspaceMembersPayload>\("\/api\/app\/members"\)/);
+  assert.match(api, /createWorkspaceInvitation: \(body: CreateWorkspaceInvitationInput\)/);
+  assert.match(api, /resendWorkspaceInvitation: \(invitationId: string\)/);
+  assert.match(api, /revokeWorkspaceInvitation: \(invitationId: string\)/);
+  assert.match(api, /updateWorkspaceMemberRole: \(userId: string, role: WorkspaceRole\)/);
+  assert.match(api, /removeWorkspaceMember: \(userId: string\) => j<\{ ok: boolean \}>\(`\/api\/app\/members\/\$\{userId\}`/);
+  assert.match(settings, /api\.listWorkspaceMembers\(\)/);
+  assert.match(settings, /api\.createWorkspaceInvitation/);
+  assert.match(settings, /api\.resendWorkspaceInvitation/);
+  assert.match(settings, /api\.revokeWorkspaceInvitation/);
+  assert.match(settings, /api\.updateWorkspaceMemberRole/);
+  assert.match(settings, /api\.removeWorkspaceMember/);
+  assert.match(settings, /MEMBERS · ACCESS CONTROL/);
+  assert.match(settings, /workspaceRole === "owner" \? workspaceRoles : workspaceRoles\.filter/);
+  assert.match(settings, /member\.role === "owner" && ownerCount <= 1/);
+});

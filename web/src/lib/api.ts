@@ -43,8 +43,12 @@ import type {
   AvailableTool,
   RunDiagnostic,
   CreateShareTokenInput,
+  CreateWorkspaceInvitationInput,
   PublicSharePayload,
   ShareTokenRecord,
+  WorkspaceMemberRecord,
+  WorkspaceMembersPayload,
+  WorkspaceRole,
 } from "@/lib/types";
 import { pushExternalToast } from "@/context/ToastContext";
 
@@ -100,6 +104,16 @@ export const api = {
   completeOnboardingStep: (stepKey: string) => j<{ onboarding: BootstrapPayload["onboarding"] }>(`/api/app/onboarding/steps/${stepKey}/complete`, { method: "POST" }),
   updateProfile: (body: { displayName: string; timezone: string }) => j<{ profile: Session["user"] }>("/api/app/profile", { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.profile),
   updateWorkspace: (body: { name: string; website: string; automationGoal: string }) => j<{ workspace: Session["workspace"] }>("/api/app/workspace", { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.workspace),
+  listWorkspaceMembers: () => j<WorkspaceMembersPayload>("/api/app/members"),
+  createWorkspaceInvitation: (body: CreateWorkspaceInvitationInput) =>
+    j<{ invitation: WorkspaceMembersPayload["invitations"][number] }>("/api/app/invitations", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.invitation),
+  resendWorkspaceInvitation: (invitationId: string) =>
+    j<{ invitation: WorkspaceMembersPayload["invitations"][number] }>(`/api/app/invitations/${invitationId}/resend`, { method: "POST" }).then((payload) => payload.invitation),
+  revokeWorkspaceInvitation: (invitationId: string) =>
+    j<{ invitation: WorkspaceMembersPayload["invitations"][number] }>(`/api/app/invitations/${invitationId}/revoke`, { method: "POST" }).then((payload) => payload.invitation),
+  updateWorkspaceMemberRole: (userId: string, role: WorkspaceRole) =>
+    j<{ member: WorkspaceMemberRecord }>(`/api/app/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }).then((payload) => payload.member),
+  removeWorkspaceMember: (userId: string) => j<{ ok: boolean }>(`/api/app/members/${userId}`, { method: "DELETE" }),
   listActivity: () => j<{ activities: ActivityRecord[] }>("/api/app/activity").then((payload) => payload.activities),
   getActivityDetail: (id: string) => j<ActivityDetailPayload>(`/api/app/activity/${id}`),
   listAgents: () => j<{ agents: AgentRecord[] }>("/api/app/agents").then((payload) => payload.agents),

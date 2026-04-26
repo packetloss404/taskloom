@@ -3,24 +3,33 @@ import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { canManageWorkspaceRole } from "@/lib/roles";
-import type { BootstrapPayload, ShareTokenRecord, ShareTokenScope } from "@/lib/types";
+import type { BootstrapPayload, ShareTokenRecord, ShareTokenScope, WorkspaceInvitationRecord, WorkspaceMemberRecord, WorkspaceRole } from "@/lib/types";
+
+const workspaceRoles: WorkspaceRole[] = ["viewer", "member", "admin", "owner"];
 
 export default function SettingsPage() {
   const { session, refreshSession } = useAuth();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
+  const [members, setMembers] = useState<WorkspaceMemberRecord[]>([]);
+  const [invitations, setInvitations] = useState<WorkspaceInvitationRecord[]>([]);
   const [shareTokens, setShareTokens] = useState<ShareTokenRecord[]>([]);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState<string | null>(null);
+  const [memberMessage, setMemberMessage] = useState<string | null>(null);
+  const [memberBusyId, setMemberBusyId] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [shareBusyId, setShareBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
       api.getBootstrap(),
+      api.listWorkspaceMembers().catch(() => ({ members: [], invitations: [] })),
       api.listShareTokens().catch(() => [] as ShareTokenRecord[]),
     ])
-      .then(([nextBootstrap, nextShareTokens]) => {
+      .then(([nextBootstrap, nextMembers, nextShareTokens]) => {
         setBootstrap(nextBootstrap);
+        setMembers(nextMembers.members);
+        setInvitations(nextMembers.invitations);
         setShareTokens(nextShareTokens);
       })
       .catch(() => setBootstrap(null));
@@ -37,6 +46,14 @@ export default function SettingsPage() {
   const workspaceRole = bootstrap.workspace.role ?? session.workspace.role;
   const canManageWorkspace = canManageWorkspaceRole(workspaceRole);
   const workspaceControlsDisabled = !canManageWorkspace;
+  const ownerCount = members.filter((member) => member.role === "owner").length;
+  const roleOptions = workspaceRole === "owner" ? workspaceRoles : workspaceRoles.filter((role) => role !== "owner");
+
+  const refreshMembers = async () => {
+    const nextMembers = await api.listWorkspaceMembers();
+    setMembers(nextMembers.members);
+    setInvitations(nextMembers.invitations);
+  };
 
   const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -109,6 +126,87 @@ export default function SettingsPage() {
     }
   };
 
+  const createInvitation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canManageWorkspace) return;
+    const form = new FormData(event.currentTarget);
+    setMemberBusyId("invite");
+    setMemberMessage(null);
+    try {
+      await api.createWorkspaceInvitation({
+        email: String(form.get("email") || "").trim(),
+        role: String(form.get("role") || "member") as WorkspaceRole,
+      });
+      await refreshMembers();
+      setMemberMessage("Invitation created.");
+      event.currentTarget.reset();
+    } catch (error) {
+      setMemberMessage((error as Error).message);
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
+  const updateMemberRole = async (member: WorkspaceMemberRecord, role: WorkspaceRole) => {
+    if (!canManageWorkspace || member.role === role) return;
+    setMemberBusyId(member.userId);
+    setMemberMessage(null);
+    try {
+      await api.updateWorkspaceMemberRole(member.userId, role);
+      await refreshMembers();
+      setMemberMessage("Member role updated.");
+    } catch (error) {
+      setMemberMessage((error as Error).message);
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
+  const removeMember = async (member: WorkspaceMemberRecord) => {
+    if (!canManageWorkspace) return;
+    setMemberBusyId(member.userId);
+    setMemberMessage(null);
+    try {
+      await api.removeWorkspaceMember(member.userId);
+      await refreshMembers();
+      setMemberMessage("Member removed.");
+    } catch (error) {
+      setMemberMessage((error as Error).message);
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
+  const resendInvitation = async (invitation: WorkspaceInvitationRecord) => {
+    if (!canManageWorkspace) return;
+    setMemberBusyId(`resend:${invitation.id}`);
+    setMemberMessage(null);
+    try {
+      await api.resendWorkspaceInvitation(invitation.id);
+      await refreshMembers();
+      setMemberMessage("Invitation resent.");
+    } catch (error) {
+      setMemberMessage((error as Error).message);
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
+  const revokeInvitation = async (invitation: WorkspaceInvitationRecord) => {
+    if (!canManageWorkspace) return;
+    setMemberBusyId(`revoke:${invitation.id}`);
+    setMemberMessage(null);
+    try {
+      await api.revokeWorkspaceInvitation(invitation.id);
+      await refreshMembers();
+      setMemberMessage("Invitation revoked.");
+    } catch (error) {
+      setMemberMessage((error as Error).message);
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
   return (
     <div className="page-frame">
       <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
@@ -140,7 +238,7 @@ export default function SettingsPage() {
             <div className="kicker mb-2">PROFILE</div>
             <h2 className="display text-2xl">Account</h2>
           </div>
-          <span className="section-marker">§ 01 / 04</span>
+          <span className="section-marker">§ 01 / 05</span>
         </div>
         <form className="grid gap-4 md:grid-cols-2 md:max-w-3xl" onSubmit={saveProfile}>
           <Field label="DISPLAY NAME">
@@ -165,7 +263,7 @@ export default function SettingsPage() {
             <div className="kicker mb-2">WORKSPACE</div>
             <h2 className="display text-2xl">Workspace profile</h2>
           </div>
-          <span className="section-marker">§ 02 / 04</span>
+          <span className="section-marker">§ 02 / 05</span>
         </div>
         <form className="grid gap-4 md:grid-cols-2 md:max-w-3xl" onSubmit={saveWorkspace}>
           <fieldset className="contents" disabled={workspaceControlsDisabled}>
@@ -191,10 +289,145 @@ export default function SettingsPage() {
       <section className="section-band">
         <div className="mb-5 flex items-end justify-between">
           <div>
+            <div className="kicker mb-2">MEMBERS · ACCESS CONTROL</div>
+            <h2 className="display text-2xl">Workspace members</h2>
+          </div>
+          <span className="section-marker">§ 03 / 05</span>
+        </div>
+
+        <form className="grid gap-4 md:grid-cols-[1fr_220px_auto] md:max-w-4xl" onSubmit={createInvitation}>
+          <fieldset className="contents" disabled={!canManageWorkspace || memberBusyId === "invite"}>
+            <Field label="INVITE EMAIL">
+              <input name="email" type="email" className="workflow-input" placeholder="teammate@example.com" required />
+            </Field>
+            <Field label="ROLE">
+              <select name="role" defaultValue="member" className="workflow-input">
+                {roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+            </Field>
+            <div className="flex items-end">
+              {canManageWorkspace ? (
+                <button className="btn-primary w-full" type="submit">Create invite</button>
+              ) : (
+                <ReadOnlyMemberNotice />
+              )}
+            </div>
+          </fieldset>
+        </form>
+        <StatusMessage message={memberMessage} />
+
+        <div className="mt-6 max-w-5xl overflow-x-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>Role</th>
+                <th>Joined</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="text-sm text-ink-500">No members found.</td>
+                </tr>
+              ) : members.map((member) => {
+                const isCurrentUser = member.userId === session.user.id;
+                const protectedLastOwner = member.role === "owner" && ownerCount <= 1;
+                const canManageMember = canManageWorkspace && !isCurrentUser && (workspaceRole === "owner" || member.role !== "owner") && !protectedLastOwner;
+                return (
+                  <tr key={member.userId}>
+                    <td>
+                      <div className="font-serif text-base text-ink-100">{member.displayName}{isCurrentUser ? " · you" : ""}</div>
+                      <div className="font-mono text-xs text-ink-500">{member.email}</div>
+                    </td>
+                    <td>
+                      {canManageMember ? (
+                        <select
+                          className="workflow-input min-w-32"
+                          value={member.role}
+                          disabled={memberBusyId === member.userId}
+                          onChange={(event) => updateMemberRole(member, event.currentTarget.value as WorkspaceRole)}
+                        >
+                          {roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+                        </select>
+                      ) : (
+                        <span className="pill pill--muted">{member.role}</span>
+                      )}
+                    </td>
+                    <td className="font-mono text-xs text-ink-400">{formatDate(member.joinedAt)}</td>
+                    <td>
+                      {canManageMember ? (
+                        <button className="btn-ghost" type="button" disabled={memberBusyId === member.userId} onClick={() => removeMember(member)}>
+                          Remove
+                        </button>
+                      ) : (
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">Read only</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-8 max-w-5xl overflow-x-auto">
+          <div className="kicker mb-3">INVITATIONS</div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Token</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invitations.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="text-sm text-ink-500">No invitations yet.</td>
+                </tr>
+              ) : invitations.map((invitation) => (
+                <tr key={invitation.id}>
+                  <td>
+                    <div className="font-serif text-base text-ink-100">{invitation.email}</div>
+                    <div className="font-mono text-xs text-ink-500">Created {formatDate(invitation.createdAt)} · Expires {formatDate(invitation.expiresAt)}</div>
+                  </td>
+                  <td><span className="pill pill--muted">{invitation.role}</span></td>
+                  <td><span className={invitation.status === "pending" ? "pill pill--good" : invitation.status === "revoked" || invitation.status === "expired" ? "pill pill--danger" : "pill pill--muted"}>{invitation.status}</span></td>
+                  <td className="font-mono text-xs text-ink-400">
+                    {invitation.token ?? <span className="text-ink-500">Visible to admins only</span>}
+                  </td>
+                  <td>
+                    {canManageWorkspace && invitation.status === "pending" ? (
+                      <div className="flex flex-wrap gap-2">
+                        <button className="btn-ghost" type="button" disabled={memberBusyId === `resend:${invitation.id}`} onClick={() => resendInvitation(invitation)}>
+                          Resend
+                        </button>
+                        <button className="btn-ghost" type="button" disabled={memberBusyId === `revoke:${invitation.id}`} onClick={() => revokeInvitation(invitation)}>
+                          Revoke
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">Read only</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="section-band">
+        <div className="mb-5 flex items-end justify-between">
+          <div>
             <div className="kicker mb-2">SHARING · PUBLIC TOKENS</div>
             <h2 className="display text-2xl">Share workspace output</h2>
           </div>
-          <span className="section-marker">§ 03 / 04</span>
+          <span className="section-marker">§ 04 / 05</span>
         </div>
 
         <form className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:max-w-4xl" onSubmit={createShareToken}>
@@ -275,7 +508,7 @@ export default function SettingsPage() {
             <div className="kicker mb-2">ACTIVATION SUMMARY · READ ONLY</div>
             <h2 className="display text-2xl">Status from the engine</h2>
           </div>
-          <span className="section-marker">§ 04 / 04</span>
+          <span className="section-marker">§ 05 / 05</span>
         </div>
         <table className="data-table max-w-3xl">
           <thead>
@@ -312,6 +545,10 @@ function ReadOnlyShareNotice() {
   return <span className="font-mono text-xs uppercase tracking-[0.18em] text-ink-500">Admin role required to create share tokens</span>;
 }
 
+function ReadOnlyMemberNotice() {
+  return <span className="font-mono text-xs uppercase tracking-[0.18em] text-ink-500">Admin role required to invite members</span>;
+}
+
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
@@ -326,7 +563,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 function StatusMessage({ message }: { message: string | null }) {
   if (!message) return null;
-  const success = ["updated", "created", "revoked"].some((word) => message.toLowerCase().includes(word));
+  const success = ["updated", "created", "revoked", "removed", "resent"].some((word) => message.toLowerCase().includes(word));
   return (
     <div className={`mt-4 max-w-3xl border px-3 py-2 font-mono text-xs ${success ? "border-signal-green/50 text-signal-green" : "border-signal-red/50 text-signal-red"}`}>
       {success ? "OK · " : "ERR · "}{message}

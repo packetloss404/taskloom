@@ -1,6 +1,5 @@
-import type { Session } from "./types";
-
-export type WorkspaceRole = NonNullable<Session["workspace"]["role"]>;
+import type { WorkspaceRole } from "./types";
+export type { WorkspaceRole } from "./types";
 
 const roleRanks: Record<WorkspaceRole, number> = {
   viewer: 0,

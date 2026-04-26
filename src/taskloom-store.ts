@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { DurableActivationProductRecord, WorkspaceActivationFacts } from "./activation/adapters";
 import type { ActivationMilestoneRecord, ActivationStatusDto } from "./activation/domain";
 import { buildSignalSnapshotFromFacts, buildSignalSnapshotFromProductRecords } from "./activation/adapters";
-import { generateId, hashPassword, now, slugify } from "./auth-utils";
+import { generateId, hashPassword, normalizeEmail, now, slugify } from "./auth-utils";
 
 export interface UserRecord {
   id: string;
@@ -209,6 +209,17 @@ export interface ActivityRecord {
   occurredAt: string;
   actor: { type: "user" | "system"; id: string; displayName?: string };
   data: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface ActivationSignalRecord {
+  id: string;
+  workspaceId: string;
+  kind: "retry" | "scope_change";
+  source: "activity" | "agent_run" | "workflow" | "seed";
+  sourceId?: string;
+  createdAt: string;
+  updatedAt: string;
+  data?: Record<string, string | number | boolean | null | undefined>;
 }
 
 export type AgentStatus = "active" | "paused" | "archived";
@@ -431,6 +442,7 @@ export interface TaskloomData {
   releaseConfirmations: ReleaseConfirmationCollection;
   onboardingStates: OnboardingStateRecord[];
   activities: ActivityRecord[];
+  activationSignals: ActivationSignalRecord[];
   agents: AgentRecord[];
   providers: ProviderRecord[];
   agentRuns: AgentRunRecord[];
@@ -609,6 +621,7 @@ const RECORD_COLLECTIONS = [
   "releaseConfirmations",
   "onboardingStates",
   "activities",
+  "activationSignals",
   "agents",
   "providers",
   "agentRuns",
@@ -648,15 +661,25 @@ function loadSqliteStore(db: DatabaseSync): TaskloomData | null {
 function persistSqliteStore(db: DatabaseSync, data: TaskloomData): void {
   db.exec("begin");
   try {
+    db.exec("delete from app_record_search");
     db.exec("delete from app_records");
     const insert = db.prepare(`
       insert into app_records (collection, id, workspace_id, payload, updated_at)
       values (?, ?, ?, json(?), ?)
     `);
+    const insertSearch = db.prepare(`
+      insert into app_record_search (collection, id, workspace_id, user_id, email, token)
+      values (?, ?, ?, ?, ?, ?)
+    `);
 
     for (const collection of RECORD_COLLECTIONS) {
       for (const payload of recordsForCollection(data, collection)) {
-        insert.run(collection, recordId(collection, payload), workspaceIdForRecord(payload), JSON.stringify(payload), updatedAtForRecord(payload));
+        const id = recordId(collection, payload);
+        insert.run(collection, id, workspaceIdForRecord(payload), JSON.stringify(payload), updatedAtForRecord(payload));
+        const searchValues = searchValuesForRecord(collection, payload);
+        if (searchValues) {
+          insertSearch.run(collection, id, searchValues.workspaceId, searchValues.userId, searchValues.email, searchValues.token);
+        }
       }
     }
 
@@ -672,6 +695,120 @@ function persistSqliteStore(db: DatabaseSync, data: TaskloomData): void {
     db.exec("rollback");
     throw error;
   }
+}
+
+interface AppRecordSearchValues {
+  workspaceId: SQLInputValue;
+  userId: SQLInputValue;
+  email: SQLInputValue;
+  token: SQLInputValue;
+}
+
+function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown): AppRecordSearchValues | null {
+  const record = payload as Record<string, unknown>;
+  if (!["users", "sessions", "memberships", "workspaceInvitations", "shareTokens"].includes(collection)) return null;
+  const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : null;
+  const userId = typeof record.userId === "string" ? record.userId : null;
+  const email = typeof record.email === "string" ? normalizeEmail(record.email) : null;
+  const token = typeof record.token === "string" ? record.token : null;
+  return { workspaceId, userId, email, token };
+}
+
+type IndexedCollection = "users" | "sessions" | "memberships" | "workspaceInvitations" | "shareTokens";
+
+function sqliteIndexedRecord<T>(collection: IndexedCollection, whereSql: string, values: SQLInputValue[]): T | null {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return null;
+  const dbPath = resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE);
+  const db = openStoreDatabase(dbPath);
+  try {
+    const row = db.prepare(`
+      select app_records.payload as payload
+      from app_record_search
+      join app_records
+        on app_records.collection = app_record_search.collection
+       and app_records.id = app_record_search.id
+      where app_record_search.collection = ? and ${whereSql}
+      limit 1
+    `).get(collection, ...values) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as T : null;
+  } finally {
+    db.close();
+  }
+}
+
+function sqliteIndexedRecords<T>(collection: IndexedCollection, whereSql: string, values: SQLInputValue[], orderSql = "app_records.id"): T[] | null {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return null;
+  const dbPath = resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE);
+  const db = openStoreDatabase(dbPath);
+  try {
+    const rows = db.prepare(`
+      select app_records.payload as payload
+      from app_record_search
+      join app_records
+        on app_records.collection = app_record_search.collection
+       and app_records.id = app_record_search.id
+      where app_record_search.collection = ? and ${whereSql}
+      order by ${orderSql}
+    `).all(collection, ...values) as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as T);
+  } finally {
+    db.close();
+  }
+}
+
+export function findUserByIdIndexed(userId: string): UserRecord | null {
+  return sqliteIndexedRecord<UserRecord>("users", "app_record_search.id = ?", [userId])
+    ?? loadStore().users.find((entry) => entry.id === userId) ?? null;
+}
+
+export function findUserByEmailIndexed(email: string): UserRecord | null {
+  const normalized = normalizeEmail(email);
+  return sqliteIndexedRecord<UserRecord>("users", "app_record_search.email = ?", [normalized])
+    ?? loadStore().users.find((entry) => normalizeEmail(entry.email) === normalized) ?? null;
+}
+
+export function findSessionByIdIndexed(sessionId: string): SessionRecord | null {
+  return sqliteIndexedRecord<SessionRecord>("sessions", "app_record_search.id = ?", [sessionId])
+    ?? loadStore().sessions.find((entry) => entry.id === sessionId) ?? null;
+}
+
+export function listSessionsForUserIndexed(userId: string): SessionRecord[] {
+  return sqliteIndexedRecords<SessionRecord>("sessions", "app_record_search.user_id = ?", [userId])
+    ?? loadStore().sessions.filter((entry) => entry.userId === userId);
+}
+
+export function findWorkspaceMembershipIndexed(workspaceId: string, userId: string): WorkspaceMemberRecord | null {
+  return sqliteIndexedRecord<WorkspaceMemberRecord>("memberships", "app_record_search.workspace_id = ? and app_record_search.user_id = ?", [workspaceId, userId])
+    ?? loadStore().memberships.find((entry) => entry.workspaceId === workspaceId && entry.userId === userId) ?? null;
+}
+
+export function listWorkspaceMembershipsIndexed(workspaceId: string): WorkspaceMemberRecord[] {
+  return sqliteIndexedRecords<WorkspaceMemberRecord>("memberships", "app_record_search.workspace_id = ?", [workspaceId])
+    ?? loadStore().memberships.filter((entry) => entry.workspaceId === workspaceId);
+}
+
+export function findWorkspaceInvitationByTokenIndexed(token: string): WorkspaceInvitationRecord | null {
+  return sqliteIndexedRecord<WorkspaceInvitationRecord>("workspaceInvitations", "app_record_search.token = ?", [token])
+    ?? loadStore().workspaceInvitations.find((entry) => entry.token === token) ?? null;
+}
+
+export function listWorkspaceInvitationsIndexed(workspaceId: string): WorkspaceInvitationRecord[] {
+  return sqliteIndexedRecords<WorkspaceInvitationRecord>("workspaceInvitations", "app_record_search.workspace_id = ?", [workspaceId], "json_extract(app_records.payload, '$.createdAt') desc")
+    ?? loadStore().workspaceInvitations
+      .filter((entry) => entry.workspaceId === workspaceId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export function findShareTokenByTokenIndexed(token: string): ShareTokenRecord | null {
+  return sqliteIndexedRecord<ShareTokenRecord>("shareTokens", "app_record_search.token = ?", [token])
+    ?? loadStore().shareTokens.find((entry) => entry.token === token) ?? null;
+}
+
+export function listShareTokensForWorkspaceIndexed(workspaceId: string): ShareTokenRecord[] {
+  return sqliteIndexedRecords<ShareTokenRecord>("shareTokens", "app_record_search.workspace_id = ?", [workspaceId], "json_extract(app_records.payload, '$.createdAt') desc")
+    ?? loadStore().shareTokens
+      .filter((entry) => entry.workspaceId === workspaceId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {
@@ -716,6 +853,7 @@ export function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     releaseConfirmations: normalizeReleaseConfirmationCollection(data.releaseConfirmations),
     onboardingStates: data.onboardingStates ?? [],
     activities: data.activities ?? [],
+    activationSignals: data.activationSignals ?? [],
     agents: (data.agents ?? []).map((entry) => ({
       ...entry,
       inputSchema: Array.isArray(entry.inputSchema) ? entry.inputSchema : [],
@@ -1341,6 +1479,15 @@ function seedStore(): TaskloomData {
     },
   };
 
+  const activationSignals: ActivationSignalRecord[] = [
+    createActivationSignal("activation_signal_alpha_retry_1", "alpha", "retry", isoDaysAgo(1), "run_alpha_support_latest"),
+    createActivationSignal("activation_signal_alpha_scope_1", "alpha", "scope_change", isoDaysAgo(3), "question_alpha_reporting"),
+    createActivationSignal("activation_signal_beta_retry_1", "beta", "retry", isoDaysAgo(2), "run_beta_dependency_latest"),
+    createActivationSignal("activation_signal_beta_retry_2", "beta", "retry", isoDaysAgo(1)),
+    createActivationSignal("activation_signal_beta_scope_1", "beta", "scope_change", isoDaysAgo(3), "question_beta_scope"),
+    createActivationSignal("activation_signal_beta_scope_2", "beta", "scope_change", isoDaysAgo(2)),
+  ];
+
   const activationFacts: Record<string, WorkspaceActivationFacts> = {
     alpha: {
       now: createdAt,
@@ -1417,6 +1564,7 @@ function seedStore(): TaskloomData {
       createActivity("beta", "account", "account.created", { type: "system", id: "seed" }, { title: "Workspace initialized" }, createdAt),
       createActivity("gamma", "account", "account.created", { type: "system", id: "seed" }, { title: "Workspace initialized" }, createdAt),
     ],
+    activationSignals,
     agents,
     providers,
     agentRuns,
@@ -1629,6 +1777,24 @@ export function upsertWorkspaceMembership(data: TaskloomData, input: WorkspaceMe
 
   data.memberships.push(input);
   return input;
+}
+
+function createActivationSignal(
+  id: string,
+  workspaceId: string,
+  kind: ActivationSignalRecord["kind"],
+  timestamp: string,
+  sourceId?: string,
+): ActivationSignalRecord {
+  return {
+    id,
+    workspaceId,
+    kind,
+    source: "seed",
+    sourceId,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 export function listWorkspaceInvitations(data: TaskloomData, workspaceId: string): WorkspaceInvitationRecord[] {
@@ -1900,6 +2066,13 @@ export function upsertAgentRun(data: TaskloomData, input: AgentRunUpsertInput, t
   return upsertRecord(data.agentRuns, input, timestamp);
 }
 
+export type ActivationSignalUpsertInput = Omit<ActivationSignalRecord, "id" | "createdAt" | "updatedAt"> &
+  Partial<Pick<ActivationSignalRecord, "id" | "createdAt" | "updatedAt">>;
+
+export function upsertActivationSignal(data: TaskloomData, input: ActivationSignalUpsertInput, timestamp = now()): ActivationSignalRecord {
+  return upsertRecord(data.activationSignals, input, timestamp);
+}
+
 export const ONBOARDING_STEPS: OnboardingStepKey[] = [
   "create_workspace_profile",
   "define_requirements",
@@ -1936,6 +2109,9 @@ function activationProductRecordsForWorkspace(data: TaskloomData, workspaceId: s
   const planItems = listImplementationPlanItemsForWorkspace(data, workspaceId);
   const concerns = listWorkflowConcernsForWorkspace(data, workspaceId);
   const validationEvidence = listValidationEvidenceForWorkspace(data, workspaceId);
+  const activationSignals = data.activationSignals.filter((entry) => entry.workspaceId === workspaceId);
+  const retryActivities = activationSignalActivities(data.activities, workspaceId, "retry");
+  const scopeChangeActivities = activationSignalActivities(data.activities, workspaceId, "scope_change");
   const releaseConfirmation = listReleaseConfirmationsForWorkspace(data, workspaceId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 
@@ -1984,17 +2160,46 @@ function activationProductRecordsForWorkspace(data: TaskloomData, workspaceId: s
         updatedAt: releaseConfirmation.updatedAt,
       }
       : factRecord(facts?.releaseConfirmedAt),
-    retries: countRecords("legacy_retry", facts?.retryCount),
-    scopeChanges: countRecords("legacy_scope_change", facts?.scopeChangeCount),
+    retries: durableSignalRecords(activationSignals, "retry", retryActivities, "activity_retry")
+      ?? countRecords("legacy_retry", facts?.retryCount),
+    scopeChanges: durableSignalRecords(activationSignals, "scope_change", scopeChangeActivities, "activity_scope_change")
+      ?? countRecords("legacy_scope_change", facts?.scopeChangeCount),
   };
 
   return {
     records,
     hasDurableRecords: Boolean(
       brief || requirements.length > 0 || planItems.length > 0 || concerns.length > 0 ||
-      validationEvidence.length > 0 || releaseConfirmation,
+      validationEvidence.length > 0 || releaseConfirmation || activationSignals.length > 0 || retryActivities.length > 0 || scopeChangeActivities.length > 0,
     ),
   };
+}
+
+function activationSignalActivities(activities: ActivityRecord[], workspaceId: string, kind: ActivationSignalRecord["kind"]): ActivityRecord[] {
+  return activities.filter((entry) => {
+    if (entry.workspaceId !== workspaceId) return false;
+    if (entry.data.activationSignalKind === kind) return true;
+    return kind === "retry" ? entry.event === "agent.run.retry" : entry.event === "workflow.scope_changed";
+  });
+}
+
+function durableSignalRecords(
+  signals: ActivationSignalRecord[],
+  kind: ActivationSignalRecord["kind"],
+  activities: ActivityRecord[],
+  activityPrefix: string,
+): DurableActivationProductRecord[] | null {
+  const records = signals
+    .filter((entry) => entry.kind === kind)
+    .map((entry) => ({ id: entry.id, kind: entry.kind, createdAt: entry.createdAt }));
+  const seenSourceIds = new Set(signals.filter((entry) => entry.kind === kind && entry.sourceId).map((entry) => entry.sourceId));
+
+  for (const activity of activities) {
+    if (seenSourceIds.has(activity.id)) continue;
+    records.push({ id: `${activityPrefix}_${activity.id}`, kind, createdAt: activity.occurredAt });
+  }
+
+  return records.length > 0 ? records : null;
 }
 
 function factRecord(timestamp: string | undefined): DurableActivationProductRecord | null {

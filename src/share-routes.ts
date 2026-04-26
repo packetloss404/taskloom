@@ -5,8 +5,10 @@ import {
   loadStore,
   mutateStore,
   findWorkspaceBrief,
+  findShareTokenByTokenIndexed,
   listImplementationPlanItemsForWorkspace,
   listRequirementsForWorkspace,
+  listShareTokensForWorkspaceIndexed,
   type ShareTokenRecord,
   type ShareTokenScope,
 } from "./taskloom-store.js";
@@ -31,9 +33,7 @@ export const shareRoutes = new Hono();
 shareRoutes.get("/", (c) => {
   try {
     const ctx = requirePrivateWorkspaceRole(c, "viewer");
-    const data = loadStore();
-    const tokens = data.shareTokens
-      .filter((t) => t.workspaceId === ctx.workspace.id)
+    const tokens = listShareTokensForWorkspaceIndexed(ctx.workspace.id)
       .map((t) => ({
         id: t.id,
         token: t.token,
@@ -97,8 +97,7 @@ export const publicShareRoutes = new Hono();
 publicShareRoutes.get("/:token", (c) => {
   try {
     const tokenParam = c.req.param("token");
-    const data = loadStore();
-    const record = data.shareTokens.find((t) => t.token === tokenParam);
+    const record = findShareTokenByTokenIndexed(tokenParam);
     if (!record || record.revokedAt) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     if (record.expiresAt && Date.parse(record.expiresAt) < Date.now()) {
       return errorResponse(c, Object.assign(new Error("share token expired"), { status: 410 }));
@@ -110,6 +109,7 @@ publicShareRoutes.get("/:token", (c) => {
         live.readCount += 1;
       }
     });
+    const data = loadStore();
     const workspace = data.workspaces.find((w) => w.id === record.workspaceId);
     if (!workspace) return errorResponse(c, Object.assign(new Error("workspace not found"), { status: 404 }));
     const brief = findWorkspaceBrief(data, record.workspaceId);

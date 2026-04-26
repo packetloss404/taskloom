@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Hono } from "hono";
-import { appRoutes } from "./app-routes.js";
+import { appRoutes, resetAppRouteSecurityForTests } from "./app-routes.js";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
 import { login } from "./taskloom-services.js";
 import { loadStore, mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
@@ -62,6 +62,7 @@ test("register creates an authenticated session response and session cookie", as
 
 test("login rejects invalid credentials with route-level 401 response", async () => {
   resetStoreForTests();
+  resetAppRouteSecurityForTests();
   const app = createTestApp();
 
   const response = await app.request("/api/auth/login", {
@@ -73,6 +74,47 @@ test("login rejects invalid credentials with route-level 401 response", async ()
 
   assert.equal(response.status, 401);
   assert.deepEqual(body, { error: "invalid email or password" });
+});
+
+test("auth routes rate limit repeated local attempts", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  const app = createTestApp();
+
+  for (let index = 0; index < 20; index += 1) {
+    const response = await app.request("/api/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.10" },
+      body: JSON.stringify({ email: "not-an-email", password: "demo12345", displayName: "New User" }),
+    });
+    assert.equal(response.status, 400);
+  }
+
+  const limitedRegister = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.10" },
+    body: JSON.stringify({ email: "not-an-email", password: "demo12345", displayName: "New User" }),
+  });
+  assert.equal(limitedRegister.status, 429);
+  assert.deepEqual(await limitedRegister.json(), { error: "too many requests" });
+  assert.ok(limitedRegister.headers.get("retry-after"));
+
+  for (let index = 0; index < 20; index += 1) {
+    const response = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.11" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(response.status, 401);
+  }
+
+  const limitedLogin = await app.request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.11" },
+    body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+  });
+  assert.equal(limitedLogin.status, 429);
+  assert.deepEqual(await limitedLogin.json(), { error: "too many requests" });
 });
 
 test("logout removes the current session so subsequent session reads are anonymous", async () => {
@@ -242,6 +284,7 @@ test("onboarding routes expose current state and reject unknown completion steps
 
 test("member and invitation routes enforce workspace management permissions", async () => {
   resetStoreForTests();
+  resetAppRouteSecurityForTests();
   const app = createTestApp();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
 
@@ -261,6 +304,27 @@ test("member and invitation routes enforce workspace management permissions", as
     assert.equal(denied.status, 403);
     assert.deepEqual(await denied.json(), { error: "workspace role admin is required" });
   }
+});
+
+test("private mutating app routes reject cross-origin browser requests", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  const app = createTestApp();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const rejected = await app.request("/api/app/workspace", {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(auth.cookieValue),
+      "content-type": "application/json",
+      host: "localhost",
+      origin: "https://evil.example",
+    },
+    body: JSON.stringify({ name: "Blocked", website: "", automationGoal: "" }),
+  });
+
+  assert.equal(rejected.status, 403);
+  assert.deepEqual(await rejected.json(), { error: "cross-origin requests are not allowed" });
 });
 
 test("member listing hides invitation tokens from non-admin roles", async () => {
@@ -289,6 +353,7 @@ test("member listing hides invitation tokens from non-admin roles", async () => 
 
 test("admins can invite an existing user and that user can accept", async () => {
   resetStoreForTests();
+  resetAppRouteSecurityForTests();
   const app = createTestApp();
   const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
   const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
@@ -318,6 +383,156 @@ test("admins can invite an existing user and that user can accept", async () => 
   assert.equal(acceptedBody.membership.role, "member");
   assert.equal(acceptedBody.invitation.status, "accepted");
   assert.equal(loadStore().memberships.some((entry) => entry.workspaceId === "alpha" && entry.userId === "user_beta"), true);
+});
+
+test("invitation create, accept, and resend routes are rate limited", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  for (let index = 0; index < 20; index += 1) {
+    const response = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json", "x-forwarded-for": "203.0.113.20" },
+      body: JSON.stringify({ email: "not-an-email", role: "member" }),
+    });
+    assert.equal(response.status, 400);
+  }
+  const createLimited = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json", "x-forwarded-for": "203.0.113.20" },
+    body: JSON.stringify({ email: "not-an-email", role: "member" }),
+  });
+  assert.equal(createLimited.status, 429);
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json", "x-forwarded-for": "203.0.113.21" },
+    body: JSON.stringify({ email: "beta@taskloom.local", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { id: string; token: string } };
+
+  for (let index = 0; index < 20; index += 1) {
+    const response = await app.request(`/api/app/invitations/${createdBody.invitation.id}/resend`, {
+      method: "POST",
+      headers: { ...authHeaders(alpha.cookieValue), "x-forwarded-for": "203.0.113.22" },
+    });
+    assert.equal(response.status, 200);
+  }
+  const resendLimited = await app.request(`/api/app/invitations/${createdBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "x-forwarded-for": "203.0.113.22" },
+  });
+  assert.equal(resendLimited.status, 429);
+
+  for (let index = 0; index < 20; index += 1) {
+    const response = await app.request("/api/app/invitations/missing-token/accept", {
+      method: "POST",
+      headers: { ...authHeaders(beta.cookieValue), "x-forwarded-for": "203.0.113.23" },
+    });
+    assert.equal(response.status, 404);
+  }
+  const acceptLimited = await app.request("/api/app/invitations/missing-token/accept", {
+    method: "POST",
+    headers: { ...authHeaders(beta.cookieValue), "x-forwarded-for": "203.0.113.23" },
+  });
+  assert.equal(acceptLimited.status, 429);
+});
+
+test("admins can resend invitations by rotating token and expiry", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "beta@taskloom.local", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { id: string; token: string; expiresAt: string } };
+
+  mutateStore((data) => {
+    const invitation = data.workspaceInvitations.find((entry) => entry.id === createdBody.invitation.id);
+    assert.ok(invitation, "expected invitation");
+    invitation.expiresAt = "2000-01-01T00:00:00.000Z";
+  });
+
+  const resent = await app.request(`/api/app/invitations/${createdBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const resentBody = await resent.json() as { invitation: { token: string; expiresAt: string; status: string } };
+
+  assert.equal(resent.status, 200);
+  assert.notEqual(resentBody.invitation.token, createdBody.invitation.token);
+  assert.equal(resentBody.invitation.status, "pending");
+  assert.ok(new Date(resentBody.invitation.expiresAt).getTime() > Date.now());
+
+  const oldToken = await app.request(`/api/app/invitations/${createdBody.invitation.token}/accept`, {
+    method: "POST",
+    headers: authHeaders(beta.cookieValue),
+  });
+  assert.equal(oldToken.status, 404);
+
+  const accepted = await app.request(`/api/app/invitations/${resentBody.invitation.token}/accept`, {
+    method: "POST",
+    headers: authHeaders(beta.cookieValue),
+  });
+  assert.equal(accepted.status, 200);
+});
+
+test("invitation revoke and resend enforce workspace roles", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "beta@taskloom.local", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { id: string; token: string } };
+
+  setAlphaRole("member");
+  const deniedResend = await app.request(`/api/app/invitations/${createdBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(deniedResend.status, 403);
+  assert.deepEqual(await deniedResend.json(), { error: "workspace role admin is required" });
+
+  setAlphaRole("viewer");
+  const deniedRevoke = await app.request(`/api/app/invitations/${createdBody.invitation.id}/revoke`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(deniedRevoke.status, 403);
+  assert.deepEqual(await deniedRevoke.json(), { error: "workspace role admin is required" });
+
+  setAlphaRole("admin");
+  const revoked = await app.request(`/api/app/invitations/${createdBody.invitation.id}/revoke`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const revokedBody = await revoked.json() as { invitation: { status: string; revokedAt: string | null } };
+  assert.equal(revoked.status, 200);
+  assert.equal(revokedBody.invitation.status, "revoked");
+  assert.ok(revokedBody.invitation.revokedAt);
+
+  const accepted = await app.request(`/api/app/invitations/${createdBody.invitation.token}/accept`, {
+    method: "POST",
+    headers: authHeaders(login({ email: "beta@taskloom.local", password: "demo12345" }).cookieValue),
+  });
+  assert.equal(accepted.status, 400);
+  assert.deepEqual(await accepted.json(), { error: "invitation has been revoked" });
 });
 
 test("member role updates and removals protect owner-only operations", async () => {

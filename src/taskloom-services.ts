@@ -6,6 +6,8 @@ import { deriveActivationStatus } from "./activation/service";
 import { buildActivationSummaryCard } from "./activation/view-model";
 import {
   defaultWorkspaceIdForUser,
+  findSessionByIdIndexed,
+  findUserByEmailIndexed,
   deleteWorkspaceEnvVar,
   findAgent,
   findProvider,
@@ -17,7 +19,9 @@ import {
   listAgentsForWorkspace,
   listProvidersForWorkspace,
   listReleaseConfirmationsForWorkspace,
+  listWorkspaceInvitationsIndexed,
   listWorkspaceInvitations,
+  listWorkspaceMembershipsIndexed,
   listWorkspaceEnvVars,
   loadStore,
   mutateStore,
@@ -45,6 +49,7 @@ import {
   type WorkspaceRole,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
+  upsertActivationSignal,
   upsertAgent,
   upsertAgentRun,
   upsertProvider,
@@ -198,12 +203,13 @@ export function restoreSession(c: Context): AuthenticatedContext | null {
   const parsed = parseSessionCookieValue(getCookie(c, SESSION_COOKIE_NAME) ?? "");
   if (!parsed) return null;
 
-  const data = loadStore();
-  const session = data.sessions.find((entry) => entry.id === parsed.sessionId);
+  const session = findSessionByIdIndexed(parsed.sessionId);
   if (!session) return null;
   if (session.secretHash !== hashSessionSecret(parsed.secret)) return null;
   if (new Date(session.expiresAt).getTime() <= Date.now()) return null;
-  session.lastAccessedAt = now();
+  const data = loadStore();
+  const liveSession = data.sessions.find((entry) => entry.id === session.id);
+  if (liveSession) liveSession.lastAccessedAt = now();
   const context = buildAuthenticatedContext(data, session.userId);
   return context;
 }
@@ -347,11 +353,10 @@ export function listWorkspaceMembers(context: AuthenticatedContext) {
   const data = loadStore();
   const canViewInvitationTokens = context.role === "admin" || context.role === "owner";
   return {
-    members: data.memberships
-      .filter((entry) => entry.workspaceId === context.workspace.id)
+    members: listWorkspaceMembershipsIndexed(context.workspace.id)
       .map((membership) => summarizeWorkspaceMember(data, membership))
       .sort((left, right) => left.displayName.localeCompare(right.displayName)),
-    invitations: listWorkspaceInvitations(data, context.workspace.id)
+    invitations: listWorkspaceInvitationsIndexed(context.workspace.id)
       .map((invitation) => summarizeWorkspaceInvitation(invitation, { includeToken: canViewInvitationTokens })),
   };
 }
@@ -363,7 +368,7 @@ export function createWorkspaceInvitation(context: AuthenticatedContext, input: 
   assertCanManageRole(context.role, role);
 
   return mutateStore((data) => {
-    const existingUser = data.users.find((entry) => normalizeEmail(entry.email) === email);
+    const existingUser = findUserByEmailIndexed(email);
     if (existingUser && findWorkspaceMembership(data, context.workspace.id, existingUser.id)) {
       throw httpError(409, "user is already a workspace member");
     }
@@ -432,6 +437,58 @@ export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: 
       membership: summarizeWorkspaceMember(data, membership),
       invitation: summarizeWorkspaceInvitation(invitation),
     };
+  });
+}
+
+export function resendWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
+  if (!invitationId.trim()) throw httpError(400, "invitation id is required");
+
+  return mutateStore((data) => {
+    const invitation = data.workspaceInvitations.find((entry) => {
+      return entry.id === invitationId.trim() && entry.workspaceId === context.workspace.id;
+    });
+    if (!invitation) throw httpError(404, "invitation not found");
+    assertCanManageRole(context.role, invitation.role);
+    if (invitation.revokedAt) throw httpError(400, "invitation has been revoked");
+    if (invitation.acceptedAt) throw httpError(400, "invitation has already been accepted");
+
+    const timestamp = now();
+    invitation.token = generateId();
+    invitation.expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+    invitation.invitedByUserId = context.user.id;
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.invitation_resent", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Invitation resent for ${invitation.email}`, email: invitation.email, role: invitation.role }, timestamp));
+
+    return { invitation: summarizeWorkspaceInvitation(invitation) };
+  });
+}
+
+export function revokeWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
+  if (!invitationId.trim()) throw httpError(400, "invitation id is required");
+
+  return mutateStore((data) => {
+    const invitation = data.workspaceInvitations.find((entry) => {
+      return entry.id === invitationId.trim() && entry.workspaceId === context.workspace.id;
+    });
+    if (!invitation) throw httpError(404, "invitation not found");
+    assertCanManageRole(context.role, invitation.role);
+    if (invitation.acceptedAt) throw httpError(400, "invitation has already been accepted");
+    if (invitation.revokedAt) throw httpError(400, "invitation has already been revoked");
+
+    const timestamp = now();
+    invitation.revokedAt = timestamp;
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.invitation_revoked", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Invitation revoked for ${invitation.email}`, email: invitation.email, role: invitation.role }, timestamp));
+
+    return { invitation: summarizeWorkspaceInvitation(invitation) };
   });
 }
 
@@ -1187,6 +1244,26 @@ export async function retryAgentRun(context: AuthenticatedContext, runId: string
   if (!previous.agentId) {
     throw httpError(400, "this run is not linked to an agent and cannot be retried");
   }
+  const timestamp = now();
+  mutateStore((store) => {
+    upsertActivationSignal(store, {
+      workspaceId: context.workspace.id,
+      kind: "retry",
+      source: "agent_run",
+      sourceId: previous.id,
+      data: { previousRunId: previous.id, agentId: previous.agentId },
+    }, timestamp);
+    store.activities.unshift(makeActivity(context.workspace.id, "activation", "agent.run.retry", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, {
+      title: `Run retried: ${previous.title}`,
+      activationSignalKind: "retry",
+      previousRunId: previous.id,
+      agentId: previous.agentId,
+    }, timestamp));
+  });
   return runAgent(context, previous.agentId);
 }
 

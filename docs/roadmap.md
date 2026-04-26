@@ -13,7 +13,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - RBAC defines owner, admin, member, and viewer roles with view workspace data, edit workflow, and manage workspace/operations permissions.
 - Private app, workflow, job, agent, provider, env-var, webhook, API-key, usage, LLM, and share routes enforce workspace membership and role-aware permissions.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
-- Local persistence commands can seed/reset the JSON store, migrate/seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
+- Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
 - Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
 - React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, workflow, activity/detail, agents, runs, operations, integrations, and public share views.
@@ -140,6 +140,7 @@ Replace the JSON-only runtime with a database-backed persistence layer while kee
 - [ ] Replace JSON-payload `app_records` persistence with query-optimized repositories for high-value routes where needed.
 - [x] Add formal seed and reset commands for local development.
 - [x] Add JSON-to-SQLite app backfill commands.
+- [x] Add local SQLite migration status plus validated backup/restore commands. Executable rollback remains intentionally unsupported; restore from a pre-migration backup is the rollback strategy.
 - [x] Preserve deterministic activation recalculation for the local JSON runtime and SQLite activation seed path.
 
 ### 2. Auth And RBAC
@@ -162,7 +163,7 @@ Move activation snapshots from onboarding-derived facts toward product-observed 
 - [x] Wire runtime activation snapshots to durable workflow, validation, and release records through `buildSignalSnapshotFromProductRecords(...)`, with legacy facts used as fallback.
 - [ ] Distinguish user-entered facts from system-observed facts.
 - [x] Track durable workflow blockers, dependency blockers, open questions, and validation failures in runtime snapshots.
-- [ ] Move retry and scope-change signals from legacy facts into durable product records.
+- [x] Move retry and scope-change signals toward durable records through `activationSignals` and activation-scoped activity mapping, while retaining legacy fact fallback.
 - [x] Keep signal mapping outside the pure activation engine.
 
 ### 4. Jobs And Backfills
@@ -201,7 +202,7 @@ Strengthen the project rails before larger product work accumulates.
 1. Query-optimized repository hardening for high-value SQLite routes, replacing broad JSON-payload reads where needed.
 2. Remaining activation signals: durable retry and scope-change records plus a normalized `ActivationSignalRepository`.
 3. Member-management UI, invitation revoke/resend, email delivery, rate limiting, and CSRF review.
-4. Production storage hardening: concurrency, backup/restore, and migration rollback strategy.
+4. Production storage hardening: concurrency and query-optimized storage beyond the local backup/restore rollback strategy.
 5. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done

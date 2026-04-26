@@ -52,6 +52,41 @@ export interface ActivityRecord {
   data: Record<string, unknown>;
 }
 
+export type WorkspaceRole = NonNullable<Session["workspace"]["role"]>;
+
+export interface WorkspaceMemberRecord {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: WorkspaceRole;
+  joinedAt: string;
+}
+
+export interface WorkspaceInvitationRecord {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: WorkspaceRole;
+  token?: string;
+  invitedByUserId: string;
+  acceptedByUserId: string | null;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  expiresAt: string;
+  createdAt: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+}
+
+export interface WorkspaceMembersPayload {
+  members: WorkspaceMemberRecord[];
+  invitations: WorkspaceInvitationRecord[];
+}
+
+export type CreateWorkspaceInvitationInput = {
+  email: string;
+  role: WorkspaceRole;
+};
+
 export type AgentStatus = "active" | "paused" | "archived";
 export type AgentTriggerKind = "manual" | "schedule" | "webhook" | "email";
 export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | "custom";

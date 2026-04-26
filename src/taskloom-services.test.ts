@@ -280,6 +280,7 @@ test("agent runs: list adds duration and capability flags; cancel and retry beha
 
   const retried = await retryAgentRun(auth.context, failed.id);
   assert.ok(retried.run.id !== failed.id);
+  assert.equal(loadStore().activationSignals.some((entry) => entry.workspaceId === "beta" && entry.kind === "retry" && entry.sourceId === failed.id), true);
 });
 
 test("release history exposes preflight and prior confirmations", async () => {

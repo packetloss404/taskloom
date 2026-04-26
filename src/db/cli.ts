@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { deriveActivationStatus } from "../activation/service";
@@ -18,6 +18,7 @@ export interface DbCliOptions {
   dbPath?: string;
   jsonPath?: string;
   migrationsDir?: string;
+  backupPath?: string;
 }
 
 export interface MigrationResult {
@@ -25,6 +26,27 @@ export interface MigrationResult {
   dbPath: string;
   applied: string[];
   skipped: string[];
+}
+
+export interface MigrationStatusResult {
+  command: "status";
+  dbPath: string;
+  exists: boolean;
+  applied: string[];
+  pending: string[];
+}
+
+export interface BackupResult {
+  command: "backup";
+  dbPath: string;
+  backupPath: string;
+}
+
+export interface RestoreResult {
+  command: "restore";
+  dbPath: string;
+  backupPath: string;
+  applied: string[];
 }
 
 export interface DbSeedResult {
@@ -95,6 +117,77 @@ export function migrateDatabase(options: DbCliOptions = {}): MigrationResult {
     return { command: "migrate", dbPath, applied, skipped };
   } finally {
     db.close();
+  }
+}
+
+export function migrationStatus(options: DbCliOptions = {}): MigrationStatusResult {
+  const dbPath = options.dbPath ?? DEFAULT_DB_PATH;
+  const migrationsDir = options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR;
+  const migrations = readdirSync(migrationsDir).filter((name) => name.endsWith(".sql")).sort();
+
+  if (!existsSync(dbPath)) {
+    return { command: "status", dbPath, exists: false, applied: [], pending: migrations };
+  }
+
+  const db = new DatabaseSync(dbPath);
+  try {
+    const hasMigrationsTable = db.prepare("select count(*) as count from sqlite_master where type = 'table' and name = 'schema_migrations'").get() as { count: number };
+    const applied = hasMigrationsTable.count > 0
+      ? (db.prepare("select name from schema_migrations order by name").all() as Array<{ name: string }>).map((row) => row.name)
+      : [];
+    const appliedSet = new Set(applied);
+    return {
+      command: "status",
+      dbPath,
+      exists: true,
+      applied,
+      pending: migrations.filter((name) => !appliedSet.has(name)),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+export function backupDatabase(options: DbCliOptions = {}): BackupResult {
+  const dbPath = options.dbPath ?? DEFAULT_DB_PATH;
+  if (!existsSync(dbPath)) throw new Error(`database not found: ${dbPath}`);
+
+  const backupPath = options.backupPath ?? resolve(dirname(dbPath), `${basename(dbPath)}.${new Date().toISOString().replace(/[:.]/g, "-")}.bak`);
+  mkdirSync(dirname(backupPath), { recursive: true });
+
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("pragma wal_checkpoint(full)");
+  } finally {
+    db.close();
+  }
+
+  copyFileSync(dbPath, backupPath);
+  return { command: "backup", dbPath, backupPath };
+}
+
+export function restoreDatabase(options: DbCliOptions = {}): RestoreResult {
+  const dbPath = options.dbPath ?? DEFAULT_DB_PATH;
+  const backupPath = options.backupPath;
+  if (!backupPath) throw new Error("restore requires --backup-path=<path>");
+  if (!existsSync(backupPath)) throw new Error(`backup not found: ${backupPath}`);
+
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const tempPath = resolve(dirname(dbPath), `${basename(dbPath)}.restore-${process.pid}.tmp`);
+  copyFileSync(backupPath, tempPath);
+
+  try {
+    const migrated = migrateDatabase({ ...options, dbPath: tempPath });
+    const validation = migrationStatus({ ...options, dbPath: tempPath });
+    if (validation.pending.length > 0) {
+      throw new Error(`restore validation failed: pending migrations ${validation.pending.join(", ")}`);
+    }
+    if (existsSync(dbPath)) rmSync(dbPath);
+    renameSync(tempPath, dbPath);
+    return { command: "restore", dbPath, backupPath, applied: migrated.applied };
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
   }
 }
 
@@ -259,6 +352,18 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(migrateDatabase(options), null, 2));
       return 0;
     }
+    if (command === "status") {
+      console.log(JSON.stringify(migrationStatus(options), null, 2));
+      return 0;
+    }
+    if (command === "backup") {
+      console.log(JSON.stringify(backupDatabase(options), null, 2));
+      return 0;
+    }
+    if (command === "restore") {
+      console.log(JSON.stringify(restoreDatabase(options), null, 2));
+      return 0;
+    }
     if (command === "seed-db") {
       console.log(JSON.stringify(seedDatabase(options), null, 2));
       return 0;
@@ -298,9 +403,11 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
 function parseOptions(args: string[]): DbCliOptions {
   const dbPath = readOption(args, "--db-path=");
   const jsonPath = readOption(args, "--json-path=");
+  const backupPath = readOption(args, "--backup-path=");
   return {
     ...(dbPath ? { dbPath: resolve(dbPath) } : {}),
     ...(jsonPath ? { jsonPath: resolve(jsonPath) } : {}),
+    ...(backupPath ? { backupPath: resolve(backupPath) } : {}),
   };
 }
 
@@ -311,7 +418,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak]");
 }
 
 function isExecutedDirectly(): boolean {
