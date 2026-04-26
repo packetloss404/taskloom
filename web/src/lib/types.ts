@@ -547,3 +547,76 @@ export interface PublicDashboardPayload {
     summary: ActivationSummary;
   }>;
 }
+
+export type ApiKeyProviderName = "anthropic" | "openai" | "minimax" | "ollama";
+
+export interface MaskedApiKey {
+  id: string;
+  workspaceId: string;
+  provider: ApiKeyProviderName;
+  label: string;
+  masked: string;
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderCallRecord {
+  id: string;
+  workspaceId: string;
+  routeKey: string;
+  provider: ApiKeyProviderName | "stub";
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  durationMs: number;
+  status: "success" | "error" | "canceled";
+  errorMessage?: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface UsageSummary {
+  totalCalls: number;
+  totalCostUsd: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  last24h: { calls: number; costUsd: number };
+  byProvider: { provider: ApiKeyProviderName | "stub"; calls: number; costUsd: number }[];
+  byRoute: { routeKey: string; calls: number; costUsd: number }[];
+  recent: ProviderCallRecord[];
+}
+
+export type JobStatus = "queued" | "running" | "success" | "failed" | "canceled";
+
+export interface JobRecord {
+  id: string;
+  workspaceId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: JobStatus;
+  attempts: number;
+  maxAttempts: number;
+  scheduledAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  cron?: string;
+  result?: unknown;
+  error?: string;
+  cancelRequested?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanModePlanItem {
+  summary: string;
+  status: "todo" | "doing" | "done";
+}
+
+export interface PlanModeResult {
+  planItems: PlanModePlanItem[];
+  rationale: string;
+  modelUsed: string;
+  costUsd: number;
+}

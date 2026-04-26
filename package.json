@@ -19,22 +19,24 @@
     "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.91.1",
     "@hono/node-server": "^1.13.8",
     "clsx": "^2.1.1",
     "hono": "^4.9.2",
     "lucide-react": "^0.542.0",
+    "openai": "^6.34.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.8.2",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
+    "@types/node": "^24.3.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.2",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.2.1",
-    "@types/node": "^24.3.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.5",
