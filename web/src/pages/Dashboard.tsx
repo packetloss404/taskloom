@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Activity, Bot, CalendarClock, KeyRound, Loader2, Plus, Play, RefreshCw, Sparkles, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
-import type { AgentRecord, AgentRunRecord, BootstrapPayload, ProviderRecord } from "@/lib/types";
+import type { AgentRecord, AgentRunRecord, BootstrapPayload, ProviderRecord, WorkflowDraft } from "@/lib/types";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -16,6 +16,9 @@ export default function DashboardPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [draft, setDraft] = useState<WorkflowDraft | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   const loadDashboard = async () => {
     setLoading(true);
@@ -48,6 +51,38 @@ export default function DashboardPage() {
       missing: providers.filter((provider) => provider.status === "missing_key").length,
     };
   }, [providers]);
+
+  const generateDraft = async () => {
+    setError(null);
+    setMessage(null);
+    setDrafting(true);
+    try {
+      const result = await api.generateWorkflowFromPrompt({ prompt, apply: false });
+      setDraft(result.draft);
+      setMessage("Draft workflow generated from prompt. Review below and apply when ready.");
+    } catch (draftError) {
+      setError((draftError as Error).message);
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  const applyDraft = async () => {
+    if (!draft) return;
+    setError(null);
+    setMessage(null);
+    setApplying(true);
+    try {
+      await api.generateWorkflowFromPrompt({ prompt: draft.prompt, apply: true });
+      setMessage("Draft applied: brief, requirements, and plan items updated.");
+      setDraft(null);
+      navigate("/workflow");
+    } catch (applyError) {
+      setError((applyError as Error).message);
+    } finally {
+      setApplying(false);
+    }
+  };
 
   const runAgent = async (agentId: string) => {
     setRunningId(agentId);
@@ -116,6 +151,15 @@ export default function DashboardPage() {
           >
             <Plus className="h-4 w-4" /> New Agent
           </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => void generateDraft()}
+            disabled={drafting || prompt.trim().length < 8}
+          >
+            {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Draft workflow from prompt
+          </button>
           <Link to="/workflows" className="btn-ghost">
             <Workflow className="h-4 w-4" /> New Workflow
           </Link>
@@ -124,6 +168,65 @@ export default function DashboardPage() {
           </Link>
         </div>
       </section>
+
+      {draft && (
+        <section className="mb-6 rounded-2xl border border-accent-500/30 bg-ink-900/70 p-4 shadow-card sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-ink-100">Draft workflow preview</h2>
+              <p className="mt-1 max-w-2xl text-sm text-ink-400">
+                Generated brief, requirements, and plan items. Apply to overwrite this workspace's workflow.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn-ghost" onClick={() => setDraft(null)} disabled={applying}>
+                Discard
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-ink-100 text-ink-950 hover:bg-white"
+                onClick={() => void applyDraft()}
+                disabled={applying}
+              >
+                {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Workflow className="h-4 w-4" />}
+                Apply to workflow
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500">Brief</h3>
+              <p className="mt-2 text-sm leading-6 text-ink-200">{draft.brief.summary}</p>
+              {draft.brief.targetCustomers.length > 0 && (
+                <p className="mt-2 text-xs text-ink-500">For: {draft.brief.targetCustomers.join(", ")}</p>
+              )}
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500">Requirements</h3>
+              <ul className="mt-2 space-y-1.5 text-sm text-ink-200">
+                {draft.requirements.map((entry, index) => (
+                  <li key={`${entry.title}-${index}`} className="flex gap-2">
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent-400" />
+                    <span><span className="text-ink-400 capitalize">{entry.priority}</span> · {entry.title}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500">Plan items</h3>
+              <ol className="mt-2 space-y-1.5 text-sm text-ink-200">
+                {draft.planItems.map((entry, index) => (
+                  <li key={`${entry.title}-${index}`} className="flex gap-2">
+                    <span className="text-ink-500">{index + 1}.</span>
+                    <span>{entry.title}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric icon={<Bot className="h-4 w-4" />} label="Agents" value={agents.length} />

@@ -1,5 +1,10 @@
 import { Hono, type Context } from "hono";
 import { requireAuthenticatedContext } from "./taskloom-services.js";
+import {
+  applyWorkflowTemplate,
+  generateAndApplyWorkflowDraft,
+  listWorkflowTemplates,
+} from "./workflow-prompt-service.js";
 
 type AuthenticatedContext = ReturnType<typeof requireAuthenticatedContext>;
 type WorkflowServiceFunction = (context: AuthenticatedContext, input?: unknown) => unknown;
@@ -69,6 +74,39 @@ workflowRoutes.patch("/validation-evidence/:evidenceId", (c) =>
 workflowRoutes.get("/release-confirmation", (c) => runWorkflowOperation(c, "getReleaseConfirmation"));
 workflowRoutes.put("/release-confirmation", (c) => runWorkflowOperation(c, "confirmRelease", readJsonBody));
 workflowRoutes.post("/release-confirmation", (c) => runWorkflowOperation(c, "confirmRelease", readJsonBody));
+
+workflowRoutes.get("/templates", (c) => {
+  try {
+    requireAuthenticatedContext(c);
+    return c.json({ templates: listWorkflowTemplates() });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+workflowRoutes.post("/templates/:templateId/apply", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    const result = await applyWorkflowTemplate(context, c.req.param("templateId"));
+    return c.json(result);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+workflowRoutes.post("/generate-from-prompt", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    const body = (await readJsonBody(c)) as { prompt?: string; apply?: boolean } | undefined;
+    const result = await generateAndApplyWorkflowDraft(context, {
+      prompt: body?.prompt ?? "",
+      apply: Boolean(body?.apply),
+    });
+    return c.json(result);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
 
 export default workflowRoutes;
 

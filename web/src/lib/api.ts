@@ -19,10 +19,13 @@ import type {
   Session,
   WorkflowBlocker,
   WorkflowBrief,
+  WorkflowDraftResult,
   WorkflowPlanItem,
   WorkflowQuestion,
   WorkflowReleaseConfirmation,
   WorkflowRequirement,
+  WorkflowTemplate,
+  WorkflowTemplateApplyResult,
   WorkflowValidationEvidence,
 } from "@/lib/types";
 
@@ -99,4 +102,10 @@ export const api = {
   getWorkflowReleaseConfirmation: () => j<WorkflowReleaseConfirmation>("/api/app/workflow/release-confirmation"),
   confirmWorkflowRelease: (body: ConfirmWorkflowReleaseInput) =>
     j<WorkflowReleaseConfirmation>("/api/app/workflow/release-confirmation", { method: "POST", body: JSON.stringify(body) }),
+  listWorkflowTemplates: () =>
+    j<{ templates: WorkflowTemplate[] }>("/api/app/workflow/templates").then((payload) => payload.templates),
+  applyWorkflowTemplate: (templateId: string) =>
+    j<WorkflowTemplateApplyResult>(`/api/app/workflow/templates/${templateId}/apply`, { method: "POST" }),
+  generateWorkflowFromPrompt: (body: { prompt: string; apply?: boolean }) =>
+    j<WorkflowDraftResult>("/api/app/workflow/generate-from-prompt", { method: "POST", body: JSON.stringify(body) }),
 };

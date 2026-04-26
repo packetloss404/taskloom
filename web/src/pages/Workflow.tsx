@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { ClipboardList, Loader2, Plus, RefreshCw, Save } from "lucide-react";
+import { ClipboardList, Layers, Loader2, Plus, RefreshCw, Save } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type {
@@ -11,6 +11,7 @@ import type {
   WorkflowRequirement,
   WorkflowRequirementPriority,
   WorkflowRequirementStatus,
+  WorkflowTemplate,
 } from "@/lib/types";
 
 interface WorkflowState {
@@ -27,6 +28,8 @@ export default function WorkflowPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
+  const [applyingTemplateId, setApplyingTemplateId] = useState<string | null>(null);
 
   const loadWorkflow = async () => {
     setLoading(true);
@@ -48,7 +51,29 @@ export default function WorkflowPage() {
 
   useEffect(() => {
     void loadWorkflow();
+    api.listWorkflowTemplates()
+      .then(setTemplates)
+      .catch(() => setTemplates([]));
   }, []);
+
+  const applyTemplate = async (template: WorkflowTemplate) => {
+    setApplyingTemplateId(template.id);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await api.applyWorkflowTemplate(template.id);
+      setState({
+        brief: result.brief,
+        requirements: result.requirements,
+        planItems: result.planItems,
+      });
+      setMessage(`Applied template: ${template.name}.`);
+    } catch (templateError) {
+      setError((templateError as Error).message);
+    } finally {
+      setApplyingTemplateId(null);
+    }
+  };
 
   const counts = useMemo(() => {
     return {
@@ -162,6 +187,43 @@ export default function WorkflowPage() {
         <Stat label="Accepted" value={counts.accepted} />
         <Stat label="Plan done" value={`${counts.done}/${state.planItems.length}`} />
       </section>
+
+      {templates.length > 0 && (
+        <section className="card mb-6 p-6">
+          <div className="flex items-center gap-3">
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-500/12 text-accent-300">
+              <Layers className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Starter templates</h2>
+              <p className="mt-1 text-xs text-ink-500">
+                Apply a workspace template to overwrite the brief, requirements, and plan items below.
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {templates.map((template) => (
+              <article key={template.id} className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
+                <div className="text-xs uppercase tracking-wider text-ink-500">{template.category}</div>
+                <h3 className="mt-1 text-sm font-semibold text-ink-100">{template.name}</h3>
+                <p className="mt-2 text-sm leading-6 text-ink-400">{template.description}</p>
+                <div className="mt-3 text-xs text-ink-500">
+                  {template.requirements.length} requirements · {template.planItems.length} plan items
+                </div>
+                <button
+                  type="button"
+                  className="btn-primary mt-4 w-full justify-center"
+                  onClick={() => void applyTemplate(template)}
+                  disabled={applyingTemplateId === template.id || Boolean(saving)}
+                >
+                  {applyingTemplateId === template.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Layers className="h-4 w-4" />}
+                  Apply template
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       {error && <Status tone="error">{error}</Status>}
       {message && !error && <Status tone="success">{message}</Status>}
