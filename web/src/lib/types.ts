@@ -55,6 +55,36 @@ export type AgentStatus = "active" | "paused" | "archived";
 export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | "custom";
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 export type AgentRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
+export type AgentInputFieldType = "string" | "number" | "boolean" | "url" | "enum";
+export type AgentRunLogLevel = "info" | "warn" | "error";
+
+export interface AgentInputField {
+  key: string;
+  label: string;
+  type: AgentInputFieldType;
+  required: boolean;
+  description?: string;
+  options?: string[];
+  defaultValue?: string;
+}
+
+export interface AgentRunLogEntry {
+  at: string;
+  level: AgentRunLogLevel;
+  message: string;
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  category: "support" | "operations" | "release" | "research" | "comms";
+  summary: string;
+  description: string;
+  instructions: string;
+  tools: string[];
+  schedule?: string;
+  inputSchema: AgentInputField[];
+}
 
 export interface ProviderRecord {
   id: string;
@@ -82,6 +112,8 @@ export interface AgentRecord {
   schedule?: string;
   status: AgentStatus;
   createdByUserId: string;
+  templateId?: string;
+  inputSchema: AgentInputField[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -95,8 +127,10 @@ export interface AgentRunRecord {
   status: AgentRunStatus;
   startedAt?: string;
   completedAt?: string;
+  inputs?: Record<string, string | number | boolean>;
   output?: string;
   error?: string;
+  logs: AgentRunLogEntry[];
   createdAt: string;
   updatedAt: string;
 }
@@ -110,6 +144,8 @@ export type SaveAgentInput = {
   tools?: string[];
   schedule?: string;
   status?: AgentStatus;
+  templateId?: string;
+  inputSchema?: AgentInputField[];
 };
 
 export type SaveProviderInput = {

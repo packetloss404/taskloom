@@ -178,6 +178,18 @@ export interface ActivityRecord {
 
 export type AgentStatus = "active" | "paused" | "archived";
 
+export type AgentInputFieldType = "string" | "number" | "boolean" | "url" | "enum";
+
+export interface AgentInputField {
+  key: string;
+  label: string;
+  type: AgentInputFieldType;
+  required: boolean;
+  description?: string;
+  options?: string[];
+  defaultValue?: string;
+}
+
 export interface AgentRecord {
   id: string;
   workspaceId: string;
@@ -190,6 +202,8 @@ export interface AgentRecord {
   schedule?: string;
   status: AgentStatus;
   createdByUserId: string;
+  templateId?: string;
+  inputSchema: AgentInputField[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -213,6 +227,14 @@ export interface ProviderRecord {
 
 export type AgentRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
 
+export type AgentRunLogLevel = "info" | "warn" | "error";
+
+export interface AgentRunLogEntry {
+  at: string;
+  level: AgentRunLogLevel;
+  message: string;
+}
+
 export interface AgentRunRecord {
   id: string;
   workspaceId: string;
@@ -221,8 +243,10 @@ export interface AgentRunRecord {
   status: AgentRunStatus;
   startedAt?: string;
   completedAt?: string;
+  inputs?: Record<string, string | number | boolean>;
   output?: string;
   error?: string;
+  logs: AgentRunLogEntry[];
   createdAt: string;
   updatedAt: string;
 }
@@ -299,9 +323,15 @@ function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     releaseConfirmations: normalizeReleaseConfirmationCollection(data.releaseConfirmations),
     onboardingStates: data.onboardingStates ?? [],
     activities: data.activities ?? [],
-    agents: data.agents ?? [],
+    agents: (data.agents ?? []).map((entry) => ({
+      ...entry,
+      inputSchema: Array.isArray(entry.inputSchema) ? entry.inputSchema : [],
+    })),
     providers: data.providers ?? [],
-    agentRuns: data.agentRuns ?? [],
+    agentRuns: (data.agentRuns ?? []).map((entry) => ({
+      ...entry,
+      logs: Array.isArray(entry.logs) ? entry.logs : [],
+    })),
     activationFacts: data.activationFacts ?? {},
     activationMilestones: data.activationMilestones ?? {},
     activationReadModels: data.activationReadModels ?? {},
@@ -624,6 +654,11 @@ function seedStore(): TaskloomData {
       tools: ["gmail", "email_drafts", "notifications"],
       schedule: "*/15 * * * *",
       status: "active",
+      templateId: "support_triage",
+      inputSchema: [
+        { key: "mailbox", label: "Mailbox label", type: "string", required: true, description: "Inbox or label to scan." },
+        { key: "urgency_threshold", label: "Urgency threshold", type: "enum", required: true, options: ["low", "medium", "high"], defaultValue: "medium" },
+      ],
       timestamp: createdAt,
     }),
     createAgent({
@@ -638,6 +673,11 @@ function seedStore(): TaskloomData {
       tools: ["activity", "workflow", "email"],
       schedule: "0 8 * * 1-5",
       status: "active",
+      templateId: "daily_brief",
+      inputSchema: [
+        { key: "lookback_hours", label: "Lookback (hours)", type: "number", required: true, defaultValue: "24" },
+        { key: "include_runs", label: "Include agent runs", type: "boolean", required: false, defaultValue: "true" },
+      ],
       timestamp: createdAt,
     }),
     createAgent({
@@ -652,6 +692,7 @@ function seedStore(): TaskloomData {
       tools: ["workflow", "activity"],
       schedule: "0 9 * * 1-5",
       status: "paused",
+      inputSchema: [],
       timestamp: createdAt,
     }),
     createAgent({
@@ -666,23 +707,72 @@ function seedStore(): TaskloomData {
       tools: ["validation", "release_notes"],
       schedule: "On demand",
       status: "active",
+      templateId: "release_audit",
+      inputSchema: [
+        { key: "release_label", label: "Release label", type: "string", required: true, description: "Version label being audited." },
+        { key: "evidence_url", label: "Evidence URL", type: "url", required: false },
+      ],
       timestamp: createdAt,
     }),
   ];
 
   const agentRuns: AgentRunRecord[] = [
-    createAgentRun("run_alpha_support_latest", "alpha", "agent_alpha_support", "Support inbox scanned", "success", isoDaysAgo(0)),
-    createAgentRun("run_alpha_brief_latest", "alpha", "agent_alpha_daily_brief", "Daily workspace brief generated", "success", isoDaysAgo(1)),
-    createAgentRun(
-      "run_beta_dependency_latest",
-      "beta",
-      "agent_beta_dependency_watch",
-      "Dependency escalation skipped while provider key is missing",
-      "failed",
-      isoDaysAgo(2),
-      "Provider API key is not configured.",
-    ),
-    createAgentRun("run_gamma_release_latest", "gamma", "agent_gamma_release_audit", "Release audit completed", "success", isoDaysAgo(7)),
+    createAgentRun({
+      id: "run_alpha_support_latest",
+      workspaceId: "alpha",
+      agentId: "agent_alpha_support",
+      title: "Support inbox scanned",
+      status: "success",
+      timestamp: isoDaysAgo(0),
+      inputs: { mailbox: "support@alpha.example.com", urgency_threshold: "medium" },
+      output: "Scanned 18 messages. Drafted 4 replies. Flagged 1 high-severity request.",
+      logs: [
+        { at: isoDaysAgo(0), level: "info", message: "Connected to support inbox." },
+        { at: isoDaysAgo(0), level: "info", message: "Classified 18 new threads." },
+        { at: isoDaysAgo(0), level: "info", message: "Drafted 4 replies." },
+      ],
+    }),
+    createAgentRun({
+      id: "run_alpha_brief_latest",
+      workspaceId: "alpha",
+      agentId: "agent_alpha_daily_brief",
+      title: "Daily workspace brief generated",
+      status: "success",
+      timestamp: isoDaysAgo(1),
+      inputs: { lookback_hours: 24, include_runs: true },
+      output: "Brief delivered. 3 open items, 1 question, no failed validations.",
+      logs: [
+        { at: isoDaysAgo(1), level: "info", message: "Pulled 24h of activity." },
+        { at: isoDaysAgo(1), level: "info", message: "Composed morning brief." },
+      ],
+    }),
+    createAgentRun({
+      id: "run_beta_dependency_latest",
+      workspaceId: "beta",
+      agentId: "agent_beta_dependency_watch",
+      title: "Dependency escalation skipped while provider key is missing",
+      status: "failed",
+      timestamp: isoDaysAgo(2),
+      error: "Provider API key is not configured.",
+      logs: [
+        { at: isoDaysAgo(2), level: "warn", message: "Provider connection check failed." },
+        { at: isoDaysAgo(2), level: "error", message: "Provider API key is not configured." },
+      ],
+    }),
+    createAgentRun({
+      id: "run_gamma_release_latest",
+      workspaceId: "gamma",
+      agentId: "agent_gamma_release_audit",
+      title: "Release audit completed",
+      status: "success",
+      timestamp: isoDaysAgo(7),
+      inputs: { release_label: "gamma-1.0" },
+      output: "Audit passed. Validation evidence linked, confirmation recorded.",
+      logs: [
+        { at: isoDaysAgo(7), level: "info", message: "Loaded release confirmation." },
+        { at: isoDaysAgo(7), level: "info", message: "Validation evidence verified." },
+      ],
+    }),
   ];
 
   const releaseConfirmations: ReleaseConfirmationCollection = {
@@ -914,6 +1004,8 @@ function createAgent(input: {
   tools: string[];
   schedule?: string;
   status: AgentStatus;
+  templateId?: string;
+  inputSchema?: AgentInputField[];
   timestamp: string;
 }): AgentRecord {
   return {
@@ -928,31 +1020,39 @@ function createAgent(input: {
     tools: input.tools,
     schedule: input.schedule,
     status: input.status,
+    templateId: input.templateId,
+    inputSchema: input.inputSchema ?? [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   };
 }
 
-function createAgentRun(
-  id: string,
-  workspaceId: string,
-  agentId: string,
-  title: string,
-  status: AgentRunStatus,
-  timestamp: string,
-  error?: string,
-): AgentRunRecord {
+function createAgentRun(input: {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  title: string;
+  status: AgentRunStatus;
+  timestamp: string;
+  inputs?: Record<string, string | number | boolean>;
+  output?: string;
+  error?: string;
+  logs?: AgentRunLogEntry[];
+}): AgentRunRecord {
   return {
-    id,
-    workspaceId,
-    agentId,
-    title,
-    status,
-    startedAt: timestamp,
-    completedAt: status === "queued" || status === "running" ? undefined : timestamp,
-    error,
-    createdAt: timestamp,
-    updatedAt: timestamp,
+    id: input.id,
+    workspaceId: input.workspaceId,
+    agentId: input.agentId,
+    title: input.title,
+    status: input.status,
+    startedAt: input.timestamp,
+    completedAt: input.status === "queued" || input.status === "running" ? undefined : input.timestamp,
+    inputs: input.inputs,
+    output: input.output,
+    error: input.error,
+    logs: input.logs ?? [],
+    createdAt: input.timestamp,
+    updatedAt: input.timestamp,
   };
 }
 

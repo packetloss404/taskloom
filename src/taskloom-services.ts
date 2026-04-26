@@ -16,7 +16,10 @@ import {
   mutateStore,
   nextIncompleteStep,
   type ActivityRecord,
+  type AgentInputField,
+  type AgentInputFieldType,
   type AgentRecord,
+  type AgentRunLogEntry,
   type AgentStatus,
   type ProviderKind,
   ONBOARDING_STEPS,
@@ -25,6 +28,7 @@ import {
   upsertAgentRun,
   upsertProvider,
 } from "./taskloom-store";
+import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
 import {
   buildSessionCookieValue,
   generateId,
@@ -402,6 +406,8 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
       tools: normalized.tools,
       schedule: normalized.schedule,
       status: normalized.status,
+      templateId: normalized.templateId,
+      inputSchema: normalized.inputSchema,
       createdByUserId: context.user.id,
     }, timestamp);
 
@@ -437,6 +443,8 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
       tools: normalized.tools,
       schedule: normalized.schedule,
       status: normalized.status,
+      templateId: normalized.templateId ?? existing.templateId,
+      inputSchema: normalized.inputSchema,
     }, timestamp);
 
     data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.updated", {
@@ -474,7 +482,7 @@ export function archiveAgent(context: AuthenticatedContext, agentId: string) {
   });
 }
 
-export function runAgent(context: AuthenticatedContext, agentId: string) {
+export function runAgent(context: AuthenticatedContext, agentId: string, rawInputs: Record<string, unknown> = {}) {
   const timestamp = now();
 
   return mutateStore((data) => {
@@ -483,8 +491,35 @@ export function runAgent(context: AuthenticatedContext, agentId: string) {
       throw httpError(404, "agent not found");
     }
 
+    const inputs = validateAgentInputs(agent.inputSchema ?? [], rawInputs);
     const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
     const providerReady = !provider || provider.status === "connected";
+
+    const logs: AgentRunLogEntry[] = [
+      { at: timestamp, level: "info", message: `Run started for ${agent.name}.` },
+    ];
+    if (provider) {
+      logs.push({
+        at: timestamp,
+        level: providerReady ? "info" : "warn",
+        message: `Provider ${provider.name} status: ${provider.status}.`,
+      });
+    }
+    for (const field of agent.inputSchema ?? []) {
+      if (field.key in inputs) {
+        logs.push({ at: timestamp, level: "info", message: `Input ${field.key} = ${formatInputValue(inputs[field.key])}` });
+      }
+    }
+    if (providerReady) {
+      logs.push({ at: timestamp, level: "info", message: "Run recorded locally. Attach an execution adapter to perform real work." });
+    } else {
+      logs.push({ at: timestamp, level: "error", message: "Provider API key is not configured." });
+    }
+
+    const output = providerReady
+      ? buildRunOutput(agent.name, inputs)
+      : undefined;
+
     const run = upsertAgentRun(data, {
       workspaceId: context.workspace.id,
       agentId: agent.id,
@@ -492,8 +527,10 @@ export function runAgent(context: AuthenticatedContext, agentId: string) {
       status: providerReady ? "success" : "failed",
       startedAt: timestamp,
       completedAt: timestamp,
-      output: providerReady ? "Run recorded locally. SDK execution adapter can be attached here." : undefined,
+      inputs: Object.keys(inputs).length ? inputs : undefined,
+      output,
       error: providerReady ? undefined : "Provider API key is not configured.",
+      logs,
     }, timestamp);
 
     data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
@@ -503,6 +540,28 @@ export function runAgent(context: AuthenticatedContext, agentId: string) {
     }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status }, timestamp));
 
     return { run };
+  });
+}
+
+export function listAgentTemplates() {
+  return { templates: AGENT_TEMPLATES };
+}
+
+export function createAgentFromTemplate(context: AuthenticatedContext, templateId: string, overrides: { name?: string; providerId?: string; model?: string } = {}) {
+  const template = findAgentTemplate(templateId);
+  if (!template) throw httpError(404, "agent template not found");
+
+  return createAgent(context, {
+    name: overrides.name?.trim() || template.name,
+    description: template.description,
+    instructions: template.instructions,
+    providerId: overrides.providerId,
+    model: overrides.model,
+    tools: template.tools,
+    schedule: template.schedule,
+    status: "active",
+    templateId: template.id,
+    inputSchema: template.inputSchema,
   });
 }
 
@@ -570,6 +629,8 @@ type AgentInput = {
   tools?: string[] | string;
   schedule?: string | null;
   status?: AgentStatus;
+  templateId?: string | null;
+  inputSchema?: AgentInputField[];
 };
 
 type ProviderInput = {
@@ -598,8 +659,8 @@ function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord) {
   };
 }
 
-function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status">> &
-  Pick<AgentRecord, "providerId" | "model" | "schedule"> {
+function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status" | "inputSchema">> &
+  Pick<AgentRecord, "providerId" | "model" | "schedule" | "templateId"> {
   const name = String(input.name ?? "").trim();
   if (name.length < 2) throw httpError(400, "agent name must be at least 2 characters");
   if (name.length > 80) throw httpError(400, "agent name must be 80 characters or fewer");
@@ -615,6 +676,7 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
         .map((entry) => entry.trim())
         .filter(Boolean);
   const status = input.status && ["active", "paused", "archived"].includes(input.status) ? input.status : "active";
+  const inputSchema = normalizeInputSchema(input.inputSchema);
 
   return {
     name,
@@ -625,7 +687,115 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
     tools: tools.slice(0, 12),
     schedule: stringOrUndefined(input.schedule),
     status,
+    templateId: stringOrUndefined(input.templateId),
+    inputSchema,
   };
+}
+
+const FIELD_TYPES: AgentInputFieldType[] = ["string", "number", "boolean", "url", "enum"];
+
+function normalizeInputSchema(raw: unknown): AgentInputField[] {
+  if (!Array.isArray(raw)) return [];
+  const seenKeys = new Set<string>();
+  const fields: AgentInputField[] = [];
+
+  for (const candidate of raw.slice(0, 12)) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const item = candidate as Record<string, unknown>;
+    const key = String(item.key ?? "").trim();
+    if (!/^[a-z0-9_]{1,40}$/i.test(key)) {
+      throw httpError(400, "input field keys must be 1-40 chars of letters, numbers, or underscores");
+    }
+    if (seenKeys.has(key)) throw httpError(400, `duplicate input field key: ${key}`);
+    seenKeys.add(key);
+
+    const type = FIELD_TYPES.includes(item.type as AgentInputFieldType) ? (item.type as AgentInputFieldType) : "string";
+    const label = String(item.label ?? "").trim() || key;
+    const description = stringOrUndefined(item.description);
+    const required = Boolean(item.required);
+    const defaultValue = stringOrUndefined(item.defaultValue);
+    let options: string[] | undefined;
+    if (type === "enum") {
+      options = Array.isArray(item.options)
+        ? item.options.map((entry) => String(entry).trim()).filter(Boolean).slice(0, 16)
+        : [];
+      if (!options.length) throw httpError(400, `enum field "${key}" requires at least one option`);
+    }
+
+    fields.push({ key, label, type, required, description, options, defaultValue });
+  }
+
+  return fields;
+}
+
+function validateAgentInputs(schema: AgentInputField[], raw: Record<string, unknown>): Record<string, string | number | boolean> {
+  const inputs: Record<string, string | number | boolean> = {};
+
+  for (const field of schema) {
+    const provided = raw[field.key];
+    const hasValue = provided !== undefined && provided !== null && String(provided).length > 0;
+
+    if (!hasValue) {
+      if (field.defaultValue !== undefined && field.defaultValue !== "") {
+        inputs[field.key] = coerceInputValue(field, field.defaultValue);
+        continue;
+      }
+      if (field.required) throw httpError(400, `input ${field.key} is required`);
+      continue;
+    }
+
+    inputs[field.key] = coerceInputValue(field, provided);
+  }
+
+  return inputs;
+}
+
+function coerceInputValue(field: AgentInputField, value: unknown): string | number | boolean {
+  switch (field.type) {
+    case "number": {
+      const next = Number(value);
+      if (!Number.isFinite(next)) throw httpError(400, `input ${field.key} must be a number`);
+      return next;
+    }
+    case "boolean": {
+      if (typeof value === "boolean") return value;
+      const text = String(value).trim().toLowerCase();
+      if (["true", "1", "yes", "on"].includes(text)) return true;
+      if (["false", "0", "no", "off", ""].includes(text)) return false;
+      throw httpError(400, `input ${field.key} must be a boolean`);
+    }
+    case "url": {
+      const text = String(value).trim();
+      try {
+        const url = new URL(text);
+        if (!["http:", "https:"].includes(url.protocol)) throw new Error("scheme");
+      } catch {
+        throw httpError(400, `input ${field.key} must be a valid http(s) URL`);
+      }
+      return text;
+    }
+    case "enum": {
+      const text = String(value).trim();
+      if (!field.options?.includes(text)) {
+        throw httpError(400, `input ${field.key} must be one of: ${(field.options ?? []).join(", ")}`);
+      }
+      return text;
+    }
+    default:
+      return String(value);
+  }
+}
+
+function formatInputValue(value: string | number | boolean): string {
+  if (typeof value === "string" && value.length > 80) return `${value.slice(0, 77)}...`;
+  return String(value);
+}
+
+function buildRunOutput(agentName: string, inputs: Record<string, string | number | boolean>): string {
+  const inputSummary = Object.keys(inputs).length === 0
+    ? "no inputs"
+    : Object.entries(inputs).map(([key, value]) => `${key}=${formatInputValue(value)}`).join(", ");
+  return `${agentName} simulated run completed with ${inputSummary}.`;
 }
 
 function validateProvider(data: ReturnType<typeof loadStore>, workspaceId: string, providerId?: string) {
