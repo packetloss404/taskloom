@@ -6,19 +6,27 @@ import { deriveActivationStatus } from "./activation/service";
 import { buildActivationSummaryCard } from "./activation/view-model";
 import {
   defaultWorkspaceIdForUser,
+  findAgentForWorkspaceIndexed,
+  findAgentRunForWorkspaceIndexed,
   findSessionByIdIndexed,
+  findImplementationPlanItemForWorkspaceIndexed,
+  findReleaseConfirmationForWorkspaceIndexed,
+  findRequirementForWorkspaceIndexed,
   findUserByEmailIndexed,
+  findValidationEvidenceForWorkspaceIndexed,
+  findWorkflowConcernForWorkspaceIndexed,
   deleteWorkspaceEnvVar,
   findAgent,
   findProvider,
   findWorkspaceInvitationByToken,
   findWorkspaceMembership,
   findWorkspaceEnvVar,
-  listAgentRunsForAgent,
-  listAgentRunsForWorkspace,
-  listAgentsForWorkspace,
-  listProvidersForWorkspace,
+  listAgentRunsForAgentIndexed,
+  listAgentRunsForWorkspaceIndexed,
+  listAgentsForWorkspaceIndexed,
+  listProvidersForWorkspaceIndexed,
   listReleaseConfirmationsForWorkspace,
+  listActivitiesForWorkspaceIndexed,
   listWorkspaceInvitationsIndexed,
   listWorkspaceInvitations,
   listWorkspaceMembershipsIndexed,
@@ -39,6 +47,7 @@ import {
   type AgentTriggerKind,
   type ImplementationPlanItemRecord,
   type ProviderKind,
+  type ProviderRecord,
   type ReleaseConfirmationRecord,
   type RequirementRecord,
   type ValidationEvidenceRecord,
@@ -574,12 +583,10 @@ export async function completeOnboardingStep(context: AuthenticatedContext, step
 }
 
 export function listWorkspaceActivities(context: AuthenticatedContext) {
-  const data = loadStore();
-  return data.activities.filter((entry) => entry.workspaceId === context.workspace.id).slice(0, 50);
+  return listActivitiesForWorkspaceIndexed(context.workspace.id, 50);
 }
 
 export function getWorkspaceActivityDetail(context: AuthenticatedContext, activityId: string) {
-  const data = loadStore();
   const activities = listWorkspaceActivities(context);
   const index = activities.findIndex((entry) => entry.id === activityId);
   if (index === -1) throw httpError(404, "activity not found");
@@ -589,7 +596,7 @@ export function getWorkspaceActivityDetail(context: AuthenticatedContext, activi
     activity,
     previous: index > 0 ? activities[index - 1] : null,
     next: index < activities.length - 1 ? activities[index + 1] : null,
-    related: buildActivityRelatedContext(data, context.workspace.id, activity),
+    related: buildActivityRelatedContext(context.workspace.id, activity),
   };
 }
 
@@ -613,7 +620,6 @@ type ActivityRelatedContext = {
 };
 
 function buildActivityRelatedContext(
-  data: ReturnType<typeof loadStore>,
   workspaceId: string,
   activity: ActivityRecord,
 ): ActivityRelatedContext {
@@ -627,32 +633,28 @@ function buildActivityRelatedContext(
   const evidenceId = stringDataValue(activity.data, "evidenceId");
   const releaseId = stringDataValue(activity.data, "releaseId");
 
-  const agent = agentId ? data.agents.find((entry) => entry.id === agentId && entry.workspaceId === workspaceId) : undefined;
+  const agent = agentId ? findAgentForWorkspaceIndexed(workspaceId, agentId) : undefined;
   if (agent) related.agent = summarizeAgent(agent);
 
-  const run = runId ? data.agentRuns.find((entry) => entry.id === runId && entry.workspaceId === workspaceId) : undefined;
+  const run = runId ? findAgentRunForWorkspaceIndexed(workspaceId, runId) : undefined;
   if (run) related.run = summarizeAgentRun(run);
 
-  const blocker = blockerId
-    ? data.workflowConcerns.find((entry) => entry.id === blockerId && entry.workspaceId === workspaceId && entry.kind === "blocker")
-    : undefined;
+  const blocker = blockerId ? findWorkflowConcernForWorkspaceIndexed(workspaceId, blockerId, "blocker") : undefined;
   if (blocker) related.blocker = summarizeWorkflowConcern(blocker);
 
-  const question = questionId
-    ? data.workflowConcerns.find((entry) => entry.id === questionId && entry.workspaceId === workspaceId && entry.kind === "open_question")
-    : undefined;
+  const question = questionId ? findWorkflowConcernForWorkspaceIndexed(workspaceId, questionId, "open_question") : undefined;
   if (question) related.question = summarizeWorkflowConcern(question);
 
-  const planItem = planItemId ? data.implementationPlanItems.find((entry) => entry.id === planItemId && entry.workspaceId === workspaceId) : undefined;
+  const planItem = planItemId ? findImplementationPlanItemForWorkspaceIndexed(workspaceId, planItemId) : undefined;
   if (planItem) related.planItem = summarizePlanItem(planItem);
 
-  const requirement = requirementId ? data.requirements.find((entry) => entry.id === requirementId && entry.workspaceId === workspaceId) : undefined;
+  const requirement = requirementId ? findRequirementForWorkspaceIndexed(workspaceId, requirementId) : undefined;
   if (requirement) related.requirement = summarizeRequirement(requirement);
 
-  const evidence = evidenceId ? data.validationEvidence.find((entry) => entry.id === evidenceId && entry.workspaceId === workspaceId) : undefined;
+  const evidence = evidenceId ? findValidationEvidenceForWorkspaceIndexed(workspaceId, evidenceId) : undefined;
   if (evidence) related.evidence = summarizeValidationEvidence(evidence);
 
-  const release = releaseId ? listReleaseConfirmationsForWorkspace(data, workspaceId).find((entry) => entry.id === releaseId || entry.workspaceId === releaseId) : undefined;
+  const release = releaseId ? findReleaseConfirmationForWorkspaceIndexed(workspaceId, releaseId) : undefined;
   if (release) related.release = summarizeReleaseConfirmation(release);
 
   const workflow = {
@@ -760,22 +762,25 @@ function summarizeReleaseConfirmation(release: ReleaseConfirmationRecord) {
 }
 
 export function listAgents(context: AuthenticatedContext) {
-  const data = loadStore();
+  const providersById = new Map(listProvidersForWorkspaceIndexed(context.workspace.id).map((provider) => [provider.id, provider]));
   return {
-    agents: listAgentsForWorkspace(data, context.workspace.id).map((agent) => decorateAgent(data, agent, { includeWebhookToken: false })),
+    agents: listAgentsForWorkspaceIndexed(context.workspace.id)
+      .map((agent) => decorateAgentWithProvider(agent, agent.providerId ? providersById.get(agent.providerId) ?? null : null, { includeWebhookToken: false })),
   };
 }
 
 export function getAgent(context: AuthenticatedContext, agentId: string) {
-  const data = loadStore();
-  const agent = findAgent(data, agentId);
-  if (!agent || agent.workspaceId !== context.workspace.id || agent.status === "archived") {
+  const agent = findAgentForWorkspaceIndexed(context.workspace.id, agentId);
+  if (!agent || agent.status === "archived") {
     throw httpError(404, "agent not found");
   }
+  const provider = agent.providerId
+    ? listProvidersForWorkspaceIndexed(context.workspace.id).find((entry) => entry.id === agent.providerId) ?? null
+    : null;
 
   return {
-    agent: decorateAgent(data, agent),
-    runs: listAgentRunsForAgent(data, context.workspace.id, agent.id).slice(0, 20),
+    agent: decorateAgentWithProvider(agent, provider),
+    runs: listAgentRunsForAgentIndexed(context.workspace.id, agent.id, 20),
   };
 }
 
@@ -1135,8 +1140,7 @@ export function createAgentFromTemplate(context: AuthenticatedContext, templateI
 }
 
 export function listProviders(context: AuthenticatedContext) {
-  const data = loadStore();
-  return { providers: listProvidersForWorkspace(data, context.workspace.id) };
+  return { providers: listProvidersForWorkspaceIndexed(context.workspace.id) };
 }
 
 export function createProvider(context: AuthenticatedContext, input: ProviderInput) {
@@ -1185,21 +1189,19 @@ export function updateProvider(context: AuthenticatedContext, providerId: string
 }
 
 export function listAgentRuns(context: AuthenticatedContext) {
-  const data = loadStore();
-  return { runs: listAgentRunsForWorkspace(data, context.workspace.id).slice(0, 50).map(decorateRun) };
+  return { runs: listAgentRunsForWorkspaceIndexed(context.workspace.id, 50).map(decorateRun) };
 }
 
 export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
   const timestamp = now();
+  const run = findAgentRunForWorkspaceIndexed(context.workspace.id, runId);
+  if (!run) {
+    throw httpError(404, "agent run not found");
+  }
+  if (run.status !== "queued" && run.status !== "running") {
+    throw httpError(409, "only queued or running runs can be canceled");
+  }
   return mutateStore((data) => {
-    const run = data.agentRuns.find((entry) => entry.id === runId);
-    if (!run || run.workspaceId !== context.workspace.id) {
-      throw httpError(404, "agent run not found");
-    }
-    if (run.status !== "queued" && run.status !== "running") {
-      throw httpError(409, "only queued or running runs can be canceled");
-    }
-
     const updated = upsertAgentRun(data, {
       ...run,
       status: "canceled",
@@ -1237,9 +1239,8 @@ export function recordRunAsPlaybook(context: AuthenticatedContext, runId: string
 }
 
 export async function retryAgentRun(context: AuthenticatedContext, runId: string) {
-  const data = loadStore();
-  const previous = data.agentRuns.find((entry) => entry.id === runId);
-  if (!previous || previous.workspaceId !== context.workspace.id) {
+  const previous = findAgentRunForWorkspaceIndexed(context.workspace.id, runId);
+  if (!previous) {
     throw httpError(404, "agent run not found");
   }
   if (!previous.agentId) {
@@ -1499,6 +1500,10 @@ type ProviderInput = {
 
 function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord, opts: { includeWebhookToken?: boolean } = {}) {
   const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
+  return decorateAgentWithProvider(agent, provider, opts);
+}
+
+function decorateAgentWithProvider(agent: AgentRecord, provider: ProviderRecord | null, opts: { includeWebhookToken?: boolean } = {}) {
   const responseAgent = opts.includeWebhookToken === false ? { ...agent, webhookToken: undefined } : agent;
   return {
     ...responseAgent,

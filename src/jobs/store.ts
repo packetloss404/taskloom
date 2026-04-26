@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mutateStore, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
+import { findJobIndexed, listJobsForWorkspaceIndexed, mutateStore, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
 import { nextAfter } from "./cron.js";
 
 const STALE_RUNNING_MS = 5 * 60 * 1000;
@@ -139,17 +139,11 @@ export function listJobs(
   workspaceId: string,
   opts: { status?: JobStatus; limit?: number } = {},
 ): JobRecord[] {
-  return mutateStore((data) => {
-    let entries = data.jobs.filter((j) => j.workspaceId === workspaceId);
-    if (opts.status) entries = entries.filter((j) => j.status === opts.status);
-    entries = entries.slice().reverse();
-    if (opts.limit) entries = entries.slice(0, opts.limit);
-    return entries;
-  });
+  return listJobsForWorkspaceIndexed(workspaceId, opts);
 }
 
 export function findJob(id: string): JobRecord | null {
-  return mutateStore((data) => data.jobs.find((j) => j.id === id) ?? null);
+  return findJobIndexed(id);
 }
 
 export function updateJob(id: string, patch: Partial<JobRecord>): JobRecord | null {

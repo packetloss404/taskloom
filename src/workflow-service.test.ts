@@ -183,3 +183,130 @@ test("workflow validation rejects invalid surface input", () => {
     /unknown requirement priority/,
   );
 });
+
+test("workflow read paths preserve workspace isolation and ordering", () => {
+  resetStoreForTests();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const timestamp = new Date().toISOString();
+  const store = loadStore();
+
+  store.requirements.unshift({
+    id: "req_beta_only_test",
+    workspaceId: "beta",
+    title: "Beta-only requirement",
+    detail: "",
+    description: "",
+    priority: "must",
+    status: "accepted",
+    acceptanceCriteria: [],
+    source: "team",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  store.requirements.push({
+    id: "req_alpha_only_test",
+    workspaceId: "alpha",
+    title: "Alpha-only requirement",
+    detail: "",
+    description: "",
+    priority: "should",
+    status: "proposed",
+    acceptanceCriteria: [],
+    source: "team",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  store.implementationPlanItems.push(
+    {
+      id: "plan_alpha_second_test",
+      workspaceId: "alpha",
+      requirementIds: [],
+      title: "Second alpha step",
+      description: "",
+      status: "todo",
+      order: 2,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    {
+      id: "plan_alpha_first_test",
+      workspaceId: "alpha",
+      requirementIds: [],
+      title: "First alpha step",
+      description: "",
+      status: "todo",
+      order: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    {
+      id: "plan_beta_only_test",
+      workspaceId: "beta",
+      requirementIds: [],
+      title: "Beta-only step",
+      description: "",
+      status: "todo",
+      order: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  );
+  store.workspaceBriefVersions.push(
+    {
+      id: "brief_alpha_v1_test",
+      workspaceId: "alpha",
+      versionNumber: 1,
+      summary: "Alpha v1",
+      goals: [],
+      audience: "",
+      constraints: "",
+      problemStatement: "",
+      targetCustomers: [],
+      desiredOutcome: "",
+      successMetrics: [],
+      source: "manual",
+      createdAt: timestamp,
+    },
+    {
+      id: "brief_alpha_v3_test",
+      workspaceId: "alpha",
+      versionNumber: 3,
+      summary: "Alpha v3",
+      goals: [],
+      audience: "",
+      constraints: "",
+      problemStatement: "",
+      targetCustomers: [],
+      desiredOutcome: "",
+      successMetrics: [],
+      source: "manual",
+      createdAt: timestamp,
+    },
+    {
+      id: "brief_beta_v9_test",
+      workspaceId: "beta",
+      versionNumber: 9,
+      summary: "Beta v9",
+      goals: [],
+      audience: "",
+      constraints: "",
+      problemStatement: "",
+      targetCustomers: [],
+      desiredOutcome: "",
+      successMetrics: [],
+      source: "manual",
+      createdAt: timestamp,
+    },
+  );
+
+  const overview = getWorkflowOverview(alpha.context);
+  assert.ok(overview.requirements.some((entry) => entry.id === "req_alpha_only_test"));
+  assert.ok(!overview.requirements.some((entry) => entry.workspaceId === "beta"));
+  const planIds = overview.planItems.map((entry) => entry.id);
+  assert.ok(planIds.indexOf("plan_alpha_first_test") < planIds.indexOf("plan_alpha_second_test"));
+  assert.ok(!overview.planItems.some((entry) => entry.workspaceId === "beta"));
+
+  const history = listWorkspaceBriefHistory(alpha.context);
+  assert.deepEqual(history.map((entry) => entry.id).slice(0, 2), ["brief_alpha_v3_test", "brief_alpha_v1_test"]);
+  assert.ok(!history.some((entry) => entry.workspaceId === "beta"));
+});

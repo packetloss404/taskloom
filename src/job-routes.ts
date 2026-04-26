@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { cancelJob, enqueueJob, findJob, listJobs } from "./jobs/store.js";
 import { parseCron } from "./jobs/cron.js";
-import { findAgent, loadStore } from "./taskloom-store.js";
+import { findAgentForWorkspaceIndexed } from "./taskloom-store.js";
 import type { JobStatus } from "./taskloom-store.js";
 
 function errorResponse(c: Context, error: unknown) {
@@ -37,8 +37,8 @@ function validateJobInput(body: Partial<{
   if (body.type === "agent.run") {
     const agentId = body.payload?.agentId;
     if (typeof agentId !== "string") throw badRequest("agent.run payload.agentId is required");
-    const agent = findAgent(loadStore(), agentId);
-    if (!agent || agent.workspaceId !== workspaceId) {
+    const agent = findAgentForWorkspaceIndexed(workspaceId, agentId);
+    if (!agent) {
       throw badRequest("agent.run payload.agentId must reference an agent in this workspace");
     }
   }

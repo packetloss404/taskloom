@@ -1,6 +1,6 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about hardening the SQLite runtime into query-optimized repositories and production-ready auth/member workflows without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about hardening production auth/member workflows and broader storage concurrency without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
@@ -22,6 +22,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - Local development uses ignored `data/taskloom.json` and `data/taskloom.sqlite` files that are recreated or migrated from built-in seed data and CLI commands.
 - README and activation docs cover local development, seed/reset, build, and release hygiene flows.
 - Durable activation signal records exist in the local app model for retry and scope-change signals. Runtime snapshots prefer those records and activation-scoped activity events before falling back to legacy activation fact counters, and an app-store activation signal repository now provides JSON and opt-in SQLite list/upsert access with stable-key dedupe and first-class origin metadata.
+- SQLite route hardening is implemented for the current local runtime through `app_record_search` metadata, `app_records` workspace indexes, and indexed helper functions for auth/session lookup, workspace membership/invitations, share tokens, workflow reads, activities, agents/runs, jobs, providers, and usage calls. JSON remains the default runtime, and SQLite remains opt-in through `TASKLOOM_STORE=sqlite`.
 
 ## Landed In This Branch
 
@@ -138,6 +139,16 @@ Phase 10 is implemented for the current app-store runtime:
 - Brief scope changes write durable `scope_change` records with `source: "workflow"`, `origin: "user_entered"`, the brief version as `sourceId`, stable-key dedupe, and stable activation activity ids.
 - Recompute jobs normalize legacy retry/scope-change counters into durable `user_fact` signals idempotently when no durable signal records exist for that kind.
 
+### Phase 11 Query-Optimized SQLite Route Hardening
+
+Phase 11 is implemented for the high-value routes that were still doing broad JSON-payload reads in SQLite mode:
+
+- SQLite still persists app collections in `app_records`, but migrations `0005_app_record_search.sql` and `0007_workspace_app_record_reads.sql` add sidecar search metadata plus workspace/read-order indexes for records repeatedly needed by route security, workflow reads, operations, and public token flows.
+- Indexed helpers now cover user lookup by id/email, session lookup/listing, workspace membership lookup/listing, invitation lookup/listing, share-token lookup/listing, workflow records, activity detail context, agents/runs, jobs, providers, and provider-call usage summaries.
+- Route hardening in this codebase means those hot paths can use SQLite-indexed metadata or collection/workspace indexes in opt-in SQLite mode while preserving the same JSON-backed store API and behavior in default JSON mode.
+- The app is not yet split into fully relational repositories for every collection; relational backfills remain future work only if later phases move high-value records out of `app_records` into dedicated tables.
+- Coverage now includes direct helper synchronization checks plus JSON-default versus SQLite-opt-in route parity for auth/session, invitation listing, workflow, jobs, agents, and share-token public/private reads.
+
 ## Roadmap
 
 Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
@@ -149,7 +160,7 @@ Replace the JSON-only runtime with a database-backed persistence layer while kee
 - [x] Add migration tooling around the existing activation schema.
 - [x] Extend the existing JSON-backed model into SQLite migrations for users, sessions, memberships, invitations, workspaces, workflow records, onboarding state, activities, activation facts, milestones, activation read models, agents, jobs, provider calls, and share tokens.
 - [x] Add an opt-in SQLite-backed runtime behind the existing `loadStore()` / `mutateStore()` surface.
-- [ ] Replace JSON-payload `app_records` persistence with query-optimized repositories for high-value routes where needed.
+- [x] Harden high-value SQLite route reads with query-indexed helpers while keeping JSON-payload `app_records` as the local compatibility layer.
 - [x] Add formal seed and reset commands for local development.
 - [x] Add JSON-to-SQLite app backfill commands.
 - [x] Add local SQLite migration status plus validated backup/restore commands. Executable rollback remains intentionally unsupported; restore from a pre-migration backup is the rollback strategy.
@@ -162,10 +173,10 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 - [x] Apply owner/admin/member/viewer RBAC to private route policies.
 - [x] Enforce workspace membership before workspace reads, workflow edits, or operational mutations.
 - [x] Add backend invitation and member management APIs.
-- [ ] Add member-management UI, invitation revoke/resend, and email delivery.
+- [ ] Add email delivery for invitations; member-management UI and invitation revoke/resend are already locally wired.
 - [x] Add session cleanup for expired sessions.
 - [x] Document production session cookie behavior and cleanup expectations.
-- [ ] Add production hardening beyond local auth, such as rate limiting and CSRF review.
+- [ ] Add production hardening beyond local in-memory rate limiting and same-origin checks, such as distributed rate limiting and CSRF review.
 
 ### 3. Real Activation Signals
 
@@ -188,7 +199,7 @@ Make activation updates reliable outside request-time reads.
 - [x] Run the local JSON-backed queue scheduler for `agent.run` jobs with cron re-enqueue, retries/backoff, cancellation, and stale-running-job sweep.
 - [x] Expose private job queue routes for list, enqueue, read, and cancel.
 - [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
-- [ ] Add relational database backfills if app records are later split into query-optimized repository tables.
+- [ ] Add relational database backfills if app records are later split from indexed `app_records` metadata into dedicated repository tables.
 - [x] Ensure activation-scoped retry and scope-change activity emission is idempotent enough to avoid double-counting repeated signal writes.
 - [x] Add stale JSON read-model repair checks and a `jobs:repair-activation` command.
 
@@ -214,11 +225,10 @@ Strengthen the project rails before larger product work accumulates.
 
 ## Recommended Order
 
-1. Query-optimized repository hardening for high-value SQLite routes, replacing broad JSON-payload reads where needed while keeping local JSON as the default runtime and SQLite opt-in.
-2. Member-management UI, invitation revoke/resend, email delivery, rate limiting, and CSRF review.
-3. Production storage hardening: concurrency and query-optimized storage beyond the local backup/restore rollback strategy.
-4. Continued workflow/UI, test, and release hardening.
+1. Invitation email delivery, distributed rate limiting, and CSRF review beyond the current local hardening.
+2. Production storage hardening: concurrency and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
+3. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The next phase is complete when SQLite mode is production-hardened for concurrent local use, high-value routes can query dedicated repository tables where broad `app_records` scans are not enough, JSON-to-SQLite backfills remain repeatable, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.
+The next phase is complete when production auth/member flows are hardened, SQLite mode is safer for concurrent local use, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.

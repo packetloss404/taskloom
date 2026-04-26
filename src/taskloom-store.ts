@@ -612,6 +612,43 @@ function applyStoreMigrations(db: DatabaseSync): void {
 
 type StoreCollectionKey = keyof TaskloomData;
 
+export interface WorkspaceRecordCollectionMap {
+  activities: ActivityRecord;
+  jobs: JobRecord;
+  agents: AgentRecord;
+  agentRuns: AgentRunRecord;
+  providerCalls: ProviderCallRecord;
+  requirements: RequirementRecord;
+  implementationPlanItems: ImplementationPlanItemRecord;
+  workflowConcerns: WorkflowConcernRecord;
+  validationEvidence: ValidationEvidenceRecord;
+  workspaceBriefVersions: WorkspaceBriefVersionRecord;
+  providers: ProviderRecord;
+  activationSignals: ActivationSignalRecord;
+  workspaceEnvVars: WorkspaceEnvVarRecord;
+}
+
+export type WorkspaceRecordCollectionKey = keyof WorkspaceRecordCollectionMap;
+
+export type WorkspaceRecordOrder =
+  | "id"
+  | "createdAtAsc"
+  | "createdAtDesc"
+  | "updatedAtDesc"
+  | "occurredAtDesc"
+  | "scheduledAtAsc"
+  | "completedAtDesc"
+  | "orderAsc"
+  | "versionNumberDesc"
+  | "nameAsc"
+  | "keyAsc";
+
+export interface ListWorkspaceRecordsOptions<TRecord> {
+  orderBy?: WorkspaceRecordOrder;
+  limit?: number;
+  filter?: (record: TRecord) => boolean;
+}
+
 const RECORD_COLLECTIONS = [
   "users",
   "sessions",
@@ -712,7 +749,29 @@ interface AppRecordSearchValues {
 
 function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown): AppRecordSearchValues | null {
   const record = payload as Record<string, unknown>;
-  if (!["users", "sessions", "memberships", "workspaceInvitations", "shareTokens", "activationSignals"].includes(collection)) return null;
+  if (![
+    "users",
+    "sessions",
+    "workspaces",
+    "memberships",
+    "workspaceInvitations",
+    "shareTokens",
+    "activationSignals",
+    "workspaceBriefs",
+    "workspaceBriefVersions",
+    "requirements",
+    "implementationPlanItems",
+    "workflowConcerns",
+    "validationEvidence",
+    "releaseConfirmations",
+    "activities",
+    "agents",
+    "providers",
+    "agentRuns",
+    "workspaceEnvVars",
+    "jobs",
+    "providerCalls",
+  ].includes(collection)) return null;
   const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : null;
   const userId = typeof record.userId === "string" ? record.userId : null;
   const email = typeof record.email === "string" ? normalizeEmail(record.email) : null;
@@ -720,7 +779,26 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
   return { workspaceId, userId, email, token };
 }
 
-type IndexedCollection = "users" | "sessions" | "memberships" | "workspaceInvitations" | "shareTokens";
+type IndexedCollection =
+  | "users"
+  | "sessions"
+  | "workspaces"
+  | "memberships"
+  | "workspaceInvitations"
+  | "workspaceBriefs"
+  | "workspaceBriefVersions"
+  | "requirements"
+  | "implementationPlanItems"
+  | "workflowConcerns"
+  | "validationEvidence"
+  | "releaseConfirmations"
+  | "activities"
+  | "agents"
+  | "providers"
+  | "agentRuns"
+  | "jobs"
+  | "providerCalls"
+  | "shareTokens";
 
 function sqliteIndexedRecord<T>(collection: IndexedCollection, whereSql: string, values: SQLInputValue[]): T | null {
   if (process.env.TASKLOOM_STORE !== "sqlite") return null;
@@ -762,6 +840,169 @@ function sqliteIndexedRecords<T>(collection: IndexedCollection, whereSql: string
   }
 }
 
+const WORKSPACE_RECORD_ORDER_SQL = {
+  id: "app_records.id",
+  createdAtAsc: "json_extract(app_records.payload, '$.createdAt') asc, app_records.id asc",
+  createdAtDesc: "json_extract(app_records.payload, '$.createdAt') desc, app_records.id desc",
+  updatedAtDesc: "coalesce(app_records.updated_at, json_extract(app_records.payload, '$.updatedAt'), json_extract(app_records.payload, '$.createdAt')) desc, app_records.id desc",
+  occurredAtDesc: "json_extract(app_records.payload, '$.occurredAt') desc, app_records.id desc",
+  scheduledAtAsc: "json_extract(app_records.payload, '$.scheduledAt') asc, app_records.id asc",
+  completedAtDesc: "json_extract(app_records.payload, '$.completedAt') desc, app_records.id desc",
+  orderAsc: "json_extract(app_records.payload, '$.order') asc, app_records.id asc",
+  versionNumberDesc: "json_extract(app_records.payload, '$.versionNumber') desc, app_records.id desc",
+  nameAsc: "json_extract(app_records.payload, '$.name') collate nocase asc, app_records.id asc",
+  keyAsc: "json_extract(app_records.payload, '$.key') collate nocase asc, app_records.id asc",
+} as const satisfies Record<WorkspaceRecordOrder, string>;
+
+export function listWorkspaceRecordsIndexed<K extends WorkspaceRecordCollectionKey>(
+  collection: K,
+  workspaceId: string,
+  options: ListWorkspaceRecordsOptions<WorkspaceRecordCollectionMap[K]> = {},
+): WorkspaceRecordCollectionMap[K][] {
+  const queryLimit = options.filter ? undefined : options.limit;
+  const sqliteRecords = sqliteWorkspaceRecords(collection, workspaceId, options.orderBy ?? "id", queryLimit);
+  const records = sqliteRecords ?? listWorkspaceRecordsFromStore(collection, workspaceId, options.orderBy ?? "id", queryLimit);
+  const filtered = options.filter ? records.filter(options.filter) : records;
+  return options.filter && options.limit && options.limit > 0 ? filtered.slice(0, options.limit) : filtered;
+}
+
+function sqliteWorkspaceRecords<K extends WorkspaceRecordCollectionKey>(
+  collection: K,
+  workspaceId: string,
+  orderBy: WorkspaceRecordOrder,
+  limit: number | undefined,
+): WorkspaceRecordCollectionMap[K][] | null {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return null;
+  const dbPath = resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE);
+  const db = openStoreDatabase(dbPath);
+  try {
+    const values: SQLInputValue[] = [collection, workspaceId];
+    const hasLimit = typeof limit === "number" && limit > 0;
+    const limitSql = hasLimit ? "limit ?" : "";
+    if (hasLimit) values.push(limit);
+    const rows = db.prepare(`
+      select payload
+      from app_records
+      where collection = ? and workspace_id = ?
+      order by ${WORKSPACE_RECORD_ORDER_SQL[orderBy]}
+      ${limitSql}
+    `).all(...values) as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as WorkspaceRecordCollectionMap[K]);
+  } finally {
+    db.close();
+  }
+}
+
+function listWorkspaceRecordsFromStore<K extends WorkspaceRecordCollectionKey>(
+  collection: K,
+  workspaceId: string,
+  orderBy: WorkspaceRecordOrder,
+  limit: number | undefined,
+): WorkspaceRecordCollectionMap[K][] {
+  const records = (loadStore()[collection] as WorkspaceRecordCollectionMap[K][])
+    .filter((entry) => entry.workspaceId === workspaceId);
+  const sorted = sortWorkspaceRecords(records, orderBy);
+  return limit && limit > 0 ? sorted.slice(0, limit) : sorted;
+}
+
+function sortWorkspaceRecords<TRecord>(records: TRecord[], orderBy: WorkspaceRecordOrder): TRecord[] {
+  const sorted = records.slice();
+  sorted.sort((left, right) => compareWorkspaceRecords(left, right, orderBy));
+  return sorted;
+}
+
+function compareWorkspaceRecords<TRecord>(left: TRecord, right: TRecord, orderBy: WorkspaceRecordOrder): number {
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  if (orderBy === "createdAtAsc") return compareStrings(field(leftRecord, "createdAt"), field(rightRecord, "createdAt")) || compareStrings(field(leftRecord, "id"), field(rightRecord, "id"));
+  if (orderBy === "createdAtDesc") return compareStrings(field(rightRecord, "createdAt"), field(leftRecord, "createdAt")) || compareStrings(field(rightRecord, "id"), field(leftRecord, "id"));
+  if (orderBy === "updatedAtDesc") return compareStrings(field(rightRecord, "updatedAt") || field(rightRecord, "createdAt"), field(leftRecord, "updatedAt") || field(leftRecord, "createdAt")) || compareStrings(field(rightRecord, "id"), field(leftRecord, "id"));
+  if (orderBy === "occurredAtDesc") return compareStrings(field(rightRecord, "occurredAt"), field(leftRecord, "occurredAt")) || compareStrings(field(rightRecord, "id"), field(leftRecord, "id"));
+  if (orderBy === "scheduledAtAsc") return compareStrings(field(leftRecord, "scheduledAt"), field(rightRecord, "scheduledAt")) || compareStrings(field(leftRecord, "id"), field(rightRecord, "id"));
+  if (orderBy === "completedAtDesc") return compareStrings(field(rightRecord, "completedAt"), field(leftRecord, "completedAt")) || compareStrings(field(rightRecord, "id"), field(leftRecord, "id"));
+  if (orderBy === "orderAsc") return compareNumbers(numberField(leftRecord, "order"), numberField(rightRecord, "order")) || compareStrings(field(leftRecord, "id"), field(rightRecord, "id"));
+  if (orderBy === "versionNumberDesc") return compareNumbers(numberField(rightRecord, "versionNumber"), numberField(leftRecord, "versionNumber")) || compareStrings(field(rightRecord, "id"), field(leftRecord, "id"));
+  if (orderBy === "nameAsc") return field(leftRecord, "name").localeCompare(field(rightRecord, "name"), undefined, { sensitivity: "base" }) || compareStrings(field(leftRecord, "id"), field(rightRecord, "id"));
+  if (orderBy === "keyAsc") return field(leftRecord, "key").localeCompare(field(rightRecord, "key"), undefined, { sensitivity: "base" }) || compareStrings(field(leftRecord, "id"), field(rightRecord, "id"));
+  return compareStrings(field(leftRecord, "id"), field(rightRecord, "id"));
+}
+
+function field(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function numberField(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareNumbers(left: number, right: number): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function listActivitiesForWorkspaceIndexed(workspaceId: string, limit?: number): ActivityRecord[] {
+  if (process.env.TASKLOOM_STORE !== "sqlite") {
+    const entries = loadStore().activities.filter((entry) => entry.workspaceId === workspaceId);
+    return limit && limit > 0 ? entries.slice(0, limit) : entries;
+  }
+  return listWorkspaceRecordsIndexed("activities", workspaceId, { orderBy: "occurredAtDesc", limit });
+}
+
+export function listJobsForWorkspaceIndexed(workspaceId: string, opts: { status?: JobStatus; limit?: number } = {}): JobRecord[] {
+  if (process.env.TASKLOOM_STORE !== "sqlite") {
+    let entries = loadStore().jobs.filter((entry) => entry.workspaceId === workspaceId);
+    if (opts.status) entries = entries.filter((entry) => entry.status === opts.status);
+    entries = entries.slice().reverse();
+    return opts.limit ? entries.slice(0, opts.limit) : entries;
+  }
+  return listWorkspaceRecordsIndexed("jobs", workspaceId, {
+    orderBy: "createdAtDesc",
+    limit: opts.limit,
+    filter: opts.status ? (entry) => entry.status === opts.status : undefined,
+  });
+}
+
+export function listAgentsForWorkspaceIndexed(workspaceId: string, includeArchived = false): AgentRecord[] {
+  return listWorkspaceRecordsIndexed("agents", workspaceId, {
+    orderBy: "updatedAtDesc",
+    filter: includeArchived ? undefined : (entry) => entry.status !== "archived",
+  });
+}
+
+export function listProvidersForWorkspaceIndexed(workspaceId: string): ProviderRecord[] {
+  return listWorkspaceRecordsIndexed("providers", workspaceId, { orderBy: "nameAsc" });
+}
+
+export function listAgentRunsForWorkspaceIndexed(workspaceId: string, limit?: number): AgentRunRecord[] {
+  return listWorkspaceRecordsIndexed("agentRuns", workspaceId, { orderBy: "createdAtDesc", limit });
+}
+
+export function listProviderCallsForWorkspaceIndexed(workspaceId: string, opts: { since?: string; limit?: number } = {}): ProviderCallRecord[] {
+  if (process.env.TASKLOOM_STORE !== "sqlite") {
+    let entries = loadStore().providerCalls.filter((entry) => entry.workspaceId === workspaceId);
+    if (opts.since) {
+      const cutoff = Date.parse(opts.since);
+      entries = entries.filter((entry) => Date.parse(entry.completedAt) >= cutoff);
+    }
+    entries = entries.slice().reverse();
+    return opts.limit ? entries.slice(0, opts.limit) : entries;
+  }
+  return listWorkspaceRecordsIndexed("providerCalls", workspaceId, {
+    orderBy: "completedAtDesc",
+    limit: opts.limit,
+    filter: opts.since ? (entry) => Date.parse(entry.completedAt) >= Date.parse(opts.since as string) : undefined,
+  });
+}
+
+export function listAgentRunsForAgentIndexed(workspaceId: string, agentId: string, limit?: number): AgentRunRecord[] {
+  return listAgentRunsForWorkspaceIndexed(workspaceId).filter((entry) => entry.agentId === agentId).slice(0, limit);
+}
+
 export function findUserByIdIndexed(userId: string): UserRecord | null {
   return sqliteIndexedRecord<UserRecord>("users", "app_record_search.id = ?", [userId])
     ?? loadStore().users.find((entry) => entry.id === userId) ?? null;
@@ -776,6 +1017,11 @@ export function findUserByEmailIndexed(email: string): UserRecord | null {
 export function findSessionByIdIndexed(sessionId: string): SessionRecord | null {
   return sqliteIndexedRecord<SessionRecord>("sessions", "app_record_search.id = ?", [sessionId])
     ?? loadStore().sessions.find((entry) => entry.id === sessionId) ?? null;
+}
+
+export function findWorkspaceByIdIndexed(workspaceId: string): WorkspaceRecord | null {
+  return sqliteIndexedRecord<WorkspaceRecord>("workspaces", "app_record_search.id = ?", [workspaceId])
+    ?? loadStore().workspaces.find((entry) => entry.id === workspaceId) ?? null;
 }
 
 export function listSessionsForUserIndexed(userId: string): SessionRecord[] {
@@ -815,6 +1061,96 @@ export function listShareTokensForWorkspaceIndexed(workspaceId: string): ShareTo
     ?? loadStore().shareTokens
       .filter((entry) => entry.workspaceId === workspaceId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export function findWorkspaceBriefIndexed(workspaceId: string): WorkspaceBriefRecord | null {
+  return sqliteIndexedRecord<WorkspaceBriefRecord>("workspaceBriefs", "app_record_search.workspace_id = ?", [workspaceId])
+    ?? workspaceBriefEntries(loadStore().workspaceBriefs).find((entry) => entry.workspaceId === workspaceId) ?? null;
+}
+
+export function listWorkspaceBriefVersionsIndexed(workspaceId: string): WorkspaceBriefVersionRecord[] {
+  return sqliteIndexedRecords<WorkspaceBriefVersionRecord>("workspaceBriefVersions", "app_record_search.workspace_id = ?", [workspaceId], "json_extract(app_records.payload, '$.versionNumber') desc")
+    ?? loadStore().workspaceBriefVersions
+      .filter((entry) => entry.workspaceId === workspaceId)
+      .sort((left, right) => right.versionNumber - left.versionNumber);
+}
+
+export function findWorkspaceBriefVersionIndexed(workspaceId: string, versionId: string): WorkspaceBriefVersionRecord | null {
+  return sqliteIndexedRecord<WorkspaceBriefVersionRecord>("workspaceBriefVersions", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, versionId])
+    ?? loadStore().workspaceBriefVersions.find((entry) => entry.workspaceId === workspaceId && entry.id === versionId) ?? null;
+}
+
+export function listRequirementsForWorkspaceIndexed(workspaceId: string): RequirementRecord[] {
+  return sqliteIndexedRecords<RequirementRecord>("requirements", "app_record_search.workspace_id = ?", [workspaceId])
+    ?? loadStore().requirements.filter((entry) => entry.workspaceId === workspaceId);
+}
+
+export function findRequirementForWorkspaceIndexed(workspaceId: string, requirementId: string): RequirementRecord | null {
+  return sqliteIndexedRecord<RequirementRecord>("requirements", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, requirementId])
+    ?? loadStore().requirements.find((entry) => entry.workspaceId === workspaceId && entry.id === requirementId) ?? null;
+}
+
+export function listImplementationPlanItemsForWorkspaceIndexed(workspaceId: string): ImplementationPlanItemRecord[] {
+  return sqliteIndexedRecords<ImplementationPlanItemRecord>("implementationPlanItems", "app_record_search.workspace_id = ?", [workspaceId], "json_extract(app_records.payload, '$.order'), app_records.id")
+    ?? loadStore().implementationPlanItems
+      .filter((entry) => entry.workspaceId === workspaceId)
+      .sort((left, right) => left.order - right.order);
+}
+
+export function findImplementationPlanItemForWorkspaceIndexed(workspaceId: string, planItemId: string): ImplementationPlanItemRecord | null {
+  return sqliteIndexedRecord<ImplementationPlanItemRecord>("implementationPlanItems", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, planItemId])
+    ?? loadStore().implementationPlanItems.find((entry) => entry.workspaceId === workspaceId && entry.id === planItemId) ?? null;
+}
+
+export function listWorkflowConcernsForWorkspaceIndexed(workspaceId: string, kind?: WorkflowConcernKind): WorkflowConcernRecord[] {
+  return sqliteIndexedRecords<WorkflowConcernRecord>(
+    "workflowConcerns",
+    `app_record_search.workspace_id = ?${kind ? " and json_extract(app_records.payload, '$.kind') = ?" : ""}`,
+    kind ? [workspaceId, kind] : [workspaceId],
+  ) ?? loadStore().workflowConcerns.filter((entry) => entry.workspaceId === workspaceId && (!kind || entry.kind === kind));
+}
+
+export function findWorkflowConcernForWorkspaceIndexed(workspaceId: string, concernId: string, kind?: WorkflowConcernKind): WorkflowConcernRecord | null {
+  return sqliteIndexedRecord<WorkflowConcernRecord>(
+    "workflowConcerns",
+    `app_record_search.workspace_id = ? and app_record_search.id = ?${kind ? " and json_extract(app_records.payload, '$.kind') = ?" : ""}`,
+    kind ? [workspaceId, concernId, kind] : [workspaceId, concernId],
+  ) ?? loadStore().workflowConcerns.find((entry) => entry.workspaceId === workspaceId && entry.id === concernId && (!kind || entry.kind === kind)) ?? null;
+}
+
+export function listValidationEvidenceForWorkspaceIndexed(workspaceId: string): ValidationEvidenceRecord[] {
+  return sqliteIndexedRecords<ValidationEvidenceRecord>("validationEvidence", "app_record_search.workspace_id = ?", [workspaceId])
+    ?? loadStore().validationEvidence.filter((entry) => entry.workspaceId === workspaceId);
+}
+
+export function findValidationEvidenceForWorkspaceIndexed(workspaceId: string, evidenceId: string): ValidationEvidenceRecord | null {
+  return sqliteIndexedRecord<ValidationEvidenceRecord>("validationEvidence", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, evidenceId])
+    ?? loadStore().validationEvidence.find((entry) => entry.workspaceId === workspaceId && entry.id === evidenceId) ?? null;
+}
+
+export function listReleaseConfirmationsForWorkspaceIndexed(workspaceId: string): ReleaseConfirmationRecord[] {
+  return sqliteIndexedRecords<ReleaseConfirmationRecord>("releaseConfirmations", "app_record_search.workspace_id = ?", [workspaceId])
+    ?? releaseConfirmationEntries(loadStore().releaseConfirmations).filter((entry) => entry.workspaceId === workspaceId);
+}
+
+export function findReleaseConfirmationForWorkspaceIndexed(workspaceId: string, releaseId: string): ReleaseConfirmationRecord | null {
+  return sqliteIndexedRecord<ReleaseConfirmationRecord>("releaseConfirmations", "app_record_search.workspace_id = ? and (json_extract(app_records.payload, '$.id') = ? or app_record_search.workspace_id = ?)", [workspaceId, releaseId, releaseId])
+    ?? releaseConfirmationEntries(loadStore().releaseConfirmations).find((entry) => entry.workspaceId === workspaceId && (entry.id === releaseId || entry.workspaceId === releaseId)) ?? null;
+}
+
+export function findAgentForWorkspaceIndexed(workspaceId: string, agentId: string): AgentRecord | null {
+  return sqliteIndexedRecord<AgentRecord>("agents", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, agentId])
+    ?? loadStore().agents.find((entry) => entry.workspaceId === workspaceId && entry.id === agentId) ?? null;
+}
+
+export function findAgentRunForWorkspaceIndexed(workspaceId: string, runId: string): AgentRunRecord | null {
+  return sqliteIndexedRecord<AgentRunRecord>("agentRuns", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, runId])
+    ?? loadStore().agentRuns.find((entry) => entry.workspaceId === workspaceId && entry.id === runId) ?? null;
+}
+
+export function findJobIndexed(jobId: string): JobRecord | null {
+  return sqliteIndexedRecord<JobRecord>("jobs", "app_record_search.id = ?", [jobId])
+    ?? loadStore().jobs.find((entry) => entry.id === jobId) ?? null;
 }
 
 function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {

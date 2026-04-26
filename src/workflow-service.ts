@@ -1,13 +1,17 @@
 import { generateId, now } from "./auth-utils";
 import {
   appendWorkspaceBriefVersion,
+  findWorkspaceBriefIndexed,
   findWorkspaceBrief,
-  findWorkspaceBriefVersion,
-  listImplementationPlanItemsForWorkspace,
+  findWorkspaceBriefVersionIndexed,
+  findWorkspaceByIdIndexed,
+  listImplementationPlanItemsForWorkspaceIndexed,
+  listReleaseConfirmationsForWorkspaceIndexed,
   listReleaseConfirmationsForWorkspace,
-  listRequirementsForWorkspace,
-  listValidationEvidenceForWorkspace,
-  listWorkflowConcernsForWorkspace,
+  listRequirementsForWorkspaceIndexed,
+  listValidationEvidenceForWorkspaceIndexed,
+  listWorkflowConcernsForWorkspaceIndexed,
+  listWorkspaceBriefVersionsIndexed,
   listWorkspaceBriefVersions,
   loadStore,
   mutateStore,
@@ -210,8 +214,8 @@ export function getWorkflowOverview(context: WorkflowContext) {
 }
 
 export function readWorkspaceBrief(context: WorkflowContext): WorkspaceBriefRecord {
-  const data = loadCheckedStore(context.workspace.id);
-  return copyRecord(findWorkspaceBrief(data, context.workspace.id) ?? defaultWorkspaceBrief(context));
+  ensureWorkspaceExists(context.workspace.id);
+  return copyRecord(findWorkspaceBriefIndexed(context.workspace.id) ?? defaultWorkspaceBrief(context));
 }
 
 export function updateWorkspaceBrief(
@@ -236,7 +240,8 @@ export function applyWorkspaceBriefTemplate(
 }
 
 export function listWorkspaceBriefHistory(context: WorkflowContext): WorkspaceBriefVersionRecord[] {
-  return listWorkspaceBriefVersions(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listWorkspaceBriefVersionsIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function restoreWorkspaceBriefVersion(
@@ -245,8 +250,8 @@ export function restoreWorkspaceBriefVersion(
 ): WorkspaceBriefRecord {
   const versionId = input.versionId?.trim();
   if (!versionId) throw httpError(400, "brief version id is required");
-  const data = loadCheckedStore(context.workspace.id);
-  const version = findWorkspaceBriefVersion(data, context.workspace.id, versionId);
+  ensureWorkspaceExists(context.workspace.id);
+  const version = findWorkspaceBriefVersionIndexed(context.workspace.id, versionId);
   if (!version) throw httpError(404, "brief version not found");
   return saveWorkspaceBriefInternal(
     context,
@@ -364,7 +369,8 @@ function saveWorkspaceBriefInternal(
 }
 
 export function listRequirements(context: WorkflowContext): RequirementRecord[] {
-  return listRequirementsForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listRequirementsForWorkspaceIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function replaceRequirements(
@@ -393,7 +399,8 @@ export function replaceRequirements(
 }
 
 export function listPlanItems(context: WorkflowContext): ImplementationPlanItemRecord[] {
-  return listImplementationPlanItemsForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listImplementationPlanItemsForWorkspaceIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function replacePlanItems(
@@ -459,10 +466,10 @@ export function updateWorkflowPlanItem(
 }
 
 export function listBlockersAndQuestions(context: WorkflowContext) {
-  const data = loadCheckedStore(context.workspace.id);
+  ensureWorkspaceExists(context.workspace.id);
   return {
-    blockers: listWorkflowConcernsForWorkspace(data, context.workspace.id, "blocker").map(copyRecord),
-    questions: listWorkflowConcernsForWorkspace(data, context.workspace.id, "open_question").map(copyRecord),
+    blockers: listWorkflowConcernsForWorkspaceIndexed(context.workspace.id, "blocker").map(copyRecord),
+    questions: listWorkflowConcernsForWorkspaceIndexed(context.workspace.id, "open_question").map(copyRecord),
   };
 }
 
@@ -550,7 +557,8 @@ export function replaceBlockersAndQuestions(
 }
 
 export function listValidationEvidence(context: WorkflowContext): ValidationEvidenceRecord[] {
-  return listValidationEvidenceForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listValidationEvidenceForWorkspaceIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function replaceValidationEvidence(
@@ -616,7 +624,8 @@ export function updateWorkflowValidationEvidence(
 }
 
 export function readReleaseConfirmation(context: WorkflowContext): ReleaseConfirmationRecord | null {
-  const confirmations = listReleaseConfirmationsForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id);
+  ensureWorkspaceExists(context.workspace.id);
+  const confirmations = listReleaseConfirmationsForWorkspaceIndexed(context.workspace.id);
   const latest = confirmations.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   return latest ? copyRecord(latest) : null;
 }
@@ -771,10 +780,8 @@ function normalizeValidationEvidence(
   };
 }
 
-function loadCheckedStore(workspaceId: string): TaskloomData {
-  const data = loadStore();
-  ensureWorkspace(data, workspaceId);
-  return data;
+function ensureWorkspaceExists(workspaceId: string): void {
+  if (!findWorkspaceByIdIndexed(workspaceId)) throw httpError(404, "workspace not found");
 }
 
 function ensureWorkspace(data: TaskloomData, workspaceId: string): WorkspaceRecord {

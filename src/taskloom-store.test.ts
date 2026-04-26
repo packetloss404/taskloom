@@ -14,10 +14,21 @@ import {
   findWorkspaceInvitationByTokenIndexed,
   findWorkspaceMembershipIndexed,
   findWorkspaceBrief,
+  listActivitiesForWorkspaceIndexed,
+  listAgentRunsForWorkspaceIndexed,
+  listAgentsForWorkspaceIndexed,
+  listImplementationPlanItemsForWorkspaceIndexed,
+  listJobsForWorkspaceIndexed,
+  listProviderCallsForWorkspaceIndexed,
+  listRequirementsForWorkspaceIndexed,
   loadStore,
   listSessionsForUserIndexed,
   listShareTokensForWorkspaceIndexed,
   listActivationSignalsForWorkspace,
+  listValidationEvidenceForWorkspaceIndexed,
+  listWorkspaceBriefVersionsIndexed,
+  listWorkspaceRecordsIndexed,
+  listWorkflowConcernsForWorkspaceIndexed,
   listWorkspaceInvitationsIndexed,
   listWorkspaceMembershipsIndexed,
   findWorkspaceMembership,
@@ -343,6 +354,259 @@ test("sqlite indexed helpers read high-value records and stay in sync", () => {
     assert.equal(findSessionByIdIndexed("session_sqlite_index"), null);
     assert.equal(findShareTokenByTokenIndexed("share-token-sqlite-index"), null);
     assert.equal(findShareTokenByTokenIndexed("share-token-sqlite-updated")?.readCount, 3);
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("sqlite workspace record helpers read scoped collections with route ordering", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-workspace-records-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+
+    resetStoreForTests();
+    mutateStore((data) => {
+      data.activities.push({
+        id: "activity_workspace_records_old",
+        workspaceId: "workspace_records",
+        scope: "workspace",
+        event: "workspace.old",
+        occurredAt: "2026-03-01T00:00:00.000Z",
+        actor: { type: "system", id: "test" },
+        data: {},
+      });
+      data.activities.push({
+        id: "activity_workspace_records_new",
+        workspaceId: "workspace_records",
+        scope: "workspace",
+        event: "workspace.new",
+        occurredAt: "2026-03-02T00:00:00.000Z",
+        actor: { type: "system", id: "test" },
+        data: {},
+      });
+      data.activities.push({
+        id: "activity_other_workspace",
+        workspaceId: "other_workspace",
+        scope: "workspace",
+        event: "workspace.private",
+        occurredAt: "2026-03-03T00:00:00.000Z",
+        actor: { type: "system", id: "test" },
+        data: {},
+      });
+      data.requirements.push({
+        id: "req_workspace_records",
+        workspaceId: "workspace_records",
+        title: "Workspace-scoped requirement",
+        priority: "must",
+        status: "approved",
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.implementationPlanItems.push({
+        id: "plan_workspace_records_second",
+        workspaceId: "workspace_records",
+        requirementIds: ["req_workspace_records"],
+        title: "Second plan item",
+        description: "Sorts after the first item.",
+        status: "todo",
+        order: 2,
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.implementationPlanItems.push({
+        id: "plan_workspace_records_first",
+        workspaceId: "workspace_records",
+        requirementIds: ["req_workspace_records"],
+        title: "First plan item",
+        description: "Sorts before the second item.",
+        status: "todo",
+        order: 1,
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.workflowConcerns.push({
+        id: "concern_workspace_records_question",
+        workspaceId: "workspace_records",
+        kind: "open_question",
+        title: "Question",
+        description: "Question for workspace helper.",
+        status: "open",
+        severity: "medium",
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.validationEvidence.push({
+        id: "evidence_workspace_records",
+        workspaceId: "workspace_records",
+        title: "Evidence",
+        status: "passed",
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.agents.push({
+        id: "agent_workspace_records_old",
+        workspaceId: "workspace_records",
+        name: "Old agent",
+        description: "Older agent.",
+        instructions: "Do the old thing.",
+        tools: [],
+        status: "active",
+        createdByUserId: "user_alpha",
+        inputSchema: [],
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.agents.push({
+        id: "agent_workspace_records_new",
+        workspaceId: "workspace_records",
+        name: "New agent",
+        description: "Newer agent.",
+        instructions: "Do the new thing.",
+        tools: [],
+        status: "active",
+        createdByUserId: "user_alpha",
+        inputSchema: [],
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-02T00:00:00.000Z",
+      });
+      data.agentRuns.push({
+        id: "run_workspace_records_old",
+        workspaceId: "workspace_records",
+        agentId: "agent_workspace_records_new",
+        title: "Old run",
+        status: "success",
+        logs: [],
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.agentRuns.push({
+        id: "run_workspace_records_new",
+        workspaceId: "workspace_records",
+        agentId: "agent_workspace_records_new",
+        title: "New run",
+        status: "success",
+        logs: [],
+        createdAt: "2026-03-02T00:00:00.000Z",
+        updatedAt: "2026-03-02T00:00:00.000Z",
+      });
+      data.providerCalls.push({
+        id: "provider_call_workspace_records_old",
+        workspaceId: "workspace_records",
+        routeKey: "test.route",
+        provider: "stub",
+        model: "stub",
+        promptTokens: 1,
+        completionTokens: 1,
+        costUsd: 0,
+        durationMs: 1,
+        status: "success",
+        startedAt: "2026-03-01T00:00:00.000Z",
+        completedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.providerCalls.push({
+        id: "provider_call_workspace_records_new",
+        workspaceId: "workspace_records",
+        routeKey: "test.route",
+        provider: "stub",
+        model: "stub",
+        promptTokens: 1,
+        completionTokens: 1,
+        costUsd: 0,
+        durationMs: 1,
+        status: "success",
+        startedAt: "2026-03-02T00:00:00.000Z",
+        completedAt: "2026-03-02T00:00:00.000Z",
+      });
+      data.jobs.push({
+        id: "job_workspace_records_old",
+        workspaceId: "workspace_records",
+        type: "test",
+        payload: {},
+        status: "success",
+        attempts: 1,
+        maxAttempts: 1,
+        scheduledAt: "2026-03-01T00:00:00.000Z",
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.jobs.push({
+        id: "job_workspace_records_new",
+        workspaceId: "workspace_records",
+        type: "test",
+        payload: {},
+        status: "queued",
+        attempts: 0,
+        maxAttempts: 1,
+        scheduledAt: "2026-03-02T00:00:00.000Z",
+        createdAt: "2026-03-02T00:00:00.000Z",
+        updatedAt: "2026-03-02T00:00:00.000Z",
+      });
+      data.workspaceBriefVersions.push({
+        id: "brief_version_workspace_records_1",
+        workspaceId: "workspace_records",
+        versionNumber: 1,
+        summary: "First version",
+        goals: [],
+        audience: "",
+        constraints: "",
+        problemStatement: "",
+        targetCustomers: [],
+        desiredOutcome: "",
+        successMetrics: [],
+        source: "manual",
+        createdAt: "2026-03-01T00:00:00.000Z",
+      });
+      data.workspaceBriefVersions.push({
+        id: "brief_version_workspace_records_2",
+        workspaceId: "workspace_records",
+        versionNumber: 2,
+        summary: "Second version",
+        goals: [],
+        audience: "",
+        constraints: "",
+        problemStatement: "",
+        targetCustomers: [],
+        desiredOutcome: "",
+        successMetrics: [],
+        source: "manual",
+        createdAt: "2026-03-02T00:00:00.000Z",
+      });
+    });
+
+    clearStoreCacheForTests();
+    assert.deepEqual(listActivitiesForWorkspaceIndexed("workspace_records", 1).map((entry) => entry.id), ["activity_workspace_records_new"]);
+    assert.deepEqual(listImplementationPlanItemsForWorkspaceIndexed("workspace_records").map((entry) => entry.id), ["plan_workspace_records_first", "plan_workspace_records_second"]);
+    assert.deepEqual(listAgentsForWorkspaceIndexed("workspace_records").map((entry) => entry.id), ["agent_workspace_records_new", "agent_workspace_records_old"]);
+    assert.deepEqual(listAgentRunsForWorkspaceIndexed("workspace_records").map((entry) => entry.id), ["run_workspace_records_new", "run_workspace_records_old"]);
+    assert.deepEqual(listProviderCallsForWorkspaceIndexed("workspace_records", { limit: 1 }).map((entry) => entry.id), ["provider_call_workspace_records_new"]);
+    assert.deepEqual(listJobsForWorkspaceIndexed("workspace_records", { status: "queued", limit: 1 }).map((entry) => entry.id), ["job_workspace_records_new"]);
+    assert.deepEqual(listWorkspaceBriefVersionsIndexed("workspace_records").map((entry) => entry.id), ["brief_version_workspace_records_2", "brief_version_workspace_records_1"]);
+    assert.equal(listRequirementsForWorkspaceIndexed("workspace_records").some((entry) => entry.id === "req_workspace_records"), true);
+    assert.equal(listWorkflowConcernsForWorkspaceIndexed("workspace_records", "open_question").length, 1);
+    assert.equal(listValidationEvidenceForWorkspaceIndexed("workspace_records").length, 1);
+    assert.equal(listWorkspaceRecordsIndexed("activities", "workspace_records").some((entry) => entry.workspaceId === "other_workspace"), false);
+
+    mutateStore((data) => {
+      const requirement = data.requirements.find((entry) => entry.id === "req_workspace_records");
+      assert.ok(requirement);
+      requirement.title = "Updated workspace-scoped requirement";
+      requirement.updatedAt = "2026-03-03T00:00:00.000Z";
+      data.validationEvidence = data.validationEvidence.filter((entry) => entry.id !== "evidence_workspace_records");
+    });
+
+    clearStoreCacheForTests();
+    assert.equal(listRequirementsForWorkspaceIndexed("workspace_records")[0]?.title, "Updated workspace-scoped requirement");
+    assert.equal(listValidationEvidenceForWorkspaceIndexed("workspace_records").length, 0);
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;

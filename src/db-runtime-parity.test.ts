@@ -245,6 +245,27 @@ test("SQLite store preserves critical app behavior parity", async (t) => {
   });
 });
 
+test("JSON default and SQLite opt-in keep indexed route behavior aligned", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-indexed-routes-"));
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+
+  t.after(() => {
+    restoreEnv("TASKLOOM_STORE", previousStore);
+    restoreEnv("TASKLOOM_DB_PATH", previousDbPath);
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const modules = await loadRuntimeModules();
+  const jsonResult = await runIndexedRouteScenario(modules, "json");
+
+  process.env.TASKLOOM_STORE = "sqlite";
+  process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
+  const sqliteResult = await runIndexedRouteScenario(modules, "sqlite");
+
+  assert.deepEqual(sqliteResult, jsonResult);
+});
+
 async function loadRuntimeModules() {
   const [store, services, appRoutesModule, workflowRoutesModule, jobRoutesModule, shareRoutesModule, rbacModule] = await Promise.all([
     import("./taskloom-store.js"),
@@ -297,6 +318,75 @@ function createTestApp(modules: RuntimeModules) {
 
 function resetSqliteStore(modules: RuntimeModules) {
   modules.store.resetStoreForTests();
+}
+
+async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
+  if (label === "json") {
+    delete process.env.TASKLOOM_STORE;
+    delete process.env.TASKLOOM_DB_PATH;
+  }
+
+  modules.store.resetStoreForTests();
+  const app = createTestApp(modules);
+  const alpha = modules.services.login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const session = await app.request("/api/auth/session", { headers: authHeaders(alpha.cookieValue) });
+  const sessionBody = await session.json() as { authenticated: boolean; user: { email: string }; workspace: { id: string } };
+
+  const invitation = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "indexed.parity@example.com", role: "member" }),
+  });
+  const invitationBody = await invitation.json() as { invitation: { email: string; role: string; status: string; token?: string } };
+
+  const members = await app.request("/api/app/members", { headers: authHeaders(alpha.cookieValue) });
+  const membersBody = await members.json() as { invitations: Array<{ email: string; role: string; status: string; token?: string }> };
+
+  const share = await app.request("/api/app/share", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ scope: "overview" }),
+  });
+  const shareBody = await share.json() as { token: { id: string; token: string; scope: string; readCount: number } };
+
+  const publicShare = await app.request(`/api/public/share/${shareBody.token.token}`);
+  const publicShareBody = await publicShare.json() as { shared: { scope: string; workspace: { id: string } } };
+
+  const shareList = await app.request("/api/app/share", { headers: authHeaders(alpha.cookieValue) });
+  const shareListBody = await shareList.json() as { tokens: Array<{ id: string; scope: string; readCount: number; lastReadAt?: string }> };
+  const listedToken = shareListBody.tokens.find((token) => token.id === shareBody.token.id);
+
+  return {
+    session: {
+      status: session.status,
+      authenticated: sessionBody.authenticated,
+      email: sessionBody.user.email,
+      workspaceId: sessionBody.workspace.id,
+    },
+    invitation: {
+      createStatus: invitation.status,
+      listStatus: members.status,
+      created: {
+        email: invitationBody.invitation.email,
+        role: invitationBody.invitation.role,
+        status: invitationBody.invitation.status,
+        hasToken: Boolean(invitationBody.invitation.token),
+      },
+      listed: membersBody.invitations.some((entry) => entry.email === "indexed.parity@example.com" && entry.role === "member" && entry.status === "pending" && Boolean(entry.token)),
+    },
+    share: {
+      createStatus: share.status,
+      publicStatus: publicShare.status,
+      listStatus: shareList.status,
+      scope: shareBody.token.scope,
+      initialReadCount: shareBody.token.readCount,
+      publicScope: publicShareBody.shared.scope,
+      publicWorkspaceId: publicShareBody.shared.workspace.id,
+      listedReadCount: listedToken?.readCount,
+      listedLastReadAt: Boolean(listedToken?.lastReadAt),
+    },
+  };
 }
 
 function setAlphaRole(modules: RuntimeModules, role: "owner" | "admin" | "member" | "viewer") {

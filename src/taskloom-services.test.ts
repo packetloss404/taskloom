@@ -12,6 +12,7 @@ import {
   listAgentRuns,
   listAgents,
   listReleaseHistory,
+  listWorkspaceActivities,
   listWorkspaceEnvVarsForUser,
   login,
   register,
@@ -220,6 +221,50 @@ test("activity detail related context is workspace isolated", () => {
   const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_cross_workspace_refs");
 
   assert.deepEqual(detail.related, {});
+});
+
+test("activity list and detail preserve workspace isolation and neighbor ordering", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+
+  store.activities.unshift(
+    {
+      id: "activity_alpha_newest_test",
+      workspaceId: "alpha",
+      scope: "activation",
+      event: "test.activity_newest",
+      actor: { type: "system", id: "test" },
+      data: { title: "Newest alpha activity" },
+      occurredAt: "2099-01-03T00:00:00.000Z",
+    },
+    {
+      id: "activity_beta_hidden_test",
+      workspaceId: "beta",
+      scope: "activation",
+      event: "test.activity_hidden",
+      actor: { type: "system", id: "test" },
+      data: { title: "Hidden beta activity" },
+      occurredAt: "2099-01-02T00:00:00.000Z",
+    },
+    {
+      id: "activity_alpha_next_test",
+      workspaceId: "alpha",
+      scope: "activation",
+      event: "test.activity_next",
+      actor: { type: "system", id: "test" },
+      data: { title: "Next alpha activity" },
+      occurredAt: "2099-01-01T00:00:00.000Z",
+    },
+  );
+
+  const activities = listWorkspaceActivities(auth.context);
+  assert.deepEqual(activities.map((entry) => entry.id).slice(0, 2), ["activity_alpha_newest_test", "activity_alpha_next_test"]);
+  assert.ok(!activities.some((entry) => entry.workspaceId === "beta"));
+
+  const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_newest_test");
+  assert.equal(detail.previous, null);
+  assert.equal(detail.next?.id, "activity_alpha_next_test");
 });
 
 test("env vars: create masks secrets, prevents duplicate keys, supports update and delete", async () => {
