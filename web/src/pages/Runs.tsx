@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import RunTelemetry from "@/components/RunTelemetry";
 import RunTranscript from "@/components/RunTranscript";
+import ToolCallTimeline from "@/components/ToolCallTimeline";
 import { triggerLabel } from "@/lib/agent-runtime";
 import type { ActivityRecord, AgentRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus } from "@/lib/types";
 
@@ -227,6 +228,12 @@ export default function RunsPage() {
                         <tr key={`${run.id}-detail`}>
                           <td colSpan={7} className="bg-ink-950/40 p-4">
                             <RunTranscript steps={run.transcript} />
+                            {run.toolCalls && run.toolCalls.length > 0 && (
+                              <>
+                                <div className="kicker mb-1.5 mt-4">TOOL CALLS · {run.toolCalls.length}</div>
+                                <ToolCallTimeline calls={run.toolCalls} />
+                              </>
+                            )}
                             {run.output && (
                               <>
                                 <div className="kicker mb-1.5 mt-4">OUTPUT</div>

@@ -126,6 +126,8 @@ export interface AgentRecord {
   provider?: Pick<ProviderRecord, "id" | "name" | "kind" | "defaultModel" | "status" | "apiKeyConfigured"> | null;
   model?: string;
   tools: string[];
+  enabledTools?: string[];
+  routeKey?: string;
   schedule?: string;
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];
@@ -136,6 +138,18 @@ export interface AgentRecord {
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
+}
+
+export interface AgentRunToolCall {
+  id: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  durationMs: number;
+  startedAt: string;
+  completedAt: string;
+  status: "ok" | "error" | "timeout";
 }
 
 export interface AgentRunRecord {
@@ -152,6 +166,9 @@ export interface AgentRunRecord {
   output?: string;
   error?: string;
   logs?: AgentRunLogEntry[];
+  toolCalls?: AgentRunToolCall[];
+  modelUsed?: string;
+  costUsd?: number;
   createdAt: string;
   updatedAt: string;
   durationMs?: number | null;
@@ -218,6 +235,8 @@ export type SaveAgentInput = {
   providerId?: string;
   model?: string;
   tools?: string[];
+  enabledTools?: string[];
+  routeKey?: string;
   schedule?: string;
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];
@@ -617,6 +636,20 @@ export interface PlanModePlanItem {
 export interface PlanModeResult {
   planItems: PlanModePlanItem[];
   rationale: string;
+  modelUsed: string;
+  costUsd: number;
+}
+
+export interface AvailableTool {
+  name: string;
+  description: string;
+  side: "read" | "write" | "exec";
+}
+
+export interface RunDiagnostic {
+  summary: string;
+  likelyCause: string;
+  suggestion: string;
   modelUsed: string;
   costUsd: number;
 }

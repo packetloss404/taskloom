@@ -47,8 +47,11 @@ import { llmStreamRoutes } from "./llm-stream-routes.js";
 import { jobRoutes } from "./job-routes.js";
 import { JobScheduler } from "./jobs/scheduler.js";
 import { registerDefaultProviders } from "./providers/bootstrap.js";
+import { registerDefaultTools } from "./tools/bootstrap.js";
+import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 
 registerDefaultProviders();
+registerDefaultTools();
 
 const app = new Hono();
 
@@ -237,7 +240,7 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
     const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
     const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
-    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), {
+    return c.json(await runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), {
       triggerKind: body?.triggerKind,
       inputs,
     }), 201);
@@ -308,9 +311,41 @@ app.post("/api/app/agent-runs/:runId/cancel", (c) => {
   }
 });
 
-app.post("/api/app/agent-runs/:runId/retry", (c) => {
+app.post("/api/app/agent-runs/:runId/retry", async (c) => {
   try {
-    return c.json(retryAgentRun(requireAuthenticatedContext(c), c.req.param("runId")), 201);
+    return c.json(await retryAgentRun(requireAuthenticatedContext(c), c.req.param("runId")), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
+  try {
+    const ctx = requireAuthenticatedContext(c);
+    const { loadStore } = await import("./taskloom-store.js");
+    const data = loadStore();
+    const run = data.agentRuns.find((r) => r.id === c.req.param("runId") && r.workspaceId === ctx.workspace.id);
+    if (!run) return errorResponse(c, Object.assign(new Error("agent run not found"), { status: 404 }));
+    const { diagnoseFailedRun } = await import("./diagnostics.js");
+    const diagnostic = await diagnoseFailedRun({ workspaceId: ctx.workspace.id, run });
+    return c.json({ diagnostic });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/tools", (c) => {
+  try {
+    requireAuthenticatedContext(c);
+    const { getDefaultToolRegistry } = require("./tools/registry.js");
+    const registry = getDefaultToolRegistry();
+    return c.json({
+      tools: registry.list().map((t: { name: string; description: string; side: string }) => ({
+        name: t.name,
+        description: t.description,
+        side: t.side,
+      })),
+    });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -361,6 +396,8 @@ app.route("/api/app/api-keys", apiKeyRoutes);
 app.route("/api/app/usage", usageRoutes);
 app.route("/api/app/llm", llmStreamRoutes);
 app.route("/api/app/jobs", jobRoutes);
+app.route("/api/app/share", shareRoutes);
+app.route("/api/public/share", publicShareRoutes);
 
 const scheduler = new JobScheduler();
 scheduler.start();

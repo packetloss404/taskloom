@@ -11,6 +11,7 @@ import type {
   AgentRunRecord,
   AgentStatus,
   AgentTriggerKind,
+  AvailableTool,
   ProviderRecord,
   SaveAgentInput,
 } from "@/lib/types";
@@ -18,6 +19,7 @@ import { relative } from "@/lib/format";
 import { describeNextRun, triggerLabel, TRIGGER_KINDS } from "@/lib/agent-runtime";
 import PlaybookEditor from "@/components/PlaybookEditor";
 import RunTranscript from "@/components/RunTranscript";
+import ToolCallTimeline from "@/components/ToolCallTimeline";
 
 type LocationState = { prompt?: string };
 
@@ -50,6 +52,8 @@ export default function AgentEditorPage() {
   const [triggerKind, setTriggerKind] = useState<AgentTriggerKind>("manual");
   const [schedule, setSchedule] = useState("");
   const [inputSchema, setInputSchema] = useState<AgentInputField[]>([]);
+  const [enabledTools, setEnabledTools] = useState<string[]>([]);
+  const [availableTools, setAvailableTools] = useState<AvailableTool[]>([]);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -64,12 +68,14 @@ export default function AgentEditorPage() {
       setLoading(true);
       setError(null);
       try {
-        const [providerList, detail] = await Promise.all([
+        const [providerList, detail, tools] = await Promise.all([
           api.listProviders(),
           id ? api.getAgent(id) : Promise.resolve(null),
+          api.listTools().catch(() => [] as AvailableTool[]),
         ]);
         if (!mounted) return;
         setProviders(providerList);
+        setAvailableTools(tools);
         if (detail) {
           setAgent(detail.agent);
           setRuns(detail.runs);
@@ -78,6 +84,7 @@ export default function AgentEditorPage() {
           setSchedule(detail.agent.schedule ?? "");
           setExpandedRun(detail.runs[0]?.id ?? null);
           setInputSchema(detail.agent.inputSchema ?? []);
+          setEnabledTools(detail.agent.enabledTools ?? []);
           setRunInputs(seedRunInputs(detail.agent.inputSchema ?? []));
         }
       } catch (loadError) {
@@ -120,6 +127,7 @@ export default function AgentEditorPage() {
       playbook: playbook.filter((step) => step.title.trim().length > 0),
       status: field(form, "status") as AgentStatus,
       inputSchema,
+      enabledTools,
     };
 
     setSaving(true);
@@ -132,6 +140,7 @@ export default function AgentEditorPage() {
       setTriggerKind(nextAgent.triggerKind ?? "manual");
       setSchedule(nextAgent.schedule ?? "");
       setInputSchema(nextAgent.inputSchema ?? []);
+      setEnabledTools(nextAgent.enabledTools ?? []);
       setRunInputs(seedRunInputs(nextAgent.inputSchema ?? []));
       setMessage(isNew ? "Agent created." : "Agent saved.");
       if (isNew) navigate(`/agents/${nextAgent.id}`, { replace: true });
@@ -316,9 +325,24 @@ export default function AgentEditorPage() {
                 <div className="kicker mb-2">PLAYBOOK · {playbook.length} STEP{playbook.length === 1 ? "" : "S"}</div>
                 <h2 className="display text-2xl">Ordered steps</h2>
               </div>
-              <span className="section-marker">§ 03 / 04</span>
+              <span className="section-marker">§ 03 / 05</span>
             </div>
             <PlaybookEditor steps={playbook} onChange={setPlaybook} />
+          </section>
+
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
+              <div>
+                <div className="kicker mb-2">TOOLS · {enabledTools.length} ENABLED</div>
+                <h2 className="display text-2xl">Available tool registry</h2>
+                <p className="mt-2 max-w-md font-mono text-xs text-ink-500">
+                  Enabling any tool runs the agent through the tool-use loop on save. Otherwise the
+                  deterministic stub run records a transcript without calling a model.
+                </p>
+              </div>
+              <span className="section-marker">§ 04 / 05</span>
+            </div>
+            <ToolPicker tools={availableTools} enabled={enabledTools} onChange={setEnabledTools} />
           </section>
 
           <section className="section-band">
@@ -330,7 +354,7 @@ export default function AgentEditorPage() {
                   Validated server-side. Coerced into typed inputs on every run.
                 </p>
               </div>
-              <span className="section-marker">§ 04 / 04</span>
+              <span className="section-marker">§ 05 / 05</span>
             </div>
             <InputSchemaEditor schema={inputSchema} onChange={setInputSchema} />
           </section>
@@ -411,6 +435,12 @@ export default function AgentEditorPage() {
                       {expanded && (
                         <div className="mt-3 space-y-3 border-t border-ink-800 pt-3">
                           <RunTranscript steps={runRecord.transcript} />
+                          {runRecord.toolCalls && runRecord.toolCalls.length > 0 && (
+                            <div>
+                              <div className="kicker mb-1.5">TOOL CALLS · {runRecord.toolCalls.length}</div>
+                              <ToolCallTimeline calls={runRecord.toolCalls} />
+                            </div>
+                          )}
                           {runRecord.output && (
                             <pre className="border border-ink-700 bg-ink-950 p-3 font-mono text-xs leading-5 text-ink-200 whitespace-pre-wrap">{runRecord.output}</pre>
                           )}
@@ -425,6 +455,55 @@ export default function AgentEditorPage() {
           </section>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function ToolPicker({ tools, enabled, onChange }: { tools: AvailableTool[]; enabled: string[]; onChange: (next: string[]) => void }) {
+  const enabledSet = new Set(enabled);
+  if (tools.length === 0) {
+    return (
+      <div className="border border-dashed border-ink-700 px-4 py-6 text-center">
+        <div className="kicker mb-1.5">TOOL REGISTRY EMPTY</div>
+        <p className="font-mono text-xs text-ink-500">No tools registered on the server.</p>
+      </div>
+    );
+  }
+  const groups = { read: [] as AvailableTool[], write: [] as AvailableTool[], exec: [] as AvailableTool[] };
+  for (const t of tools) groups[t.side].push(t);
+  const toggle = (name: string) => {
+    if (enabledSet.has(name)) onChange(enabled.filter((n) => n !== name));
+    else onChange([...enabled, name]);
+  };
+  return (
+    <div className="grid gap-px bg-ink-700 md:grid-cols-3">
+      {(["read", "write", "exec"] as const).map((side) => (
+        <div key={side} className="bg-ink-875 p-4">
+          <div className="kicker-amber mb-3">{side.toUpperCase()} · {groups[side].length}</div>
+          {groups[side].length === 0 ? (
+            <p className="font-mono text-xs text-ink-500">— none —</p>
+          ) : (
+            <ul>
+              {groups[side].map((t) => (
+                <li key={t.name} className="border-t border-ink-700 py-2 first:border-t-0">
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-3.5 w-3.5 accent-signal-amber"
+                      checked={enabledSet.has(t.name)}
+                      onChange={() => toggle(t.name)}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-mono text-xs text-ink-100">{t.name}</span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-ink-400">{t.description}</span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

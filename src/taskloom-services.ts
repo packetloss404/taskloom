@@ -497,7 +497,7 @@ export function archiveAgent(context: AuthenticatedContext, agentId: string) {
   });
 }
 
-export function runAgent(
+export async function runAgent(
   context: AuthenticatedContext,
   agentId: string,
   input: { triggerKind?: string; inputs?: Record<string, unknown> } = {},
@@ -509,19 +509,35 @@ export function runAgent(
     : "manual";
   const rawInputs: Record<string, unknown> = input?.inputs ?? {};
 
-  return mutateStore((data) => {
-    const agent = findAgent(data, agentId);
-    if (!agent || agent.workspaceId !== context.workspace.id || agent.status === "archived") {
-      throw httpError(404, "agent not found");
-    }
+  const data = loadStore();
+  const agent = findAgent(data, agentId);
+  if (!agent || agent.workspaceId !== context.workspace.id || agent.status === "archived") {
+    throw httpError(404, "agent not found");
+  }
+  const inputs = validateAgentInputs(agent.inputSchema ?? [], rawInputs);
+  const enabledTools = agent.enabledTools ?? [];
+  const useToolLoop = enabledTools.length > 0;
 
-    const inputs = validateAgentInputs(agent.inputSchema ?? [], rawInputs);
-    const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
+  if (useToolLoop) {
+    const { run } = await runAgentWithToolLoop({
+      context,
+      agent,
+      inputs,
+      triggerKind,
+      timestamp,
+    });
+    return { run };
+  }
+
+  return mutateStore((store) => {
+    const liveAgent = findAgent(store, agentId);
+    if (!liveAgent) throw httpError(404, "agent not found");
+    const provider = liveAgent.providerId ? findProvider(store, liveAgent.providerId) : null;
     const providerReady = !provider || provider.status === "connected";
-    const transcript = buildRunTranscript(agent.playbook ?? [], providerReady, timestamp);
+    const transcript = buildRunTranscript(liveAgent.playbook ?? [], providerReady, timestamp);
 
     const logs: AgentRunLogEntry[] = [
-      { at: timestamp, level: "info", message: `Run started for ${agent.name}.` },
+      { at: timestamp, level: "info", message: `Run started for ${liveAgent.name}.` },
     ];
     if (provider) {
       logs.push({
@@ -530,7 +546,7 @@ export function runAgent(
         message: `Provider ${provider.name} status: ${provider.status}.`,
       });
     }
-    for (const field of agent.inputSchema ?? []) {
+    for (const field of liveAgent.inputSchema ?? []) {
       if (field.key in inputs) {
         logs.push({ at: timestamp, level: "info", message: `Input ${field.key} = ${formatInputValue(inputs[field.key])}` });
       }
@@ -541,12 +557,12 @@ export function runAgent(
       logs.push({ at: timestamp, level: "error", message: "Provider API key is not configured." });
     }
 
-    const output = providerReady ? buildRunOutput(agent.name, inputs) : undefined;
+    const output = providerReady ? buildRunOutput(liveAgent.name, inputs) : undefined;
 
-    const run = upsertAgentRun(data, {
+    const run = upsertAgentRun(store, {
       workspaceId: context.workspace.id,
-      agentId: agent.id,
-      title: providerReady ? `${agent.name} run completed` : `${agent.name} run failed`,
+      agentId: liveAgent.id,
+      title: providerReady ? `${liveAgent.name} run completed` : `${liveAgent.name} run failed`,
       status: providerReady ? "success" : "failed",
       triggerKind,
       transcript,
@@ -558,7 +574,103 @@ export function runAgent(
       logs,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
+    store.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: run.title, agentId: liveAgent.id, runId: run.id, status: run.status, triggerKind }, timestamp));
+
+    return { run };
+  });
+}
+
+async function runAgentWithToolLoop(args: {
+  context: AuthenticatedContext;
+  agent: AgentRecord;
+  inputs: Record<string, string | number | boolean>;
+  triggerKind: AgentTriggerKind;
+  timestamp: string;
+}): Promise<{ run: AgentRunRecord }> {
+  const { context, agent, inputs, triggerKind, timestamp } = args;
+  const { runAgentLoop } = await import("./tools/agent-loop.js");
+  const enabledTools = agent.enabledTools ?? [];
+  const routeKey = agent.routeKey || "agent.reasoning";
+
+  const userPromptParts = [agent.instructions];
+  if (Object.keys(inputs).length > 0) {
+    userPromptParts.push("INPUTS:");
+    for (const [k, v] of Object.entries(inputs)) userPromptParts.push(`- ${k}: ${formatInputValue(v)}`);
+  }
+  if ((agent.playbook ?? []).length > 0) {
+    userPromptParts.push("PLAYBOOK:");
+    for (const step of agent.playbook ?? []) userPromptParts.push(`- ${step.title}: ${step.instruction}`);
+  }
+
+  const logs: AgentRunLogEntry[] = [
+    { at: timestamp, level: "info", message: `Tool-loop run started for ${agent.name}.` },
+    { at: timestamp, level: "info", message: `Tools enabled: ${enabledTools.join(", ")}` },
+  ];
+
+  let loopResult: Awaited<ReturnType<typeof runAgentLoop>> | null = null;
+  let loopError: string | undefined;
+  try {
+    loopResult = await runAgentLoop({
+      workspaceId: context.workspace.id,
+      userId: context.user.id,
+      agentId: agent.id,
+      routeKey,
+      systemPrompt: "You are a workspace agent. Use the supplied tools to complete the user's task. When finished, return a concise final answer.",
+      userPrompt: userPromptParts.join("\n"),
+      toolNames: enabledTools,
+      maxTurns: 8,
+    });
+  } catch (error) {
+    loopError = (error as Error).message;
+    logs.push({ at: new Date().toISOString(), level: "error", message: `Loop crashed: ${loopError}` });
+  }
+
+  const completedAt = new Date().toISOString();
+  const ok = loopResult !== null && !loopError && loopResult.finishReason !== "error";
+  for (const tc of loopResult?.toolCalls ?? []) {
+    logs.push({
+      at: tc.completedAt,
+      level: tc.status === "ok" ? "info" : tc.status === "timeout" ? "warn" : "error",
+      message: `${tc.toolName}: ${tc.status}${tc.error ? ` — ${tc.error}` : ""}`,
+    });
+  }
+  if (loopResult) {
+    logs.push({ at: completedAt, level: "info", message: `Finished in ${loopResult.turnsUsed} turn(s) using ${loopResult.modelUsed} ($${loopResult.costUsd.toFixed(4)}).` });
+  }
+
+  return mutateStore((store) => {
+    const run = upsertAgentRun(store, {
+      workspaceId: context.workspace.id,
+      agentId: agent.id,
+      title: ok ? `${agent.name} run completed` : `${agent.name} run failed`,
+      status: ok ? "success" : "failed",
+      triggerKind,
+      startedAt: timestamp,
+      completedAt,
+      inputs: Object.keys(inputs).length ? inputs : undefined,
+      output: loopResult?.finalContent,
+      error: loopError ?? (loopResult?.finishReason === "max_turns" ? "Loop exceeded max_turns." : undefined),
+      logs,
+      toolCalls: loopResult?.toolCalls.map((tc) => ({
+        id: tc.id,
+        toolName: tc.toolName,
+        input: tc.input,
+        output: tc.output,
+        ...(tc.error ? { error: tc.error } : {}),
+        durationMs: tc.durationMs,
+        startedAt: tc.startedAt,
+        completedAt: tc.completedAt,
+        status: tc.status,
+      })),
+      modelUsed: loopResult?.modelUsed,
+      costUsd: loopResult?.costUsd,
+    }, timestamp);
+
+    store.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -710,7 +822,7 @@ export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
   });
 }
 
-export function retryAgentRun(context: AuthenticatedContext, runId: string) {
+export async function retryAgentRun(context: AuthenticatedContext, runId: string) {
   const data = loadStore();
   const previous = data.agentRuns.find((entry) => entry.id === runId);
   if (!previous || previous.workspaceId !== context.workspace.id) {
@@ -914,6 +1026,8 @@ type AgentInput = {
   providerId?: string | null;
   model?: string | null;
   tools?: string[] | string;
+  enabledTools?: string[] | null;
+  routeKey?: string | null;
   schedule?: string | null;
   triggerKind?: AgentTriggerKind | string | null;
   playbook?: Array<Partial<AgentPlaybookStep>> | null;
@@ -951,7 +1065,7 @@ function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord) {
 }
 
 function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status" | "inputSchema">> &
-  Pick<AgentRecord, "providerId" | "model" | "schedule" | "triggerKind" | "playbook" | "templateId"> {
+  Pick<AgentRecord, "providerId" | "model" | "schedule" | "triggerKind" | "playbook" | "templateId" | "enabledTools" | "routeKey"> {
   const name = String(input.name ?? "").trim();
   if (name.length < 2) throw httpError(400, "agent name must be at least 2 characters");
   if (name.length > 80) throw httpError(400, "agent name must be 80 characters or fewer");
@@ -976,6 +1090,10 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
 
   const playbook = normalizePlaybook(input.playbook ?? undefined);
 
+  const enabledTools = Array.isArray(input.enabledTools)
+    ? input.enabledTools.map((t) => String(t).trim()).filter(Boolean).slice(0, 24)
+    : undefined;
+
   return {
     name,
     description,
@@ -983,6 +1101,8 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
     providerId: stringOrUndefined(input.providerId),
     model: stringOrUndefined(input.model),
     tools: tools.slice(0, 12),
+    enabledTools,
+    routeKey: stringOrUndefined(input.routeKey),
     schedule: stringOrUndefined(input.schedule),
     triggerKind,
     playbook,

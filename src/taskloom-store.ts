@@ -225,6 +225,8 @@ export interface AgentRecord {
   providerId?: string;
   model?: string;
   tools: string[];
+  enabledTools?: string[];
+  routeKey?: string;
   schedule?: string;
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];
@@ -273,6 +275,18 @@ export interface AgentRunLogEntry {
   message: string;
 }
 
+export interface AgentRunToolCall {
+  id: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  durationMs: number;
+  startedAt: string;
+  completedAt: string;
+  status: "ok" | "error" | "timeout";
+}
+
 export interface AgentRunRecord {
   id: string;
   workspaceId: string;
@@ -287,6 +301,9 @@ export interface AgentRunRecord {
   output?: string;
   error?: string;
   logs: AgentRunLogEntry[];
+  toolCalls?: AgentRunToolCall[];
+  modelUsed?: string;
+  costUsd?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -345,6 +362,21 @@ export interface ProviderCallRecord {
   completedAt: string;
 }
 
+export type ShareTokenScope = "brief" | "plan" | "overview";
+
+export interface ShareTokenRecord {
+  id: string;
+  workspaceId: string;
+  token: string;
+  scope: ShareTokenScope;
+  createdByUserId: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastReadAt?: string;
+  readCount: number;
+  createdAt: string;
+}
+
 export type JobStatus = "queued" | "running" | "success" | "failed" | "canceled";
 
 export interface JobRecord {
@@ -387,6 +419,7 @@ export interface TaskloomData {
   apiKeys: ApiKeyRecord[];
   providerCalls: ProviderCallRecord[];
   jobs: JobRecord[];
+  shareTokens: ShareTokenRecord[];
   activationFacts: Record<string, WorkspaceActivationFacts>;
   activationMilestones: Record<string, ActivationMilestoneRecord[]>;
   activationReadModels: Record<string, ActivationStatusDto>;
@@ -449,6 +482,7 @@ function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     apiKeys: data.apiKeys ?? [],
     providerCalls: data.providerCalls ?? [],
     jobs: data.jobs ?? [],
+    shareTokens: data.shareTokens ?? [],
     activationFacts: data.activationFacts ?? {},
     activationMilestones: data.activationMilestones ?? {},
     activationReadModels: data.activationReadModels ?? {},
@@ -1105,6 +1139,7 @@ function seedStore(): TaskloomData {
     apiKeys: [],
     providerCalls: [],
     jobs: [],
+    shareTokens: [],
     activationFacts,
     activationMilestones: {},
     activationReadModels: {},

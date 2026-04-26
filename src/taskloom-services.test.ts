@@ -71,7 +71,7 @@ test("agent playbook is persisted and runs produce a step transcript", async () 
   assert.equal(agent.playbook?.[0].title, "Read latest signals");
   assert.ok(agent.playbook?.[1].id, "second step should receive a generated id");
 
-  const runResult = runAgent(auth.context, agent.id, { triggerKind: "manual" });
+  const runResult = await runAgent(auth.context, agent.id, { triggerKind: "manual" });
   assert.equal(runResult.run.triggerKind, "manual");
   assert.equal(runResult.run.status, "success");
   assert.ok(Array.isArray(runResult.run.transcript));
@@ -148,7 +148,7 @@ test("agent runs: list adds duration and capability flags; cancel and retry beha
     /only queued or running runs can be canceled/,
   );
 
-  const retried = retryAgentRun(auth.context, failed.id);
+  const retried = await retryAgentRun(auth.context, failed.id);
   assert.ok(retried.run.id !== failed.id);
 });
 
