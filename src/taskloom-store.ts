@@ -58,6 +58,25 @@ export interface WorkspaceBriefRecord {
   updatedAt: string;
 }
 
+export interface WorkspaceBriefVersionRecord {
+  id: string;
+  workspaceId: string;
+  versionNumber: number;
+  summary: string;
+  goals: string[];
+  audience: string;
+  constraints: string;
+  problemStatement: string;
+  targetCustomers: string[];
+  desiredOutcome: string;
+  successMetrics: string[];
+  source: "manual" | "template" | "restore";
+  sourceLabel?: string;
+  createdByUserId?: string;
+  createdByDisplayName?: string;
+  createdAt: string;
+}
+
 export type RequirementPriority = "must" | "should" | "could";
 export type RequirementStatus = "draft" | "approved" | "changed" | "done" | "proposed" | "accepted" | "deferred";
 
@@ -241,6 +260,7 @@ export interface TaskloomData {
   workspaces: WorkspaceRecord[];
   memberships: WorkspaceMemberRecord[];
   workspaceBriefs: WorkspaceBriefCollection;
+  workspaceBriefVersions: WorkspaceBriefVersionRecord[];
   requirements: RequirementRecord[];
   implementationPlanItems: ImplementationPlanItemRecord[];
   workflowConcerns: WorkflowConcernRecord[];
@@ -292,6 +312,7 @@ function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     workspaces: data.workspaces ?? [],
     memberships: data.memberships ?? [],
     workspaceBriefs: normalizeWorkspaceBriefCollection(data.workspaceBriefs),
+    workspaceBriefVersions: data.workspaceBriefVersions ?? [],
     requirements: data.requirements ?? [],
     implementationPlanItems: data.implementationPlanItems ?? [],
     workflowConcerns: data.workflowConcerns ?? [],
@@ -788,6 +809,7 @@ function seedStore(): TaskloomData {
     workspaces,
     memberships,
     workspaceBriefs,
+    workspaceBriefVersions: [],
     requirements,
     implementationPlanItems,
     workflowConcerns,
@@ -985,6 +1007,51 @@ export type WorkspaceBriefUpsertInput = Omit<WorkspaceBriefRecord, "createdAt" |
 
 export function findWorkspaceBrief(data: TaskloomData, workspaceId: string): WorkspaceBriefRecord | null {
   return workspaceBriefEntries(data.workspaceBriefs).find((entry) => entry.workspaceId === workspaceId) ?? null;
+}
+
+export function listWorkspaceBriefVersions(data: TaskloomData, workspaceId: string): WorkspaceBriefVersionRecord[] {
+  return data.workspaceBriefVersions
+    .filter((entry) => entry.workspaceId === workspaceId)
+    .sort((left, right) => right.versionNumber - left.versionNumber);
+}
+
+export function findWorkspaceBriefVersion(
+  data: TaskloomData,
+  workspaceId: string,
+  versionId: string,
+): WorkspaceBriefVersionRecord | null {
+  return data.workspaceBriefVersions.find((entry) => entry.workspaceId === workspaceId && entry.id === versionId) ?? null;
+}
+
+export function appendWorkspaceBriefVersion(
+  data: TaskloomData,
+  input: Omit<WorkspaceBriefVersionRecord, "id" | "versionNumber" | "createdAt"> & {
+    id?: string;
+    createdAt?: string;
+  },
+  timestamp = now(),
+): WorkspaceBriefVersionRecord {
+  const versionNumber = listWorkspaceBriefVersions(data, input.workspaceId)[0]?.versionNumber ?? 0;
+  const next: WorkspaceBriefVersionRecord = {
+    id: input.id ?? generateId(),
+    versionNumber: versionNumber + 1,
+    workspaceId: input.workspaceId,
+    summary: input.summary,
+    goals: input.goals,
+    audience: input.audience,
+    constraints: input.constraints,
+    problemStatement: input.problemStatement,
+    targetCustomers: input.targetCustomers,
+    desiredOutcome: input.desiredOutcome,
+    successMetrics: input.successMetrics,
+    source: input.source,
+    sourceLabel: input.sourceLabel,
+    createdByUserId: input.createdByUserId,
+    createdByDisplayName: input.createdByDisplayName,
+    createdAt: input.createdAt ?? timestamp,
+  };
+  data.workspaceBriefVersions.push(next);
+  return next;
 }
 
 export function upsertWorkspaceBrief(

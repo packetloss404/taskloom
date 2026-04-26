@@ -19,6 +19,8 @@ import type {
   Session,
   WorkflowBlocker,
   WorkflowBrief,
+  WorkflowBriefTemplate,
+  WorkflowBriefVersion,
   WorkflowPlanItem,
   WorkflowQuestion,
   WorkflowReleaseConfirmation,
@@ -76,6 +78,12 @@ export const api = {
   listAgentRuns: () => j<{ runs: AgentRunRecord[] }>("/api/app/agent-runs").then((payload) => payload.runs),
   getWorkflowBrief: () => j<WorkflowBrief>("/api/app/workflow/brief"),
   saveWorkflowBrief: (body: SaveWorkflowBriefInput) => j<WorkflowBrief>("/api/app/workflow/brief", { method: "PUT", body: JSON.stringify(body) }),
+  listWorkflowBriefTemplates: () => j<WorkflowBriefTemplate[]>("/api/app/workflow/brief/templates"),
+  applyWorkflowBriefTemplate: (templateId: string) =>
+    j<WorkflowBrief>(`/api/app/workflow/brief/templates/${templateId}/apply`, { method: "POST", body: "{}" }),
+  listWorkflowBriefVersions: () => j<WorkflowBriefVersion[]>("/api/app/workflow/brief/versions"),
+  restoreWorkflowBriefVersion: (versionId: string) =>
+    j<WorkflowBrief>(`/api/app/workflow/brief/versions/${versionId}/restore`, { method: "POST", body: "{}" }),
   listWorkflowRequirements: () => j<WorkflowRequirement[]>("/api/app/workflow/requirements"),
   saveWorkflowRequirements: (requirements: SaveWorkflowRequirementInput[]) =>
     j<WorkflowRequirement[]>("/api/app/workflow/requirements", { method: "PUT", body: JSON.stringify(requirements) }),
