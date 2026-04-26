@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { Activity, Bot, ChevronDown, Home, KeyRound, LogOut, Plus, Settings, Workflow } from "lucide-react";
+import { Activity, Bot, ChevronDown, Home, KeyRound, LogOut, Plus, Search, Settings, Workflow } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { useCommandPalette } from "@/context/CommandPaletteContext";
 import { brand } from "@/config/brand";
 import { api } from "@/lib/api";
 import type { AgentRecord } from "@/lib/types";
@@ -18,10 +19,12 @@ const nav = [
 
 export default function Sidebar() {
   const { session, signOut } = useAuth();
+  const { open: openCommandPalette } = useCommandPalette();
   const location = useLocation();
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [accountOpen, setAccountOpen] = useState(false);
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform);
 
   useEffect(() => {
     let mounted = true;
@@ -74,6 +77,16 @@ export default function Sidebar() {
         >
           <Plus className="h-4 w-4" /> New Agent
         </Link>
+
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          className="mt-3 inline-flex w-full items-center gap-2 rounded-xl border border-ink-700 bg-ink-950/40 px-3 py-2 text-sm text-ink-400 transition-colors hover:border-ink-600 hover:text-ink-100"
+        >
+          <Search className="h-4 w-4 shrink-0" />
+          <span className="flex-1 text-left">Search…</span>
+          <kbd className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 text-[10px] font-medium text-ink-400">{isMac ? "⌘" : "Ctrl"}K</kbd>
+        </button>
 
         <NavItems mode="desktop" />
 
