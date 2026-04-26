@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bot, Loader2, Plus, Search } from "lucide-react";
+import { Bot, CalendarClock, ListChecks, Loader2, Plus, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type { AgentRecord } from "@/lib/types";
+import { describeNextRun, triggerLabel, triggerToneClass } from "@/lib/agent-runtime";
 import { DashboardStyles } from "./Dashboard";
 
 export default function AgentsPage() {
@@ -61,23 +62,36 @@ export default function AgentsPage() {
         </div>
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
-          {filtered.map((agent) => (
-            <Link key={agent.id} to={`/agents/${agent.id}`} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4 transition-colors hover:border-ink-600 hover:bg-ink-900/75">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="truncate text-base font-semibold text-ink-100">{agent.name}</h2>
-                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-400">{agent.description || "No description yet."}</p>
+          {filtered.map((agent) => {
+            const stepCount = agent.playbook?.length ?? 0;
+            return (
+              <Link key={agent.id} to={`/agents/${agent.id}`} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4 transition-colors hover:border-ink-600 hover:bg-ink-900/75">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="truncate text-base font-semibold text-ink-100">{agent.name}</h2>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-400">{agent.description || "No description yet."}</p>
+                  </div>
+                  <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs capitalize text-ink-300">{agent.status}</span>
                 </div>
-                <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs capitalize text-ink-300">{agent.status}</span>
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2 text-xs text-ink-500">
-                <span>{agent.provider?.name ?? "No provider"}</span>
-                {agent.model && <span>· {agent.model}</span>}
-                {agent.schedule && <span>· {agent.schedule}</span>}
-                <span>· Updated {relative(agent.updatedAt)}</span>
-              </div>
-            </Link>
-          ))}
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${triggerToneClass(agent.triggerKind)}`}>
+                    {triggerLabel(agent.triggerKind)}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-950/40 px-2 py-0.5 text-ink-300">
+                    <ListChecks className="h-3 w-3" /> {stepCount} step{stepCount === 1 ? "" : "s"}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-950/40 px-2 py-0.5 text-ink-300">
+                    <CalendarClock className="h-3 w-3" /> {describeNextRun(agent.schedule, agent.triggerKind)}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs text-ink-500">
+                  <span>{agent.provider?.name ?? "No provider"}</span>
+                  {agent.model && <span>· {agent.model}</span>}
+                  <span>· Updated {relative(agent.updatedAt)}</span>
+                </div>
+              </Link>
+            );
+          })}
         </div>
       )}
 

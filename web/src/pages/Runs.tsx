@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
-import { Activity, Loader2 } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type { ActivityRecord, AgentRunRecord } from "@/lib/types";
+import { triggerLabel, triggerToneClass } from "@/lib/agent-runtime";
+import RunTranscript from "@/components/RunTranscript";
 
 export default function RunsPage() {
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
   const [activities, setActivities] = useState<ActivityRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.listAgentRuns(), api.listActivity()])
@@ -39,18 +42,40 @@ export default function RunsPage() {
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Agent runs</h2>
             {runs.length === 0 ? <Empty text="No agent runs recorded." /> : (
               <div className="space-y-3">
-                {runs.map((run) => (
-                  <div key={run.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-ink-100">{run.title}</div>
-                        <div className="mt-1 text-xs text-ink-500">{relative(run.createdAt)}</div>
-                        {run.error && <div className="mt-2 text-xs text-rose-300">{run.error}</div>}
-                      </div>
-                      <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs capitalize text-ink-300">{run.status}</span>
+                {runs.map((run) => {
+                  const expanded = expandedRun === run.id;
+                  const stepCount = run.transcript?.length ?? 0;
+                  return (
+                    <div key={run.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
+                      <button
+                        type="button"
+                        className="flex w-full items-start justify-between gap-3 text-left"
+                        onClick={() => setExpandedRun(expanded ? null : run.id)}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-ink-100">{run.title}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-500">
+                            <span>{relative(run.createdAt)}</span>
+                            {stepCount > 0 && <span>· {stepCount} step{stepCount === 1 ? "" : "s"}</span>}
+                            <span className={`rounded-full border px-2 py-0.5 capitalize ${triggerToneClass(run.triggerKind)}`}>
+                              {triggerLabel(run.triggerKind)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs capitalize text-ink-300">{run.status}</span>
+                          {expanded ? <ChevronDown className="h-4 w-4 text-ink-400" /> : <ChevronRight className="h-4 w-4 text-ink-400" />}
+                        </div>
+                      </button>
+                      {run.error && <div className="mt-2 text-xs text-rose-300">{run.error}</div>}
+                      {expanded && (
+                        <div className="mt-3 border-t border-ink-800/60 pt-3">
+                          <RunTranscript steps={run.transcript} />
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

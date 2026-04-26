@@ -216,9 +216,10 @@ app.delete("/api/app/agents/:agentId", (c) => {
   }
 });
 
-app.post("/api/app/agents/:agentId/runs", (c) => {
+app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
-    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId")), 201);
+    const body = (await readJsonBody(c)) as { triggerKind?: string };
+    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), body), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
