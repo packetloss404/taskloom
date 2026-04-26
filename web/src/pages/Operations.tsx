@@ -216,40 +216,41 @@ export default function OperationsPage() {
   };
 
   return (
-    <>
-      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+    <div className="page-frame">
+      <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink-100">Operations</h1>
-          <p className="mt-2 max-w-2xl text-sm text-ink-400">
-            Blockers, questions, validation evidence, and release confirmation for the current workspace.
+          <div className="kicker mb-3">OPERATIONS · LIVE WORKSPACE STATUS</div>
+          <h1 className="display-xl">Operations.</h1>
+          <p className="mt-4 max-w-xl font-mono text-xs text-ink-400">
+            <span className="text-ink-500">blockers · questions · validation evidence · release confirmation</span>
           </p>
         </div>
         <button className="btn-ghost" type="button" onClick={loadOperations} disabled={loading || Boolean(saving)}>
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
         </button>
       </header>
 
-      <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Open blockers" value={counts.openBlockers} tone={counts.openBlockers > 0 ? "danger" : "good"} />
-        <Stat label="Open questions" value={counts.openQuestions} tone={counts.openQuestions > 0 ? "warn" : "good"} />
-        <Stat label="Passed evidence" value={counts.passedValidation} tone="good" />
-        <Stat label="Failed checks" value={counts.failedValidation} tone={counts.failedValidation > 0 ? "danger" : "muted"} />
+      <section className="grid grid-cols-2 divide-x divide-ink-700 border-y border-ink-700 lg:grid-cols-4">
+        <Stat label="OPEN BLOCKERS" value={counts.openBlockers} tone={counts.openBlockers > 0 ? "danger" : "good"} />
+        <Stat label="OPEN QUESTIONS" value={counts.openQuestions} tone={counts.openQuestions > 0 ? "warn" : "good"} />
+        <Stat label="PASSED EVIDENCE" value={counts.passedValidation} tone="good" />
+        <Stat label="FAILED CHECKS" value={counts.failedValidation} tone={counts.failedValidation > 0 ? "danger" : "muted"} />
       </section>
 
       {error && (
-        <div className="mb-6 rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          {error}
+        <div className="mt-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
+          ERR · {error}
         </div>
       )}
       {message && !error && (
-        <div className="mb-6 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-          {message}
+        <div className="mt-6 border border-signal-green/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-green">
+          OK · {message}
         </div>
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 p-6 text-sm text-ink-400">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading operations…
+        <div className="mt-8 flex items-center gap-3 text-sm text-ink-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING OPERATIONS</span>
         </div>
       ) : (
         <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
@@ -259,10 +260,10 @@ export default function OperationsPage() {
             action={
               <form className="grid gap-3 lg:grid-cols-[1fr_150px_auto] lg:items-end" onSubmit={addBlocker}>
                 <Field label="Title">
-                  <input name="title" className="ops-input" required placeholder="Dependency, access, or scope blocker" />
+                  <input name="title" className="workflow-input" required placeholder="Dependency, access, or scope blocker" />
                 </Field>
                 <Field label="Severity">
-                  <select name="severity" className="ops-input" defaultValue="medium">
+                  <select name="severity" className="workflow-input" defaultValue="medium">
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
                     <option value="high">High</option>
@@ -274,7 +275,7 @@ export default function OperationsPage() {
                 </button>
                 <div className="lg:col-span-2">
                   <Field label="Detail">
-                    <input name="detail" className="ops-input" placeholder="Owner, impact, or next step" />
+                    <input name="detail" className="workflow-input" placeholder="Owner, impact, or next step" />
                   </Field>
                 </div>
                 <label className="flex items-center gap-2 self-center text-sm text-ink-300">
@@ -313,7 +314,7 @@ export default function OperationsPage() {
               <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={addQuestion}>
                 <div className="flex-1">
                   <Field label="Question">
-                    <input name="prompt" className="ops-input" required placeholder="Decision or clarification needed" />
+                    <input name="prompt" className="workflow-input" required placeholder="Decision or clarification needed" />
                   </Field>
                 </div>
                 <button className="btn-primary justify-center" type="submit" disabled={saving === "question"}>
@@ -329,7 +330,7 @@ export default function OperationsPage() {
                 {state.questions.map((question) => (
                   <form
                     key={question.id}
-                    className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4"
+                    className="border-t border-ink-700 py-3 first:border-t-0"
                     onSubmit={(event) => saveQuestionAnswer(question, event)}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -343,7 +344,7 @@ export default function OperationsPage() {
                       name="answer"
                       defaultValue={question.answer}
                       rows={3}
-                      className="ops-input mt-4 resize-none"
+                      className="workflow-input mt-4 resize-none"
                       placeholder="Answer or decision"
                     />
                     <div className="mt-3 flex justify-end">
@@ -363,10 +364,10 @@ export default function OperationsPage() {
             action={
               <form className="grid gap-3 lg:grid-cols-[1fr_140px_auto] lg:items-end" onSubmit={addEvidence}>
                 <Field label="Title">
-                  <input name="title" className="ops-input" required placeholder="Test run, demo, metric, or review" />
+                  <input name="title" className="workflow-input" required placeholder="Test run, demo, metric, or review" />
                 </Field>
                 <Field label="Status">
-                  <select name="status" className="ops-input" defaultValue="pending">
+                  <select name="status" className="workflow-input" defaultValue="pending">
                     <option value="pending">Pending</option>
                     <option value="passed">Passed</option>
                     <option value="failed">Failed</option>
@@ -376,11 +377,11 @@ export default function OperationsPage() {
                   Add evidence
                 </button>
                 <Field label="Source">
-                  <input name="source" className="ops-input" placeholder="URL, run ID, or owner" />
+                  <input name="source" className="workflow-input" placeholder="URL, run ID, or owner" />
                 </Field>
                 <div className="lg:col-span-2">
                   <Field label="Detail">
-                    <input name="detail" className="ops-input" placeholder="Result, scope, or follow-up" />
+                    <input name="detail" className="workflow-input" placeholder="Result, scope, or follow-up" />
                   </Field>
                 </div>
               </form>
@@ -399,7 +400,7 @@ export default function OperationsPage() {
                     badge={<StatusBadge value={evidence.status} tone={validationTone(evidence.status)} />}
                     action={
                       <select
-                        className="ops-input min-w-32"
+                        className="workflow-input min-w-32"
                         value={evidence.status}
                         onChange={(event) => updateEvidenceStatus(evidence, event.target.value as WorkflowValidationStatus)}
                         disabled={saving === `evidence-${evidence.id}`}
@@ -426,7 +427,7 @@ export default function OperationsPage() {
                     name="summary"
                     defaultValue={state.releaseConfirmation?.summary ?? ""}
                     rows={4}
-                    className="ops-input resize-none"
+                    className="workflow-input resize-none"
                     placeholder="Release notes, caveats, or rollback context"
                   />
                 </Field>
@@ -434,7 +435,7 @@ export default function OperationsPage() {
                   <Field label="Confirmed by">
                     <input
                       name="confirmedBy"
-                      className="ops-input"
+                      className="workflow-input"
                       defaultValue={state.releaseConfirmation?.confirmedBy || session?.user.displayName || session?.user.email || ""}
                     />
                   </Field>
@@ -457,20 +458,11 @@ export default function OperationsPage() {
               </form>
             }
           >
-            <div className="space-y-3">
-              <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
-                <div className="flex items-center gap-3">
-                  <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/12 text-accent-300">
-                    {state.releaseConfirmation?.confirmed ? <CheckCircle2 className="h-5 w-5" /> : <Rocket className="h-5 w-5" />}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-ink-100">
-                      {state.releaseConfirmation?.confirmed ? "Release confirmed" : "Release pending"}
-                    </div>
-                    <div className="mt-1 text-xs text-ink-500">
-                      Updated {relative(state.releaseConfirmation?.updatedAt)}
-                    </div>
-                  </div>
+            <div>
+              <div className="border border-ink-700 bg-ink-875 px-4 py-3">
+                <div className="kicker mb-1.5">{state.releaseConfirmation?.confirmed ? "RELEASE CONFIRMED" : "RELEASE PENDING"}</div>
+                <div className="font-mono text-xs text-ink-400">
+                  Updated {relative(state.releaseConfirmation?.updatedAt)}
                 </div>
               </div>
               <ReleaseHistoryList history={state.releaseHistory} />
@@ -479,35 +471,25 @@ export default function OperationsPage() {
         </div>
       )}
 
-      <style>{`
-        .ops-input {
-          width: 100%;
-          background: rgb(11 11 18 / 0.6);
-          border: 1px solid rgb(38 40 56);
-          border-radius: 12px;
-          padding: 10px 12px;
-          font-size: 14px;
-          color: rgb(230 231 240);
-          outline: none;
-          transition: border-color 150ms, box-shadow 150ms;
-        }
-        .ops-input::placeholder { color: rgb(107 110 133); }
-        .ops-input:focus {
-          border-color: rgb(161 161 170 / 0.5);
-          box-shadow: 0 0 0 3px rgb(161 161 170 / 0.14);
-        }
-        .ops-input:disabled { opacity: 0.65; cursor: not-allowed; }
-      `}</style>
-      <div className="mt-6 grid gap-6 xl:grid-cols-2">
-        <UsageSummaryCard />
-        <StreamingTextDemo />
-      </div>
-    </>
+      <section className="section-band">
+        <div className="mb-5 flex items-end justify-between">
+          <div>
+            <div className="kicker-amber mb-2">PROVIDER USAGE & STREAM TEST</div>
+            <h2 className="display text-2xl">Live monitors</h2>
+          </div>
+          <span className="section-marker">§ EOF</span>
+        </div>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <UsageSummaryCard />
+          <StreamingTextDemo />
+        </div>
+      </section>
+    </div>
   );
 }
 
 function WorkflowSection({
-  icon,
+  icon: _icon,
   title,
   action,
   children,
@@ -518,12 +500,14 @@ function WorkflowSection({
   children: ReactNode;
 }) {
   return (
-    <section className="card p-6">
-      <div className="mb-5 flex items-center gap-3">
-        <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-500/12 text-accent-300">{icon}</div>
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">{title}</h2>
+    <section className="section-band">
+      <div className="mb-5 flex items-end justify-between">
+        <div>
+          <div className="kicker mb-2">{title.toUpperCase()}</div>
+          <h2 className="display text-2xl">{title}</h2>
+        </div>
       </div>
-      <div className="mb-5">{action}</div>
+      <div className="mb-5 border-b border-ink-700 pb-5">{action}</div>
       {children}
     </section>
   );
@@ -543,12 +527,12 @@ function RecordRow({
   action: ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
+    <div className="border-t border-ink-700 py-3 first:border-t-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-medium text-ink-100">{title}</h3>
-          {detail && <p className="mt-1 text-sm text-ink-400">{detail}</p>}
-          <p className="mt-2 text-xs text-ink-500">{meta}</p>
+          <h3 className="font-serif text-base text-ink-100">{title}</h3>
+          {detail && <p className="mt-1 text-sm leading-6 text-ink-400">{detail}</p>}
+          <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-ink-500">{meta}</p>
         </div>
         <div className="flex items-center gap-2">
           {badge}
@@ -562,7 +546,7 @@ function RecordRow({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-ink-200">{label}</span>
+      <span className="kicker mb-1.5 block">{label.toUpperCase()}</span>
       {children}
     </label>
   );
@@ -570,33 +554,31 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function Stat({ label, value, tone }: { label: string; value: number; tone: "danger" | "good" | "muted" | "warn" }) {
   const color = {
-    danger: "text-rose-300",
-    good: "text-emerald-300",
-    muted: "text-ink-200",
-    warn: "text-amber-300",
+    danger: "text-signal-red",
+    good: "text-signal-green",
+    muted: "text-ink-100",
+    warn: "text-signal-amber",
   }[tone];
 
   return (
-    <div className="card p-4">
-      <div className="text-xs uppercase tracking-wider text-ink-500">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold ${color}`}>{value}</div>
+    <div className="px-5 py-5">
+      <div className="kicker">{label}</div>
+      <div className={`mt-2 font-mono text-3xl tabular-nums ${color}`}>{value}</div>
     </div>
   );
 }
 
 function StatusBadge({ value, tone }: { value: string; tone: "danger" | "good" | "muted" | "warn" }) {
-  const color = {
-    danger: "border-rose-400/30 bg-rose-500/10 text-rose-200",
-    good: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
-    muted: "border-ink-700 bg-ink-900/80 text-ink-300",
-    warn: "border-amber-400/30 bg-amber-500/10 text-amber-200",
-  }[tone];
-
-  return <span className={`rounded-full border px-2.5 py-1 text-xs capitalize ${color}`}>{value.replaceAll("_", " ")}</span>;
+  const cls =
+    tone === "danger" ? "pill pill--danger" :
+    tone === "good" ? "pill pill--good" :
+    tone === "warn" ? "pill pill--warn" :
+    "pill pill--muted";
+  return <span className={cls}>{value.replaceAll("_", " ")}</span>;
 }
 
 function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="rounded-2xl border border-dashed border-ink-700 px-4 py-6 text-center text-sm text-ink-500">{children}</div>;
+  return <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">— {children} —</div>;
 }
 
 function ReleaseStatus({ release }: { release: WorkflowReleaseConfirmation | null }) {
@@ -634,31 +616,29 @@ function ReleasePreflightPanel({ preflight }: { preflight: ReleaseHistoryPayload
     },
   ];
 
-  const banner = preflight.ready
-    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
-    : "border-amber-400/30 bg-amber-500/10 text-amber-200";
+  const bannerBorder = preflight.ready ? "border-signal-green/50" : "border-signal-amber/50";
+  const bannerText = preflight.ready ? "text-signal-green" : "text-signal-amber";
 
   return (
-    <div className={`rounded-2xl border p-4 ${banner}`}>
-      <div className="flex items-center gap-2 text-sm font-medium">
-        {preflight.ready ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-        {preflight.ready ? "Release preflight passed" : "Release preflight has warnings"}
+    <div className={`border ${bannerBorder} bg-ink-950/40 p-4`}>
+      <div className={`flex items-center gap-2 font-mono text-xs uppercase tracking-wider ${bannerText}`}>
+        {preflight.ready ? "PREFLIGHT · PASSED" : "PREFLIGHT · WARNINGS"}
         {preflight.openQuestions > 0 && (
-          <span className="ml-auto text-xs opacity-80">
+          <span className="ml-auto text-ink-500">
             {preflight.openQuestions} open question{preflight.openQuestions === 1 ? "" : "s"}
           </span>
         )}
       </div>
-      <ul className="mt-3 space-y-1.5 text-xs">
+      <ul className="mt-3">
         {checks.map((check) => (
-          <li key={check.label} className="flex items-center gap-2">
-            <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full ${
-              check.ok ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
-            }`}>
-              {check.ok ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+          <li key={check.label} className="flex items-baseline justify-between border-t border-ink-800 py-1.5 leader first:border-t-0">
+            <span className="bg-ink-950 pr-2">
+              <span className={`mr-2 font-mono text-xs ${check.ok ? "text-signal-green" : "text-signal-red"}`}>
+                {check.ok ? "[ ✓ ]" : "[ × ]"}
+              </span>
+              <span className="text-sm text-ink-200">{check.label}</span>
             </span>
-            <span className="text-ink-200">{check.label}</span>
-            <span className="ml-auto text-ink-500">{check.detail}</span>
+            <span className="bg-ink-950 pl-2 font-mono text-[11px] text-ink-500">{check.detail}</span>
           </li>
         ))}
       </ul>
@@ -671,28 +651,25 @@ function ReleaseHistoryList({ history }: { history: ReleaseHistoryPayload }) {
     return <EmptyState>No releases recorded yet.</EmptyState>;
   }
   return (
-    <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
-      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
-        <History className="h-3.5 w-3.5" /> Release history
-      </div>
-      <ol className="space-y-3">
+    <div className="mt-4">
+      <div className="kicker mb-3"><History className="inline h-3 w-3 mr-1" /> RELEASE HISTORY</div>
+      <ol>
         {history.releases.map((release) => (
-          <li key={release.id} className="flex items-start gap-3 border-l-2 border-ink-800 pl-3">
-            <div className={`mt-1 grid h-2 w-2 shrink-0 place-items-center rounded-full ${
-              release.confirmed ? "bg-emerald-400" : release.status === "rolled_back" ? "bg-rose-400" : "bg-amber-400"
-            }`} />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="font-mono text-sm text-ink-100">{release.versionLabel}</span>
-                <StatusBadge value={release.status} tone={release.confirmed ? "good" : release.status === "rolled_back" ? "danger" : "warn"} />
-              </div>
-              {release.summary && <p className="mt-1 text-xs text-ink-400">{release.summary}</p>}
-              <p className="mt-1 text-[11px] text-ink-500">
+          <li key={release.id} className="border-t border-ink-700 py-3 first:border-t-0">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-mono text-sm text-ink-100">{release.versionLabel}</span>
+              <StatusBadge value={release.status} tone={release.confirmed ? "good" : release.status === "rolled_back" ? "danger" : "warn"} />
+              <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-ink-500">
                 {release.confirmedBy ? `${release.confirmedBy} · ` : ""}
                 {relative(release.confirmedAt ?? release.updatedAt)}
-                {release.validationEvidenceIds.length > 0 && ` · ${release.validationEvidenceIds.length} evidence link${release.validationEvidenceIds.length === 1 ? "" : "s"}`}
-              </p>
+              </span>
             </div>
+            {release.summary && <p className="mt-1 text-sm leading-6 text-ink-400">{release.summary}</p>}
+            {release.validationEvidenceIds.length > 0 && (
+              <p className="mt-1 font-mono text-[10px] text-ink-500">
+                {release.validationEvidenceIds.length} evidence link{release.validationEvidenceIds.length === 1 ? "" : "s"}
+              </p>
+            )}
           </li>
         ))}
       </ol>

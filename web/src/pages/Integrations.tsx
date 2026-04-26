@@ -1,31 +1,41 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { Eye, EyeOff, KeyRound, Loader2, Lock, Plus, Trash2, Variable } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type {
+  ApiKeyProviderName,
+  MaskedApiKey,
   ProviderKind,
   ProviderRecord,
   SaveWorkspaceEnvVarInput,
   WorkspaceEnvVarRecord,
   WorkspaceEnvVarScope,
 } from "@/lib/types";
-import { DashboardStyles } from "./Dashboard";
+
+const VAULT_PROVIDERS: ApiKeyProviderName[] = ["anthropic", "openai", "minimax", "ollama"];
 
 export default function IntegrationsPage() {
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [envVars, setEnvVars] = useState<WorkspaceEnvVarRecord[]>([]);
+  const [apiKeys, setApiKeys] = useState<MaskedApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingEnv, setSavingEnv] = useState<string | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const reload = async () => {
     setError(null);
     try {
-      const [nextProviders, nextEnvVars] = await Promise.all([api.listProviders(), api.listEnvVars()]);
+      const [nextProviders, nextEnvVars, nextKeys] = await Promise.all([
+        api.listProviders(),
+        api.listEnvVars(),
+        api.listApiKeys().catch(() => [] as MaskedApiKey[]),
+      ]);
       setProviders(nextProviders);
       setEnvVars(nextEnvVars);
+      setApiKeys(nextKeys);
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
@@ -33,9 +43,7 @@ export default function IntegrationsPage() {
     }
   };
 
-  useEffect(() => {
-    void reload();
-  }, []);
+  useEffect(() => { void reload(); }, []);
 
   const addProvider = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -93,236 +101,302 @@ export default function IntegrationsPage() {
       await api.deleteEnvVar(envVar.id);
       setMessage(`Env var ${envVar.key} removed.`);
       await reload();
-    } catch (removeError) {
-      setError((removeError as Error).message);
-    } finally {
-      setSavingEnv(null);
-    }
+    } catch (e) { setError((e as Error).message); }
+    finally { setSavingEnv(null); }
   };
 
-  const toggleSecret = async (envVar: WorkspaceEnvVarRecord) => {
-    setSavingEnv(envVar.id);
+  const addApiKey = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setSavingKey("new");
+    setError(null);
+    setMessage(null);
+    try {
+      await api.createApiKey({
+        provider: field(form, "provider") as ApiKeyProviderName,
+        label: field(form, "label"),
+        value: field(form, "value"),
+      });
+      event.currentTarget.reset();
+      setMessage("Provider key stored encrypted.");
+      await reload();
+    } catch (e) { setError((e as Error).message); }
+    finally { setSavingKey(null); }
+  };
+
+  const removeApiKey = async (key: MaskedApiKey) => {
+    setSavingKey(key.id);
     setError(null);
     try {
-      await api.updateEnvVar(envVar.id, { secret: !envVar.secret });
+      await api.deleteApiKey(key.id);
+      setMessage(`Key ${key.label} removed.`);
       await reload();
-    } catch (updateError) {
-      setError((updateError as Error).message);
-    } finally {
-      setSavingEnv(null);
-    }
+    } catch (e) { setError((e as Error).message); }
+    finally { setSavingKey(null); }
   };
 
   return (
-    <>
-      <header className="mb-7">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink-100">Providers & Environment</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-400">
-          Connect provider keys, then expose workspace-scoped environment variables to builds and runtime adapters.
-        </p>
+    <div className="page-frame">
+      <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
+        <div>
+          <div className="kicker mb-3">PROVIDERS · KEYS · ENV</div>
+          <h1 className="display-xl">Integrations.</h1>
+          <p className="mt-4 max-w-xl font-mono text-xs text-ink-400">
+            <span className="text-ink-500">connect provider keys, store secrets in the AES-GCM vault, expose env vars to runtime.</span>
+          </p>
+        </div>
       </header>
 
-      {error && <div className="mb-6 rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</div>}
-      {message && !error && <div className="mb-6 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
+      {error && <div className="mb-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">ERR · {error}</div>}
+      {message && !error && <div className="mb-6 border border-signal-green/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-green">OK · {message}</div>}
 
       {loading ? (
-        <div className="flex items-center gap-3 text-sm text-ink-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading providers and environment...</div>
+        <div className="flex items-center gap-3 text-sm text-ink-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING</span>
+        </div>
       ) : (
-        <div className="space-y-10">
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Providers</h2>
-            <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
-              <form className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5" onSubmit={addProvider}>
-                <h3 className="text-sm font-semibold text-ink-100">Connect provider</h3>
-                <p className="mt-2 text-sm leading-6 text-ink-500">Records provider metadata and key status. Secret storage can be wired behind this model later.</p>
-                <div className="mt-4 space-y-4">
-                  <Field label="Name"><input name="name" className="dashboard-input" placeholder="OpenAI" required /></Field>
-                  <Field label="Kind">
-                    <select name="kind" className="dashboard-input" defaultValue="openai">
-                      <option value="openai">OpenAI</option>
-                      <option value="anthropic">Anthropic</option>
-                      <option value="azure_openai">Azure OpenAI</option>
-                      <option value="ollama">Ollama</option>
-                      <option value="custom">Custom</option>
-                    </select>
-                  </Field>
-                  <Field label="Default model"><input name="defaultModel" className="dashboard-input" placeholder="gpt-4.1-mini" required /></Field>
-                  <Field label="Base URL"><input name="baseUrl" className="dashboard-input" placeholder="https://api.openai.com/v1" /></Field>
-                  <label className="flex items-center gap-2 text-sm text-ink-300">
-                    <input name="apiKeyConfigured" type="checkbox" className="h-4 w-4 rounded border-ink-700 bg-ink-950" />
-                    API key configured outside UI
-                  </label>
-                  <button className="btn-primary w-full justify-center bg-ink-100 text-ink-950 hover:bg-white" type="submit" disabled={saving}>
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    Save provider
-                  </button>
-                </div>
-              </form>
-
-              {providers.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-ink-700 bg-ink-900/25 p-8 text-center">
-                  <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-ink-850 text-ink-300"><KeyRound className="h-5 w-5" /></div>
-                  <h2 className="mt-3 text-sm font-semibold text-ink-100">No providers configured</h2>
-                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-ink-500">Add a provider to make it selectable in the agent editor.</p>
-                </div>
-              ) : (
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {providers.map((provider) => (
-                    <article key={provider.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h2 className="text-base font-semibold text-ink-100">{provider.name}</h2>
-                          <p className="mt-2 text-sm text-ink-400">{provider.kind.replace("_", " ")} · {provider.defaultModel}</p>
-                          {provider.baseUrl && <p className="mt-1 text-xs text-ink-500">{provider.baseUrl}</p>}
-                        </div>
-                        <span className={`rounded-full border px-2.5 py-1 text-xs capitalize ${
-                          provider.status === "connected"
-                            ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
-                            : "border-amber-400/30 bg-amber-500/10 text-amber-200"
-                        }`}>
-                          {provider.status.replace("_", " ")}
-                        </span>
-                      </div>
-                      <div className="mt-4 rounded-xl border border-ink-800 bg-ink-950/35 px-3 py-2 text-xs text-ink-500">
-                        API key: {provider.apiKeyConfigured ? "configured in backend" : "missing"}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-
-          <section>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <>
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
               <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Environment variables</h2>
-                <p className="mt-1 text-xs text-ink-500">Workspace-scoped key/value pairs. Mark sensitive values as secret to mask them in the UI.</p>
+                <div className="kicker-amber mb-2">PROVIDER KEYS · {apiKeys.length} STORED</div>
+                <h2 className="display text-2xl">Encrypted vault</h2>
+                <p className="mt-2 max-w-xl font-mono text-xs text-ink-500">
+                  AES-256-GCM at rest. Keys decrypt only at provider-call time.
+                </p>
               </div>
-              <span className="rounded-full border border-ink-700 bg-ink-900/40 px-3 py-1 text-xs text-ink-300">{envVars.length} variable{envVars.length === 1 ? "" : "s"}</span>
+              <span className="section-marker">§ 01 / 03</span>
             </div>
-            <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
-              <form className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5" onSubmit={addEnvVar}>
-                <h3 className="text-sm font-semibold text-ink-100">Add variable</h3>
-                <div className="mt-4 space-y-4">
-                  <Field label="Key">
-                    <input
-                      name="key"
-                      className="dashboard-input"
-                      placeholder="MY_API_KEY"
-                      pattern="[A-Za-z][A-Za-z0-9_]*"
-                      title="Letters, digits, and underscores. Must start with a letter."
-                      required
-                    />
-                  </Field>
-                  <Field label="Value">
-                    <textarea name="value" rows={3} className="dashboard-input resize-none" placeholder="https://example.com or sk-..." required />
-                  </Field>
-                  <Field label="Scope">
-                    <select name="scope" className="dashboard-input" defaultValue="all">
-                      <option value="all">All scopes</option>
-                      <option value="build">Builds only</option>
-                      <option value="runtime">Runtime only</option>
-                    </select>
-                  </Field>
-                  <Field label="Description">
-                    <input name="description" className="dashboard-input" placeholder="What this value is used for" />
-                  </Field>
-                  <label className="flex items-center gap-2 text-sm text-ink-300">
-                    <input name="secret" type="checkbox" className="h-4 w-4 rounded border-ink-700 bg-ink-950" />
-                    Mark as secret (mask in UI)
-                  </label>
-                  <button className="btn-primary w-full justify-center bg-ink-100 text-ink-950 hover:bg-white" type="submit" disabled={savingEnv === "new"}>
-                    {savingEnv === "new" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    Save variable
-                  </button>
-                </div>
-              </form>
 
-              {envVars.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-ink-700 bg-ink-900/25 p-8 text-center">
-                  <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-ink-850 text-ink-300"><Variable className="h-5 w-5" /></div>
-                  <h3 className="mt-3 text-sm font-semibold text-ink-100">No environment variables yet</h3>
-                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-ink-500">Define keys here and reference them from agents, runtime adapters, or build commands.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {envVars.map((envVar) => (
-                    <EnvVarRow
-                      key={envVar.id}
-                      envVar={envVar}
-                      busy={savingEnv === envVar.id}
-                      onToggleSecret={() => toggleSecret(envVar)}
-                      onDelete={() => removeEnvVar(envVar)}
-                    />
+            <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-[160px_1fr_2fr_120px] md:items-end" onSubmit={addApiKey}>
+              <Field label="PROVIDER">
+                <select name="provider" className="workflow-input" defaultValue="anthropic">
+                  {VAULT_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </Field>
+              <Field label="LABEL">
+                <input name="label" className="workflow-input" placeholder="default" required />
+              </Field>
+              <Field label="API KEY">
+                <input name="value" type="password" className="workflow-input font-mono" placeholder="sk-..." required />
+              </Field>
+              <button className="btn-primary justify-center" type="submit" disabled={savingKey === "new"}>
+                {savingKey === "new" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "+"} Store
+              </button>
+            </form>
+
+            {apiKeys.length === 0 ? (
+              <div className="border border-dashed border-ink-700 px-6 py-8 text-center">
+                <div className="kicker mb-1.5">VAULT EMPTY</div>
+                <p className="font-mono text-xs text-ink-500">Stub provider in use until a key is added.</p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Label</th>
+                    <th>Masked</th>
+                    <th>Last used</th>
+                    <th>Created</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {apiKeys.map((k) => (
+                    <tr key={k.id}>
+                      <td className="font-mono text-[11px] text-ink-200 lowercase">{k.provider}</td>
+                      <td className="text-sm text-ink-100">{k.label}</td>
+                      <td className="font-mono text-[11px] text-ink-400">{k.masked}</td>
+                      <td className="font-mono text-[11px] text-ink-500">{k.lastUsedAt ? relative(k.lastUsedAt) : "—"}</td>
+                      <td className="font-mono text-[11px] text-ink-500">{relative(k.createdAt)}</td>
+                      <td>
+                        <button type="button" className="font-mono text-xs text-ink-500 hover:text-signal-red" onClick={() => removeApiKey(k)} disabled={savingKey === k.id}>
+                          × DEL
+                        </button>
+                      </td>
+                    </tr>
                   ))}
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
-      <DashboardStyles />
-    </>
-  );
-}
-
-function EnvVarRow({
-  envVar,
-  busy,
-  onToggleSecret,
-  onDelete,
-}: {
-  envVar: WorkspaceEnvVarRecord;
-  busy: boolean;
-  onToggleSecret: () => void;
-  onDelete: () => void;
-}) {
-  const scopeLabel = envVar.scope === "all" ? "All scopes" : envVar.scope === "build" ? "Builds" : "Runtime";
-  return (
-    <div className="rounded-2xl border border-ink-800/80 bg-ink-900/45 px-4 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm text-ink-100">{envVar.key}</span>
-            {envVar.secret && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-200">
-                <Lock className="h-3 w-3" /> secret
-              </span>
+                </tbody>
+              </table>
             )}
-            <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2 py-0.5 text-[10px] uppercase tracking-wider text-ink-400">{scopeLabel}</span>
-          </div>
-          <code className="mt-1.5 block break-all font-mono text-xs text-ink-400">{envVar.value || "(empty)"}</code>
-          {envVar.description && <p className="mt-1 text-xs text-ink-500">{envVar.description}</p>}
-          <p className="mt-1 text-[11px] text-ink-600">Updated {relative(envVar.updatedAt)}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={onToggleSecret}
-            disabled={busy}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-ink-700 bg-ink-950/40 text-ink-300 hover:border-ink-500 hover:text-ink-100 disabled:opacity-50"
-            title={envVar.secret ? "Mark as plain (show value)" : "Mark as secret (mask value)"}
-          >
-            {envVar.secret ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            disabled={busy}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-ink-700 bg-ink-950/40 text-ink-300 hover:border-rose-400/40 hover:text-rose-200 disabled:opacity-50"
-            title="Delete"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
+          </section>
+
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
+              <div>
+                <div className="kicker mb-2">ENV VARIABLES · {envVars.length}</div>
+                <h2 className="display text-2xl">Workspace environment</h2>
+                <p className="mt-2 max-w-xl font-mono text-xs text-ink-500">
+                  Workspace-scoped key/value pairs. Mark sensitive values as secret to mask them in the UI.
+                </p>
+              </div>
+              <span className="section-marker">§ 02 / 03</span>
+            </div>
+
+            <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-2" onSubmit={addEnvVar}>
+              <Field label="KEY">
+                <input
+                  name="key"
+                  className="workflow-input font-mono"
+                  placeholder="MY_API_KEY"
+                  pattern="[A-Za-z][A-Za-z0-9_]*"
+                  required
+                />
+              </Field>
+              <Field label="SCOPE">
+                <select name="scope" className="workflow-input" defaultValue="all">
+                  <option value="all">all scopes</option>
+                  <option value="build">build only</option>
+                  <option value="runtime">runtime only</option>
+                </select>
+              </Field>
+              <div className="md:col-span-2">
+                <Field label="VALUE">
+                  <textarea name="value" rows={2} className="workflow-input resize-none" placeholder="https://example.com or sk-..." required />
+                </Field>
+              </div>
+              <Field label="DESCRIPTION">
+                <input name="description" className="workflow-input" placeholder="What this value is used for" />
+              </Field>
+              <label className="flex items-center gap-3 self-end font-mono text-xs text-ink-300">
+                <input name="secret" type="checkbox" className="h-3.5 w-3.5 accent-signal-amber" />
+                MARK AS SECRET (MASK IN UI)
+              </label>
+              <div className="md:col-span-2 flex justify-end">
+                <button className="btn-primary" type="submit" disabled={savingEnv === "new"}>
+                  {savingEnv === "new" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "+"} Save variable
+                </button>
+              </div>
+            </form>
+
+            {envVars.length === 0 ? (
+              <div className="border border-dashed border-ink-700 px-6 py-8 text-center">
+                <div className="kicker mb-1.5">NO ENV VARIABLES</div>
+                <p className="font-mono text-xs text-ink-500">Define keys here and reference them from agents and runtime adapters.</p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Value</th>
+                    <th>Scope</th>
+                    <th>Description</th>
+                    <th>Updated</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {envVars.map((v) => (
+                    <tr key={v.id}>
+                      <td className="font-mono text-[12px] text-ink-100">
+                        {v.key}
+                        {v.secret && <span className="ml-2 pill pill--warn">SECRET</span>}
+                      </td>
+                      <td className="break-all font-mono text-[11px] text-ink-400">{v.value || "(empty)"}</td>
+                      <td className="font-mono text-[10px] uppercase tracking-wider text-ink-500">{v.scope}</td>
+                      <td className="text-sm text-ink-400">{v.description || "—"}</td>
+                      <td className="font-mono text-[11px] text-ink-500">{relative(v.updatedAt)}</td>
+                      <td>
+                        <button type="button" className="font-mono text-xs text-ink-500 hover:text-signal-red" onClick={() => removeEnvVar(v)} disabled={savingEnv === v.id}>
+                          × DEL
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
+              <div>
+                <div className="kicker mb-2">EXTERNAL PROVIDERS · {providers.length}</div>
+                <h2 className="display text-2xl">Provider registry</h2>
+                <p className="mt-2 max-w-xl font-mono text-xs text-ink-500">
+                  Provider metadata used by the agent editor. Storage of the actual key happens in the encrypted vault above.
+                </p>
+              </div>
+              <span className="section-marker">§ 03 / 03</span>
+            </div>
+
+            <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-[1fr_140px_1fr_1fr_auto] md:items-end" onSubmit={addProvider}>
+              <Field label="NAME">
+                <input name="name" className="workflow-input" placeholder="OpenAI" required />
+              </Field>
+              <Field label="KIND">
+                <select name="kind" className="workflow-input" defaultValue="openai">
+                  <option value="openai">openai</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="azure_openai">azure_openai</option>
+                  <option value="ollama">ollama</option>
+                  <option value="custom">custom</option>
+                </select>
+              </Field>
+              <Field label="DEFAULT MODEL">
+                <input name="defaultModel" className="workflow-input" placeholder="gpt-4.1-mini" required />
+              </Field>
+              <Field label="BASE URL">
+                <input name="baseUrl" className="workflow-input" placeholder="https://api.openai.com/v1" />
+              </Field>
+              <button className="btn-primary justify-center" type="submit" disabled={saving}>
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "+"} Add
+              </button>
+              <label className="md:col-span-5 flex items-center gap-2 font-mono text-xs text-ink-300">
+                <input name="apiKeyConfigured" type="checkbox" className="h-3.5 w-3.5 accent-signal-amber" />
+                API KEY CONFIGURED OUTSIDE UI
+              </label>
+            </form>
+
+            {providers.length === 0 ? (
+              <div className="border border-dashed border-ink-700 px-6 py-8 text-center">
+                <div className="kicker mb-1.5">NO PROVIDERS</div>
+                <p className="font-mono text-xs text-ink-500">Add a provider to make it selectable in the agent editor.</p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Kind</th>
+                    <th>Default model</th>
+                    <th>Base URL</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {providers.map((p) => (
+                    <tr key={p.id}>
+                      <td className="font-serif text-base text-ink-100">{p.name}</td>
+                      <td className="font-mono text-[11px] text-ink-300">{p.kind.replace("_", " ")}</td>
+                      <td className="font-mono text-[11px] text-ink-300">{p.defaultModel}</td>
+                      <td className="font-mono text-[11px] text-ink-500">{p.baseUrl || "—"}</td>
+                      <td>
+                        <span className={p.status === "connected" ? "pill pill--good" : "pill pill--warn"}>
+                          {p.status.replace("_", " ")}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="block"><span className="mb-1.5 block text-sm font-medium text-ink-200">{label}</span>{children}</label>;
+  return (
+    <label className="block">
+      <span className="kicker mb-1.5 block">{label}</span>
+      {children}
+    </label>
+  );
 }
 
 function field(form: FormData, key: string) {

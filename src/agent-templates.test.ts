@@ -69,18 +69,18 @@ test("agent input schema is validated and persisted", () => {
   );
 });
 
-test("runAgent validates required inputs and records logs", () => {
+test("runAgent validates required inputs and records logs", async () => {
   resetStoreForTests();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
 
   const { agent } = createAgentFromTemplate(auth.context, "release_audit");
 
-  assert.throws(
+  await assert.rejects(
     () => runAgent(auth.context, agent.id, { inputs: {} }),
     /input release_label is required/,
   );
 
-  const { run } = runAgent(auth.context, agent.id, {
+  const { run } = await runAgent(auth.context, agent.id, {
     inputs: { release_label: "v1.2.3", evidence_url: "https://example.com/evidence" },
   });
 
@@ -88,22 +88,22 @@ test("runAgent validates required inputs and records logs", () => {
   assert.equal(run.inputs?.release_label, "v1.2.3");
   assert.equal(run.inputs?.evidence_url, "https://example.com/evidence");
   assert.ok((run.logs ?? []).length >= 2);
-  assert.ok((run.logs ?? []).some((entry) => entry.message.includes("release_label")));
+  assert.ok((run.logs ?? []).some((entry: { message: string }) => entry.message.includes("release_label")));
 });
 
-test("runAgent rejects invalid url and enum inputs", () => {
+test("runAgent rejects invalid url and enum inputs", async () => {
   resetStoreForTests();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
 
   const { agent } = createAgentFromTemplate(auth.context, "release_audit");
 
-  assert.throws(
+  await assert.rejects(
     () => runAgent(auth.context, agent.id, { inputs: { release_label: "v1", evidence_url: "not-a-url" } }),
     /must be a valid http/,
   );
 
   const { agent: triage } = createAgentFromTemplate(auth.context, "support_triage");
-  assert.throws(
+  await assert.rejects(
     () => runAgent(auth.context, triage.id, { inputs: { mailbox: "inbox", urgency_threshold: "extreme" } }),
     /must be one of/,
   );

@@ -40,6 +40,8 @@ import type {
   JobRecord,
   PlanModeResult,
   PlanModePlanItem,
+  AvailableTool,
+  RunDiagnostic,
 } from "@/lib/types";
 import { pushExternalToast } from "@/context/ToastContext";
 
@@ -175,4 +177,13 @@ export const api = {
   requestPlanMode: () => j<PlanModeResult>("/api/app/workflow/plan-mode", { method: "POST", body: "{}" }),
   applyPlanMode: (planItems: PlanModePlanItem[]) =>
     j<{ planItems: WorkflowPlanItem[] }>("/api/app/workflow/plan-mode/apply", { method: "POST", body: JSON.stringify({ planItems }) }).then((p) => p.planItems),
+  listTools: () => j<{ tools: AvailableTool[] }>("/api/app/tools").then((p) => p.tools),
+  diagnoseAgentRun: (runId: string) =>
+    j<{ diagnostic: RunDiagnostic | null }>(`/api/app/agent-runs/${runId}/diagnose`, { method: "POST" }).then((p) => p.diagnostic),
+  recordRunAsPlaybook: (runId: string) =>
+    j<{ agent: AgentRecord }>(`/api/app/agent-runs/${runId}/record-as-playbook`, { method: "POST" }).then((p) => p.agent),
+  rotateAgentWebhook: (agentId: string) =>
+    j<{ webhookToken: string }>(`/api/app/webhooks/agents/${agentId}/rotate`, { method: "POST" }).then((p) => p.webhookToken),
+  removeAgentWebhook: (agentId: string) =>
+    j<{ ok: boolean }>(`/api/app/webhooks/agents/${agentId}`, { method: "DELETE" }),
 };

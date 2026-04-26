@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,30..100&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,30 +11,397 @@
     height: 100%;
   }
 
+  html {
+    background: #070809;
+  }
+
   body {
-    font-feature-settings: "cv11", "ss01", "ss03";
-    letter-spacing: -0.005em;
+    color: #cdced4;
+    background:
+      radial-gradient(ellipse 1200px 600px at 18% -10%, rgba(255, 176, 0, 0.04), transparent 60%),
+      radial-gradient(ellipse 800px 500px at 100% 110%, rgba(255, 176, 0, 0.025), transparent 60%),
+      #070809;
+    font-feature-settings: "ss01", "ss02", "cv05", "cv11";
+    letter-spacing: -0.003em;
+    -webkit-font-smoothing: antialiased;
   }
 
   ::selection {
-    background: rgba(161, 161, 170, 0.28);
+    background: #ffb000;
+    color: #070809;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: "Fraunces", serif;
+    font-feature-settings: "ss01", "ss02", "ss03";
+    font-variation-settings: "opsz" 80, "SOFT" 30;
+  }
+
+  /* Subtle horizontal rule used everywhere instead of a box border */
+  hr {
+    border: 0;
+    border-top: 1px solid #2a2c34;
+  }
+
+  /* Tabular numerics globally for dashboards */
+  .num,
+  table {
+    font-feature-settings: "tnum", "ss01";
+    font-variant-numeric: tabular-nums;
   }
 }
 
 @layer components {
-  .card {
-    @apply rounded-2xl border border-ink-700/70 bg-ink-850/60 shadow-card backdrop-blur-sm;
+  /* ------------------------------------------------------------------ */
+  /*  KICKER — small-caps monospace label used above section headings  */
+  /* ------------------------------------------------------------------ */
+  .kicker {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: #80828d;
   }
 
+  .kicker-amber {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: #ffb000;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  DISPLAY HEADINGS — serif, dramatic, used on page titles          */
+  /* ------------------------------------------------------------------ */
+  .display {
+    font-family: "Fraunces", serif;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    font-variation-settings: "opsz" 144, "SOFT" 0, "wght" 600;
+    line-height: 0.95;
+    color: #ebebef;
+  }
+
+  .display-xl {
+    font-family: "Fraunces", serif;
+    font-weight: 700;
+    font-size: clamp(2.5rem, 5.5vw, 4.25rem);
+    letter-spacing: -0.035em;
+    line-height: 0.92;
+    font-variation-settings: "opsz" 144, "SOFT" 0;
+    color: #ebebef;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  SPEC FRAME — fieldset-like bordered region (replaces .card)      */
+  /*  Use with <div className="spec-frame"><div className="spec-label">LABEL</div>...</div>
+   */
+  /* ------------------------------------------------------------------ */
+  .spec-frame {
+    position: relative;
+    border: 1px solid #2a2c34;
+    background: linear-gradient(180deg, rgba(20, 21, 26, 0.55), rgba(12, 13, 16, 0.55));
+    padding: 1.25rem 1.5rem 1.5rem;
+  }
+
+  .spec-frame--tight {
+    padding: 1rem 1.25rem 1.125rem;
+  }
+
+  .spec-label {
+    position: absolute;
+    top: -0.55rem;
+    left: 1rem;
+    padding: 0 0.5rem;
+    background: #070809;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: #80828d;
+  }
+
+  .spec-label--amber {
+    color: #ffb000;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  SECTION BAND — full-bleed band divided by hairline rules         */
+  /* ------------------------------------------------------------------ */
+  .section-band {
+    border-top: 1px solid #2a2c34;
+    padding: 2.25rem 0 2rem;
+  }
+
+  .section-band:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .section-marker {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6875rem;
+    color: #5a5c66;
+    letter-spacing: 0.18em;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  DATA TABLE — hairline grid with mono numerics                     */
+  /* ------------------------------------------------------------------ */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+    color: #cdced4;
+  }
+
+  .data-table th {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #80828d;
+    text-align: left;
+    padding: 0.625rem 0.875rem;
+    border-bottom: 1px solid #2a2c34;
+    font-weight: 500;
+  }
+
+  .data-table td {
+    padding: 0.75rem 0.875rem;
+    border-bottom: 1px solid #1a1c22;
+  }
+
+  .data-table tbody tr:hover {
+    background: rgba(255, 176, 0, 0.04);
+  }
+
+  .data-table .num {
+    font-family: "JetBrains Mono", monospace;
+    text-align: right;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  RULES & DIVIDERS                                                  */
+  /* ------------------------------------------------------------------ */
+  .rule {
+    border-top: 1px solid #2a2c34;
+  }
+
+  .rule-thin {
+    border-top: 1px solid #1a1c22;
+  }
+
+  .rule-amber {
+    border-top: 1px solid #ffb000;
+  }
+
+  /* Dotted leader line, like a table-of-contents row */
+  .leader {
+    background-image: radial-gradient(circle, #3a3c45 1px, transparent 1px);
+    background-size: 6px 1px;
+    background-repeat: repeat-x;
+    background-position: 0 60%;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  BUTTONS — sharp-cornered                                          */
+  /* ------------------------------------------------------------------ */
   .btn-primary {
-    @apply inline-flex items-center gap-2 rounded-xl bg-accent-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-400/60;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: #ffb000;
+    color: #070809;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    border: 1px solid #ffb000;
+    border-radius: 0;
+    transition: background 120ms, color 120ms;
+  }
+
+  .btn-primary:hover {
+    background: #ffd16a;
+    border-color: #ffd16a;
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .btn-ghost {
-    @apply inline-flex items-center gap-2 rounded-xl border border-ink-700 bg-transparent px-3 py-1.5 text-sm text-ink-200 transition-colors hover:border-ink-600 hover:bg-ink-800;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.875rem;
+    background: transparent;
+    color: #cdced4;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    border: 1px solid #2a2c34;
+    border-radius: 0;
+    transition: border-color 120ms, color 120ms, background 120ms;
+  }
+
+  .btn-ghost:hover:not(:disabled) {
+    border-color: #ffb000;
+    color: #ffb000;
+  }
+
+  .btn-ghost:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-link {
+    color: #ffb000;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    text-decoration: none;
+    border-bottom: 1px solid #ffb000;
+    padding-bottom: 1px;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  STATUS PILLS — square, mono, hairline                             */
+  /* ------------------------------------------------------------------ */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    border: 1px solid #2a2c34;
+    color: #a7a9b3;
+    background: rgba(20, 21, 26, 0.6);
+  }
+
+  .pill--good { color: #00d68f; border-color: rgba(0, 214, 143, 0.4); }
+  .pill--warn { color: #ffb000; border-color: rgba(255, 176, 0, 0.5); }
+  .pill--danger { color: #ff3b30; border-color: rgba(255, 59, 48, 0.5); }
+  .pill--muted { color: #80828d; }
+
+  /* ------------------------------------------------------------------ */
+  /*  TAB STRIP — underline-only active state                           */
+  /* ------------------------------------------------------------------ */
+  .tab-strip {
+    display: flex;
+    gap: 1.75rem;
+    border-bottom: 1px solid #2a2c34;
+  }
+
+  .tab-strip__item {
+    position: relative;
+    padding: 0.625rem 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: #80828d;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    transition: color 120ms;
+  }
+
+  .tab-strip__item:hover {
+    color: #cdced4;
+  }
+
+  .tab-strip__item--active {
+    color: #ebebef;
+  }
+
+  .tab-strip__item--active::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 1px;
+    background: #ffb000;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  PAGE FRAME — generous top padding, page number on right          */
+  /* ------------------------------------------------------------------ */
+  .page-frame {
+    padding: 2.5rem 3rem 3.5rem;
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 768px) {
+    .page-frame { padding: 1.5rem 1.25rem 2.5rem; }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  WORKFLOW INPUT (replaces the previous card-style input)           */
+  /* ------------------------------------------------------------------ */
+  .workflow-input {
+    width: 100%;
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid #2a2c34;
+    border-radius: 0;
+    padding: 0.625rem 0.75rem;
+    color: #ebebef;
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 0.875rem;
+    transition: border-color 120ms, background 120ms;
+  }
+
+  .workflow-input:focus {
+    outline: 0;
+    border-color: #ffb000;
+    background: rgba(20, 21, 26, 0.8);
+  }
+
+  .workflow-input::placeholder {
+    color: #5a5c66;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Backwards-compatible .card class — flattened, square-edge,        */
+  /*  fieldset-style. Pages should migrate to .spec-frame, but until    */
+  /*  they do this avoids a visual regression.                          */
+  /* ------------------------------------------------------------------ */
+  .card {
+    @apply border border-ink-700 bg-ink-875;
+    border-radius: 0;
+    padding: 1.25rem 1.5rem;
   }
 }
 
 .sidebar-glow {
-  background: rgb(10 10 10 / 0.82);
+  background: rgb(7 8 9 / 0.92);
+}
+
+/* Graph-paper texture used by canvas-style pages (lineage, telemetry) */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(42, 44, 52, 0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42, 44, 52, 0.3) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+.bg-grid-fine {
+  background-image:
+    linear-gradient(rgba(42, 44, 52, 0.18) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42, 44, 52, 0.18) 1px, transparent 1px);
+  background-size: 16px 16px;
 }

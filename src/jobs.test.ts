@@ -96,6 +96,7 @@ function makeStore(): TaskloomData {
     apiKeys: [],
     providerCalls: [],
     jobs: [],
+    shareTokens: [],
     activationMilestones: {},
     activationReadModels: {},
   };

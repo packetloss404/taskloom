@@ -1,5 +1,4 @@
 import { Link, useLocation } from "react-router-dom";
-import { ArrowLeft, Compass } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 export default function NotFoundPage() {
@@ -8,25 +7,23 @@ export default function NotFoundPage() {
   const home = session ? "/dashboard" : "/";
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-ink-950 px-6 py-12 text-ink-200">
-      <div className="card w-full max-w-md p-8 text-center">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-ink-850 text-ink-200">
-          <Compass className="h-5 w-5" strokeWidth={1.75} />
-        </div>
-        <p className="mt-5 text-xs uppercase tracking-[0.22em] text-ink-500">404</p>
-        <h1 className="mt-2 text-xl font-semibold text-ink-100">We couldn{"’"}t find that page</h1>
-        <p className="mt-3 break-all text-sm leading-6 text-ink-400">
-          <code className="rounded bg-ink-900 px-1.5 py-0.5 text-xs text-ink-300">{location.pathname}</code> doesn{"’"}t match any route in this workspace.
+    <div className="min-h-[100dvh] bg-ink-950 text-ink-200">
+      <div className="mx-auto flex min-h-[100dvh] max-w-7xl flex-col justify-center px-12 py-20 max-md:px-5">
+        <div className="kicker mb-8">// HTTP 404 · ROUTE NOT FOUND</div>
+        <h1 className="font-serif text-[clamp(6rem,18vw,14rem)] font-bold leading-none tracking-tighter text-ink-100">
+          404.
+        </h1>
+        <p className="mt-10 max-w-2xl font-mono text-sm text-ink-400">
+          NO RESOURCE AT <span className="text-signal-amber">{location.pathname}</span>
         </p>
-        <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <Link to={home} className="btn-primary bg-ink-100 text-ink-950 hover:bg-white">
-            <ArrowLeft className="h-4 w-4" /> Back to {session ? "dashboard" : "home"}
-          </Link>
-          {session && (
-            <Link to="/agents" className="btn-ghost">
-              Browse agents
-            </Link>
-          )}
+        <p className="mt-2 max-w-2xl font-sans text-lg leading-7 text-ink-300">
+          That path doesn{"’"}t resolve to anything in this workspace. The route was either never registered or has been removed.
+        </p>
+        <div className="mt-10 flex flex-wrap gap-3">
+          <Link to={home} className="btn-primary">← Back to {session ? "dashboard" : "portal"}</Link>
+          {session && <Link to="/agents" className="btn-ghost">Agents</Link>}
+          {session && <Link to="/workflows" className="btn-ghost">Workflows</Link>}
+          {session && <Link to="/runs" className="btn-ghost">Runs</Link>}
         </div>
       </div>
     </div>

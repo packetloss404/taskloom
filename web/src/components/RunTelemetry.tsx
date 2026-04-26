@@ -1,6 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { AgentRecord, AgentRunRecord, AgentRunStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 interface RunTelemetryProps {
   runs: AgentRunRecord[];
@@ -14,14 +13,15 @@ interface DayBucket {
   total: number;
   success: number;
   failed: number;
+  other: number;
 }
 
-const STATUS_TONE: Record<AgentRunStatus, string> = {
-  queued: "bg-ink-700",
-  running: "bg-amber-400",
-  success: "bg-emerald-400",
-  failed: "bg-rose-400",
-  canceled: "bg-ink-500",
+const STATUS_BAR_TONE: Record<AgentRunStatus, string> = {
+  queued: "bg-ink-500",
+  running: "bg-signal-amber",
+  success: "bg-signal-green",
+  failed: "bg-signal-red",
+  canceled: "bg-ink-600",
 };
 
 export default function RunTelemetry({ runs, agents = [], windowDays = 7 }: RunTelemetryProps) {
@@ -31,69 +31,72 @@ export default function RunTelemetry({ runs, agents = [], windowDays = 7 }: RunT
   const peakDay = useMemo(() => days.reduce((max, day) => Math.max(max, day.total), 0), [days]);
 
   return (
-    <section className="card p-5">
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <div className="border border-ink-700 bg-ink-900/40">
+      <div className="flex items-end justify-between gap-4 border-b border-ink-700 px-5 py-3">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Run telemetry</h2>
-          <p className="mt-1 text-xs text-ink-500">
-            Aggregated agent run history. Last {windowDays} days timeline plus rolling success rate.
-          </p>
+          <div className="kicker">RUN TELEMETRY · LAST {windowDays} DAYS</div>
+          <div className="mt-1 font-mono text-[11px] text-ink-400">
+            {stats.windowTotal} runs in window · success rate {stats.successRate}%
+          </div>
         </div>
-        <SuccessGauge value={stats.successRate} />
+        <div className="flex gap-4 font-mono text-[11px]">
+          <LegendDot label="OK" cls="bg-signal-green" />
+          <LegendDot label="FAIL" cls="bg-signal-red" />
+          <LegendDot label="OTHER" cls="bg-ink-500" />
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Total runs" value={String(stats.total)} />
-        <Stat label="Successes" value={String(stats.success)} tone="good" />
-        <Stat label="Failures" value={String(stats.failed)} tone={stats.failed > 0 ? "danger" : "muted"} />
-        <Stat label="Avg duration" value={stats.avgDurationLabel} />
-      </div>
-
-      <div className="mt-5">
-        <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-ink-500">
-          <span>Last {windowDays} days</span>
-          <span>{stats.windowTotal} runs</span>
-        </div>
-        <div className="grid grid-cols-7 gap-2" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
+      <div className="bg-grid px-5 pt-4 pb-2">
+        <div
+          className="grid items-end gap-2"
+          style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))`, height: "180px" }}
+        >
           {days.map((day) => {
             const total = day.total;
-            const heightPercent = peakDay === 0 ? 0 : (total / peakDay) * 100;
-            const successPercent = total === 0 ? 0 : (day.success / total) * 100;
+            const totalH = peakDay === 0 ? 0 : (total / peakDay) * 160;
+            const okH = total === 0 ? 0 : (day.success / total) * totalH;
+            const failH = total === 0 ? 0 : (day.failed / total) * totalH;
+            const otherH = Math.max(0, totalH - okH - failH);
             return (
-              <div key={day.iso} className="flex flex-col items-center gap-1.5">
-                <div className="flex h-24 w-full flex-col-reverse overflow-hidden rounded-md border border-ink-800 bg-ink-950/40">
-                  <div
-                    className="bg-ink-700 transition-all"
-                    style={{ height: `${heightPercent}%` }}
-                  >
-                    <div
-                      className="h-full bg-emerald-500/60"
-                      style={{ width: `${successPercent}%` }}
-                      title={`${day.success}/${day.total} succeeded`}
-                    />
-                  </div>
-                </div>
-                <span className="text-[10px] uppercase tracking-wider text-ink-500">{day.label}</span>
-                <span className="text-[10px] text-ink-400">{day.total}</span>
-              </div>
+              <BarColumn
+                key={day.iso}
+                label={day.label}
+                total={total}
+                okH={okH}
+                failH={failH}
+                otherH={otherH}
+                day={day}
+              />
             );
           })}
         </div>
+        <div className="mt-2 grid gap-2 border-t border-ink-700 pt-2 font-mono text-[10px] text-ink-500" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
+          {days.map((day) => (
+            <div key={day.iso} className="text-center uppercase tracking-[0.16em]">{day.label}</div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-ink-700 border-t border-ink-700 lg:grid-cols-4">
+        <TileStat label="TOTAL · ALLTIME" value={String(stats.total)} />
+        <TileStat label="SUCCESS" value={String(stats.success)} tone="good" />
+        <TileStat label="FAILED" value={String(stats.failed)} tone={stats.failed > 0 ? "danger" : undefined} />
+        <TileStat label="AVG DURATION" value={stats.avgDurationLabel} />
       </div>
 
       {perAgent.length > 0 && (
-        <div className="mt-6">
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-500">By agent</h3>
-          <div className="space-y-2">
+        <div className="border-t border-ink-700 px-5 py-4">
+          <div className="kicker mb-3">BY AGENT · TOP {perAgent.length}</div>
+          <ul className="space-y-2">
             {perAgent.map((entry) => (
-              <div key={entry.agentId} className="rounded-xl border border-ink-800 bg-ink-950/35 p-3">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="truncate font-medium text-ink-100">{entry.name}</span>
-                  <span className="text-xs text-ink-400">
+              <li key={entry.agentId} className="font-mono text-[11px]">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="truncate text-ink-100">{entry.name}</span>
+                  <span className="text-ink-400">
                     {entry.success}/{entry.total} ok
                   </span>
                 </div>
-                <div className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-ink-800">
+                <div className="mt-1.5 flex h-1.5 overflow-hidden border border-ink-700 bg-ink-950">
                   {(["success", "failed", "running", "queued", "canceled"] as AgentRunStatus[]).map((status) => {
                     const count = entry.byStatus[status] ?? 0;
                     if (count === 0 || entry.total === 0) return null;
@@ -101,19 +104,71 @@ export default function RunTelemetry({ runs, agents = [], windowDays = 7 }: RunT
                     return (
                       <div
                         key={status}
-                        className={cn("h-full", STATUS_TONE[status])}
+                        className={STATUS_BAR_TONE[status]}
                         style={{ width: `${percent}%` }}
                         title={`${status}: ${count}`}
                       />
                     );
                   })}
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
-    </section>
+    </div>
+  );
+}
+
+function BarColumn({
+  label,
+  total,
+  okH,
+  failH,
+  otherH,
+  day,
+}: {
+  label: string;
+  total: number;
+  okH: number;
+  failH: number;
+  otherH: number;
+  day: DayBucket;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div className="relative flex h-full flex-col items-stretch justify-end" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      {hover && total > 0 && (
+        <div className="pointer-events-none absolute -top-12 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap border border-ink-600 bg-ink-950 px-2 py-1 font-mono text-[10px] text-ink-100">
+          <span className="text-signal-amber">{label}</span> · {day.success} ok · {day.failed} fail · {day.other} other
+        </div>
+      )}
+      <div className="flex flex-col-reverse">
+        {okH > 0 && <div className="bg-signal-green/85" style={{ height: `${okH}px` }} aria-label={`${day.success} succeeded`} />}
+        {failH > 0 && <div className="bg-signal-red/85" style={{ height: `${failH}px` }} aria-label={`${day.failed} failed`} />}
+        {otherH > 0 && <div className="bg-ink-500" style={{ height: `${otherH}px` }} aria-label={`${day.other} other`} />}
+        {total === 0 && <div className="border-t border-ink-700" />}
+      </div>
+    </div>
+  );
+}
+
+function LegendDot({ label, cls }: { label: string; cls: string }) {
+  return (
+    <span className="flex items-center gap-1.5 text-ink-500">
+      <span className={`block h-2 w-2 ${cls}`} />
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function TileStat({ label, value, tone }: { label: string; value: string; tone?: "good" | "danger" }) {
+  const color = tone === "good" ? "text-signal-green" : tone === "danger" ? "text-signal-red" : "text-ink-100";
+  return (
+    <div className="px-5 py-4">
+      <div className="kicker">{label}</div>
+      <div className={`mt-1 font-mono text-2xl tabular-nums ${color}`}>{value}</div>
+    </div>
   );
 }
 
@@ -168,10 +223,11 @@ function bucketByDay(runs: AgentRunRecord[], windowDays: number): DayBucket[] {
     const iso = day.toISOString().slice(0, 10);
     buckets.set(iso, {
       iso,
-      label: day.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2),
+      label: day.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 3).toUpperCase(),
       total: 0,
       success: 0,
       failed: 0,
+      other: 0,
     });
   }
 
@@ -182,7 +238,8 @@ function bucketByDay(runs: AgentRunRecord[], windowDays: number): DayBucket[] {
     if (!bucket) continue;
     bucket.total += 1;
     if (run.status === "success") bucket.success += 1;
-    if (run.status === "failed") bucket.failed += 1;
+    else if (run.status === "failed") bucket.failed += 1;
+    else bucket.other += 1;
   }
 
   return Array.from(buckets.values());
@@ -233,45 +290,4 @@ function formatDuration(ms: number): string {
   if (minutes < 60) return `${minutes.toFixed(1)}m`;
   const hours = minutes / 60;
   return `${hours.toFixed(1)}h`;
-}
-
-function Stat({ label, value, tone }: { label: string; value: string; tone?: "good" | "danger" | "muted" }) {
-  const color = tone === "good" ? "text-emerald-300" : tone === "danger" ? "text-rose-300" : "text-ink-100";
-  return (
-    <div className="rounded-xl border border-ink-800 bg-ink-950/35 p-3">
-      <div className="text-[10px] uppercase tracking-wider text-ink-500">{label}</div>
-      <div className={cn("mt-1 text-xl font-semibold", color)}>{value}</div>
-    </div>
-  );
-}
-
-function SuccessGauge({ value }: { value: number }) {
-  const radius = 22;
-  const circumference = 2 * Math.PI * radius;
-  const dash = (value / 100) * circumference;
-  const tone = value >= 90 ? "stroke-emerald-400" : value >= 60 ? "stroke-amber-400" : "stroke-rose-400";
-  return (
-    <div className="flex items-center gap-2">
-      <svg width={56} height={56} viewBox="0 0 56 56">
-        <circle cx={28} cy={28} r={radius} strokeWidth={5} className="fill-none stroke-ink-800" />
-        <circle
-          cx={28}
-          cy={28}
-          r={radius}
-          strokeWidth={5}
-          strokeLinecap="round"
-          className={cn("fill-none transition-all", tone)}
-          strokeDasharray={`${dash} ${circumference}`}
-          transform="rotate(-90 28 28)"
-        />
-        <text x={28} y={32} textAnchor="middle" className="fill-ink-100 text-[12px] font-semibold">
-          {value}%
-        </text>
-      </svg>
-      <div className="text-right">
-        <div className="text-[10px] uppercase tracking-wider text-ink-500">Success</div>
-        <div className="text-xs text-ink-300">on completed runs</div>
-      </div>
-    </div>
-  );
 }

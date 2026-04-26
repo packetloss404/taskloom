@@ -4,27 +4,66 @@ import { lineageNeighbors } from "@/lib/lineage";
 import { cn } from "@/lib/utils";
 
 const COLUMN_WIDTH = 220;
-const COLUMN_GAP = 56;
+const COLUMN_GAP = 64;
 const NODE_HEIGHT = 64;
-const ROW_GAP = 16;
-const HEADER_HEIGHT = 32;
+const ROW_GAP = 18;
+const HEADER_HEIGHT = 40;
+const SELECTED_LABEL_OFFSET = 14;
 
 const STAGE_LABELS: Record<LineageStageKey, string> = {
-  brief: "Brief",
-  requirements: "Requirements",
-  plan: "Plan items",
-  validation: "Validation",
-  release: "Release",
+  brief: "BRIEF",
+  requirements: "REQUIREMENTS",
+  plan: "PLAN ITEMS",
+  validation: "VALIDATION",
+  release: "RELEASE",
 };
 
-const STATUS_TONE: Record<LineageNodeStatus, { fill: string; ring: string; dot: string; label: string }> = {
-  empty:       { fill: "fill-ink-900",       ring: "stroke-ink-700",        dot: "bg-ink-600",       label: "empty" },
-  pending:     { fill: "fill-ink-800",       ring: "stroke-ink-600",        dot: "bg-ink-400",       label: "pending" },
-  in_progress: { fill: "fill-amber-900/40",  ring: "stroke-amber-400/70",   dot: "bg-amber-300",     label: "in progress" },
-  blocked:     { fill: "fill-rose-900/40",   ring: "stroke-rose-400/70",    dot: "bg-rose-300",      label: "blocked" },
-  passed:      { fill: "fill-emerald-900/40",ring: "stroke-emerald-400/70", dot: "bg-emerald-300",   label: "passed" },
-  failed:      { fill: "fill-rose-900/50",   ring: "stroke-rose-400/80",    dot: "bg-rose-400",      label: "failed" },
-  done:        { fill: "fill-emerald-900/50",ring: "stroke-emerald-400/80", dot: "bg-emerald-400",   label: "done" },
+const STATUS_TONE: Record<
+  LineageNodeStatus,
+  { fill: string; ring: string; dotFill: string; label: string }
+> = {
+  empty: {
+    fill: "#0c0d10",
+    ring: "#2a2c34",
+    dotFill: "#3a3c45",
+    label: "EMPTY",
+  },
+  pending: {
+    fill: "#101116",
+    ring: "#3a3c45",
+    dotFill: "#80828d",
+    label: "PENDING",
+  },
+  in_progress: {
+    fill: "#14151a",
+    ring: "#ffb000",
+    dotFill: "#ffb000",
+    label: "IN PROGRESS",
+  },
+  blocked: {
+    fill: "#14151a",
+    ring: "#ff3b30",
+    dotFill: "#ff3b30",
+    label: "BLOCKED",
+  },
+  passed: {
+    fill: "#14151a",
+    ring: "#00d68f",
+    dotFill: "#00d68f",
+    label: "PASSED",
+  },
+  failed: {
+    fill: "#14151a",
+    ring: "#ff3b30",
+    dotFill: "#ff3b30",
+    label: "FAILED",
+  },
+  done: {
+    fill: "#14151a",
+    ring: "#00d68f",
+    dotFill: "#00d68f",
+    label: "DONE",
+  },
 };
 
 interface LineageGraphProps {
@@ -55,32 +94,74 @@ export default function LineageGraphView({ graph, selectedNodeId, onSelect }: Li
   }, [layout.nodes]);
 
   return (
-    <div className="card overflow-hidden p-4">
-      <div className="mb-3 flex items-center justify-between gap-3 px-2">
-        <div>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Workflow lineage</h3>
-          <p className="mt-1 text-xs text-ink-500">Brief → Requirements → Plan → Validation → Release. Click a node to focus its chain.</p>
+    <div className="bg-grid border border-ink-700 bg-ink-950">
+      <div className="flex items-center justify-between border-b border-ink-700 bg-ink-950/80 px-4 py-3">
+        <div className="flex items-baseline gap-3">
+          <span className="kicker-amber">LINEAGE · STAGE GRAPH</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+            BRIEF → REQ → PLAN → VALIDATION → RELEASE
+          </span>
         </div>
         <Legend />
       </div>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto p-6">
         <svg
           width={layout.width}
           height={layout.height}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           className="block"
         >
-          {layout.stageOrder.map((stage, index) => (
-            <text
-              key={`stage-${stage}`}
-              x={index * (COLUMN_WIDTH + COLUMN_GAP) + COLUMN_WIDTH / 2}
-              y={18}
-              textAnchor="middle"
-              className="fill-ink-500 text-[11px] uppercase tracking-[0.18em]"
+          <defs>
+            <marker
+              id="lineage-arrow"
+              viewBox="0 0 10 10"
+              refX="10"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
             >
-              {STAGE_LABELS[stage]}
-            </text>
-          ))}
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a3c45" />
+            </marker>
+            <marker
+              id="lineage-arrow-active"
+              viewBox="0 0 10 10"
+              refX="10"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#80828d" />
+            </marker>
+          </defs>
+
+          {layout.stageOrder.map((stage, index) => {
+            const x = index * (COLUMN_WIDTH + COLUMN_GAP);
+            return (
+              <g key={`stage-${stage}`}>
+                <line
+                  x1={x}
+                  x2={x + COLUMN_WIDTH}
+                  y1={HEADER_HEIGHT - 10}
+                  y2={HEADER_HEIGHT - 10}
+                  stroke="#2a2c34"
+                  strokeWidth={1}
+                />
+                <text
+                  x={x}
+                  y={HEADER_HEIGHT - 18}
+                  textAnchor="start"
+                  fill="#80828d"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize={10}
+                  letterSpacing="0.2em"
+                >
+                  {`§ 0${index + 1}  ${STAGE_LABELS[stage]}`}
+                </text>
+              </g>
+            );
+          })}
 
           {graph.edges.map((edge, index) => {
             const fromNode = positionsById.get(edge.from);
@@ -88,12 +169,7 @@ export default function LineageGraphView({ graph, selectedNodeId, onSelect }: Li
             if (!fromNode || !toNode) return null;
             const isActive = !selectedNodeId || (highlight.has(edge.from) && highlight.has(edge.to));
             return (
-              <EdgePath
-                key={`edge-${index}`}
-                from={fromNode}
-                to={toNode}
-                active={isActive}
-              />
+              <EdgePath key={`edge-${index}`} from={fromNode} to={toNode} active={isActive} />
             );
           })}
 
@@ -106,21 +182,70 @@ export default function LineageGraphView({ graph, selectedNodeId, onSelect }: Li
                 key={node.id}
                 transform={`translate(${node.x}, ${node.y})`}
                 onClick={() => onSelect?.(isSelected ? null : node)}
-                className={cn("cursor-pointer transition-opacity", isMuted ? "opacity-40" : "opacity-100")}
+                className={cn(
+                  "cursor-pointer transition-opacity",
+                  isMuted ? "opacity-30" : "opacity-100",
+                )}
               >
+                {isSelected && (
+                  <text
+                    x={0}
+                    y={-SELECTED_LABEL_OFFSET}
+                    fill="#ffb000"
+                    fontFamily="JetBrains Mono, monospace"
+                    fontSize={9}
+                    letterSpacing="0.22em"
+                  >
+                    [SELECTED]
+                  </text>
+                )}
                 <rect
                   width={COLUMN_WIDTH}
                   height={NODE_HEIGHT}
-                  rx={14}
-                  className={cn(tone.fill, tone.ring, isSelected && "stroke-accent-400")}
-                  strokeWidth={isSelected ? 2 : 1}
+                  rx={0}
+                  fill={tone.fill}
+                  stroke={isSelected ? "#ffb000" : tone.ring}
+                  strokeWidth={1}
+                  shapeRendering="crispEdges"
                 />
-                <circle cx={14} cy={NODE_HEIGHT / 2} r={4} className={cn(tone.dot)} fill="currentColor" />
-                <text x={28} y={24} className="fill-ink-100 text-[12px] font-medium">
-                  {truncate(node.label, 26)}
+                <line
+                  x1={0}
+                  x2={COLUMN_WIDTH}
+                  y1={22}
+                  y2={22}
+                  stroke="#1a1c22"
+                  strokeWidth={1}
+                  shapeRendering="crispEdges"
+                />
+                <rect x={0} y={0} width={3} height={NODE_HEIGHT} fill={tone.dotFill} />
+                <text
+                  x={12}
+                  y={15}
+                  fill="#80828d"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize={9}
+                  letterSpacing="0.2em"
+                >
+                  {tone.label}
                 </text>
-                <text x={28} y={42} className="fill-ink-400 text-[11px]">
-                  {truncate(node.sublabel ?? tone.label, 30)}
+                <text
+                  x={12}
+                  y={38}
+                  fill="#ebebef"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize={11.5}
+                  letterSpacing="0.02em"
+                >
+                  {truncate(node.label, 24)}
+                </text>
+                <text
+                  x={12}
+                  y={54}
+                  fill="#80828d"
+                  fontFamily="IBM Plex Sans, sans-serif"
+                  fontSize={10.5}
+                >
+                  {truncate(node.sublabel ?? "—", 28)}
                 </text>
               </g>
             );
@@ -136,17 +261,18 @@ function EdgePath({ from, to, active }: { from: PositionedNode; to: PositionedNo
   const y1 = from.y + NODE_HEIGHT / 2;
   const x2 = to.x;
   const y2 = to.y + NODE_HEIGHT / 2;
-  const midX = (x1 + x2) / 2;
-  const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+  const midX = x1 + (x2 - x1) / 2;
+  // Orthogonal polyline: out, vertical, in
+  const path = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
   return (
     <path
       d={path}
       fill="none"
-      strokeWidth={1.5}
-      className={cn(
-        "transition-opacity",
-        active ? "stroke-ink-500" : "stroke-ink-700 opacity-30",
-      )}
+      strokeWidth={1}
+      shapeRendering="crispEdges"
+      stroke={active ? "#80828d" : "#2a2c34"}
+      strokeDasharray={active ? undefined : "2 3"}
+      markerEnd={active ? "url(#lineage-arrow-active)" : "url(#lineage-arrow)"}
     />
   );
 }
@@ -154,10 +280,17 @@ function EdgePath({ from, to, active }: { from: PositionedNode; to: PositionedNo
 function Legend() {
   const items: LineageNodeStatus[] = ["done", "passed", "in_progress", "blocked", "failed", "pending", "empty"];
   return (
-    <div className="hidden flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider text-ink-500 sm:flex">
+    <div className="hidden flex-wrap items-center gap-3 sm:flex">
       {items.map((status) => (
-        <span key={status} className="inline-flex items-center gap-1.5 rounded-full border border-ink-800 bg-ink-900/40 px-2 py-1">
-          <span className={cn("h-1.5 w-1.5 rounded-full", STATUS_TONE[status].dot)} />
+        <span
+          key={status}
+          className="inline-flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.18em] text-ink-400"
+        >
+          <span
+            className="h-2 w-2"
+            style={{ background: STATUS_TONE[status].dotFill }}
+            aria-hidden
+          />
           {STATUS_TONE[status].label}
         </span>
       ))}
@@ -189,7 +322,7 @@ function layoutGraph(graph: LineageGraph) {
 
   const maxRows = Math.max(1, ...Array.from(stageBuckets.values()).map((bucket) => bucket.length));
   const width = graph.stageOrder.length * COLUMN_WIDTH + (graph.stageOrder.length - 1) * COLUMN_GAP;
-  const height = HEADER_HEIGHT + maxRows * NODE_HEIGHT + (maxRows - 1) * ROW_GAP + 8;
+  const height = HEADER_HEIGHT + maxRows * NODE_HEIGHT + (maxRows - 1) * ROW_GAP + 16;
 
   return { nodes, width, height, stageOrder: graph.stageOrder };
 }
