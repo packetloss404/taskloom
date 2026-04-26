@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import RunTelemetry from "@/components/RunTelemetry";
 import RunTranscript from "@/components/RunTranscript";
 import { triggerLabel, triggerToneClass } from "@/lib/agent-runtime";
-import type { ActivityRecord, AgentRecord, AgentRunRecord, AgentRunStatus } from "@/lib/types";
+import type { ActivityRecord, AgentRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus } from "@/lib/types";
 
 const STATUS_TONE: Record<AgentRunStatus, "good" | "danger" | "warn" | "muted"> = {
   success: "good",
@@ -54,7 +54,7 @@ export default function RunsPage() {
       <header className="mb-7">
         <h1 className="text-3xl font-semibold tracking-tight text-ink-100">Runs / Activity</h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-400">
-          Execution history and workspace activity from the backend.
+          Execution history with structured inputs, output, and step logs.
         </p>
       </header>
 
@@ -142,6 +142,15 @@ export default function RunsPage() {
                               {triggerLabel(run.triggerKind)}
                             </span>
                           </div>
+                          {run.inputs && Object.keys(run.inputs).length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-ink-400">
+                              {Object.entries(run.inputs).map(([key, val]) => (
+                                <span key={key} className="rounded-md border border-ink-800 bg-ink-950/40 px-2 py-0.5">
+                                  <span className="text-ink-500">{key}:</span> {String(val)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {run.error && <div className="mt-2 truncate text-xs text-rose-300">{run.error}</div>}
                         </button>
                         <div className="flex items-center gap-2">
@@ -166,6 +175,12 @@ export default function RunsPage() {
                             <div>
                               <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">Output</div>
                               <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-ink-800 bg-ink-950/60 p-3 text-xs leading-5 text-ink-200">{run.output}</pre>
+                            </div>
+                          )}
+                          {run.logs && run.logs.length > 0 && (
+                            <div>
+                              <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">Log timeline</div>
+                              <RunLogTimeline logs={run.logs} />
                             </div>
                           )}
                         </div>
@@ -431,6 +446,25 @@ function absolute(iso: string | undefined | null) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleString(undefined, { dateStyle: "short", timeStyle: "medium" });
+}
+
+function RunLogTimeline({ logs }: { logs: AgentRunLogEntry[] }) {
+  return (
+    <ol className="mt-1 space-y-1.5 border-l border-ink-800 pl-3">
+      {logs.map((entry, index) => (
+        <li key={index} className="text-xs">
+          <span className={logLevelClass(entry.level)}>{entry.level.toUpperCase()}</span>
+          <span className="ml-2 text-ink-300">{entry.message}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function logLevelClass(level: AgentRunLogEntry["level"]) {
+  if (level === "error") return "font-semibold text-rose-300";
+  if (level === "warn") return "font-semibold text-amber-300";
+  return "font-semibold text-ink-500";
 }
 
 function Empty({ text }: { text: string }) {

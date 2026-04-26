@@ -57,6 +57,8 @@ export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | 
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 export type AgentRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
 export type AgentRunStepStatus = "success" | "failed" | "skipped";
+export type AgentInputFieldType = "string" | "number" | "boolean" | "url" | "enum";
+export type AgentRunLogLevel = "info" | "warn" | "error";
 
 export interface AgentPlaybookStep {
   id: string;
@@ -71,6 +73,34 @@ export interface AgentRunStep {
   output: string;
   durationMs: number;
   startedAt: string;
+}
+
+export interface AgentInputField {
+  key: string;
+  label: string;
+  type: AgentInputFieldType;
+  required: boolean;
+  description?: string;
+  options?: string[];
+  defaultValue?: string;
+}
+
+export interface AgentRunLogEntry {
+  at: string;
+  level: AgentRunLogLevel;
+  message: string;
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  category: "support" | "operations" | "release" | "research" | "comms";
+  summary: string;
+  description: string;
+  instructions: string;
+  tools: string[];
+  schedule?: string;
+  inputSchema: AgentInputField[];
 }
 
 export interface ProviderRecord {
@@ -101,6 +131,8 @@ export interface AgentRecord {
   playbook?: AgentPlaybookStep[];
   status: AgentStatus;
   createdByUserId: string;
+  templateId?: string;
+  inputSchema?: AgentInputField[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -116,8 +148,10 @@ export interface AgentRunRecord {
   transcript?: AgentRunStep[];
   startedAt?: string;
   completedAt?: string;
+  inputs?: Record<string, string | number | boolean>;
   output?: string;
   error?: string;
+  logs?: AgentRunLogEntry[];
   createdAt: string;
   updatedAt: string;
 }
@@ -133,6 +167,8 @@ export type SaveAgentInput = {
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];
   status?: AgentStatus;
+  templateId?: string;
+  inputSchema?: AgentInputField[];
 };
 
 export type SaveProviderInput = {

@@ -7,6 +7,7 @@ import {
   archiveAgent,
   completeOnboardingStep,
   createAgent,
+  createAgentFromTemplate,
   createProvider,
   getActivationDetail,
   getAgent,
@@ -17,6 +18,7 @@ import {
   getSessionPayload,
   listPublicActivationSummaries,
   listAgentRuns,
+  listAgentTemplates,
   listAgents,
   listProviders,
   listWorkspaceActivities,
@@ -218,8 +220,34 @@ app.delete("/api/app/agents/:agentId", (c) => {
 
 app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
-    const body = (await readJsonBody(c)) as { triggerKind?: string };
-    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), body), 201);
+    const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
+    const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
+    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), {
+      triggerKind: body?.triggerKind,
+      inputs,
+    }), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/agent-templates", (c) => {
+  try {
+    requireAuthenticatedContext(c);
+    return c.json(listAgentTemplates());
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agents/from-template/:templateId", async (c) => {
+  try {
+    const body = await readJsonBody(c);
+    return c.json(createAgentFromTemplate(requireAuthenticatedContext(c), c.req.param("templateId"), {
+      name: typeof body.name === "string" ? body.name : undefined,
+      providerId: typeof body.providerId === "string" ? body.providerId : undefined,
+      model: typeof body.model === "string" ? body.model : undefined,
+    }), 201);
   } catch (error) {
     return errorResponse(c, error);
   }

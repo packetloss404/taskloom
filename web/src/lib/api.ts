@@ -3,6 +3,7 @@ import type {
   ActivityRecord,
   AgentRecord,
   AgentRunRecord,
+  AgentTemplate,
   ActivationDetailPayload,
   BootstrapPayload,
   ConfirmWorkflowReleaseInput,
@@ -92,8 +93,11 @@ export const api = {
   updateAgent: (id: string, body: Partial<SaveAgentInput>) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.agent),
   archiveAgent: (id: string) => j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "DELETE" }).then((payload) => payload.agent),
-  runAgent: (id: string, body?: { triggerKind?: string }) =>
+  runAgent: (id: string, body?: { triggerKind?: string; inputs?: Record<string, string | number | boolean> }) =>
     j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST", body: JSON.stringify(body ?? {}) }).then((payload) => payload.run),
+  listAgentTemplates: () => j<{ templates: AgentTemplate[] }>("/api/app/agent-templates").then((payload) => payload.templates),
+  createAgentFromTemplate: (templateId: string, body: { name?: string; providerId?: string; model?: string } = {}) =>
+    j<{ agent: AgentRecord }>(`/api/app/agents/from-template/${templateId}`, { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
   listProviders: () => j<{ providers: ProviderRecord[] }>("/api/app/providers").then((payload) => payload.providers),
   createProvider: (body: SaveProviderInput) =>
     j<{ provider: ProviderRecord }>("/api/app/providers", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.provider),
