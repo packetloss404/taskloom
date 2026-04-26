@@ -42,6 +42,9 @@ import type {
   PlanModePlanItem,
   AvailableTool,
   RunDiagnostic,
+  CreateShareTokenInput,
+  PublicSharePayload,
+  ShareTokenRecord,
 } from "@/lib/types";
 import { pushExternalToast } from "@/context/ToastContext";
 
@@ -186,4 +189,9 @@ export const api = {
     j<{ webhookToken: string }>(`/api/app/webhooks/agents/${agentId}/rotate`, { method: "POST" }).then((p) => p.webhookToken),
   removeAgentWebhook: (agentId: string) =>
     j<{ ok: boolean }>(`/api/app/webhooks/agents/${agentId}`, { method: "DELETE" }),
+  listShareTokens: () => j<{ tokens: ShareTokenRecord[] }>("/api/app/share").then((p) => p.tokens),
+  createShareToken: (body: CreateShareTokenInput) =>
+    j<{ token: ShareTokenRecord }>("/api/app/share", { method: "POST", body: JSON.stringify(body) }).then((p) => p.token),
+  deleteShareToken: (id: string) => j<{ ok: boolean }>(`/api/app/share/${id}`, { method: "DELETE" }),
+  getPublicShare: (token: string) => j<{ shared: PublicSharePayload }>(`/api/public/share/${encodeURIComponent(token)}`).then((p) => p.shared),
 };

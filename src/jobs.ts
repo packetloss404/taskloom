@@ -40,6 +40,15 @@ export interface RecomputeActivationResult {
   statuses: ActivationStatusDto[];
 }
 
+export interface RepairActivationReadModelsResult {
+  command: "repair-activation-read-models";
+  processed: number;
+  repaired: number;
+  workspaceIds: string[];
+  repairedWorkspaceIds: string[];
+  statuses: ActivationStatusDto[];
+}
+
 export interface CleanupSessionsOptions {
   now?: Date | string | number;
 }
@@ -104,6 +113,28 @@ export async function recomputeActivationReadModels(
   };
 }
 
+export async function repairActivationReadModels(
+  deps: RecomputeActivationDeps = defaultDeps,
+  options: RecomputeActivationOptions = {},
+): Promise<RepairActivationReadModelsResult> {
+  const initialData = deps.loadStore();
+  const workspaceIds = options.workspaceIds ?? initialData.workspaces.map((workspace) => workspace.id);
+  const before = new Map(workspaceIds.map((workspaceId) => [workspaceId, initialData.activationReadModels[workspaceId] ?? null]));
+  const recompute = await recomputeActivationReadModels(deps, options);
+  const repairedWorkspaceIds = recompute.statuses
+    .filter((status) => !activationStatusEquals(before.get(status.subject.workspaceId) ?? null, status))
+    .map((status) => status.subject.workspaceId);
+
+  return {
+    command: "repair-activation-read-models",
+    processed: recompute.processed,
+    repaired: repairedWorkspaceIds.length,
+    workspaceIds: recompute.workspaceIds,
+    repairedWorkspaceIds,
+    statuses: recompute.statuses,
+  };
+}
+
 export function cleanupExpiredSessions(
   deps: StoreJobDeps = defaultDeps,
   options: CleanupSessionsOptions = {},
@@ -142,6 +173,13 @@ export async function runJobsCli(argv = process.argv.slice(2)): Promise<number> 
     return 0;
   }
 
+  if (command === "repair-activation-read-models") {
+    const workspaceIds = parseWorkspaceIds(args);
+    const result = await repairActivationReadModels(defaultDeps, { workspaceIds });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
+
   if (command === "cleanup-sessions") {
     const result = cleanupExpiredSessions(defaultDeps);
     console.log(JSON.stringify(result, null, 2));
@@ -173,10 +211,15 @@ function normalizeTimestamp(value: Date | string | number): number {
   return timestamp;
 }
 
+function activationStatusEquals(left: ActivationStatusDto | null, right: ActivationStatusDto): boolean {
+  return Boolean(left) && JSON.stringify(left) === JSON.stringify(right);
+}
+
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|cleanup-sessions>");
+  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions>");
   console.error("Options:");
   console.error("  recompute-activation --workspace-ids=alpha,beta");
+  console.error("  repair-activation-read-models --workspace-ids=alpha,beta");
 }
 
 function isExecutedDirectly(): boolean {

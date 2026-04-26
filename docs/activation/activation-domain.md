@@ -29,12 +29,14 @@ Maintain a small, storage-agnostic activation domain:
 ## Current Local Flow
 
 - `data/taskloom.json` stores local activation facts, milestones, and read models.
-- `snapshotForWorkspace(...)` maps stored workspace facts into `ActivationSignalSnapshot` through `buildSignalSnapshotFromFacts(...)`.
-- Workflow writes update activation facts and emit activity events.
+- `snapshotForWorkspace(...)` maps durable workflow/product records into `ActivationSignalSnapshot` through `buildSignalSnapshotFromProductRecords(...)` when records exist.
+- Legacy `activationFacts` remain a fallback for workspaces or signal categories that do not yet have durable records.
+- Workflow writes update durable records, maintain legacy activation facts, and emit activity events.
 - `npm run jobs:recompute-activation` refreshes activation read models and milestone records for all workspaces, or a targeted set with `--workspace-ids=alpha,beta`.
+- `node --import tsx src/jobs.ts repair-activation-read-models` repairs stale JSON-backed activation read models and reports changed workspace IDs.
 - Removing `data/taskloom.json` resets local activation data to the built-in seed state on the next app start or store load.
 
-## Out Of Scope
+## Out Of Scope For The Pure Engine
 
 - HTTP routes
 - jobs/backfills
@@ -44,7 +46,7 @@ Maintain a small, storage-agnostic activation domain:
 - external branding/copy
 - Supabase-specific schema or policies
 
-The current app has HTTP routes, jobs, and React pages around this domain, but those layers should stay outside the pure activation engine.
+The current app has HTTP routes, JSON-backed recompute jobs, route-level RBAC, and React pages around this domain, but those layers should stay outside the pure activation engine.
 
 ## Milestones
 

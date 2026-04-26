@@ -19,7 +19,7 @@ export default function ActivityDetailPage() {
 
   if (notFound) {
     return (
-      <div className="text-ink-300">
+      <div className="page-frame text-ink-300">
         <Link to="/activity" className="btn-ghost mb-6">
           <ArrowLeft className="h-4 w-4" /> Back
         </Link>
@@ -27,7 +27,7 @@ export default function ActivityDetailPage() {
       </div>
     );
   }
-  if (!detail) return <div className="text-sm text-ink-400">Loading activity detail…</div>;
+  if (!detail) return <div className="page-frame text-sm text-ink-400">Loading activity detail…</div>;
 
   const activity = detail.activity;
   const actorName = activity.actor?.displayName || activity.actor?.id || "System";
@@ -36,12 +36,12 @@ export default function ActivityDetailPage() {
   const relatedWorkflow = detail.related?.workflow ?? detail.workflow ?? null;
 
   return (
-    <>
+    <div className="page-frame">
       <Link to="/activity" className="btn-ghost mb-6">
         <ArrowLeft className="h-4 w-4" /> All activity
       </Link>
 
-      <header className="relative mb-8 overflow-hidden rounded-[2rem] border border-ink-800 bg-ink-900/80 p-5 shadow-soft sm:p-8">
+      <header className="relative mb-8 overflow-hidden border border-ink-700 bg-ink-875 p-5 shadow-card sm:p-8">
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-signal-amber/80 to-transparent" />
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
@@ -111,7 +111,7 @@ export default function ActivityDetailPage() {
           </article>
         </aside>
       </section>
-    </>
+    </div>
   );
 }
 

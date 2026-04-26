@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { canEditWorkflowRole, canManageWorkspaceRole } from "@/lib/roles";
 import type {
   AgentInputField,
   AgentInputFieldType,
@@ -46,8 +48,11 @@ export default function AgentEditorPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const { session } = useAuth();
   const isNew = !id;
   const incomingPrompt = (location.state as LocationState | null)?.prompt ?? "";
+  const canManageAgent = canManageWorkspaceRole(session?.workspace.role);
+  const canRunAgent = canEditWorkflowRole(session?.workspace.role);
 
   const [agent, setAgent] = useState<AgentRecord | null>(null);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
@@ -123,6 +128,17 @@ export default function AgentEditorPage() {
 
   const saveAgent = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageAgent) {
+      setError("admin role is required to save agents");
+      setMessage(null);
+      return;
+    }
+    const invalidEnum = inputSchema.find((field) => field.type === "enum" && (field.options ?? []).length === 0);
+    if (invalidEnum) {
+      setError(`enum input ${invalidEnum.key || invalidEnum.label} needs at least one option`);
+      setMessage(null);
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const body: SaveAgentInput = {
       name: field(form, "name"),
@@ -168,7 +184,7 @@ export default function AgentEditorPage() {
   };
 
   const archive = async () => {
-    if (!agent) return;
+    if (!agent || !canManageAgent) return;
     setSaving(true);
     setError(null);
     try {
@@ -182,7 +198,7 @@ export default function AgentEditorPage() {
   };
 
   const rotateWebhook = async () => {
-    if (!agent) return;
+    if (!agent || !canManageAgent) return;
     setWebhookBusy(true);
     setError(null);
     try {
@@ -197,7 +213,7 @@ export default function AgentEditorPage() {
   };
 
   const removeWebhook = async () => {
-    if (!agent) return;
+    if (!agent || !canManageAgent) return;
     setWebhookBusy(true);
     setError(null);
     try {
@@ -212,6 +228,7 @@ export default function AgentEditorPage() {
   };
 
   const recordAsPlaybook = async (runId: string) => {
+    if (!canRunAgent) return;
     setRecordingRunId(runId);
     setError(null);
     try {
@@ -227,7 +244,7 @@ export default function AgentEditorPage() {
   };
 
   const run = async () => {
-    if (!agent) return;
+    if (!agent || !canRunAgent) return;
     setRunning(true);
     setError(null);
     setMessage(null);
@@ -270,15 +287,23 @@ export default function AgentEditorPage() {
         </div>
         {!isNew && agent && (
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-ghost" onClick={run} disabled={running || saving}>
+            <button type="button" className="btn-ghost" onClick={run} disabled={!canRunAgent || running || saving}>
               {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} Run now
             </button>
-            <button type="button" className="btn-ghost" onClick={archive} disabled={saving}>
-              × Archive
-            </button>
+            {canManageAgent && (
+              <button type="button" className="btn-ghost" onClick={archive} disabled={saving}>
+                × Archive
+              </button>
+            )}
           </div>
         )}
       </header>
+
+      {!canManageAgent && (
+        <div className="mb-6 border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-500">
+          Admin role required to create, edit, archive, or manage webhooks for agents.
+        </div>
+      )}
 
       {error && (
         <div className="mb-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
@@ -293,6 +318,7 @@ export default function AgentEditorPage() {
 
       <div className="grid gap-10 xl:grid-cols-[1fr_360px]">
         <form className="space-y-0" onSubmit={saveAgent}>
+          <fieldset className="contents" disabled={!canManageAgent}>
           <section className="section-band">
             <div className="mb-5 flex items-end justify-between">
               <div>
@@ -454,10 +480,11 @@ export default function AgentEditorPage() {
           </section>
 
           <div className="mt-8 flex justify-end border-t border-ink-700 pt-6">
-            <button type="submit" className="btn-primary" disabled={saving}>
+            <button type="submit" className="btn-primary" disabled={!canManageAgent || saving}>
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "✓"} {isNew ? "Create agent" : "Save agent"}
             </button>
           </div>
+          </fieldset>
         </form>
 
         <aside className="space-y-8">
@@ -480,8 +507,8 @@ export default function AgentEditorPage() {
                   ))}
                 </div>
               )}
-              <button type="button" className="btn-primary mt-4 w-full justify-center" onClick={run} disabled={running || saving}>
-                {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} Execute
+              <button type="button" className="btn-primary mt-4 w-full justify-center" onClick={run} disabled={!canRunAgent || running || saving}>
+                {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} {canRunAgent ? "Execute" : "Member role required"}
               </button>
             </section>
           )}
@@ -537,7 +564,7 @@ export default function AgentEditorPage() {
                                   type="button"
                                   className="font-mono text-[10px] uppercase tracking-wider text-ink-400 hover:text-signal-amber"
                                   onClick={() => recordAsPlaybook(runRecord.id)}
-                                  disabled={recordingRunId === runRecord.id}
+                                  disabled={!canRunAgent || recordingRunId === runRecord.id}
                                 >
                                   {recordingRunId === runRecord.id ? "RECORDING…" : "▣ RECORD AS PLAYBOOK"}
                                 </button>
@@ -638,6 +665,7 @@ function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; on
               <th>Label</th>
               <th>Type</th>
               <th>Required</th>
+              <th>Options</th>
               <th>Default</th>
               <th />
             </tr>
@@ -665,7 +693,13 @@ function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; on
                   <select
                     className="workflow-input font-mono text-[11px]"
                     value={f.type}
-                    onChange={(event) => update(index, { type: event.target.value as AgentInputFieldType })}
+                    onChange={(event) => {
+                      const type = event.target.value as AgentInputFieldType;
+                      update(index, {
+                        type,
+                        options: type === "enum" ? (f.options && f.options.length > 0 ? f.options : ["option_a"]) : undefined,
+                      });
+                    }}
                   >
                     {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                   </select>
@@ -677,6 +711,19 @@ function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; on
                     checked={f.required}
                     onChange={(event) => update(index, { required: event.target.checked })}
                   />
+                </td>
+                <td>
+                  {f.type === "enum" ? (
+                    <textarea
+                      className="workflow-input min-w-40 resize-none font-mono text-[11px]"
+                      rows={2}
+                      placeholder="one option per line"
+                      value={(f.options ?? []).join("\n")}
+                      onChange={(event) => update(index, { options: lines(event.target.value) })}
+                    />
+                  ) : (
+                    <span className="font-mono text-[11px] text-ink-600">—</span>
+                  )}
                 </td>
                 <td>
                   <input
@@ -770,6 +817,10 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function field(form: FormData, key: string) {
   return String(form.get(key) || "").trim();
+}
+
+function lines(value: string) {
+  return value.split(/\r?\n|,/).map((entry) => entry.trim()).filter(Boolean);
 }
 
 function seedRunInputs(schema: AgentInputField[]): Record<string, string> {

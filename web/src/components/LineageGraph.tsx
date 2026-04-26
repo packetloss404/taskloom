@@ -232,9 +232,9 @@ export default function LineageGraphView({ graph, selectedNodeId, onSelect }: Li
                   x={12}
                   y={38}
                   fill="#ebebef"
-                  fontFamily="JetBrains Mono, monospace"
-                  fontSize={11.5}
-                  letterSpacing="0.02em"
+                  fontFamily="IBM Plex Sans, sans-serif"
+                  fontSize={12}
+                  fontWeight={500}
                 >
                   {truncate(node.label, 24)}
                 </text>

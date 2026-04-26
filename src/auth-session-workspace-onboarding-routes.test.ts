@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { appRoutes } from "./app-routes.js";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
 import { login } from "./taskloom-services.js";
-import { mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
+import { loadStore, mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
 
 function createTestApp() {
   const app = new Hono();
@@ -238,4 +238,128 @@ test("onboarding routes expose current state and reject unknown completion steps
   assert.equal(completedBody.onboarding.status, "in_progress");
   assert.equal(completedBody.onboarding.currentStep, "define_requirements");
   assert.deepEqual(completedBody.onboarding.completedSteps, ["create_workspace_profile"]);
+});
+
+test("member and invitation routes enforce workspace management permissions", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  setAlphaRole("viewer");
+  const list = await app.request("/api/app/members", { headers: authHeaders(auth.cookieValue) });
+  assert.equal(list.status, 200);
+  assert.ok((await list.json() as { members: unknown[] }).members.length > 0);
+
+  for (const role of ["viewer", "member"] as const) {
+    setAlphaRole(role);
+    const denied = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers: { ...authHeaders(auth.cookieValue), "content-type": "application/json" },
+      body: JSON.stringify({ email: "beta@taskloom.local", role: "member" }),
+    });
+
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { error: "workspace role admin is required" });
+  }
+});
+
+test("member listing hides invitation tokens from non-admin roles", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(auth.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "beta@taskloom.local", role: "member" }),
+  });
+  assert.equal(created.status, 201);
+
+  const adminList = await app.request("/api/app/members", { headers: authHeaders(auth.cookieValue) });
+  const adminBody = await adminList.json() as { invitations: Array<{ token?: string }> };
+  assert.ok(adminBody.invitations[0]?.token);
+
+  setAlphaRole("viewer");
+  const viewerList = await app.request("/api/app/members", { headers: authHeaders(auth.cookieValue) });
+  const viewerBody = await viewerList.json() as { invitations: Array<{ token?: string }> };
+  assert.equal(viewerList.status, 200);
+  assert.equal(viewerBody.invitations[0]?.token, undefined);
+});
+
+test("admins can invite an existing user and that user can accept", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "Beta@Taskloom.Local", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { token: string; email: string; role: string; status: string } };
+
+  assert.equal(created.status, 201);
+  assert.equal(createdBody.invitation.email, "beta@taskloom.local");
+  assert.equal(createdBody.invitation.role, "member");
+  assert.equal(createdBody.invitation.status, "pending");
+  assert.ok(createdBody.invitation.token);
+
+  const accepted = await app.request(`/api/app/invitations/${createdBody.invitation.token}/accept`, {
+    method: "POST",
+    headers: authHeaders(beta.cookieValue),
+  });
+  const acceptedBody = await accepted.json() as { membership: { userId: string; role: string }; invitation: { status: string } };
+
+  assert.equal(accepted.status, 200);
+  assert.equal(acceptedBody.membership.userId, "user_beta");
+  assert.equal(acceptedBody.membership.role, "member");
+  assert.equal(acceptedBody.invitation.status, "accepted");
+  assert.equal(loadStore().memberships.some((entry) => entry.workspaceId === "alpha" && entry.userId === "user_beta"), true);
+});
+
+test("member role updates and removals protect owner-only operations", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  mutateStore((data) => {
+    data.memberships.push({ workspaceId: "alpha", userId: "user_beta", role: "member", joinedAt: new Date().toISOString() });
+  });
+  setAlphaRole("admin");
+
+  const promotedToOwner = await app.request("/api/app/members/user_beta", {
+    method: "PATCH",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ role: "owner" }),
+  });
+  assert.equal(promotedToOwner.status, 403);
+  assert.deepEqual(await promotedToOwner.json(), { error: "workspace role owner is required" });
+
+  const updated = await app.request("/api/app/members/user_beta", {
+    method: "PATCH",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ role: "viewer" }),
+  });
+  const updatedBody = await updated.json() as { member: { role: string } };
+  assert.equal(updated.status, 200);
+  assert.equal(updatedBody.member.role, "viewer");
+
+  setAlphaRole("owner");
+  const demoteLastOwner = await app.request("/api/app/members/user_alpha", {
+    method: "PATCH",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ role: "admin" }),
+  });
+  assert.equal(demoteLastOwner.status, 400);
+  assert.deepEqual(await demoteLastOwner.json(), { error: "workspace must keep at least one owner" });
+
+  const removed = await app.request("/api/app/members/user_beta", {
+    method: "DELETE",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(removed.status, 200);
+  assert.equal(loadStore().memberships.some((entry) => entry.workspaceId === "alpha" && entry.userId === "user_beta"), false);
 });

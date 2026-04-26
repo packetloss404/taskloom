@@ -108,7 +108,7 @@ export function buildSignalSnapshotFromProductRecords(
   const validationEvidence = (records.validationEvidence ?? []).filter(isUsableRecord);
   const testEvidence = (records.testEvidence ?? []).filter(isUsableRecord);
   const releaseConfirmation =
-    records.releaseConfirmation && isUsableRecord(records.releaseConfirmation)
+    records.releaseConfirmation && isConfirmedReleaseRecord(records.releaseConfirmation)
       ? records.releaseConfirmation
       : undefined;
   const activeBlockers = (records.blockers ?? []).filter(isActiveRecord);
@@ -203,6 +203,12 @@ function isOpenQuestion(record: DurableActivationProductRecord): boolean {
 
 function isFailedRecord(record: DurableActivationProductRecord): boolean {
   return Boolean(record.failedAt) || ["failed", "rejected", "error"].includes(normalize(record.status));
+}
+
+function isConfirmedReleaseRecord(record: DurableActivationProductRecord): boolean {
+  if (!isUsableRecord(record)) return false;
+  return Boolean(record.confirmedAt || record.releasedAt || record.completedAt)
+    || ["confirmed", "released", "completed", "done"].includes(normalize(record.status));
 }
 
 function isCriticalRecord(record: DurableActivationProductRecord): boolean {

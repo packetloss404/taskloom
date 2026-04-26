@@ -20,6 +20,7 @@ import type {
   WorkflowBlocker,
   WorkflowBlockerSeverity,
   WorkflowBlockerStatus,
+  PlanModeResult,
   WorkflowBrief,
   WorkflowBriefTemplate,
   WorkflowBriefVersion,
@@ -79,6 +80,7 @@ export default function WorkflowPage() {
   const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
   const [compareSelection, setCompareSelection] = useState<CompareSelection>({ left: null, right: null });
   const [compareOpen, setCompareOpen] = useState(false);
+  const [planMode, setPlanMode] = useState<PlanModeResult | null>(null);
 
   const loadWorkflow = async () => {
     setLoading(true);
@@ -149,6 +151,38 @@ export default function WorkflowPage() {
       setError((templateError as Error).message);
     } finally {
       setApplyingTemplateId(null);
+    }
+  };
+
+  const requestPlanMode = async () => {
+    setSaving("plan-mode");
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await api.requestPlanMode();
+      setPlanMode(result);
+      setMessage(`Plan Mode proposed ${result.planItems.length} item${result.planItems.length === 1 ? "" : "s"}.`);
+    } catch (planError) {
+      setError((planError as Error).message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const applyPlanModeSuggestion = async () => {
+    if (!planMode) return;
+    setSaving("plan-mode-apply");
+    setError(null);
+    setMessage(null);
+    try {
+      const planItems = await api.applyPlanMode(planMode.planItems);
+      setState((current) => ({ ...current, planItems }));
+      setPlanMode(null);
+      setMessage("Plan Mode items applied to the implementation plan.");
+    } catch (planError) {
+      setError((planError as Error).message);
+    } finally {
+      setSaving(null);
     }
   };
 
@@ -474,10 +508,20 @@ export default function WorkflowPage() {
               <button
                 className="btn-ghost"
                 type="button"
+                onClick={requestPlanMode}
+                disabled={loading || Boolean(saving)}
+              >
+                {saving === "plan-mode" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Plan mode
+              </button>
+            )}
+            {!isViewer && state.briefTemplates.length > 0 && (
+              <button
+                className="btn-ghost"
+                type="button"
                 onClick={() => setShowBriefTemplates((open) => !open)}
                 disabled={loading || Boolean(saving)}
               >
-                <Sparkles className="h-3.5 w-3.5" /> Plan mode
+                <Sparkles className="h-3.5 w-3.5" /> Brief templates
               </button>
             )}
             <button
@@ -518,6 +562,39 @@ export default function WorkflowPage() {
         </div>
       ) : (
         <>
+          {!isViewer && planMode && (
+            <section className="spec-frame mt-8">
+              <div className="spec-label spec-label--amber">PLAN MODE</div>
+              <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+                <div>
+                  <h2 className="display text-2xl">Suggested implementation plan</h2>
+                  <p className="mt-3 text-sm leading-6 text-ink-300">{planMode.rationale}</p>
+                  <div className="mt-4 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">
+                    <span>{planMode.modelUsed}</span>
+                    <span>·</span>
+                    <span>${planMode.costUsd.toFixed(4)}</span>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {planMode.planItems.map((item, index) => (
+                    <div key={`${item.summary}-${index}`} className="border border-ink-700 bg-ink-950/50 px-3 py-2">
+                      <div className="font-medium text-ink-100">{item.summary}</div>
+                      <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{item.status}</div>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button className="btn-primary" type="button" onClick={applyPlanModeSuggestion} disabled={saving === "plan-mode-apply"}>
+                      {saving === "plan-mode-apply" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Apply plan
+                    </button>
+                    <button className="btn-ghost" type="button" onClick={() => setPlanMode(null)} disabled={saving === "plan-mode-apply"}>
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
           {/* ======================= STARTER TEMPLATES ======================= */}
           {!isViewer && templates.length > 0 && (
             <section className="section-band mt-2">

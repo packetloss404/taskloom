@@ -5,6 +5,7 @@ import StreamingTextDemo from "@/components/StreamingTextDemo";
 import UsageSummaryCard from "@/components/UsageSummaryCard";
 import { relative } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
+import { canManageWorkspaceRole } from "@/lib/roles";
 import type {
   ConfirmWorkflowReleaseInput,
   JobRecord,
@@ -80,6 +81,7 @@ const EMPTY_STATE: OperationsState = {
 export default function OperationsPage() {
   const { session } = useAuth();
   const isViewer = session?.workspace.role === "viewer";
+  const canManageOperations = canManageWorkspaceRole(session?.workspace.role);
   const [state, setState] = useState<OperationsState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -303,7 +305,7 @@ export default function OperationsPage() {
                     meta={jobMeta(job)}
                     badge={<StatusBadge value={job.status} tone={jobTone(job.status)} />}
                     action={
-                      !isViewer && canCancelJob(job) ? (
+                      canManageOperations && canCancelJob(job) ? (
                         <button className="btn-ghost" type="button" onClick={() => cancelJob(job)} disabled={saving === `job-${job.id}`}>
                           {saving === `job-${job.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
                           Cancel

@@ -2,18 +2,23 @@ import { Hono, type Context } from "hono";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import {
   applySessionCookie,
+  acceptWorkspaceInvitation,
   completeOnboardingStep,
+  createWorkspaceInvitation,
   getActivationDetail,
   getOnboarding,
   getPrivateBootstrap,
   getSessionPayload,
   getWorkspaceActivityDetail,
+  listWorkspaceMembers,
   listWorkspaceActivities,
   login,
   logout,
   register,
+  removeWorkspaceMember,
   requireAuthenticatedContext,
   restoreSession,
+  updateWorkspaceMemberRole,
   updateProfile,
   updateWorkspace,
 } from "./taskloom-services.js";
@@ -162,6 +167,61 @@ appRoutes.patch("/app/workspace", async (c) => {
       automationGoal: body.automationGoal ?? "",
     });
     return c.json({ workspace });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.get("/app/members", (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json(listWorkspaceMembers(context));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.post("/app/invitations", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "manageWorkspace");
+    const body = (await c.req.json()) as { email?: string; role?: string };
+    c.status(201);
+    return c.json(createWorkspaceInvitation(context, {
+      email: body.email ?? "",
+      role: body.role ?? "member",
+    }));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.post("/app/invitations/:token/accept", (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    return c.json(acceptWorkspaceInvitation(context, c.req.param("token")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.patch("/app/members/:userId", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "manageWorkspace");
+    const body = (await c.req.json()) as { role?: string };
+    return c.json(updateWorkspaceMemberRole(context, c.req.param("userId"), { role: body.role ?? "" }));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.delete("/app/members/:userId", (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "manageWorkspace");
+    return c.json(removeWorkspaceMember(context, c.req.param("userId")));
   } catch (error) {
     return errorResponse(c, error);
   }

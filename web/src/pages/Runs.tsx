@@ -6,7 +6,7 @@ import RunTelemetry from "@/components/RunTelemetry";
 import RunTranscript from "@/components/RunTranscript";
 import ToolCallTimeline from "@/components/ToolCallTimeline";
 import { triggerLabel } from "@/lib/agent-runtime";
-import type { ActivityRecord, AgentRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus } from "@/lib/types";
+import type { ActivityRecord, AgentRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus, RunDiagnostic } from "@/lib/types";
 
 function statusPillClass(status: AgentRunStatus) {
   if (status === "success") return "pill pill--good";
@@ -25,6 +25,8 @@ export default function RunsPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | AgentRunStatus>("all");
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Record<string, RunDiagnostic | null>>({});
+  const [diagnosingRunId, setDiagnosingRunId] = useState<string | null>(null);
 
   const reload = async () => {
     setLoading(true);
@@ -73,6 +75,19 @@ export default function RunsPage() {
     try { await api.retryAgentRun(run.id); await reload(); }
     catch (e) { setError((e as Error).message); }
     finally { setPending(null); }
+  };
+
+  const diagnose = async (run: AgentRunRecord, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (diagnosingRunId) return;
+    setDiagnosingRunId(run.id);
+    setError(null);
+    try {
+      const diagnostic = await api.diagnoseAgentRun(run.id);
+      setDiagnostics((current) => ({ ...current, [run.id]: diagnostic }));
+      setExpandedRun(run.id);
+    } catch (e) { setError((e as Error).message); }
+    finally { setDiagnosingRunId(null); }
   };
 
   const successTone = stats.total === 0 ? "muted" : stats.successRate >= 90 ? "good" : stats.successRate >= 60 ? "warn" : "danger";
@@ -192,6 +207,7 @@ export default function RunsPage() {
                     const stepCount = run.transcript?.length ?? 0;
                     const canCancel = run.canCancel ?? (run.status === "running" || run.status === "queued");
                     const canRetry = run.canRetry ?? (run.status === "failed" || run.status === "canceled");
+                    const diagnostic = diagnostics[run.id];
                     const rows: ReactNode[] = [
                       <tr key={run.id} className="cursor-pointer">
                         <td className="font-mono text-[11px] text-ink-400" onClick={() => setSelectedRunId(run.id)}>
@@ -220,6 +236,11 @@ export default function RunsPage() {
                               RETRY
                             </button>
                           )}
+                          {run.status === "failed" && (
+                            <button type="button" onClick={(e) => diagnose(run, e)} disabled={diagnosingRunId === run.id} className="ml-3 hover:text-signal-amber disabled:opacity-50">
+                              {diagnosingRunId === run.id ? "DIAGNOSING" : "DIAGNOSE"}
+                            </button>
+                          )}
                         </td>
                       </tr>,
                     ];
@@ -246,6 +267,7 @@ export default function RunsPage() {
                                 <RunLogTimeline logs={run.logs} />
                               </>
                             )}
+                            {diagnostic && <RunDiagnosticPanel diagnostic={diagnostic} />}
                           </td>
                         </tr>,
                       );
@@ -314,6 +336,28 @@ function computeRunStats(runs: AgentRunRecord[]): RunStats {
   const last24h = runs.filter((r) => new Date(r.createdAt).getTime() >= since).length;
   const successRate = success + failed === 0 ? 0 : Math.round((success / (success + failed)) * 100);
   return { total: runs.length, success, failed, successRate, inFlight, completed: finished.length, avgDurationMs, last24h };
+}
+
+function RunDiagnosticPanel({ diagnostic }: { diagnostic: RunDiagnostic }) {
+  return (
+    <div className="mt-4 border border-signal-amber/40 bg-ink-950/60 p-4">
+      <div className="kicker-amber mb-2">DIAGNOSTIC</div>
+      <div className="text-sm font-medium text-ink-100">{diagnostic.summary}</div>
+      <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">Likely cause</dt>
+          <dd className="mt-1 leading-6 text-ink-300">{diagnostic.likelyCause}</dd>
+        </div>
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">Suggested fix</dt>
+          <dd className="mt-1 leading-6 text-ink-300">{diagnostic.suggestion}</dd>
+        </div>
+      </dl>
+      <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">
+        {diagnostic.modelUsed} · ${diagnostic.costUsd.toFixed(4)}
+      </div>
+    </div>
+  );
 }
 
 function durationMs(run: AgentRunRecord): number | null {

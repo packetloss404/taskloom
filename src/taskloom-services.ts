@@ -9,12 +9,15 @@ import {
   deleteWorkspaceEnvVar,
   findAgent,
   findProvider,
+  findWorkspaceInvitationByToken,
+  findWorkspaceMembership,
   findWorkspaceEnvVar,
   listAgentRunsForAgent,
   listAgentRunsForWorkspace,
   listAgentsForWorkspace,
   listProvidersForWorkspace,
   listReleaseConfirmationsForWorkspace,
+  listWorkspaceInvitations,
   listWorkspaceEnvVars,
   loadStore,
   mutateStore,
@@ -37,11 +40,16 @@ import {
   type WorkflowConcernRecord,
   type WorkspaceEnvVarRecord,
   type WorkspaceEnvVarScope,
+  type WorkspaceInvitationRecord,
+  type WorkspaceMemberRecord,
+  type WorkspaceRole,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
   upsertAgent,
   upsertAgentRun,
   upsertProvider,
+  upsertWorkspaceInvitation,
+  upsertWorkspaceMembership,
   upsertWorkspaceEnvVar,
 } from "./taskloom-store";
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
@@ -333,6 +341,141 @@ export async function updateWorkspace(
 
   await syncWorkspaceActivation(context.workspace.id, true, { type: "user", id: context.user.id, displayName: context.user.displayName });
   return result;
+}
+
+export function listWorkspaceMembers(context: AuthenticatedContext) {
+  const data = loadStore();
+  const canViewInvitationTokens = context.role === "admin" || context.role === "owner";
+  return {
+    members: data.memberships
+      .filter((entry) => entry.workspaceId === context.workspace.id)
+      .map((membership) => summarizeWorkspaceMember(data, membership))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+    invitations: listWorkspaceInvitations(data, context.workspace.id)
+      .map((invitation) => summarizeWorkspaceInvitation(invitation, { includeToken: canViewInvitationTokens })),
+  };
+}
+
+export function createWorkspaceInvitation(context: AuthenticatedContext, input: { email: string; role: string }) {
+  const email = normalizeEmail(input.email);
+  const role = parseWorkspaceRole(input.role);
+  if (!email.includes("@")) throw httpError(400, "valid email is required");
+  assertCanManageRole(context.role, role);
+
+  return mutateStore((data) => {
+    const existingUser = data.users.find((entry) => normalizeEmail(entry.email) === email);
+    if (existingUser && findWorkspaceMembership(data, context.workspace.id, existingUser.id)) {
+      throw httpError(409, "user is already a workspace member");
+    }
+
+    const existingInvitation = data.workspaceInvitations.find((entry) => {
+      return entry.workspaceId === context.workspace.id
+        && normalizeEmail(entry.email) === email
+        && !entry.acceptedAt
+        && !entry.revokedAt
+        && new Date(entry.expiresAt).getTime() > Date.now();
+    });
+    if (existingInvitation) throw httpError(409, "an active invitation already exists for that email");
+
+    const timestamp = now();
+    const invitation = upsertWorkspaceInvitation(data, {
+      id: generateId(),
+      workspaceId: context.workspace.id,
+      email,
+      role,
+      token: generateId(),
+      invitedByUserId: context.user.id,
+      expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      createdAt: timestamp,
+    });
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.invitation_created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Invitation created for ${email}`, email, role }, timestamp));
+
+    return { invitation: summarizeWorkspaceInvitation(invitation) };
+  });
+}
+
+export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: string) {
+  if (!token.trim()) throw httpError(400, "invitation token is required");
+
+  return mutateStore((data) => {
+    const invitation = findWorkspaceInvitationByToken(data, token.trim());
+    if (!invitation) throw httpError(404, "invitation not found");
+    if (invitation.revokedAt) throw httpError(400, "invitation has been revoked");
+    if (invitation.acceptedAt) throw httpError(400, "invitation has already been accepted");
+    if (new Date(invitation.expiresAt).getTime() <= Date.now()) throw httpError(400, "invitation has expired");
+    if (normalizeEmail(context.user.email) !== normalizeEmail(invitation.email)) {
+      throw httpError(403, "invitation does not match the authenticated user");
+    }
+
+    const timestamp = now();
+    const membership = upsertWorkspaceMembership(data, {
+      workspaceId: invitation.workspaceId,
+      userId: context.user.id,
+      role: invitation.role,
+      joinedAt: timestamp,
+    });
+    invitation.acceptedAt = timestamp;
+    invitation.acceptedByUserId = context.user.id;
+
+    data.activities.unshift(makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_accepted", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `${context.user.displayName} joined the workspace`, email: context.user.email, role: invitation.role }, timestamp));
+
+    return {
+      membership: summarizeWorkspaceMember(data, membership),
+      invitation: summarizeWorkspaceInvitation(invitation),
+    };
+  });
+}
+
+export function updateWorkspaceMemberRole(context: AuthenticatedContext, userId: string, input: { role: string }) {
+  const role = parseWorkspaceRole(input.role);
+  assertCanManageRole(context.role, role);
+
+  return mutateStore((data) => {
+    const membership = findWorkspaceMembership(data, context.workspace.id, userId);
+    if (!membership) throw httpError(404, "workspace member not found");
+    assertCanManageRole(context.role, membership.role);
+    assertNotLastOwner(data, context.workspace.id, membership, role);
+
+    membership.role = role;
+    const timestamp = now();
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.member_role_updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: "Workspace member role updated", userId, role }, timestamp));
+
+    return { member: summarizeWorkspaceMember(data, membership) };
+  });
+}
+
+export function removeWorkspaceMember(context: AuthenticatedContext, userId: string) {
+  return mutateStore((data) => {
+    const membership = findWorkspaceMembership(data, context.workspace.id, userId);
+    if (!membership) throw httpError(404, "workspace member not found");
+    assertCanManageRole(context.role, membership.role);
+    assertNotLastOwner(data, context.workspace.id, membership, null);
+
+    data.memberships = data.memberships.filter((entry) => {
+      return !(entry.workspaceId === context.workspace.id && entry.userId === userId);
+    });
+    const timestamp = now();
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.member_removed", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: "Workspace member removed", userId }, timestamp));
+
+    return { ok: true };
+  });
 }
 
 export function getOnboarding(context: AuthenticatedContext) {
@@ -1606,6 +1749,62 @@ function applyOnboardingStepToFacts(facts: any, stepKey: string, timestamp: stri
       facts.releasedAt ??= timestamp;
       break;
   }
+}
+
+const workspaceRoles = new Set<WorkspaceRole>(["viewer", "member", "admin", "owner"]);
+
+function parseWorkspaceRole(role: string): WorkspaceRole {
+  if (!workspaceRoles.has(role as WorkspaceRole)) throw httpError(400, "valid workspace role is required");
+  return role as WorkspaceRole;
+}
+
+function assertCanManageRole(actorRole: WorkspaceRole, targetRole: WorkspaceRole) {
+  if (targetRole === "owner" && actorRole !== "owner") {
+    throw httpError(403, "workspace role owner is required");
+  }
+}
+
+function assertNotLastOwner(
+  data: ReturnType<typeof loadStore>,
+  workspaceId: string,
+  currentMembership: WorkspaceMemberRecord,
+  nextRole: WorkspaceRole | null,
+) {
+  if (currentMembership.role !== "owner" || nextRole === "owner") return;
+  const ownerCount = data.memberships.filter((entry) => entry.workspaceId === workspaceId && entry.role === "owner").length;
+  if (ownerCount <= 1) throw httpError(400, "workspace must keep at least one owner");
+}
+
+function summarizeWorkspaceMember(data: ReturnType<typeof loadStore>, membership: WorkspaceMemberRecord) {
+  const user = data.users.find((entry) => entry.id === membership.userId);
+  return {
+    userId: membership.userId,
+    email: user?.email ?? "",
+    displayName: user?.displayName ?? "Unknown user",
+    role: membership.role,
+    joinedAt: membership.joinedAt,
+  };
+}
+
+function summarizeWorkspaceInvitation(
+  invitation: WorkspaceInvitationRecord,
+  options: { includeToken?: boolean } = { includeToken: true },
+) {
+  const expired = new Date(invitation.expiresAt).getTime() <= Date.now();
+  return {
+    id: invitation.id,
+    workspaceId: invitation.workspaceId,
+    email: invitation.email,
+    role: invitation.role,
+    ...(options.includeToken ? { token: invitation.token } : {}),
+    invitedByUserId: invitation.invitedByUserId,
+    acceptedByUserId: invitation.acceptedByUserId ?? null,
+    acceptedAt: invitation.acceptedAt ?? null,
+    revokedAt: invitation.revokedAt ?? null,
+    expiresAt: invitation.expiresAt,
+    createdAt: invitation.createdAt,
+    status: invitation.acceptedAt ? "accepted" : invitation.revokedAt ? "revoked" : expired ? "expired" : "pending",
+  };
 }
 
 export function requireAuthenticatedContext(c: Context): AuthenticatedContext {

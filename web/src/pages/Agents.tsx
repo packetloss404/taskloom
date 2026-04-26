@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { relative } from "@/lib/format";
+import { canManageWorkspaceRole } from "@/lib/roles";
 import type { AgentRecord, AgentTemplate } from "@/lib/types";
 import { describeNextRun, triggerLabel } from "@/lib/agent-runtime";
 
@@ -15,6 +17,8 @@ function statusPillClass(status: string): string {
 
 export default function AgentsPage() {
   const navigate = useNavigate();
+  const { session } = useAuth();
+  const canManageAgents = canManageWorkspaceRole(session?.workspace.role);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [templates, setTemplates] = useState<AgentTemplate[]>([]);
   const [query, setQuery] = useState("");
@@ -38,6 +42,7 @@ export default function AgentsPage() {
   }, []);
 
   const createFromTemplate = async (template: AgentTemplate) => {
+    if (!canManageAgents) return;
     setCreatingTemplateId(template.id);
     setError(null);
     try {
@@ -76,7 +81,11 @@ export default function AgentsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link to="/agents/new" className="btn-primary">+ New agent</Link>
+          {canManageAgents ? (
+            <Link to="/agents/new" className="btn-primary">+ New agent</Link>
+          ) : (
+            <span className="font-mono text-xs uppercase tracking-[0.18em] text-ink-500">Admin role required to create agents</span>
+          )}
         </div>
       </header>
 
@@ -211,14 +220,14 @@ export default function AgentsPage() {
                       type="button"
                       className="btn-ghost"
                       onClick={() => void createFromTemplate(template)}
-                      disabled={creatingTemplateId === template.id}
+                      disabled={!canManageAgents || creatingTemplateId === template.id}
                     >
                       {creatingTemplateId === template.id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         "+"
                       )}
-                      Use
+                      {canManageAgents ? "Use" : "Admin only"}
                     </button>
                   </div>
                 </article>

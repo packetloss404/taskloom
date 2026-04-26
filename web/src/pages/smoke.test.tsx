@@ -7,6 +7,7 @@ import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import ActivationPage from "./Activation";
 import DashboardPage from "./Dashboard";
+import PublicSharePage from "./PublicShare";
 
 const pageSource = (fileName: string) => readFileSync(fileURLToPath(new URL(fileName, import.meta.url)), "utf8");
 const appSource = () => readFileSync(fileURLToPath(new URL("../App.tsx", import.meta.url)), "utf8");
@@ -30,6 +31,17 @@ test("Activation surface server-renders its initial loading shell", () => {
   );
 
   assert.match(html, /Loading activation detail/);
+});
+
+test("Public share surface server-renders its loading shell", () => {
+  const html = renderToString(
+    <MemoryRouter initialEntries={["/share/test-token"]}>
+      <PublicSharePage />
+    </MemoryRouter>,
+  );
+
+  assert.match(html, /PUBLIC SHARE/);
+  assert.match(html, /LOADING SHARE/);
 });
 
 test("Auth routes are wired to public sign-in and sign-up surfaces", () => {
@@ -80,11 +92,49 @@ test("Role-aware workspace controls are surfaced and gated for viewers", () => {
 
   assert.match(types, /role\?: "owner" \| "admin" \| "member" \| "viewer"/);
   assert.match(settings, /WORKSPACE ROLE/);
-  assert.match(settings, /const isViewer = workspaceRole === "viewer"/);
-  assert.match(settings, /disabled=\{isViewer\}/);
+  assert.match(settings, /canManageWorkspaceRole\(workspaceRole\)/);
+  assert.match(settings, /disabled=\{workspaceControlsDisabled\}/);
   assert.match(workflow, /ROLE · \{session\.workspace\.role\.toUpperCase\(\)\}/);
   assert.match(workflow, /!isViewer && templates\.length > 0/);
   assert.match(workflow, /disabled=\{isViewer\}/);
   assert.match(operations, /Workspace role · \{session\.workspace\.role\}/);
   assert.match(operations, /isViewer \? <ReadOnlyRoleNotice \/> : <form/);
+});
+
+test("Previously unwired controls are connected to backend-facing APIs", () => {
+  const workflow = pageSource("Workflow.tsx");
+  const agentEditor = pageSource("AgentEditor.tsx");
+  const agents = pageSource("Agents.tsx");
+  const integrations = pageSource("Integrations.tsx");
+  const runs = pageSource("Runs.tsx");
+
+  assert.match(workflow, /api\.requestPlanMode\(\)/);
+  assert.match(workflow, /api\.applyPlanMode\(planMode\.planItems\)/);
+  assert.match(agentEditor, /field\.options/);
+  assert.match(agentEditor, /canManageWorkspaceRole\(session\?\.workspace\.role\)/);
+  assert.match(agents, /canManageWorkspaceRole\(session\?\.workspace\.role\)/);
+  assert.match(integrations, /canManageWorkspaceRole\(session\?\.workspace\.role\)/);
+  assert.match(runs, /api\.diagnoseAgentRun\(run\.id\)/);
+});
+
+test("Share tokens are wired through API, settings, and public routes", () => {
+  const app = appSource();
+  const api = readFileSync(fileURLToPath(new URL("../lib/api.ts", import.meta.url)), "utf8");
+  const types = readFileSync(fileURLToPath(new URL("../lib/types.ts", import.meta.url)), "utf8");
+  const settings = pageSource("Settings.tsx");
+  const publicShare = pageSource("PublicShare.tsx");
+
+  assert.match(types, /export type ShareTokenScope = "brief" \| "plan" \| "overview"/);
+  assert.match(api, /listShareTokens: \(\) => j<\{ tokens: ShareTokenRecord\[\] \}>\("\/api\/app\/share"\)/);
+  assert.match(api, /createShareToken: \(body: CreateShareTokenInput\)/);
+  assert.match(api, /deleteShareToken: \(id: string\) => j<\{ ok: boolean \}>\(`\/api\/app\/share\/\$\{id\}`/);
+  assert.match(api, /getPublicShare: \(token: string\) => j<\{ shared: PublicSharePayload \}>\(`\/api\/public\/share\/\$\{encodeURIComponent\(token\)\}`/);
+  assert.match(app, /path="\/share\/:token"/);
+  assert.match(settings, /api\.listShareTokens\(\)/);
+  assert.match(settings, /api\.createShareToken/);
+  assert.match(settings, /api\.deleteShareToken/);
+  assert.match(settings, /canManageWorkspaceRole\(workspaceRole\)/);
+  assert.match(publicShare, /api\.getPublicShare\(token\)/);
+  assert.match(publicShare, /shared\.scope === "brief" \|\| shared\.scope === "overview"/);
+  assert.match(publicShare, /shared\.scope === "plan" \|\| shared\.scope === "overview"/);
 });

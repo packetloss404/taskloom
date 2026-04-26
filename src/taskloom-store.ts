@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { WorkspaceActivationFacts } from "./activation/adapters";
+import type { DurableActivationProductRecord, WorkspaceActivationFacts } from "./activation/adapters";
 import type { ActivationMilestoneRecord, ActivationStatusDto } from "./activation/domain";
-import { buildSignalSnapshotFromFacts } from "./activation/adapters";
+import { buildSignalSnapshotFromFacts, buildSignalSnapshotFromProductRecords } from "./activation/adapters";
 import { generateId, hashPassword, now, slugify } from "./auth-utils";
 
 export interface UserRecord {
@@ -41,6 +41,20 @@ export interface WorkspaceMemberRecord {
   userId: string;
   role: WorkspaceRole;
   joinedAt: string;
+}
+
+export interface WorkspaceInvitationRecord {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: WorkspaceRole;
+  token: string;
+  invitedByUserId: string;
+  acceptedByUserId?: string;
+  acceptedAt?: string;
+  revokedAt?: string;
+  expiresAt: string;
+  createdAt: string;
 }
 
 export interface WorkspaceBriefRecord {
@@ -405,6 +419,7 @@ export interface TaskloomData {
   sessions: SessionRecord[];
   workspaces: WorkspaceRecord[];
   memberships: WorkspaceMemberRecord[];
+  workspaceInvitations: WorkspaceInvitationRecord[];
   workspaceBriefs: WorkspaceBriefCollection;
   workspaceBriefVersions: WorkspaceBriefVersionRecord[];
   requirements: RequirementRecord[];
@@ -462,6 +477,7 @@ function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     sessions: data.sessions ?? [],
     workspaces: data.workspaces ?? [],
     memberships: data.memberships ?? [],
+    workspaceInvitations: data.workspaceInvitations ?? [],
     workspaceBriefs: normalizeWorkspaceBriefCollection(data.workspaceBriefs),
     workspaceBriefVersions: data.workspaceBriefVersions ?? [],
     requirements: data.requirements ?? [],
@@ -1154,6 +1170,7 @@ function seedStore(): TaskloomData {
     sessions: [],
     workspaces,
     memberships,
+    workspaceInvitations: [],
     workspaceBriefs,
     workspaceBriefVersions: [],
     requirements,
@@ -1185,10 +1202,18 @@ function seedStore(): TaskloomData {
   };
 }
 
-export function resetStoreForTests(): TaskloomData {
+export function createSeedStore(): TaskloomData {
+  return seedStore();
+}
+
+export function resetLocalStore(): TaskloomData {
   cache = seedStore();
   persistStore(cache);
   return cache;
+}
+
+export function resetStoreForTests(): TaskloomData {
+  return resetLocalStore();
 }
 
 function createSeedUser(id: string, email: string, displayName: string, timestamp: string): UserRecord {
@@ -1368,6 +1393,30 @@ export function upsertWorkspaceMembership(data: TaskloomData, input: WorkspaceMe
   }
 
   data.memberships.push(input);
+  return input;
+}
+
+export function listWorkspaceInvitations(data: TaskloomData, workspaceId: string): WorkspaceInvitationRecord[] {
+  return data.workspaceInvitations
+    .filter((entry) => entry.workspaceId === workspaceId)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export function findWorkspaceInvitationByToken(data: TaskloomData, token: string): WorkspaceInvitationRecord | null {
+  return data.workspaceInvitations.find((entry) => entry.token === token) ?? null;
+}
+
+export function upsertWorkspaceInvitation(
+  data: TaskloomData,
+  input: WorkspaceInvitationRecord,
+): WorkspaceInvitationRecord {
+  const existing = data.workspaceInvitations.find((entry) => entry.id === input.id);
+  if (existing) {
+    Object.assign(existing, input);
+    return existing;
+  }
+
+  data.workspaceInvitations.push(input);
   return input;
 }
 
@@ -1630,10 +1679,178 @@ export function nextIncompleteStep(completedSteps: OnboardingStepKey[]): Onboard
 }
 
 export function snapshotForWorkspace(data: TaskloomData, workspaceId: string) {
+  const timestamp = now();
+  const facts = data.activationFacts[workspaceId];
+  const productRecords = activationProductRecordsForWorkspace(data, workspaceId, timestamp);
+
+  if (productRecords.hasDurableRecords) {
+    return buildSignalSnapshotFromProductRecords(productRecords.records);
+  }
+
   return buildSignalSnapshotFromFacts({
-    ...data.activationFacts[workspaceId],
-    now: now(),
+    ...facts,
+    now: timestamp,
   });
+}
+
+function activationProductRecordsForWorkspace(data: TaskloomData, workspaceId: string, timestamp: string) {
+  const workspace = data.workspaces.find((entry) => entry.id === workspaceId);
+  const facts = data.activationFacts[workspaceId];
+  const brief = findWorkspaceBrief(data, workspaceId);
+  const requirements = listRequirementsForWorkspace(data, workspaceId);
+  const planItems = listImplementationPlanItemsForWorkspace(data, workspaceId);
+  const concerns = listWorkflowConcernsForWorkspace(data, workspaceId);
+  const validationEvidence = listValidationEvidenceForWorkspace(data, workspaceId);
+  const releaseConfirmation = listReleaseConfirmationsForWorkspace(data, workspaceId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+
+  const records = {
+    now: timestamp,
+    createdAt: workspace?.createdAt ?? facts?.createdAt,
+    startedAt: facts?.startedAt,
+    completedAt: facts?.completedAt,
+    releasedAt: facts?.releasedAt,
+    brief: brief
+      ? { id: brief.workspaceId, capturedAt: brief.createdAt, updatedAt: brief.updatedAt }
+      : factRecord(facts?.briefCapturedAt),
+    requirements: requirements.length > 0
+      ? requirements.map((entry) => ({
+        id: entry.id,
+        status: entry.status,
+        definedAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+      }))
+      : factRecord(facts?.requirementsDefinedAt),
+    plan: planItems.length > 0 ? planRecordFromPlanItems(planItems) : factRecord(facts?.planDefinedAt),
+    implementation: planItems.length > 0
+      ? implementationRecordFromPlanItems(planItems)
+      : factRecord(facts?.implementationStartedAt ?? facts?.completedAt),
+    blockers: concerns.some((entry) => entry.kind === "blocker")
+      ? concerns.filter((entry) => entry.kind === "blocker").map(concernRecord)
+      : countRecords("legacy_blocker", facts?.blockerCount, { severity: facts?.criticalIssueCount ? "critical" : undefined }),
+    questions: concerns.some((entry) => entry.kind === "open_question")
+      ? concerns.filter((entry) => entry.kind === "open_question").map(concernRecord)
+      : countRecords("legacy_question", facts?.openQuestionCount),
+    validationEvidence: validationEvidence.length > 0
+      ? validationEvidence.map(validationEvidenceRecord)
+      : [
+        ...countRecords("legacy_failed_validation", facts?.failedValidationCount, { status: "failed" }),
+        ...factRecords("legacy_validation", facts?.validationPassedAt, { status: "passed", passedAt: facts?.validationPassedAt }),
+      ],
+    testEvidence: validationEvidence.length > 0
+      ? validationEvidence.filter((entry) => entry.type === "automated_test").map(validationEvidenceRecord)
+      : factRecords("legacy_test", facts?.testsPassedAt, { status: "passed", evidenceType: "test", passedAt: facts?.testsPassedAt }),
+    releaseConfirmation: releaseConfirmation
+      ? {
+        id: releaseConfirmation.id ?? releaseConfirmation.workspaceId,
+        status: releaseConfirmation.status,
+        confirmedAt: releaseConfirmation.confirmedAt,
+        createdAt: releaseConfirmation.createdAt,
+        updatedAt: releaseConfirmation.updatedAt,
+      }
+      : factRecord(facts?.releaseConfirmedAt),
+    retries: countRecords("legacy_retry", facts?.retryCount),
+    scopeChanges: countRecords("legacy_scope_change", facts?.scopeChangeCount),
+  };
+
+  return {
+    records,
+    hasDurableRecords: Boolean(
+      brief || requirements.length > 0 || planItems.length > 0 || concerns.length > 0 ||
+      validationEvidence.length > 0 || releaseConfirmation,
+    ),
+  };
+}
+
+function factRecord(timestamp: string | undefined): DurableActivationProductRecord | null {
+  return timestamp ? { id: `legacy_${timestamp}`, createdAt: timestamp } : null;
+}
+
+function factRecords(
+  prefix: string,
+  timestamp: string | undefined,
+  overrides: DurableActivationProductRecord = {},
+): DurableActivationProductRecord[] {
+  return timestamp ? [{ id: `${prefix}_${timestamp}`, createdAt: timestamp, ...overrides }] : [];
+}
+
+function countRecords(
+  prefix: string,
+  count = 0,
+  overrides: DurableActivationProductRecord = {},
+): DurableActivationProductRecord[] {
+  return Array.from({ length: count }, (_, index) => ({ id: `${prefix}_${index}`, ...overrides }));
+}
+
+function planRecordFromPlanItems(planItems: ImplementationPlanItemRecord[]): DurableActivationProductRecord {
+  const first = planItems[0];
+  return {
+    id: first.id,
+    status: planItems.some((entry) => entry.status === "in_progress" || entry.status === "blocked")
+      ? "in_progress"
+      : planItems.every((entry) => entry.status === "done") ? "completed" : "todo",
+    plannedAt: first.createdAt,
+    startedAt: firstTimestamp(planItems, "startedAt") ?? firstTimestamp(planItems, "updatedAt", isStartedPlanItem),
+    updatedAt: latestTimestamp(planItems.map((entry) => entry.updatedAt)),
+    createdAt: first.createdAt,
+  };
+}
+
+function implementationRecordFromPlanItems(planItems: ImplementationPlanItemRecord[]): DurableActivationProductRecord {
+  const started = planItems.filter(isStartedPlanItem);
+  const completed = planItems.filter((entry) => entry.status === "done");
+  return {
+    id: started[0]?.id ?? planItems[0].id,
+    status: planItems.length > 0 && completed.length === planItems.length ? "completed" : started.length > 0 ? "in_progress" : "todo",
+    startedAt: firstTimestamp(planItems, "startedAt") ?? firstTimestamp(started, "updatedAt"),
+    completedAt: completed.length === planItems.length ? latestTimestamp(completed.map((entry) => entry.completedAt ?? entry.updatedAt)) : undefined,
+    createdAt: started[0]?.createdAt,
+    updatedAt: latestTimestamp(planItems.map((entry) => entry.updatedAt)),
+  };
+}
+
+function concernRecord(entry: WorkflowConcernRecord): DurableActivationProductRecord {
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    status: entry.status,
+    severity: entry.severity,
+    dependency: Boolean(entry.relatedPlanItemId || entry.relatedRequirementId),
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    resolvedAt: entry.resolvedAt,
+  };
+}
+
+function validationEvidenceRecord(entry: ValidationEvidenceRecord): DurableActivationProductRecord {
+  const outcome = entry.outcome ?? entry.status;
+  return {
+    id: entry.id,
+    kind: entry.type,
+    evidenceType: entry.type,
+    status: outcome,
+    capturedAt: entry.capturedAt,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    passedAt: outcome === "passed" ? entry.capturedAt ?? entry.updatedAt : undefined,
+    failedAt: outcome === "failed" ? entry.capturedAt ?? entry.updatedAt : undefined,
+  };
+}
+
+function isStartedPlanItem(entry: ImplementationPlanItemRecord): boolean {
+  return entry.status === "in_progress" || entry.status === "blocked" || entry.status === "done";
+}
+
+function firstTimestamp(
+  records: ImplementationPlanItemRecord[],
+  field: "startedAt" | "updatedAt",
+  predicate: (entry: ImplementationPlanItemRecord) => boolean = () => true,
+): string | undefined {
+  return records.filter(predicate).map((entry) => entry[field]).filter(Boolean).sort()[0];
+}
+
+function latestTimestamp(timestamps: Array<string | undefined>): string | undefined {
+  return timestamps.filter(Boolean).sort().at(-1);
 }
 
 function upsertRecord<TRecord extends { id: string; createdAt: string; updatedAt: string }>(

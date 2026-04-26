@@ -102,3 +102,17 @@ test("buildSignalSnapshotFromProductRecords counts only unresolved blockers and 
   assert.equal(snapshot.failedValidationCount, 1);
   assert.equal(snapshot.hasValidationEvidence, true);
 });
+
+test("buildSignalSnapshotFromProductRecords ignores pending release confirmation as release evidence", () => {
+  const snapshot = buildSignalSnapshotFromProductRecords({
+    now: "2026-04-22T10:00:00.000Z",
+    releaseConfirmation: {
+      id: "release_pending",
+      status: "pending",
+      createdAt: "2026-04-22T09:00:00.000Z",
+    },
+  });
+
+  assert.equal(snapshot.releasedAt, undefined);
+  assert.equal(snapshot.hasReleaseEvidence, false);
+});

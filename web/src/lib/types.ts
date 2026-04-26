@@ -397,6 +397,32 @@ export interface WorkflowOverviewPayload {
   releaseConfirmation: WorkflowReleaseConfirmation;
 }
 
+export type ShareTokenScope = "brief" | "plan" | "overview";
+
+export interface ShareTokenRecord {
+  id: string;
+  token: string;
+  scope: ShareTokenScope;
+  revokedAt?: string;
+  expiresAt?: string;
+  readCount: number;
+  lastReadAt?: string;
+  createdAt: string;
+}
+
+export interface PublicSharePayload {
+  scope: ShareTokenScope;
+  workspace: Pick<Session["workspace"], "id" | "name" | "automationGoal">;
+  brief?: WorkflowBrief | null;
+  requirements?: WorkflowRequirement[];
+  planItems?: WorkflowPlanItem[];
+}
+
+export type CreateShareTokenInput = {
+  scope: ShareTokenScope;
+  expiresAt?: string;
+};
+
 export type SaveWorkflowBriefInput = {
   summary: string;
   goals?: string[];
