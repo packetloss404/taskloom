@@ -1,6 +1,6 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, local SQLite write/concurrency hardening, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam, proxy-aware same-origin plus CSRF-token mutation checks, deployment-configurable store-backed auth/invitation rate limits, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about production/deployment hardening and continued workflow polish without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, local SQLite write/concurrency hardening, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam, proxy-aware same-origin plus CSRF-token mutation checks, deployment-configurable store-backed auth/invitation rate limits, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, production deployment guidance in `README.md`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md`, and a React/Vite interface. The remaining roadmap is mainly about production/deployment implementation hardening and continued workflow polish without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
@@ -14,16 +14,18 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - Private app, workflow, job, agent, provider, env-var, webhook, API-key, usage, LLM, and share routes enforce workspace membership and role-aware permissions.
 - Private mutating app routes reject browser requests whose `Origin` host does not match the request host, and same-origin browser mutations must echo the readable `taskloom_csrf` cookie in `X-CSRF-Token`. `X-Forwarded-Host` is trusted for the origin host comparison only when `TASKLOOM_TRUST_PROXY=true`.
 - Auth register/login and invitation create/accept/resend routes have store-backed rate limits in the active local store, with deployment knobs for `TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS`, `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS`, and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`. JSON keeps buckets in the default app store; SQLite uses dedicated `rate_limit_buckets` storage. These limits remain process/store scoped and still need production edge/distributed coordination for multi-process or multi-region deployments.
-- Invitation webhook email delivery supports `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` for provider request timeout control. Provider-specific retries and dead-letter handling remain future work.
+- `docs/deployment-auth-hardening.md` documents how to pair the process/store-scoped buckets with edge or shared distributed limits in production, including supported app envs, multi-process/multi-region caveats, and a validation checklist.
+- Invitation webhook email delivery supports `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` for provider request timeout control; see `docs/invitation-email-operations.md` for production email operations guidance.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
 - Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
+- `docs/deployment-sqlite-topology.md` defines the supported local SQLite posture, WAL/`busy_timeout`/`BEGIN IMMEDIATE` guarantees, backup/restore policy, network filesystem caveats, multi-process/multi-region limits, and thresholds for dedicated relational repositories/backfills beyond indexed `app_records`.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
 - Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
 - React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, workflow, activity/detail, agents, runs, operations, integrations, and public share views.
 - The frontend API layer has typed workflow calls for brief, requirements, plan items, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, Plan Mode, share tokens, and public share reads.
 - Build, typecheck, and test scripts are available through `npm run build`.
 - Local development uses ignored `data/taskloom.json` and `data/taskloom.sqlite` files that are recreated or migrated from built-in seed data and CLI commands.
-- README and activation docs cover local development, seed/reset, build, and release hygiene flows.
+- README, deployment auth hardening, SQLite topology, invitation email operations, and activation docs cover local development, seed/reset, build, release hygiene flows, and production deployment guidance for the current single-node/local-store posture.
 - Durable activation signal records exist in the local app model for retry and scope-change signals. Runtime snapshots prefer those records and activation-scoped activity events before falling back to legacy activation fact counters, and an app-store activation signal repository now provides JSON and opt-in SQLite list/upsert access with stable-key dedupe and first-class origin metadata.
 - SQLite route and local write hardening is implemented for the current local runtime through `app_record_search` metadata, `app_records` workspace indexes, indexed helper functions for auth/session lookup, workspace membership/invitations, share tokens, workflow reads, activities, agents/runs, jobs, providers, and usage calls, and safer `mutateStore()` whole-store writes. SQLite opens with `busy_timeout`, WAL mode, `synchronous=normal`, and `foreign_keys=on`; SQLite `mutateStore()` writes use `BEGIN IMMEDIATE` and fresh state to avoid stale-cache whole-store overwrites. JSON remains the default runtime, and SQLite remains opt-in through `TASKLOOM_STORE=sqlite`.
 
@@ -156,7 +158,7 @@ Phase 11 is implemented for the high-value routes that were still doing broad JS
 
 Phase 13 is landed for the local runtime, with webhook invitation delivery and hashed rate-limit buckets in place. Distributed rate limiting and deeper deployment-specific hardening remain future work:
 
-- Invitation create, accept, resend, and revoke APIs are present. Create/resend record `invitationEmailDeliveries` rows and return an `emailDelivery` summary. `TASKLOOM_INVITATION_EMAIL_MODE=dev` records local sent deliveries, `skip` records skipped deliveries, and `webhook` posts delivery requests to `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL` with optional provider name and shared-secret header configuration. Delivery adapter and webhook failures are recorded without rolling back invitation state.
+- Invitation create, accept, resend, and revoke APIs are present. Create/resend record `invitationEmailDeliveries` rows and return an `emailDelivery` summary. `TASKLOOM_INVITATION_EMAIL_MODE=dev` records local sent deliveries, `skip` records skipped deliveries, and `webhook` posts delivery requests to `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL` with optional provider name and shared-secret header configuration. Delivery adapter and webhook failures are recorded without rolling back invitation state. Production retries, dead letters, and token-redaction expectations are documented in `docs/invitation-email-operations.md`.
 - Invitation acceptance requires a signed-in user whose normalized email matches the invitation. Revoked, expired, accepted, and stale rotated tokens are rejected.
 - Store-backed rate limiting covers auth register/login and invitation create/accept/resend with 20 attempts per client key per 60 seconds. Buckets use `local` by default, trust forwarded IP headers only when `TASKLOOM_TRUST_PROXY=true`, and store salted SHA-256 bucket IDs. Buckets stay in JSON for the default runtime; after Phase 14, SQLite mode keeps them in dedicated `rate_limit_buckets` storage. The threshold and window are currently code constants rather than deployment environment knobs.
 - CSRF behavior is a same-origin `Origin` host check plus double-submit token for browser mutations. Login/register set `taskloom_csrf`; same-origin browser mutations must send `X-CSRF-Token`; requests without `Origin` are allowed for local clients/tests.
@@ -179,7 +181,22 @@ Phase 15 hardens deployment-facing auth configuration beyond the earlier local d
 - Invitation route rate limits are configurable through `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS` and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`.
 - Invitation webhook delivery timeout is configurable through `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS`, with failures recorded without rolling back invitation state.
 - CSRF origin validation is proxy-aware: `X-Forwarded-Host` is trusted only when `TASKLOOM_TRUST_PROXY=true`; otherwise origin checks compare against `Host`.
-- Rate-limit buckets remain local-store backed. Edge/distributed rate limiting, provider-specific delivery retries/dead-letter handling, and full production topology guidance remain future work.
+- Rate-limit buckets remain local-store backed. Edge/distributed rate limiting and full production topology guidance remain future work; email delivery operations are tracked separately in `docs/invitation-email-operations.md`.
+
+### Phase 16 Production Deployment Guidance
+
+Phase 16 lands documentation for production deployment handoff in `README.md#production-deployment-guidance`, focused auth/proxy/rate-limit checks in `docs/deployment-auth-hardening.md`, SQLite/database topology guidance in `docs/deployment-sqlite-topology.md`, and invitation email operations guidance in `docs/invitation-email-operations.md`. It defines the recommended posture for the current runtime without claiming new runtime capabilities:
+
+- HTTPS termination and `NODE_ENV=production` cookie expectations.
+- Proxy trust boundaries for `TASKLOOM_TRUST_PROXY` and forwarded host/IP headers.
+- Secret handling for rate-limit salts, invitation webhook secrets, provider credentials, and environment files.
+- Single-node SQLite persistence guidance with durable `TASKLOOM_DB_PATH`, persistent artifacts, backups, restore validation, network-filesystem caveats, and session cleanup scheduling.
+- Scheduler constraints for the current local store: run one scheduler-active Node process unless external job coordination is added.
+- Abuse-protection limits: built-in auth/invitation buckets remain process/store scoped, so multi-process or multi-region deployments need edge/shared distributed rate limiting; `docs/deployment-auth-hardening.md` captures supported env knobs, topology caveats, and validation checks.
+- Invitation webhook operational requirements are tracked separately in `docs/invitation-email-operations.md`.
+- Public share/webhook token, API-key, environment-variable, and audit/redaction review expectations for production handoff.
+
+This phase is documentation-only. Distributed locking, managed database repositories, email delivery workers, edge rate limiting, and broader token-redaction enforcement remain future work.
 
 ## Roadmap
 
@@ -197,6 +214,7 @@ Replace the JSON-only runtime with a database-backed persistence layer while kee
 - [x] Add formal seed and reset commands for local development.
 - [x] Add JSON-to-SQLite app backfill commands.
 - [x] Add local SQLite migration status plus validated backup/restore commands. Executable rollback remains intentionally unsupported; restore from a pre-migration backup is the rollback strategy.
+- [x] Document the production deployment posture for the current JSON-default and single-node SQLite runtime, including persistence, backups, restore validation, network-filesystem caveats, relational-repository thresholds, and scheduler constraints.
 - [x] Preserve deterministic activation recalculation for the local JSON runtime and SQLite activation seed path.
 
 ### 2. Auth And RBAC
@@ -213,7 +231,8 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 - [x] Keep SQLite rate-limit buckets in dedicated `rate_limit_buckets` storage while leaving the JSON default store shape unchanged.
 - [x] Add local same-origin and CSRF-token checks for private app browser mutations.
 - [x] Add deployment-specific auth/invitation rate-limit knobs, invitation webhook timeout control, and proxy-aware CSRF origin handling where `X-Forwarded-Host` is trusted only with `TASKLOOM_TRUST_PROXY=true`.
-- [ ] Add production hardening beyond process/store-scoped rate limiting, webhook email delivery, and CSRF checks, such as edge/distributed rate limiting, provider-specific delivery retries/dead-letter handling, token-redaction review, and full production topology guidance.
+- [x] Document production deployment guidance for HTTPS/proxy trust, secrets, local-store rate-limit limits, edge/distributed limiter pairing expectations, persistence, backups, and scheduler constraints. Invitation email operations are cross-linked separately.
+- [ ] Add production hardening implementation beyond process/store-scoped rate limiting, webhook email delivery, and CSRF checks, such as edge/distributed rate limiting, token-redaction enforcement, and managed production topology support. SQLite/database topology guidance now lives in `docs/deployment-sqlite-topology.md`.
 
 ### 3. Real Activation Signals
 
@@ -236,7 +255,7 @@ Make activation updates reliable outside request-time reads.
 - [x] Run the local JSON-backed queue scheduler for `agent.run` jobs with cron re-enqueue, retries/backoff, cancellation, and stale-running-job sweep.
 - [x] Expose private job queue routes for list, enqueue, read, and cancel.
 - [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
-- [ ] Add relational database backfills if app records are later split from indexed `app_records` metadata into dedicated repository tables.
+- [ ] Add relational database backfills if app records are later split from indexed `app_records` metadata into dedicated repository tables, using `docs/deployment-sqlite-topology.md` thresholds to decide when that split is justified.
 - [x] Ensure activation-scoped retry and scope-change activity emission is idempotent enough to avoid double-counting repeated signal writes.
 - [x] Add stale JSON read-model repair checks and a `jobs:repair-activation` command.
 
@@ -257,16 +276,17 @@ Strengthen the project rails before larger product work accumulates.
 - [ ] Continue broadening API route coverage as new route policies and product surfaces land.
 - [x] Maintain frontend smoke/static contract tests for auth, onboarding, dashboard, activation, role-aware controls, workflow wiring, integrations, agents, runs, and share routes.
 - [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, invitation resend/revoke and delivery-row behavior including skip mode, workflow activation, jobs, agents, share links, CSRF rejection, cross-origin mutation rejection, dedicated SQLite rate-limit bucket persistence, and local mutating-write concurrency behavior.
-- [ ] Maintain local development, reset, seed, build, and release flow documentation as scripts change.
+- [x] Add README cross-links for the roadmap, deployment auth hardening doc, SQLite topology doc, invitation email operations doc, activation docs, and Phase 16 production deployment guidance.
+- [ ] Maintain local development, reset, seed, build, production deployment, and release flow documentation as scripts and deployment posture change.
 - [x] Keep generated `web/dist` assets ignored unless release packaging requirements change.
 
 ## Recommended Order
 
-1. Edge/distributed rate limiting and deployment-specific abuse controls beyond the current process/store-scoped auth and invitation buckets.
-2. Production invitation email provider hardening, including provider-specific retries or dead-letter handling, sender/domain setup, and token-redaction review.
-3. Production storage and topology planning: deployment-specific SQLite/database concurrency posture, operational backup/restore policy, and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
+1. Implement or integrate edge/distributed rate limiting beyond the documented process/store-scoped auth and invitation bucket guidance.
+2. Production invitation email provider implementation hardening tracked in `docs/invitation-email-operations.md`.
+3. Production storage implementation hardening: managed database topology, external scheduler/job coordination for multi-process runtimes, and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
 4. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The next phase is complete when edge/distributed rate-limit guidance is documented, production invitation delivery has provider-specific retry or dead-letter guidance, deployment-specific SQLite/database topology guidance is documented, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.
+The next phase is complete when edge/distributed rate limiting is implemented or integrated for multi-process deployments, invitation delivery production hardening from `docs/invitation-email-operations.md` is implemented, managed database or external scheduler topology is implemented where needed, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.

@@ -129,6 +129,26 @@ Release hygiene checklist:
 - Keep `README.md`, `docs/roadmap.md`, and `docs/activation/*` aligned with any landed product, storage, or hardening milestone.
 - Do not commit `data/taskloom.json`, `data/artifacts/`, `web/dist/`, logs, or environment files.
 
+## Production Deployment Guidance
+
+Taskloom is still optimized for local and single-node deployments. Before production handoff, treat the current runtime as a Node app that needs standard platform controls around HTTPS, secrets, shared abuse protection, persistence, and backups.
+
+Recommended production posture:
+
+- Run with `NODE_ENV=production` behind an HTTPS-terminating reverse proxy or platform load balancer so session cookies are sent with `Secure`.
+- Set `TASKLOOM_TRUST_PROXY=true` only when the proxy is trusted to overwrite `X-Forwarded-Host`, `X-Forwarded-For`, and related forwarding headers.
+- Keep `TASKLOOM_RATE_LIMIT_KEY_SALT`, invitation webhook secrets, provider keys, and environment files in the deployment secret store, not in source control or logs.
+- Use `TASKLOOM_STORE=sqlite` with a durable `TASKLOOM_DB_PATH` for single-node persistence. Keep JSON storage for local contributor workflows unless a deployment explicitly accepts file-backed local state.
+- Put `data/taskloom.sqlite`, `data/artifacts/`, and any deployment logs on backed-up persistent storage when they are needed across restarts.
+- Run `npm run db:backup` before migrations or release handoff, and validate restore with `npm run db:restore` in a non-production environment.
+- Run `npm run jobs:cleanup-sessions` on a schedule to prune expired sessions.
+- Run only one scheduler-active Node process against the current local store. Multi-process or multi-region deployments need external job coordination before enabling duplicate app runtimes.
+- Add edge or shared distributed rate limiting in front of auth and invitation routes before relying on the built-in store-backed buckets for abuse prevention across multiple processes or regions.
+- For invitation email webhook operations, see `docs/invitation-email-operations.md`.
+- Review public share tokens, public agent webhook tokens, API keys, and environment variable display paths for deployment-specific redaction and audit requirements.
+
+Current production guidance is documentation only. It does not add distributed locking, managed database repositories, email delivery workers, or edge rate limiting by itself. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md` for focused deployment checks.
+
 ## API Endpoints
 
 Available endpoints include:
@@ -240,11 +260,13 @@ Backend route policies are the security boundary. Frontend role-aware controls h
 
 Member-management APIs allow workspace members to be listed by any authenticated workspace member. Invitation tokens are only exposed to `admin` and `owner` list responses. Invitations, role updates, and member removals require `admin` or `owner`; only `owner` can grant or modify the `owner` role, and the backend prevents removing or demoting the final workspace owner. Invitation acceptance requires a signed-in user whose email matches the invitation.
 
-Invitation delivery records `invitationEmailDeliveries` rows for create and resend, and responses include an `emailDelivery` summary. The default `TASKLOOM_INVITATION_EMAIL_MODE=dev` records local provider deliveries as `sent`; set `TASKLOOM_INVITATION_EMAIL_MODE=skip` to record them as skipped for local runs that should not simulate sending. Set `TASKLOOM_INVITATION_EMAIL_MODE=webhook` with `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL` to POST delivery requests to an HTTP provider; `TASKLOOM_INVITATION_EMAIL_PROVIDER` overrides the recorded provider name, optional `TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET` plus `TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER` add a shared-secret header, and `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` controls the provider request timeout. Webhook configuration errors, timeouts, and non-2xx responses are recorded as failed deliveries without rolling back invitation creation. Local testing can still copy the returned invitation token into `POST /api/app/invitations/:token/accept` while signed in as the matching invited email. Production handoff still needs sender/domain setup, secret handling, provider-specific retries or dead-letter policy, and token-redaction policy for logs and admin surfaces.
+Invitation delivery records `invitationEmailDeliveries` rows for create and resend, and responses include an `emailDelivery` summary. The default `TASKLOOM_INVITATION_EMAIL_MODE=dev` records local provider deliveries as `sent`; set `TASKLOOM_INVITATION_EMAIL_MODE=skip` to record them as skipped for local runs that should not simulate sending. Set `TASKLOOM_INVITATION_EMAIL_MODE=webhook` with `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL` to POST delivery requests to an HTTP provider; `TASKLOOM_INVITATION_EMAIL_PROVIDER` overrides the recorded provider name, optional `TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET` plus `TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER` add a shared-secret header, and `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` controls the provider request timeout. Webhook configuration errors, timeouts, and non-2xx responses are recorded as failed deliveries without rolling back invitation creation. Local testing can still copy the returned invitation token into `POST /api/app/invitations/:token/accept` while signed in as the matching invited email. Production email operations guidance is tracked in `docs/invitation-email-operations.md`.
 
 Session cookies are HTTP-only, use `SameSite=Lax`, and are marked `Secure` when `NODE_ENV=production`. Login and registration also set a readable `taskloom_csrf` cookie. Private mutating app routes reject browser requests with an `Origin` host that does not match the request host. `X-Forwarded-Host` participates in that host comparison only when `TASKLOOM_TRUST_PROXY=true`; otherwise the app uses `Host` and does not trust forwarded host headers. Same-origin browser mutations must echo the CSRF cookie in `X-CSRF-Token`. Requests without `Origin`, such as same-process tests and non-browser local clients, are allowed.
 
 Auth register/login and invitation create/accept/resend routes have store-backed rate limits. The default client key is `local`; set `TASKLOOM_TRUST_PROXY=true` to trust `X-Forwarded-For`, then `X-Real-IP`. Stored bucket IDs include a SHA-256 hash salted by `TASKLOOM_RATE_LIMIT_KEY_SALT`, and expired or excess buckets are pruned with `TASKLOOM_RATE_LIMIT_MAX_BUCKETS` defaulting to 5000. Limited responses are `429` with `Retry-After`. In JSON mode the buckets live in `data/taskloom.json`; in SQLite mode they live in dedicated `rate_limit_buckets` storage instead of `app_records`. Phase 15 adds deployment knobs for local-store-backed thresholds: `TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS`, `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS`, and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`. These limits are still process/store scoped; multi-process or multi-region production deployments should add shared edge or deployment-specific database coordination before relying on them for abuse prevention.
+
+Production edge/distributed rate-limit guidance, topology caveats, and a validation checklist live in `docs/deployment-auth-hardening.md`.
 
 Production deployments should terminate HTTPS before the Node server and run the scheduled `cleanup-sessions` job to remove expired sessions.
 
@@ -319,6 +341,12 @@ Taskloom now uses a React/Vite GUI modeled on the Automate shell and patterns:
 
 Key docs:
 
+- `docs/roadmap.md`
+- `docs/deployment-auth-hardening.md`
+- `docs/deployment-sqlite-topology.md`
+- `docs/invitation-email-operations.md`
 - `docs/activation/activation-domain.md`
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
+
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md`, and is tracked as Phase 16 in `docs/roadmap.md`.
