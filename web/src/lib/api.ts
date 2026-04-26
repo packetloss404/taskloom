@@ -9,9 +9,12 @@ import type {
   ConfirmWorkflowReleaseInput,
   ProviderRecord,
   PublicDashboardPayload,
+  ReleaseHistoryPayload,
   SaveAgentInput,
   SaveProviderInput,
   SaveWorkflowBlockerInput,
+  SaveWorkspaceEnvVarInput,
+  WorkspaceEnvVarRecord,
   SaveWorkflowBriefInput,
   SaveWorkflowPlanItemInput,
   SaveWorkflowQuestionInput,
@@ -104,6 +107,17 @@ export const api = {
   updateProvider: (id: string, body: Partial<SaveProviderInput>) =>
     j<{ provider: ProviderRecord }>(`/api/app/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.provider),
   listAgentRuns: () => j<{ runs: AgentRunRecord[] }>("/api/app/agent-runs").then((payload) => payload.runs),
+  cancelAgentRun: (runId: string) =>
+    j<{ run: AgentRunRecord }>(`/api/app/agent-runs/${runId}/cancel`, { method: "POST" }).then((payload) => payload.run),
+  retryAgentRun: (runId: string) =>
+    j<{ run: AgentRunRecord }>(`/api/app/agent-runs/${runId}/retry`, { method: "POST" }).then((payload) => payload.run),
+  listEnvVars: () => j<{ envVars: WorkspaceEnvVarRecord[] }>("/api/app/env-vars").then((payload) => payload.envVars),
+  createEnvVar: (body: SaveWorkspaceEnvVarInput) =>
+    j<{ envVar: WorkspaceEnvVarRecord }>("/api/app/env-vars", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.envVar),
+  updateEnvVar: (id: string, body: Partial<SaveWorkspaceEnvVarInput>) =>
+    j<{ envVar: WorkspaceEnvVarRecord }>(`/api/app/env-vars/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.envVar),
+  deleteEnvVar: (id: string) => j<{ ok: boolean }>(`/api/app/env-vars/${id}`, { method: "DELETE" }),
+  getReleaseHistory: () => j<ReleaseHistoryPayload>("/api/app/release-history"),
   getWorkflowBrief: () => j<WorkflowBrief>("/api/app/workflow/brief"),
   saveWorkflowBrief: (body: SaveWorkflowBriefInput) => j<WorkflowBrief>("/api/app/workflow/brief", { method: "PUT", body: JSON.stringify(body) }),
   listWorkflowBriefTemplates: () => j<WorkflowBriefTemplate[]>("/api/app/workflow/brief/templates"),

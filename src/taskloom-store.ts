@@ -299,6 +299,21 @@ export type OnboardingStepKey =
   | "validate"
   | "confirm_release";
 
+export type WorkspaceEnvVarScope = "all" | "build" | "runtime";
+
+export interface WorkspaceEnvVarRecord {
+  id: string;
+  workspaceId: string;
+  key: string;
+  value: string;
+  scope: WorkspaceEnvVarScope;
+  secret: boolean;
+  description?: string;
+  createdByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TaskloomData {
   users: UserRecord[];
   sessions: SessionRecord[];
@@ -316,6 +331,7 @@ export interface TaskloomData {
   agents: AgentRecord[];
   providers: ProviderRecord[];
   agentRuns: AgentRunRecord[];
+  workspaceEnvVars: WorkspaceEnvVarRecord[];
   activationFacts: Record<string, WorkspaceActivationFacts>;
   activationMilestones: Record<string, ActivationMilestoneRecord[]>;
   activationReadModels: Record<string, ActivationStatusDto>;
@@ -374,6 +390,7 @@ function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
       ...entry,
       logs: Array.isArray(entry.logs) ? entry.logs : [],
     })),
+    workspaceEnvVars: data.workspaceEnvVars ?? [],
     activationFacts: data.activationFacts ?? {},
     activationMilestones: data.activationMilestones ?? {},
     activationReadModels: data.activationReadModels ?? {},
@@ -782,6 +799,45 @@ function seedStore(): TaskloomData {
     }),
   ];
 
+  const workspaceEnvVars: WorkspaceEnvVarRecord[] = [
+    {
+      id: "env_alpha_api_base",
+      workspaceId: "alpha",
+      key: "ALPHA_API_BASE",
+      value: "https://api.alpha.example.com",
+      scope: "all",
+      secret: false,
+      description: "Base URL for the Alpha workspace integration.",
+      createdByUserId: "user_alpha",
+      createdAt: isoDaysAgo(8),
+      updatedAt: isoDaysAgo(8),
+    },
+    {
+      id: "env_alpha_signing_secret",
+      workspaceId: "alpha",
+      key: "ALPHA_SIGNING_SECRET",
+      value: "alpha_demo_signing_secret",
+      scope: "runtime",
+      secret: true,
+      description: "Webhook signing secret used by runtime handlers.",
+      createdByUserId: "user_alpha",
+      createdAt: isoDaysAgo(6),
+      updatedAt: isoDaysAgo(6),
+    },
+    {
+      id: "env_beta_feature_flag",
+      workspaceId: "beta",
+      key: "BETA_FEATURE_RETRY",
+      value: "false",
+      scope: "build",
+      secret: false,
+      description: "Toggle to enable retry experiments during builds.",
+      createdByUserId: "user_beta",
+      createdAt: isoDaysAgo(5),
+      updatedAt: isoDaysAgo(2),
+    },
+  ];
+
   const agentRuns: AgentRunRecord[] = [
     createAgentRun({
       id: "run_alpha_support_latest",
@@ -987,6 +1043,7 @@ function seedStore(): TaskloomData {
     agents,
     providers,
     agentRuns,
+    workspaceEnvVars,
     activationFacts,
     activationMilestones: {},
     activationReadModels: {},
@@ -1464,6 +1521,33 @@ function upsertRecord<TRecord extends { id: string; createdAt: string; updatedAt
   } as TRecord;
   records.push(next);
   return next;
+}
+
+export function listWorkspaceEnvVars(data: TaskloomData, workspaceId: string): WorkspaceEnvVarRecord[] {
+  return data.workspaceEnvVars
+    .filter((entry) => entry.workspaceId === workspaceId)
+    .sort((left, right) => left.key.localeCompare(right.key));
+}
+
+export function findWorkspaceEnvVar(data: TaskloomData, envVarId: string): WorkspaceEnvVarRecord | null {
+  return data.workspaceEnvVars.find((entry) => entry.id === envVarId) ?? null;
+}
+
+export type WorkspaceEnvVarUpsertInput = Omit<WorkspaceEnvVarRecord, "id" | "createdAt" | "updatedAt"> &
+  Partial<Pick<WorkspaceEnvVarRecord, "id" | "createdAt" | "updatedAt">>;
+
+export function upsertWorkspaceEnvVar(
+  data: TaskloomData,
+  input: WorkspaceEnvVarUpsertInput,
+  timestamp = now(),
+): WorkspaceEnvVarRecord {
+  return upsertRecord(data.workspaceEnvVars, input, timestamp);
+}
+
+export function deleteWorkspaceEnvVar(data: TaskloomData, envVarId: string): boolean {
+  const before = data.workspaceEnvVars.length;
+  data.workspaceEnvVars = data.workspaceEnvVars.filter((entry) => entry.id !== envVarId);
+  return data.workspaceEnvVars.length < before;
 }
 
 function workspaceBriefEntries(collection: WorkspaceBriefCollection): WorkspaceBriefRecord[] {

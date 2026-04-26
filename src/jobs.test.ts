@@ -92,6 +92,7 @@ function makeStore(): TaskloomData {
     agents: [],
     providers: [],
     agentRuns: [],
+    workspaceEnvVars: [],
     activationMilestones: {},
     activationReadModels: {},
   };

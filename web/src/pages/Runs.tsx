@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, CheckCircle2, ChevronDown, ChevronRight, Clock, Loader2, Timer, X } from "lucide-react";
+import { Activity, CheckCircle2, ChevronDown, ChevronRight, Clock, Loader2, RotateCcw, Timer, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -25,16 +25,29 @@ export default function RunsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | AgentRunStatus>("all");
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+
+  const reload = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextRuns, nextActivities, nextAgents] = await Promise.all([
+        api.listAgentRuns(),
+        api.listActivity(),
+        api.listAgents(),
+      ]);
+      setRuns(nextRuns);
+      setActivities(nextActivities);
+      setAgents(nextAgents);
+    } catch (loadError) {
+      setError((loadError as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    Promise.all([api.listAgentRuns(), api.listActivity(), api.listAgents()])
-      .then(([nextRuns, nextActivities, nextAgents]) => {
-        setRuns(nextRuns);
-        setActivities(nextActivities);
-        setAgents(nextAgents);
-      })
-      .catch((loadError) => setError((loadError as Error).message))
-      .finally(() => setLoading(false));
+    void reload();
   }, []);
 
   const filteredRuns = useMemo(
@@ -49,12 +62,42 @@ export default function RunsPage() {
     [runs, selectedRunId],
   );
 
+  const cancel = async (run: AgentRunRecord, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (pending) return;
+    setPending(run.id);
+    setError(null);
+    try {
+      await api.cancelAgentRun(run.id);
+      await reload();
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const retry = async (run: AgentRunRecord, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (pending) return;
+    setPending(run.id);
+    setError(null);
+    try {
+      await api.retryAgentRun(run.id);
+      await reload();
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setPending(null);
+    }
+  };
+
   return (
     <>
       <header className="mb-7">
         <h1 className="text-3xl font-semibold tracking-tight text-ink-100">Runs / Activity</h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-400">
-          Execution history with structured inputs, output, and step logs.
+          Execution history with structured inputs, output, step logs, and per-run retry/cancel.
         </p>
       </header>
 
@@ -101,10 +144,12 @@ export default function RunsPage() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">Agent runs</h2>
               <div className="flex flex-wrap gap-1.5">
-                <FilterChip label="All" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
-                <FilterChip label="Success" active={statusFilter === "success"} onClick={() => setStatusFilter("success")} />
-                <FilterChip label="Failed" active={statusFilter === "failed"} onClick={() => setStatusFilter("failed")} />
-                <FilterChip label="Running" active={statusFilter === "running"} onClick={() => setStatusFilter("running")} />
+                <FilterChip label="All" count={runs.length} active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
+                <FilterChip label="Success" count={stats.success} active={statusFilter === "success"} onClick={() => setStatusFilter("success")} />
+                <FilterChip label="Failed" count={stats.failed} active={statusFilter === "failed"} onClick={() => setStatusFilter("failed")} />
+                <FilterChip label="Running" count={runs.filter((run) => run.status === "running").length} active={statusFilter === "running"} onClick={() => setStatusFilter("running")} />
+                <FilterChip label="Queued" count={runs.filter((run) => run.status === "queued").length} active={statusFilter === "queued"} onClick={() => setStatusFilter("queued")} />
+                <FilterChip label="Canceled" count={runs.filter((run) => run.status === "canceled").length} active={statusFilter === "canceled"} onClick={() => setStatusFilter("canceled")} />
               </div>
             </div>
             {filteredRuns.length === 0 ? <Empty text={runs.length === 0 ? "No agent runs recorded." : "No runs match this filter."} /> : (
@@ -112,6 +157,8 @@ export default function RunsPage() {
                 {filteredRuns.map((run) => {
                   const expanded = expandedRun === run.id;
                   const stepCount = run.transcript?.length ?? 0;
+                  const canCancel = run.canCancel ?? (run.status === "running" || run.status === "queued");
+                  const canRetry = run.canRetry ?? (run.status === "failed" || run.status === "canceled");
                   return (
                     <div
                       key={run.id}
@@ -168,6 +215,30 @@ export default function RunsPage() {
                           </button>
                         </div>
                       </div>
+                      {(canCancel || canRetry) && (
+                        <div className="flex flex-wrap items-center gap-2 border-t border-ink-800/60 px-4 py-2">
+                          {canCancel && (
+                            <button
+                              type="button"
+                              onClick={(event) => cancel(run, event)}
+                              disabled={pending === run.id}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-950/40 px-3 py-1.5 text-xs text-ink-200 hover:border-rose-400/40 hover:text-rose-200 disabled:opacity-50"
+                            >
+                              <X className="h-3.5 w-3.5" /> {pending === run.id ? "Canceling…" : "Cancel"}
+                            </button>
+                          )}
+                          {canRetry && (
+                            <button
+                              type="button"
+                              onClick={(event) => retry(run, event)}
+                              disabled={pending === run.id}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-950/40 px-3 py-1.5 text-xs text-ink-200 hover:border-emerald-400/40 hover:text-emerald-200 disabled:opacity-50"
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" /> {pending === run.id ? "Retrying…" : "Retry"}
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {expanded && (
                         <div className="space-y-3 border-t border-ink-800/60 px-4 py-3">
                           <RunTranscript steps={run.transcript} />
@@ -277,7 +348,7 @@ function formatDuration(ms: number) {
   return `${minutes}m ${rest}s`;
 }
 
-function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function FilterChip({ label, active, onClick, count }: { label: string; active: boolean; onClick: () => void; count?: number }) {
   return (
     <button
       type="button"
@@ -290,6 +361,9 @@ function FilterChip({ label, active, onClick }: { label: string; active: boolean
       )}
     >
       {label}
+      {count !== undefined && count > 0 && (
+        <span className={cn("ml-1.5", active ? "text-ink-700" : "text-ink-500")}>· {count}</span>
+      )}
     </button>
   );
 }
