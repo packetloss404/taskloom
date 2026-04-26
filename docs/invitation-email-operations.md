@@ -43,4 +43,4 @@ Required redaction areas:
 
 Current production records for invitation delivery and activity store invitation id, email, status, provider/mode, subject, action, delivery id, and error details, but not the invitation token. Test-only delivery records may include tokens to assert webhook payload behavior and should not be treated as production telemetry.
 
-See `README.md` for the webhook environment variables and `docs/roadmap.md` for remaining production hardening context.
+See `README.md` for the webhook environment variables, `docs/deployment-auth-hardening.md` for invitation create/accept/resend abuse controls, and `docs/roadmap.md` for remaining production hardening context.

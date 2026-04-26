@@ -345,6 +345,145 @@ test("rate limit client keys only trust forwarded headers when enabled", async (
   }
 });
 
+test("distributed rate limiter receives hashed auth and invitation bucket checks", async () => {
+  const previousUrl = process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL;
+  const previousSecret = process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_SECRET;
+  const previousTrustProxy = process.env.TASKLOOM_TRUST_PROXY;
+  const previousSalt = process.env.TASKLOOM_RATE_LIMIT_KEY_SALT;
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
+  try {
+    process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL = "https://limits.example/check";
+    process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_SECRET = "shared-secret";
+    process.env.TASKLOOM_TRUST_PROXY = "true";
+    process.env.TASKLOOM_RATE_LIMIT_KEY_SALT = "test-rate-limit-salt";
+    globalThis.fetch = async (input, init) => {
+      const body = init?.body;
+      const headers = init?.headers;
+      if (typeof body !== "string") throw new Error("expected string request body");
+      if (!(headers instanceof Headers)) throw new Error("expected Headers request headers");
+      calls.push({
+        url: String(input),
+        headers,
+        body: JSON.parse(body) as Record<string, unknown>,
+      });
+      return new Response(JSON.stringify({ allowed: true }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    setAlphaRole("admin");
+
+    const loginResponse = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.40" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(loginResponse.status, 401);
+
+    const invitationResponse = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json", "x-forwarded-for": "203.0.113.41" },
+      body: JSON.stringify({ email: "not-an-email", role: "member" }),
+    });
+    assert.equal(invitationResponse.status, 400);
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, "https://limits.example/check");
+    assert.equal(calls[0]?.headers.get("authorization"), "Bearer shared-secret");
+    assert.equal(calls[0]?.body.scope, "auth:login");
+    assert.match(String(calls[0]?.body.bucketId), /^auth:login:sha256:[a-f0-9]{64}$/);
+    assert.equal(String(calls[0]?.body.bucketId).includes("203.0.113.40"), false);
+    assert.equal(calls[0]?.body.maxAttempts, 20);
+    assert.equal(calls[0]?.body.windowMs, 60_000);
+    assert.equal(calls[1]?.body.scope, "invitation:create");
+    assert.match(String(calls[1]?.body.bucketId), /^invitation:create:sha256:[a-f0-9]{64}$/);
+    assert.equal(String(calls[1]?.body.bucketId).includes("203.0.113.41"), false);
+    assert.equal((loadStore().rateLimits ?? []).some((entry) => entry.id.startsWith("auth:login:")), true);
+    assert.equal((loadStore().rateLimits ?? []).some((entry) => entry.id.startsWith("invitation:create:")), true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restoreEnv("TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL", previousUrl);
+    restoreEnv("TASKLOOM_DISTRIBUTED_RATE_LIMIT_SECRET", previousSecret);
+    restoreEnv("TASKLOOM_TRUST_PROXY", previousTrustProxy);
+    restoreEnv("TASKLOOM_RATE_LIMIT_KEY_SALT", previousSalt);
+  }
+});
+
+test("distributed rate limiter blocks before local buckets and sets retry-after", async () => {
+  const previousUrl = process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL;
+  const previousFetch = globalThis.fetch;
+  try {
+    process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL = "https://limits.example/check";
+    globalThis.fetch = async () => new Response(JSON.stringify({ limited: true }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "7" },
+    });
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+
+    const response = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("retry-after"), "7");
+    assert.deepEqual(await response.json(), { error: "too many requests" });
+    assert.equal((loadStore().rateLimits ?? []).length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restoreEnv("TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL", previousUrl);
+  }
+});
+
+test("distributed rate limiter fails closed unless fail-open is enabled", async () => {
+  const previousUrl = process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL;
+  const previousFailOpen = process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN;
+  const previousMaxAttempts = process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+  const previousFetch = globalThis.fetch;
+  try {
+    process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL = "https://limits.example/check";
+    globalThis.fetch = async () => {
+      throw new Error("limiter unavailable");
+    };
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const closedResponse = await createTestApp().request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(closedResponse.status, 503);
+    assert.deepEqual(await closedResponse.json(), { error: "rate limit service unavailable" });
+    assert.equal((loadStore().rateLimits ?? []).length, 0);
+
+    process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN = "true";
+    process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS = "1";
+    resetStoreForTests();
+    const failOpenFirst = await createTestApp().request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(failOpenFirst.status, 401);
+    const failOpenLimited = await createTestApp().request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(failOpenLimited.status, 429);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restoreEnv("TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL", previousUrl);
+    restoreEnv("TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN", previousFailOpen);
+    restoreEnv("TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS", previousMaxAttempts);
+  }
+});
+
 test("rate limit cleanup drops expired buckets and caps retained buckets", async () => {
   const previousMaxBuckets = process.env.TASKLOOM_RATE_LIMIT_MAX_BUCKETS;
   try {

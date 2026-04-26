@@ -64,7 +64,7 @@ appRoutes.get("/auth/session", (c) => {
 
 appRoutes.post("/auth/register", async (c) => {
   try {
-    enforceRateLimit(c, "auth:register", AUTH_RATE_LIMIT);
+    await enforceRateLimit(c, "auth:register", AUTH_RATE_LIMIT);
     const body = (await c.req.json()) as { email?: string; password?: string; displayName?: string };
     const result = register({
       email: body.email ?? "",
@@ -82,7 +82,7 @@ appRoutes.post("/auth/register", async (c) => {
 
 appRoutes.post("/auth/login", async (c) => {
   try {
-    enforceRateLimit(c, "auth:login", AUTH_RATE_LIMIT);
+    await enforceRateLimit(c, "auth:login", AUTH_RATE_LIMIT);
     const body = (await c.req.json()) as { email?: string; password?: string };
     const result = login({
       email: body.email ?? "",
@@ -213,7 +213,7 @@ appRoutes.get("/app/members", (c) => {
 
 appRoutes.post("/app/invitations", async (c) => {
   try {
-    enforceRateLimit(c, "invitation:create", INVITATION_RATE_LIMIT);
+    await enforceRateLimit(c, "invitation:create", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json()) as { email?: string; role?: string };
@@ -227,9 +227,9 @@ appRoutes.post("/app/invitations", async (c) => {
   }
 });
 
-appRoutes.post("/app/invitations/:token/accept", (c) => {
+appRoutes.post("/app/invitations/:token/accept", async (c) => {
   try {
-    enforceRateLimit(c, "invitation:accept", INVITATION_RATE_LIMIT);
+    await enforceRateLimit(c, "invitation:accept", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     return c.json(acceptWorkspaceInvitation(context, c.req.param("token")));
   } catch (error) {
@@ -239,7 +239,7 @@ appRoutes.post("/app/invitations/:token/accept", (c) => {
 
 appRoutes.post("/app/invitations/:invitationId/resend", async (c) => {
   try {
-    enforceRateLimit(c, "invitation:resend", INVITATION_RATE_LIMIT);
+    await enforceRateLimit(c, "invitation:resend", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
     return c.json(await resendWorkspaceInvitation(context, c.req.param("invitationId")));
@@ -286,21 +286,105 @@ function requireWorkspacePermission(context: AuthenticatedRouteContext, permissi
   assertPermission(membership, permission);
 }
 
-function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number; maxAttemptsEnv: string; windowMsEnv: string }) {
+async function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number; maxAttemptsEnv: string; windowMsEnv: string }) {
   const timestamp = Date.now();
-  const limitedUntil = rateLimitRepository().upsert({
+  const input = {
     bucketId: `${scope}:${hashedClientKey(clientKey(c))}`,
+    scope,
     maxAttempts: configuredPositiveInteger(options.maxAttemptsEnv, options.maxAttempts),
     windowMs: configuredPositiveInteger(options.windowMsEnv, options.windowMs),
     timestamp,
     maxBuckets: configuredPositiveInteger("TASKLOOM_RATE_LIMIT_MAX_BUCKETS", RATE_LIMIT_MAX_BUCKETS),
-  });
+  };
 
-  if (limitedUntil) {
+  applyRateLimitDecision(c, timestamp, await distributedRateLimitUpsert(input));
+  applyRateLimitDecision(c, timestamp, rateLimitRepository().upsert(input));
+}
+
+async function distributedRateLimitUpsert(input: { bucketId: string; scope: string; maxAttempts: number; windowMs: number; timestamp: number }) {
+  const url = (process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL ?? "").trim();
+  if (!url) return null;
+
+  try {
+    const headers = new Headers({
+      accept: "application/json",
+      "content-type": "application/json",
+    });
+    const secret = (process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_SECRET ?? "").trim();
+    if (secret) headers.set("authorization", `Bearer ${secret}`);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        bucketId: input.bucketId,
+        scope: input.scope,
+        maxAttempts: input.maxAttempts,
+        windowMs: input.windowMs,
+        timestamp: new Date(input.timestamp).toISOString(),
+      }),
+      signal: AbortSignal.timeout(configuredPositiveInteger("TASKLOOM_DISTRIBUTED_RATE_LIMIT_TIMEOUT_MS", 750)),
+    });
+    const payload = await readJsonObject(response);
+    if (response.status === 429) return limitedUntilFromDistributedResponse(input, response, payload);
+    if (!response.ok) throw new Error(`distributed rate limiter returned ${response.status}`);
+    if (payload?.limited === true || payload?.allowed === false) return limitedUntilFromDistributedResponse(input, response, payload);
+    return null;
+  } catch (error) {
+    if (distributedRateLimitFailOpen()) return null;
+    throw httpRouteError(503, "rate limit service unavailable");
+  }
+}
+
+function applyRateLimitDecision(c: Context, timestamp: number, limitedUntil: number | null) {
+  if (limitedUntil !== null) {
     const retryAfterSeconds = Math.max(1, Math.ceil((limitedUntil - timestamp) / 1000));
     c.header("Retry-After", String(retryAfterSeconds));
     throw httpRouteError(429, "too many requests");
   }
+}
+
+async function readJsonObject(response: Response): Promise<Record<string, unknown> | null> {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function limitedUntilFromDistributedResponse(input: { windowMs: number; timestamp: number }, response: Response, payload: Record<string, unknown> | null) {
+  const retryAfter = retryAfterLimitedUntil(response.headers.get("retry-after"), input.timestamp);
+  if (retryAfter !== null) return retryAfter;
+
+  if (typeof payload?.retryAfterSeconds === "number" && Number.isFinite(payload.retryAfterSeconds)) {
+    return input.timestamp + Math.max(0, payload.retryAfterSeconds) * 1000;
+  }
+
+  const resetAt = payload?.resetAt;
+  if (typeof resetAt === "string") {
+    const resetAtTimestamp = Date.parse(resetAt);
+    if (Number.isFinite(resetAtTimestamp)) return resetAtTimestamp;
+  }
+  if (typeof resetAt === "number" && Number.isFinite(resetAt)) {
+    return resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
+  }
+
+  return input.timestamp + input.windowMs;
+}
+
+function retryAfterLimitedUntil(headerValue: string | null, timestamp: number) {
+  if (!headerValue) return null;
+  const seconds = Number.parseInt(headerValue, 10);
+  if (Number.isFinite(seconds) && seconds >= 0) return timestamp + seconds * 1000;
+  const retryAt = Date.parse(headerValue);
+  return Number.isFinite(retryAt) ? retryAt : null;
+}
+
+function distributedRateLimitFailOpen() {
+  return ["1", "true", "yes"].includes((process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN ?? "").trim().toLowerCase());
 }
 
 function clientKey(c: Context) {

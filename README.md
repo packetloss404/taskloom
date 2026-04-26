@@ -143,11 +143,11 @@ Recommended production posture:
 - Run `npm run db:backup` before migrations or release handoff, and validate restore with `npm run db:restore` in a non-production environment.
 - Run `npm run jobs:cleanup-sessions` on a schedule to prune expired sessions.
 - Run only one scheduler-active Node process against the current local store. Multi-process or multi-region deployments need external job coordination before enabling duplicate app runtimes.
-- Add edge or shared distributed rate limiting in front of auth and invitation routes before relying on the built-in store-backed buckets for abuse prevention across multiple processes or regions.
+- Enable `TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL` or add equivalent edge/shared distributed rate limiting for auth and invitation routes before relying on local buckets across multiple processes or regions.
 - For invitation email webhook operations, see `docs/invitation-email-operations.md`.
 - Review public share tokens, public agent webhook tokens, API keys, and environment variable display paths for deployment-specific redaction and audit requirements.
 
-Current production guidance is documentation only. It does not add distributed locking, managed database repositories, email delivery workers, or edge rate limiting by itself. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md` for focused deployment checks.
+Current production guidance still does not add distributed locking, managed database repositories, or email delivery workers by itself. The app includes an optional HTTP distributed rate-limit adapter, but the shared limiter service or edge provider remains deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md` for focused deployment checks.
 
 ## API Endpoints
 
@@ -264,7 +264,7 @@ Invitation delivery records `invitationEmailDeliveries` rows for create and rese
 
 Session cookies are HTTP-only, use `SameSite=Lax`, and are marked `Secure` when `NODE_ENV=production`. Login and registration also set a readable `taskloom_csrf` cookie. Private mutating app routes reject browser requests with an `Origin` host that does not match the request host. `X-Forwarded-Host` participates in that host comparison only when `TASKLOOM_TRUST_PROXY=true`; otherwise the app uses `Host` and does not trust forwarded host headers. Same-origin browser mutations must echo the CSRF cookie in `X-CSRF-Token`. Requests without `Origin`, such as same-process tests and non-browser local clients, are allowed.
 
-Auth register/login and invitation create/accept/resend routes have store-backed rate limits. The default client key is `local`; set `TASKLOOM_TRUST_PROXY=true` to trust `X-Forwarded-For`, then `X-Real-IP`. Stored bucket IDs include a SHA-256 hash salted by `TASKLOOM_RATE_LIMIT_KEY_SALT`, and expired or excess buckets are pruned with `TASKLOOM_RATE_LIMIT_MAX_BUCKETS` defaulting to 5000. Limited responses are `429` with `Retry-After`. In JSON mode the buckets live in `data/taskloom.json`; in SQLite mode they live in dedicated `rate_limit_buckets` storage instead of `app_records`. Phase 15 adds deployment knobs for local-store-backed thresholds: `TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS`, `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS`, and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`. These limits are still process/store scoped; multi-process or multi-region production deployments should add shared edge or deployment-specific database coordination before relying on them for abuse prevention.
+Auth register/login and invitation create/accept/resend routes have store-backed rate limits. The default client key is `local`; set `TASKLOOM_TRUST_PROXY=true` to trust `X-Forwarded-For`, then `X-Real-IP`. Stored bucket IDs include a SHA-256 hash salted by `TASKLOOM_RATE_LIMIT_KEY_SALT`, and expired or excess buckets are pruned with `TASKLOOM_RATE_LIMIT_MAX_BUCKETS` defaulting to 5000. Limited responses are `429` with `Retry-After`. In JSON mode the buckets live in `data/taskloom.json`; in SQLite mode they live in dedicated `rate_limit_buckets` storage instead of `app_records`. Phase 15 adds deployment knobs for local-store-backed thresholds: `TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS`, `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS`, and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`. Set `TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL` to call an HTTP shared limiter before the local bucket backstop; optional `TASKLOOM_DISTRIBUTED_RATE_LIMIT_SECRET`, `TASKLOOM_DISTRIBUTED_RATE_LIMIT_TIMEOUT_MS`, and `TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN` control authentication, timeout, and outage behavior. Multi-process or multi-region production deployments should enable that adapter or equivalent edge/shared coordination before relying on rate limits for abuse prevention.
 
 Production edge/distributed rate-limit guidance, topology caveats, and a validation checklist live in `docs/deployment-auth-hardening.md`.
 
@@ -349,4 +349,4 @@ Key docs:
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
 
-Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md`, and is tracked as Phase 16 in `docs/roadmap.md`.
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md`, and is tracked across Phases 16 and 17 in `docs/roadmap.md`.

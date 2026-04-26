@@ -31,9 +31,9 @@ When the app opens the SQLite store, it applies migrations and sets these connec
 - `synchronous = normal`: WAL durability/performance tradeoff suitable for the current local posture.
 - `foreign_keys = on`: migrated relational tables enforce declared foreign keys.
 
-SQLite whole-store mutations use `BEGIN IMMEDIATE`. This acquires the write reservation before loading fresh state and writing changed collections, which prevents a local writer from overwriting newer committed whole-store state from a stale in-memory cache. SQLite rate-limit bucket writes also use `BEGIN IMMEDIATE` against the dedicated `rate_limit_buckets` table.
+SQLite whole-store mutations use `BEGIN IMMEDIATE`. This acquires the write reservation before loading fresh state and writing changed collections, which prevents a local writer from overwriting newer committed whole-store state from a stale in-memory cache. SQLite rate-limit bucket writes also use `BEGIN IMMEDIATE` against the dedicated `rate_limit_buckets` table. If `TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL` is configured, shared abuse counters live outside SQLite and the SQLite buckets remain a local backstop.
 
-These guarantees are local SQLite guarantees. They do not provide distributed consensus, cross-region conflict resolution, or process-external request serialization. `busy_timeout` reduces transient local lock failures; it does not make long-running or high-contention multi-writer deployment safe.
+These guarantees are local SQLite guarantees. They do not provide distributed consensus, cross-region conflict resolution, or process-external request serialization. `busy_timeout` reduces transient local lock failures; it does not make long-running or high-contention multi-writer deployment safe. The optional distributed rate-limit adapter coordinates only auth/invitation abuse counters; it does not change SQLite's database topology limits.
 
 ## Current Schema Shape
 
@@ -83,11 +83,11 @@ SQLite permits multiple readers and one writer, but Taskloom's SQLite runtime is
 - queue scheduler leadership across several app instances,
 - global write ordering across regions,
 - regional failover and replication conflict handling,
-- cross-process abuse-prevention coordination.
+- cross-process abuse-prevention coordination unless the optional HTTP distributed limiter or equivalent edge/shared limiter is configured.
 
 For multi-process single-region deployments, introduce a managed relational database before scaling writes horizontally. For multi-region deployments, choose a database topology with explicit replication, failover, and write-leadership semantics. Keep the app runtime single-writer per logical workspace or introduce repository-level concurrency controls before active/active writes.
 
-Auth rate limits and invitation delivery have separate deployment notes in `README.md` and `docs/roadmap.md`; this document only calls out that any production topology should coordinate those concerns outside one local SQLite file.
+Auth rate limits and invitation delivery have separate deployment notes in `README.md`, `docs/deployment-auth-hardening.md`, and `docs/roadmap.md`; this document only calls out that any production topology should coordinate those concerns outside one local SQLite file.
 
 ## When To Introduce Dedicated Relational Repositories
 
