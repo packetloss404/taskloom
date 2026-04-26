@@ -10,7 +10,9 @@ export const TASKLOOM_INVITATION_EMAIL_PROVIDER_ENV = "TASKLOOM_INVITATION_EMAIL
 export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL";
 export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET";
 export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER";
+export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS";
 export const DEFAULT_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER = "x-taskloom-webhook-secret";
+export const DEFAULT_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS = 10_000;
 
 export interface RecordInvitationEmailDeliveryInput {
   invitation: WorkspaceInvitationRecord;
@@ -37,6 +39,7 @@ export interface InvitationEmailWebhookConfig {
   url?: string;
   secret?: string;
   secretHeader: string;
+  timeoutMs: number;
 }
 
 export function resolveInvitationEmailWebhookConfig(env = process.env): InvitationEmailWebhookConfig {
@@ -45,7 +48,13 @@ export function resolveInvitationEmailWebhookConfig(env = process.env): Invitati
     url: env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV]?.trim() || undefined,
     secret: env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_ENV]?.trim() || undefined,
     secretHeader: env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER_ENV]?.trim() || DEFAULT_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER,
+    timeoutMs: resolveInvitationEmailWebhookTimeoutMs(env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV]),
   };
+}
+
+function resolveInvitationEmailWebhookTimeoutMs(value?: string): number {
+  const timeoutMs = Number(value?.trim());
+  return Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS;
 }
 
 export function recordLocalInvitationEmailDelivery(

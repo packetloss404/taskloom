@@ -110,6 +110,54 @@ test("job mutations use central browser csrf and same-origin guard", async () =>
   assert.equal(apiClientCompatible.status, 201);
 });
 
+test("job mutation origin checks only trust forwarded host when proxy trust is enabled", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const previousTrustProxy = process.env.TASKLOOM_TRUST_PROXY;
+
+  try {
+    const loginResponse = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "demo12345" }),
+    });
+    const sessionCookie = cookieValue(loginResponse);
+
+    delete process.env.TASKLOOM_TRUST_PROXY;
+    const spoofedForwardedHost = await app.request("/api/app/jobs", {
+      method: "POST",
+      headers: {
+        ...authHeaders(sessionCookie),
+        Origin: "https://public.example",
+        Host: "internal.example",
+        "X-Forwarded-Host": "public.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ type: "test.forwarded-host-disabled" }),
+    });
+    assert.equal(spoofedForwardedHost.status, 403);
+    assert.deepEqual(await spoofedForwardedHost.json(), { error: "cross-origin requests are not allowed" });
+
+    process.env.TASKLOOM_TRUST_PROXY = "true";
+    const trustedForwardedHost = await app.request("/api/app/jobs", {
+      method: "POST",
+      headers: {
+        ...authHeaders(sessionCookie),
+        Origin: "https://public.example",
+        Host: "internal.example",
+        "X-Forwarded-Host": "public.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ type: "test.forwarded-host-enabled" }),
+    });
+    assert.equal(trustedForwardedHost.status, 403);
+    assert.deepEqual(await trustedForwardedHost.json(), { error: "invalid csrf token" });
+  } finally {
+    if (previousTrustProxy === undefined) delete process.env.TASKLOOM_TRUST_PROXY;
+    else process.env.TASKLOOM_TRUST_PROXY = previousTrustProxy;
+  }
+});
+
 test("job detail does not expose jobs from another workspace", async () => {
   resetStoreForTests();
   const app = createTestApp();

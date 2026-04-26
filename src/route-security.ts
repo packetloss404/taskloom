@@ -31,7 +31,7 @@ export function rejectCrossOriginPrivateMutationOrThrow(c: Context) {
   const origin = c.req.header("origin");
   if (!origin) return;
 
-  const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? new URL(c.req.url).host;
+  const host = originComparisonHost(c);
   try {
     if (new URL(origin).host !== host) throw httpRouteError(403, "cross-origin requests are not allowed");
   } catch {
@@ -68,6 +68,15 @@ function enforceBrowserCsrf(c: Context) {
 
 function csrfTokenForSessionCookie(sessionCookie: string) {
   return sessionCookie ? hashSessionSecret(`csrf:${sessionCookie}`) : "";
+}
+
+function originComparisonHost(c: Context) {
+  if (trustedProxyEnabled()) return c.req.header("x-forwarded-host") ?? c.req.header("host") ?? new URL(c.req.url).host;
+  return c.req.header("host") ?? new URL(c.req.url).host;
+}
+
+function trustedProxyEnabled() {
+  return ["1", "true", "yes"].includes((process.env.TASKLOOM_TRUST_PROXY ?? "").trim().toLowerCase());
 }
 
 function httpRouteError(status: number, message: string) {

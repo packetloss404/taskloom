@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { deliverInvitationEmail, resetInvitationEmailDeliveryForTests, setInvitationEmailFetchForTests, type InvitationEmailDeliveryRequest } from "./invitation-email-delivery";
 import {
+  DEFAULT_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS,
   TASKLOOM_INVITATION_EMAIL_MODE_ENV,
   TASKLOOM_INVITATION_EMAIL_PROVIDER_ENV,
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_ENV,
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER_ENV,
+  TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV,
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV,
 } from "./invitation-email";
 import { resetStoreForTests, type TaskloomData } from "./taskloom-store";
@@ -26,6 +28,7 @@ const invitationEmailEnvVars = [
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV,
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_ENV,
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER_ENV,
+  TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV,
 ];
 
 async function withInvitationEmailEnv(run: (store: TaskloomData) => Promise<void> | void): Promise<void> {
@@ -105,6 +108,78 @@ test("deliverInvitationEmail posts webhook deliveries and records success", asyn
     assert.equal(delivery?.provider, "mail-webhook");
     assert.equal(delivery?.sentAt, "2026-04-26T10:02:00.000Z");
     assert.equal(delivery?.error, undefined);
+  });
+});
+
+test("deliverInvitationEmail applies configured webhook timeout", async () => {
+  await withInvitationEmailEnv(async (store) => {
+    let timeoutMs: number | undefined;
+    const timeout = AbortSignal.timeout;
+    AbortSignal.timeout = ((milliseconds: number) => {
+      timeoutMs = milliseconds;
+      return timeout(milliseconds);
+    }) as typeof AbortSignal.timeout;
+
+    try {
+      process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "webhook";
+      process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV] = "https://mail.example.test/invitations";
+      process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV] = "2500";
+      setInvitationEmailFetchForTests(async () => new Response(null, { status: 202, statusText: "Accepted" }));
+
+      const result = await deliverInvitationEmail(store, invitationRequest, "2026-04-26T10:02:30.000Z");
+
+      assert.equal(result.status, "sent");
+      assert.equal(timeoutMs, 2500);
+    } finally {
+      AbortSignal.timeout = timeout;
+    }
+  });
+});
+
+test("deliverInvitationEmail falls back to default webhook timeout for invalid values", async () => {
+  await withInvitationEmailEnv(async (store) => {
+    let timeoutMs: number | undefined;
+    const timeout = AbortSignal.timeout;
+    AbortSignal.timeout = ((milliseconds: number) => {
+      timeoutMs = milliseconds;
+      return timeout(milliseconds);
+    }) as typeof AbortSignal.timeout;
+
+    try {
+      process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "webhook";
+      process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV] = "https://mail.example.test/invitations";
+      process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV] = "0";
+      setInvitationEmailFetchForTests(async () => new Response(null, { status: 202, statusText: "Accepted" }));
+
+      const result = await deliverInvitationEmail(store, invitationRequest, "2026-04-26T10:02:45.000Z");
+
+      assert.equal(result.status, "sent");
+      assert.equal(timeoutMs, DEFAULT_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS);
+    } finally {
+      AbortSignal.timeout = timeout;
+    }
+  });
+});
+
+test("deliverInvitationEmail records webhook timeout abort failures", async () => {
+  await withInvitationEmailEnv(async (store) => {
+    process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "webhook";
+    process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV] = "https://mail.example.test/invitations";
+    process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV] = "1";
+    setInvitationEmailFetchForTests((_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("webhook request aborted")), { once: true });
+    }));
+
+    const result = await deliverInvitationEmail(store, invitationRequest, "2026-04-26T10:02:50.000Z");
+    const delivery = store.invitationEmailDeliveries.at(-1);
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "webhook request aborted");
+    assert.equal(delivery?.status, "failed");
+    assert.equal(delivery?.mode, "webhook");
+    assert.equal(delivery?.provider, "webhook");
+    assert.equal(delivery?.sentAt, undefined);
+    assert.equal(delivery?.error, "webhook request aborted");
   });
 });
 

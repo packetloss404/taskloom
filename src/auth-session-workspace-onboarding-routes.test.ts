@@ -145,6 +145,88 @@ test("auth routes rate limit repeated local attempts", async () => {
   assert.deepEqual(await limitedLogin.json(), { error: "too many requests" });
 });
 
+test("auth rate limit env overrides max attempts and window", async () => {
+  const previousMaxAttempts = process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+  const previousWindowMs = process.env.TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS;
+  try {
+    process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS = "2";
+    process.env.TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS = "2500";
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+    const headers = { "content-type": "application/json" };
+
+    const first = await app.request("/api/auth/login", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(first.status, 401);
+    const bucket = (loadStore().rateLimits ?? []).find((entry) => entry.id.startsWith("auth:login:"));
+    assert.ok(bucket, "expected auth login rate limit bucket");
+    assert.equal(new Date(bucket.resetAt).getTime() - new Date(bucket.updatedAt).getTime(), 2500);
+
+    const second = await app.request("/api/auth/login", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(second.status, 401);
+
+    const limited = await app.request("/api/auth/login", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(limited.status, 429);
+  } finally {
+    restoreEnv("TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS", previousMaxAttempts);
+    restoreEnv("TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS", previousWindowMs);
+  }
+});
+
+test("auth rate limit invalid env values fall back to defaults", async () => {
+  const previousMaxAttempts = process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+  const previousWindowMs = process.env.TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS;
+  try {
+    process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS = "0";
+    process.env.TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS = "not-a-number";
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+    const headers = { "content-type": "application/json" };
+
+    const first = await app.request("/api/auth/login", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(first.status, 401);
+    const bucket = (loadStore().rateLimits ?? []).find((entry) => entry.id.startsWith("auth:login:"));
+    assert.ok(bucket, "expected auth login rate limit bucket");
+    assert.equal(new Date(bucket.resetAt).getTime() - new Date(bucket.updatedAt).getTime(), 60_000);
+
+    for (let index = 1; index < 20; index += 1) {
+      const response = await app.request("/api/auth/login", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+      });
+      assert.equal(response.status, 401);
+    }
+
+    const limited = await app.request("/api/auth/login", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(limited.status, 429);
+  } finally {
+    restoreEnv("TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS", previousMaxAttempts);
+    restoreEnv("TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS", previousWindowMs);
+  }
+});
+
 test("auth route rate limits persist across app instances and store reloads", { concurrency: false }, async () => {
   const previousStore = process.env.TASKLOOM_STORE;
   const previousDbPath = process.env.TASKLOOM_DB_PATH;
@@ -731,6 +813,85 @@ test("invitation create, accept, and resend routes are rate limited", async () =
     assert.equal(acceptLimited.status, 429);
   } finally {
     restoreEnv("TASKLOOM_TRUST_PROXY", previousTrustProxy);
+  }
+});
+
+test("invitation rate limit env overrides max attempts and window", async () => {
+  const previousMaxAttempts = process.env.TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS;
+  const previousWindowMs = process.env.TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS;
+  try {
+    process.env.TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS = "1";
+    process.env.TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS = "3456";
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    setAlphaRole("admin");
+    const headers = { ...authHeaders(alpha.cookieValue), "content-type": "application/json" };
+
+    const first = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "not-an-email", role: "member" }),
+    });
+    assert.equal(first.status, 400);
+    const bucket = (loadStore().rateLimits ?? []).find((entry) => entry.id.startsWith("invitation:create:"));
+    assert.ok(bucket, "expected invitation create rate limit bucket");
+    assert.equal(new Date(bucket.resetAt).getTime() - new Date(bucket.updatedAt).getTime(), 3456);
+
+    const limited = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "not-an-email", role: "member" }),
+    });
+    assert.equal(limited.status, 429);
+  } finally {
+    restoreEnv("TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS", previousMaxAttempts);
+    restoreEnv("TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS", previousWindowMs);
+  }
+});
+
+test("invitation rate limit invalid env values fall back to defaults", async () => {
+  const previousMaxAttempts = process.env.TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS;
+  const previousWindowMs = process.env.TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS;
+  try {
+    process.env.TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS = "-1";
+    process.env.TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS = "";
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    setAlphaRole("admin");
+    const headers = { ...authHeaders(alpha.cookieValue), "content-type": "application/json" };
+
+    const first = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "not-an-email", role: "member" }),
+    });
+    assert.equal(first.status, 400);
+    const bucket = (loadStore().rateLimits ?? []).find((entry) => entry.id.startsWith("invitation:create:"));
+    assert.ok(bucket, "expected invitation create rate limit bucket");
+    assert.equal(new Date(bucket.resetAt).getTime() - new Date(bucket.updatedAt).getTime(), 60_000);
+
+    for (let index = 1; index < 20; index += 1) {
+      const response = await app.request("/api/app/invitations", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: "not-an-email", role: "member" }),
+      });
+      assert.equal(response.status, 400);
+    }
+
+    const limited = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "not-an-email", role: "member" }),
+    });
+    assert.equal(limited.status, 429);
+  } finally {
+    restoreEnv("TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS", previousMaxAttempts);
+    restoreEnv("TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS", previousWindowMs);
   }
 });
 

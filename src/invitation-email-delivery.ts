@@ -124,6 +124,7 @@ async function sendInvitationEmailWebhook(
   const response = await fetchImplementation(webhook.url, {
     method: "POST",
     headers,
+    signal: AbortSignal.timeout(webhook.timeoutMs),
     body: JSON.stringify({
       workspaceId: request.workspaceId,
       workspaceName: request.workspaceName,

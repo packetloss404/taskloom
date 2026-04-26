@@ -30,8 +30,18 @@ import { findWorkspaceMembership, loadStore, rateLimitRepository } from "./taskl
 
 export const appRoutes = new Hono();
 
-const AUTH_RATE_LIMIT = { maxAttempts: 20, windowMs: 60_000 };
-const INVITATION_RATE_LIMIT = { maxAttempts: 20, windowMs: 60_000 };
+const AUTH_RATE_LIMIT = {
+  maxAttempts: 20,
+  windowMs: 60_000,
+  maxAttemptsEnv: "TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS",
+  windowMsEnv: "TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS",
+};
+const INVITATION_RATE_LIMIT = {
+  maxAttempts: 20,
+  windowMs: 60_000,
+  maxAttemptsEnv: "TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS",
+  windowMsEnv: "TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS",
+};
 const RATE_LIMIT_MAX_BUCKETS = 5_000;
 
 export function resetAppRouteSecurityForTests() {
@@ -276,12 +286,12 @@ function requireWorkspacePermission(context: AuthenticatedRouteContext, permissi
   assertPermission(membership, permission);
 }
 
-function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number }) {
+function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number; maxAttemptsEnv: string; windowMsEnv: string }) {
   const timestamp = Date.now();
   const limitedUntil = rateLimitRepository().upsert({
     bucketId: `${scope}:${hashedClientKey(clientKey(c))}`,
-    maxAttempts: options.maxAttempts,
-    windowMs: options.windowMs,
+    maxAttempts: configuredPositiveInteger(options.maxAttemptsEnv, options.maxAttempts),
+    windowMs: configuredPositiveInteger(options.windowMsEnv, options.windowMs),
     timestamp,
     maxBuckets: configuredPositiveInteger("TASKLOOM_RATE_LIMIT_MAX_BUCKETS", RATE_LIMIT_MAX_BUCKETS),
   });
