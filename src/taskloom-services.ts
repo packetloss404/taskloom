@@ -6,24 +6,32 @@ import { deriveActivationStatus } from "./activation/service";
 import { buildActivationSummaryCard } from "./activation/view-model";
 import {
   defaultWorkspaceIdForUser,
+  deleteWorkspaceEnvVar,
   findAgent,
   findProvider,
+  findWorkspaceEnvVar,
   listAgentRunsForAgent,
   listAgentRunsForWorkspace,
   listAgentsForWorkspace,
   listProvidersForWorkspace,
+  listReleaseConfirmationsForWorkspace,
+  listWorkspaceEnvVars,
   loadStore,
   mutateStore,
   nextIncompleteStep,
   type ActivityRecord,
   type AgentRecord,
+  type AgentRunRecord,
   type AgentStatus,
   type ProviderKind,
+  type WorkspaceEnvVarRecord,
+  type WorkspaceEnvVarScope,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
   upsertAgent,
   upsertAgentRun,
   upsertProvider,
+  upsertWorkspaceEnvVar,
 } from "./taskloom-store";
 import {
   buildSessionCookieValue,
@@ -558,7 +566,232 @@ export function updateProvider(context: AuthenticatedContext, providerId: string
 
 export function listAgentRuns(context: AuthenticatedContext) {
   const data = loadStore();
-  return { runs: listAgentRunsForWorkspace(data, context.workspace.id).slice(0, 50) };
+  return { runs: listAgentRunsForWorkspace(data, context.workspace.id).slice(0, 50).map(decorateRun) };
+}
+
+export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
+  const timestamp = now();
+  return mutateStore((data) => {
+    const run = data.agentRuns.find((entry) => entry.id === runId);
+    if (!run || run.workspaceId !== context.workspace.id) {
+      throw httpError(404, "agent run not found");
+    }
+    if (run.status !== "queued" && run.status !== "running") {
+      throw httpError(409, "only queued or running runs can be canceled");
+    }
+
+    const updated = upsertAgentRun(data, {
+      ...run,
+      status: "canceled",
+      completedAt: timestamp,
+      error: run.error ?? "Canceled by operator.",
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run_canceled", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Run canceled: ${updated.title}`, agentId: updated.agentId, runId: updated.id }, timestamp));
+
+    return { run: decorateRun(updated) };
+  });
+}
+
+export function retryAgentRun(context: AuthenticatedContext, runId: string) {
+  const data = loadStore();
+  const previous = data.agentRuns.find((entry) => entry.id === runId);
+  if (!previous || previous.workspaceId !== context.workspace.id) {
+    throw httpError(404, "agent run not found");
+  }
+  if (!previous.agentId) {
+    throw httpError(400, "this run is not linked to an agent and cannot be retried");
+  }
+  return runAgent(context, previous.agentId);
+}
+
+export function listWorkspaceEnvVarsForUser(context: AuthenticatedContext) {
+  const data = loadStore();
+  return { envVars: listWorkspaceEnvVars(data, context.workspace.id).map(maskEnvVar) };
+}
+
+export function createWorkspaceEnvVar(context: AuthenticatedContext, input: WorkspaceEnvVarInput) {
+  const normalized = normalizeEnvVarInput(input);
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const conflict = listWorkspaceEnvVars(data, context.workspace.id)
+      .find((entry) => entry.key === normalized.key);
+    if (conflict) throw httpError(409, `env var ${normalized.key} already exists`);
+
+    const created = upsertWorkspaceEnvVar(data, {
+      workspaceId: context.workspace.id,
+      key: normalized.key,
+      value: normalized.value,
+      scope: normalized.scope,
+      secret: normalized.secret,
+      description: normalized.description,
+      createdByUserId: context.user.id,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var added: ${created.key}`, envVarId: created.id, scope: created.scope, secret: created.secret }, timestamp));
+
+    return { envVar: maskEnvVar(created) };
+  });
+}
+
+export function updateWorkspaceEnvVar(
+  context: AuthenticatedContext,
+  envVarId: string,
+  input: Partial<WorkspaceEnvVarInput>,
+) {
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const existing = findWorkspaceEnvVar(data, envVarId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "env var not found");
+    }
+
+    const merged = normalizeEnvVarInput({
+      key: input.key ?? existing.key,
+      value: input.value ?? existing.value,
+      scope: input.scope ?? existing.scope,
+      secret: input.secret ?? existing.secret,
+      description: input.description ?? existing.description,
+    });
+
+    if (merged.key !== existing.key) {
+      const conflict = listWorkspaceEnvVars(data, context.workspace.id)
+        .find((entry) => entry.key === merged.key && entry.id !== existing.id);
+      if (conflict) throw httpError(409, `env var ${merged.key} already exists`);
+    }
+
+    const updated = upsertWorkspaceEnvVar(data, {
+      ...existing,
+      key: merged.key,
+      value: merged.value,
+      scope: merged.scope,
+      secret: merged.secret,
+      description: merged.description,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var updated: ${updated.key}`, envVarId: updated.id }, timestamp));
+
+    return { envVar: maskEnvVar(updated) };
+  });
+}
+
+export function deleteWorkspaceEnvVarById(context: AuthenticatedContext, envVarId: string) {
+  const timestamp = now();
+  return mutateStore((data) => {
+    const existing = findWorkspaceEnvVar(data, envVarId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "env var not found");
+    }
+    deleteWorkspaceEnvVar(data, envVarId);
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.deleted", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var removed: ${existing.key}`, envVarId: existing.id }, timestamp));
+    return { ok: true };
+  });
+}
+
+export function listReleaseHistory(context: AuthenticatedContext) {
+  const data = loadStore();
+  const releases = listReleaseConfirmationsForWorkspace(data, context.workspace.id)
+    .sort((left, right) => (right.confirmedAt ?? right.updatedAt).localeCompare(left.confirmedAt ?? left.updatedAt));
+
+  const evidence = data.validationEvidence.filter((entry) => entry.workspaceId === context.workspace.id);
+  const concerns = data.workflowConcerns.filter((entry) => entry.workspaceId === context.workspace.id);
+
+  const passedEvidence = evidence.filter((entry) => entry.status === "passed").length;
+  const failedEvidence = evidence.filter((entry) => entry.status === "failed").length;
+  const pendingEvidence = evidence.filter((entry) => !entry.status || entry.status === "pending").length;
+  const openBlockers = concerns.filter((entry) => entry.kind === "blocker" && entry.status === "open").length;
+  const openQuestions = concerns.filter((entry) => entry.kind === "open_question" && entry.status === "open").length;
+
+  return {
+    releases: releases.map((entry) => ({
+      id: entry.id ?? entry.workspaceId,
+      workspaceId: entry.workspaceId,
+      versionLabel: entry.versionLabel ?? "release",
+      status: entry.status ?? (entry.confirmed ? "confirmed" : "pending"),
+      confirmed: Boolean(entry.confirmed || entry.status === "confirmed"),
+      summary: entry.summary ?? entry.releaseNotes ?? "",
+      confirmedBy: entry.confirmedBy ?? "",
+      confirmedAt: entry.confirmedAt ?? null,
+      validationEvidenceIds: entry.validationEvidenceIds ?? [],
+      updatedAt: entry.updatedAt,
+    })),
+    preflight: {
+      passedEvidence,
+      failedEvidence,
+      pendingEvidence,
+      openBlockers,
+      openQuestions,
+      ready: failedEvidence === 0 && openBlockers === 0 && passedEvidence > 0,
+    },
+  };
+}
+
+type WorkspaceEnvVarInput = {
+  key?: string;
+  value?: string;
+  scope?: WorkspaceEnvVarScope;
+  secret?: boolean;
+  description?: string;
+};
+
+const ENV_VAR_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,254}$/;
+
+function normalizeEnvVarInput(input: WorkspaceEnvVarInput) {
+  const key = String(input.key ?? "").trim().toUpperCase();
+  if (!ENV_VAR_KEY_PATTERN.test(key)) {
+    throw httpError(400, "key must start with a letter and contain only A-Z, 0-9, and underscores");
+  }
+  const value = String(input.value ?? "");
+  if (value.length > 5000) throw httpError(400, "value must be 5000 characters or fewer");
+  const scope: WorkspaceEnvVarScope = input.scope === "build" || input.scope === "runtime" ? input.scope : "all";
+  const secret = Boolean(input.secret);
+  const description = stringOrUndefined(input.description);
+  return { key, value, scope, secret, description };
+}
+
+function maskEnvVar(record: WorkspaceEnvVarRecord) {
+  return {
+    ...record,
+    value: record.secret ? maskSecret(record.value) : record.value,
+    valuePreview: record.secret ? maskSecret(record.value) : null,
+    valueLength: record.value.length,
+  };
+}
+
+function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 4) return "•".repeat(value.length);
+  return `${"•".repeat(Math.max(value.length - 4, 4))}${value.slice(-4)}`;
+}
+
+function decorateRun(run: AgentRunRecord) {
+  const start = run.startedAt ? Date.parse(run.startedAt) : NaN;
+  const end = run.completedAt ? Date.parse(run.completedAt) : NaN;
+  const durationMs = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null;
+  return {
+    ...run,
+    durationMs,
+    canCancel: run.status === "queued" || run.status === "running",
+    canRetry: Boolean(run.agentId) && (run.status === "failed" || run.status === "canceled" || run.status === "success"),
+  };
 }
 
 type AgentInput = {

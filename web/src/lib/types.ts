@@ -99,6 +99,61 @@ export interface AgentRunRecord {
   error?: string;
   createdAt: string;
   updatedAt: string;
+  durationMs?: number | null;
+  canCancel?: boolean;
+  canRetry?: boolean;
+}
+
+export type WorkspaceEnvVarScope = "all" | "build" | "runtime";
+
+export interface WorkspaceEnvVarRecord {
+  id: string;
+  workspaceId: string;
+  key: string;
+  value: string;
+  scope: WorkspaceEnvVarScope;
+  secret: boolean;
+  description?: string;
+  createdByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+  valuePreview?: string | null;
+  valueLength?: number;
+}
+
+export type SaveWorkspaceEnvVarInput = {
+  key: string;
+  value: string;
+  scope?: WorkspaceEnvVarScope;
+  secret?: boolean;
+  description?: string;
+};
+
+export interface ReleaseHistoryEntry {
+  id: string;
+  workspaceId: string;
+  versionLabel: string;
+  status: "pending" | "confirmed" | "rolled_back";
+  confirmed: boolean;
+  summary: string;
+  confirmedBy: string;
+  confirmedAt: string | null;
+  validationEvidenceIds: string[];
+  updatedAt: string;
+}
+
+export interface ReleasePreflight {
+  passedEvidence: number;
+  failedEvidence: number;
+  pendingEvidence: number;
+  openBlockers: number;
+  openQuestions: number;
+  ready: boolean;
+}
+
+export interface ReleaseHistoryPayload {
+  releases: ReleaseHistoryEntry[];
+  preflight: ReleasePreflight;
 }
 
 export type SaveAgentInput = {

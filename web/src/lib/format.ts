@@ -10,3 +10,12 @@ export function relative(iso: string | null | undefined): string {
   if (absMin < 60 * 24) return RELATIVE.format(Math.round(diffMs / 3_600_000), "hour");
   return RELATIVE.format(Math.round(diffMs / 86_400_000), "day");
 }
+
+export function duration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
