@@ -129,7 +129,18 @@ export default function Sidebar() {
             </div>
           )}
 
-          <div className="mt-2 px-2 text-[11px] text-ink-500">Self-hosted workspace</div>
+          <div className="mt-2 flex items-center justify-between px-2 text-[11px] text-ink-500">
+            <span>Self-hosted workspace</span>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }))}
+              className="inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-ink-300 transition-colors hover:border-ink-600 hover:text-ink-100"
+              aria-label="Show keyboard shortcuts"
+              title="Keyboard shortcuts"
+            >
+              ?
+            </button>
+          </div>
         </div>
       </aside>
     </>

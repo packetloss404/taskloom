@@ -15,6 +15,7 @@ import WorkflowPage from "./pages/Workflow";
 import OperationsPage from "./pages/Operations";
 import IntegrationsPage from "./pages/Integrations";
 import RunsPage from "./pages/Runs";
+import NotFoundPage from "./pages/NotFound";
 
 export default function App() {
   return (
@@ -72,7 +73,9 @@ export default function App() {
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/activity/:id" element={<ActivityDetailPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }
