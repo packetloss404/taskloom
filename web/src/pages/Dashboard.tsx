@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Activity, Bot, CalendarClock, KeyRound, Loader2, Plus, Play, RefreshCw, Sparkles, Workflow } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
-import type { AgentRecord, AgentRunRecord, BootstrapPayload, ProviderRecord, WorkflowDraft } from "@/lib/types";
+import type {
+  ActivityRecord,
+  AgentRecord,
+  AgentRunRecord,
+  BootstrapPayload,
+  ProviderRecord,
+  WorkflowDraft,
+} from "@/lib/types";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -11,9 +18,9 @@ export default function DashboardPage() {
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
+  const [activities, setActivities] = useState<ActivityRecord[]>([]);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(true);
-  const [runningId, setRunningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [draft, setDraft] = useState<WorkflowDraft | null>(null);
@@ -34,6 +41,7 @@ export default function DashboardPage() {
       setAgents(nextAgents);
       setProviders(nextProviders);
       setRuns(nextRuns);
+      setActivities(nextBootstrap.activities ?? []);
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
@@ -52,6 +60,11 @@ export default function DashboardPage() {
     };
   }, [providers]);
 
+  const openBlockers = useMemo(() => {
+    const items = bootstrap?.activation.summary.items ?? [];
+    return items.filter((item) => !item.completed).length;
+  }, [bootstrap]);
+
   const generateDraft = async () => {
     setError(null);
     setMessage(null);
@@ -59,7 +72,7 @@ export default function DashboardPage() {
     try {
       const result = await api.generateWorkflowFromPrompt({ prompt, apply: false });
       setDraft(result.draft);
-      setMessage("Draft workflow generated from prompt. Review below and apply when ready.");
+      setMessage("Draft workflow generated. Review below and apply when ready.");
     } catch (draftError) {
       setError((draftError as Error).message);
     } finally {
@@ -84,315 +97,513 @@ export default function DashboardPage() {
     }
   };
 
-  const runAgent = async (agentId: string) => {
-    setRunningId(agentId);
-    setError(null);
-    setMessage(null);
-    try {
-      await api.runAgent(agentId);
-      setMessage("Agent run recorded.");
-      await loadDashboard();
-    } catch (runError) {
-      setError((runError as Error).message);
-    } finally {
-      setRunningId(null);
-    }
-  };
-
   if (loading) {
     return (
-      <div className="space-y-4">
-        <div className="h-8 w-64 animate-pulse rounded-lg bg-ink-850" />
-        <div className="h-44 animate-pulse rounded-2xl bg-ink-900" />
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="h-28 animate-pulse rounded-2xl bg-ink-900" />
-          <div className="h-28 animate-pulse rounded-2xl bg-ink-900" />
-          <div className="h-28 animate-pulse rounded-2xl bg-ink-900" />
+      <div className="page-frame space-y-6">
+        <div className="h-3 w-40 animate-pulse bg-ink-850" />
+        <div className="h-16 w-2/3 animate-pulse bg-ink-850" />
+        <div className="h-px w-full bg-ink-800" />
+        <div className="grid grid-cols-4 gap-px bg-ink-800">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-24 animate-pulse bg-ink-900" />
+          ))}
         </div>
       </div>
     );
   }
 
+  const workspaceName = bootstrap?.workspace.name ?? "Workspace";
+  const stage = bootstrap?.activation.summary.stageLabel ?? "—";
+  const risk = bootstrap?.activation.summary.riskLabel ?? "—";
+  const riskLevel = bootstrap?.activation.summary.riskLevel ?? "low";
+  const activation = bootstrap?.activation.summary.progressLabel ?? "0%";
+  const activationPercent = bootstrap?.activation.summary.progressPercent ?? 0;
+
   return (
-    <>
-      <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
+    <div className="page-frame">
+      <header className="mb-12 flex flex-wrap items-end justify-between gap-6">
         <div>
-          <p className="text-sm text-ink-400">{bootstrap?.workspace.name ?? "Workspace"}</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink-100">Dashboard</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-400">
-            Build agents, connect your own providers, and run scheduled workflows without platform credit lock-in.
+          <p className="kicker">WORKSPACE OVERVIEW · {workspaceName.toUpperCase()}</p>
+          <h1 className="display-xl mt-3">{workspaceName}</h1>
+          <p className="mt-4 max-w-xl text-sm leading-6 text-ink-400">
+            Build agents, connect your own providers, and run scheduled workflows without
+            platform credit lock-in.
           </p>
         </div>
-        <button className="btn-ghost" type="button" onClick={loadDashboard}>
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <span className="section-marker">§ 01 / 06</span>
+          <button className="btn-ghost" type="button" onClick={loadDashboard}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
       </header>
 
-      {error && <Status tone="error">{error}</Status>}
-      {message && !error && <Status tone="success">{message}</Status>}
+      {error && <Banner tone="error">{error}</Banner>}
+      {message && !error && <Banner tone="success">{message}</Banner>}
 
-      <section className="mb-6 rounded-2xl border border-ink-700/70 bg-ink-900/70 p-4 shadow-card sm:p-5">
-        <label className="mb-2 block text-sm font-medium text-ink-200" htmlFor="automation-prompt">
-          What do you want to automate?
-        </label>
-        <textarea
-          id="automation-prompt"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          rows={4}
-          className="dashboard-input resize-none"
-          placeholder="Every weekday at 8am, check my support inbox, summarize urgent items, draft replies, and post a brief."
-        />
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-primary bg-ink-100 text-ink-950 hover:bg-white"
-            onClick={() => navigate("/agents/new", { state: { prompt } })}
-          >
-            <Plus className="h-4 w-4" /> New Agent
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => void generateDraft()}
-            disabled={drafting || prompt.trim().length < 8}
-          >
-            {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            Draft workflow from prompt
-          </button>
-          <Link to="/workflows" className="btn-ghost">
-            <Workflow className="h-4 w-4" /> New Workflow
-          </Link>
-          <Link to="/integrations" className="btn-ghost">
-            <KeyRound className="h-4 w-4" /> Connect Provider
-          </Link>
+      {/* STAT STRIP */}
+      <section className="mb-2">
+        <div className="grid grid-cols-2 gap-px border border-ink-700 bg-ink-700 sm:grid-cols-4">
+          <StatCell label="STAGE" value={stage} />
+          <StatCell label="RISK" value={risk} tone={riskLevel === "high" ? "danger" : riskLevel === "medium" ? "warn" : "good"} />
+          <StatCell label="ACTIVATION" value={activation} subline={`${activationPercent}/100`} />
+          <StatCell
+            label="OPEN BLOCKERS"
+            value={String(openBlockers).padStart(2, "0")}
+            tone={openBlockers > 0 ? "warn" : "good"}
+          />
         </div>
       </section>
 
-      {draft && (
-        <section className="mb-6 rounded-2xl border border-accent-500/30 bg-ink-900/70 p-4 shadow-card sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-ink-100">Draft workflow preview</h2>
-              <p className="mt-1 max-w-2xl text-sm text-ink-400">
-                Generated brief, requirements, and plan items. Apply to overwrite this workspace's workflow.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button type="button" className="btn-ghost" onClick={() => setDraft(null)} disabled={applying}>
-                Discard
+      {/* DRAFT WORKFLOW */}
+      <section className="section-band mt-12">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="kicker">§ 02 / 06 · PROMPT INTAKE</p>
+            <h2 className="display mt-2 text-3xl">Draft workflow from prompt.</h2>
+          </div>
+          <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
+            MODEL · gpt-4.1-mini · ~$0.0040 / draft
+          </span>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[1.4fr_0.6fr]">
+          <div>
+            <label className="kicker mb-2 block" htmlFor="automation-prompt">
+              AUTOMATION REQUEST
+            </label>
+            <textarea
+              id="automation-prompt"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              rows={5}
+              className="workflow-input resize-none"
+              placeholder="Every weekday at 8am, check my support inbox, summarize urgent items, draft replies, and post a brief."
+            />
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void generateDraft()}
+                disabled={drafting || prompt.trim().length < 8}
+              >
+                {drafting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>▸</span>
+                )}
+                Draft workflow
               </button>
               <button
                 type="button"
-                className="btn-primary bg-ink-100 text-ink-950 hover:bg-white"
-                onClick={() => void applyDraft()}
-                disabled={applying}
+                className="btn-ghost"
+                onClick={() => navigate("/agents/new", { state: { prompt } })}
               >
-                {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Workflow className="h-4 w-4" />}
-                Apply to workflow
+                + New agent
               </button>
+              <span className="ml-auto font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
+                CHAR · {prompt.length.toString().padStart(4, "0")}
+              </span>
             </div>
           </div>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500">Brief</h3>
-              <p className="mt-2 text-sm leading-6 text-ink-200">{draft.brief.summary}</p>
-              {draft.brief.targetCustomers.length > 0 && (
-                <p className="mt-2 text-xs text-ink-500">For: {draft.brief.targetCustomers.join(", ")}</p>
-              )}
+          <aside className="border-l border-ink-800 pl-6">
+            <p className="kicker mb-3">JUMP</p>
+            <ul className="space-y-2 text-sm">
+              <li>
+                <Link to="/workflows" className="leader flex justify-between text-ink-200 hover:text-signal-amber">
+                  <span>Workflow brief</span>
+                  <span className="font-mono text-ink-500">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link to="/agents" className="leader flex justify-between text-ink-200 hover:text-signal-amber">
+                  <span>Agents catalogue</span>
+                  <span className="font-mono text-ink-500">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link to="/operations" className="leader flex justify-between text-ink-200 hover:text-signal-amber">
+                  <span>Operations</span>
+                  <span className="font-mono text-ink-500">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link to="/integrations" className="leader flex justify-between text-ink-200 hover:text-signal-amber">
+                  <span>Provider keys</span>
+                  <span className="font-mono text-ink-500">→</span>
+                </Link>
+              </li>
+            </ul>
+          </aside>
+        </div>
+
+        {draft && (
+          <div className="spec-frame mt-8">
+            <div className="spec-label spec-label--amber">DRAFT PREVIEW</div>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <p className="text-sm text-ink-300">
+                Generated brief, requirements, and plan items. Apply to overwrite this workspace's workflow.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => setDraft(null)}
+                  disabled={applying}
+                >
+                  × Discard
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => void applyDraft()}
+                  disabled={applying}
+                >
+                  {applying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span>▸</span>}
+                  Apply to workflow
+                </button>
+              </div>
             </div>
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500">Requirements</h3>
-              <ul className="mt-2 space-y-1.5 text-sm text-ink-200">
-                {draft.requirements.map((entry, index) => (
-                  <li key={`${entry.title}-${index}`} className="flex gap-2">
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent-400" />
-                    <span><span className="text-ink-400 capitalize">{entry.priority}</span> · {entry.title}</span>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-3">
+              <div>
+                <p className="kicker mb-2">BRIEF</p>
+                <p className="text-sm leading-6 text-ink-200">{draft.brief.summary}</p>
+                {draft.brief.targetCustomers.length > 0 && (
+                  <p className="mt-2 font-mono text-[11px] uppercase tracking-wide text-ink-500">
+                    FOR · {draft.brief.targetCustomers.join(", ")}
+                  </p>
+                )}
+              </div>
+              <div>
+                <p className="kicker mb-2">REQUIREMENTS</p>
+                <ul className="space-y-1.5 text-sm text-ink-200">
+                  {draft.requirements.map((entry, index) => (
+                    <li key={`${entry.title}-${index}`} className="flex gap-3">
+                      <span className="font-mono text-ink-500">{(index + 1).toString().padStart(2, "0")}</span>
+                      <span>
+                        <span className="font-mono text-[11px] uppercase tracking-wide text-ink-500">
+                          {entry.priority}
+                        </span>{" "}
+                        · {entry.title}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="kicker mb-2">PLAN ITEMS</p>
+                <ol className="space-y-1.5 text-sm text-ink-200">
+                  {draft.planItems.map((entry, index) => (
+                    <li key={`${entry.title}-${index}`} className="flex gap-3">
+                      <span className="font-mono text-ink-500">{(index + 1).toString().padStart(2, "0")}</span>
+                      <span>{entry.title}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ONBOARDING CHECKLIST */}
+      <section className="section-band">
+        <SectionHeader marker="§ 03 / 06" kicker="STATE OF THE WORKSPACE" title="Activation checklist." />
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="w-12"></th>
+                <th>MILESTONE</th>
+                <th>NOTE</th>
+                <th className="w-36 text-right">SINCE</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(bootstrap?.activation.summary.items ?? []).map((item) => (
+                <tr key={item.key}>
+                  <td className="font-mono text-ink-300">
+                    {item.completed ? (
+                      <span className="text-signal-green">[✓]</span>
+                    ) : (
+                      <span className="text-ink-500">[ ]</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="text-ink-100">{item.label}</div>
+                  </td>
+                  <td className="text-ink-400">{item.description}</td>
+                  <td className="num text-ink-500">
+                    {item.completed && item.completedAt ? relative(item.completedAt) : "—"}
+                  </td>
+                </tr>
+              ))}
+              {(bootstrap?.activation.summary.items ?? []).length === 0 && (
+                <tr>
+                  <td colSpan={4} className="text-center text-ink-500">
+                    No activation checklist available.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* RECENT ACTIVITY */}
+      <section className="section-band">
+        <SectionHeader marker="§ 04 / 06" kicker="LEDGER" title="Recent activity." viewAll="/activity" />
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="w-32">SCOPE</th>
+                <th>EVENT</th>
+                <th>ACTOR</th>
+                <th className="w-40 text-right">WHEN</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activities.slice(0, 10).map((activity) => (
+                <tr key={activity.id}>
+                  <td className="font-mono text-[11px] uppercase tracking-wide text-ink-500">{activity.scope}</td>
+                  <td className="text-ink-100">
+                    <Link to={`/activity/${activity.id}`} className="hover:text-signal-amber">
+                      {formatEventName(activity.event)}
+                    </Link>
+                  </td>
+                  <td className="text-ink-400">
+                    {activity.actor.displayName ?? activity.actor.id}
+                  </td>
+                  <td className="num text-ink-500">{relative(activity.occurredAt)}</td>
+                </tr>
+              ))}
+              {activities.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="text-center text-ink-500">
+                    No activity yet. Run an agent to populate the ledger.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* AGENTS + PROVIDERS + RUNS — typographic three-column ledger */}
+      <section className="section-band">
+        <SectionHeader marker="§ 05 / 06" kicker="ROSTER" title="Agents, providers, runs." />
+        <div className="grid gap-px bg-ink-800 lg:grid-cols-3">
+          <div className="bg-ink-950 p-6">
+            <div className="mb-4 flex items-baseline justify-between">
+              <p className="kicker">AGENTS · {agents.length.toString().padStart(2, "0")}</p>
+              <Link to="/agents" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500 hover:text-signal-amber">
+                ALL →
+              </Link>
+            </div>
+            {agents.length === 0 ? (
+              <p className="text-sm text-ink-500">
+                No agents yet. <Link to="/agents/new" className="text-signal-amber">Create one →</Link>
+              </p>
+            ) : (
+              <ul className="space-y-3">
+                {agents.slice(0, 5).map((agent) => (
+                  <li key={agent.id} className="border-b border-ink-800 pb-3 last:border-b-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <Link to={`/agents/${agent.id}`} className="text-sm text-ink-100 hover:text-signal-amber">
+                        {agent.name}
+                      </Link>
+                      <StatusPill status={agent.status} />
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] uppercase tracking-wide text-ink-500">
+                      {agent.provider?.name ?? "NO PROVIDER"} · {agent.model ?? "—"}
+                    </p>
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+
+          <div className="bg-ink-950 p-6">
+            <div className="mb-4 flex items-baseline justify-between">
+              <p className="kicker">
+                PROVIDERS · {providerCounts.connected.toString().padStart(2, "0")}/{providers.length.toString().padStart(2, "0")}
+              </p>
+              <Link to="/integrations" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500 hover:text-signal-amber">
+                ALL →
+              </Link>
             </div>
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500">Plan items</h3>
-              <ol className="mt-2 space-y-1.5 text-sm text-ink-200">
-                {draft.planItems.map((entry, index) => (
-                  <li key={`${entry.title}-${index}`} className="flex gap-2">
-                    <span className="text-ink-500">{index + 1}.</span>
-                    <span>{entry.title}</span>
+            {providers.length === 0 ? (
+              <p className="text-sm text-ink-500">No providers configured.</p>
+            ) : (
+              <ul className="space-y-3">
+                {providers.slice(0, 5).map((provider) => (
+                  <li key={provider.id} className="border-b border-ink-800 pb-3 last:border-b-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-sm text-ink-100">{provider.name}</span>
+                      <span
+                        className={`pill ${
+                          provider.status === "connected" ? "pill--good" : "pill--warn"
+                        }`}
+                      >
+                        {provider.status.replace("_", " ")}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] uppercase tracking-wide text-ink-500">
+                      {provider.defaultModel}
+                    </p>
                   </li>
                 ))}
-              </ol>
-            </div>
+              </ul>
+            )}
           </div>
-        </section>
-      )}
 
-      <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric icon={<Bot className="h-4 w-4" />} label="Agents" value={agents.length} />
-        <Metric icon={<CalendarClock className="h-4 w-4" />} label="Scheduled" value={agents.filter((agent) => agent.schedule).length} />
-        <Metric icon={<Activity className="h-4 w-4" />} label="Runs" value={runs.length} />
-        <Metric icon={<KeyRound className="h-4 w-4" />} label="Providers" value={`${providerCounts.connected}/${providers.length}`} />
+          <div className="bg-ink-950 p-6">
+            <div className="mb-4 flex items-baseline justify-between">
+              <p className="kicker">RUNS · {runs.length.toString().padStart(2, "0")}</p>
+              <Link to="/runs" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500 hover:text-signal-amber">
+                ALL →
+              </Link>
+            </div>
+            {runs.length === 0 ? (
+              <p className="text-sm text-ink-500">No runs yet.</p>
+            ) : (
+              <ul className="space-y-3">
+                {runs.slice(0, 5).map((run) => (
+                  <li key={run.id} className="border-b border-ink-800 pb-3 last:border-b-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-sm text-ink-100">{run.title}</span>
+                      <span
+                        className={`pill ${
+                          run.status === "failed"
+                            ? "pill--danger"
+                            : run.status === "success"
+                              ? "pill--good"
+                              : "pill--muted"
+                        }`}
+                      >
+                        {run.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] uppercase tracking-wide text-ink-500">
+                      {relative(run.createdAt)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
-        <section>
-          <SectionHeader title="Recent agents" to="/agents" />
-          {agents.length === 0 ? (
-            <EmptyState
-              icon={<Bot className="h-5 w-5" />}
-              title="No agents yet"
-              body="Create your first agent and it will persist to the backend, appear in the sidebar, and become runnable here."
-              action={<Link to="/agents/new" className="btn-primary bg-ink-100 text-ink-950 hover:bg-white"><Plus className="h-4 w-4" /> New Agent</Link>}
-            />
-          ) : (
-            <div className="grid gap-3">
-              {agents.slice(0, 5).map((agent) => (
-                <article key={agent.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Link to={`/agents/${agent.id}`} className="text-base font-semibold text-ink-100 hover:text-white">
-                          {agent.name}
-                        </Link>
-                        <Badge>{agent.status}</Badge>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-ink-400">{agent.description || "No description yet."}</p>
-                      <div className="mt-3 text-xs text-ink-500">
-                        {agent.provider?.name ?? "No provider"} {agent.model ? `· ${agent.model}` : ""} {agent.schedule ? `· ${agent.schedule}` : ""}
-                      </div>
-                    </div>
-                    <button className="btn-ghost justify-center" type="button" onClick={() => void runAgent(agent.id)} disabled={runningId === agent.id}>
-                      {runningId === agent.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                      Run
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+      {/* QUICK LINKS */}
+      <section className="section-band">
+        <SectionHeader marker="§ 06 / 06" kicker="JUMP DESK" title="Workspace surfaces." />
+        <ul className="divide-y divide-ink-800">
+          {[
+            { label: "Workflow brief & plan", to: "/workflows", code: "WF-01" },
+            { label: "Agents catalogue", to: "/agents", code: "AG-01" },
+            { label: "Operations · blockers, questions, release", to: "/operations", code: "OP-01" },
+            { label: "Run history & telemetry", to: "/runs", code: "RN-01" },
+            { label: "Provider keys & env vars", to: "/integrations", code: "IN-01" },
+            { label: "Settings", to: "/settings", code: "ST-01" },
+          ].map((link) => (
+            <li key={link.to}>
+              <Link
+                to={link.to}
+                className="leader flex items-center justify-between gap-4 py-3 text-sm text-ink-200 transition-colors hover:text-signal-amber"
+              >
+                <span className="flex items-baseline gap-3">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
+                    {link.code}
+                  </span>
+                  <span>{link.label}</span>
+                </span>
+                <span className="font-mono text-ink-500">→</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
 
-        <aside className="space-y-6">
-          <section>
-            <SectionHeader title="Provider status" to="/integrations" />
-            {providers.length === 0 ? (
-              <EmptyState icon={<KeyRound className="h-5 w-5" />} title="No providers" body="Connect an API provider or local runtime before running model-backed agents." />
-            ) : (
-              <div className="space-y-3">
-                {providers.map((provider) => (
-                  <div key={provider.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-ink-100">{provider.name}</div>
-                        <div className="mt-1 text-xs text-ink-500">{provider.defaultModel}</div>
-                      </div>
-                      <Badge tone={provider.status === "connected" ? "good" : "warn"}>{provider.status.replace("_", " ")}</Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+function StatCell({
+  label,
+  value,
+  subline,
+  tone,
+}: {
+  label: string;
+  value: string;
+  subline?: string;
+  tone?: "good" | "warn" | "danger";
+}) {
+  const valueColor =
+    tone === "danger" ? "text-signal-red" : tone === "warn" ? "text-signal-amber" : "text-ink-100";
+  return (
+    <div className="bg-ink-950 px-5 py-5">
+      <p className="kicker">{label}</p>
+      <p className={`mt-2 font-mono text-2xl font-semibold tracking-tight ${valueColor} num`}>{value}</p>
+      {subline && <p className="mt-1 font-mono text-[11px] uppercase tracking-wide text-ink-500">{subline}</p>}
+    </div>
+  );
+}
 
-          <section>
-            <SectionHeader title="Recent runs" to="/runs" />
-            {runs.length === 0 ? (
-              <EmptyState icon={<Activity className="h-5 w-5" />} title="No runs yet" body="Run an agent to record execution history here." />
-            ) : (
-              <div className="space-y-3">
-                {runs.slice(0, 6).map((run) => (
-                  <div key={run.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-ink-100">{run.title}</div>
-                        <div className="mt-1 text-xs text-ink-500">{relative(run.createdAt)}</div>
-                      </div>
-                      <Badge tone={run.status === "failed" ? "danger" : run.status === "success" ? "good" : "muted"}>{run.status}</Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        </aside>
+function SectionHeader({
+  marker,
+  kicker,
+  title,
+  viewAll,
+}: {
+  marker: string;
+  kicker: string;
+  title: string;
+  viewAll?: string;
+}) {
+  return (
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <p className="kicker">{marker} · {kicker}</p>
+        <h2 className="display mt-2 text-3xl">{title}</h2>
       </div>
-
-      <DashboardStyles />
-    </>
-  );
-}
-
-function SectionHeader({ title, to }: { title: string; to: string }) {
-  return (
-    <div className="mb-3 flex items-center justify-between gap-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">{title}</h2>
-      <Link to={to} className="text-sm text-ink-400 hover:text-ink-100">View all</Link>
+      {viewAll && (
+        <Link
+          to={viewAll}
+          className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-400 hover:text-signal-amber"
+        >
+          VIEW ALL →
+        </Link>
+      )}
     </div>
   );
 }
 
-function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: number | string }) {
+function StatusPill({ status }: { status: AgentRecord["status"] }) {
+  const tone = status === "active" ? "pill--good" : status === "paused" ? "pill--warn" : "pill--muted";
+  return <span className={`pill ${tone}`}>{status}</span>;
+}
+
+function Banner({ tone, children }: { tone: "error" | "success"; children: ReactNode }) {
+  const cls =
+    tone === "error"
+      ? "border-signal-red text-signal-red"
+      : "border-signal-green text-signal-green";
   return (
-    <div className="rounded-2xl border border-ink-800/80 bg-ink-900/50 p-4">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-ink-500">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-2 text-3xl font-semibold text-ink-100">{value}</div>
+    <div className={`mb-6 border ${cls} bg-ink-950 px-4 py-3 font-mono text-xs uppercase tracking-wide`}>
+      {children}
     </div>
   );
 }
 
-function EmptyState({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action?: ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-dashed border-ink-700 bg-ink-900/25 p-6 text-center">
-      <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-ink-850 text-ink-300">{icon}</div>
-      <h3 className="mt-3 text-sm font-semibold text-ink-100">{title}</h3>
-      <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-ink-500">{body}</p>
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
-    </div>
-  );
+function formatEventName(event: string) {
+  return event.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function Badge({ children, tone = "muted" }: { children: ReactNode; tone?: "danger" | "good" | "muted" | "warn" }) {
-  const classes = {
-    danger: "border-rose-400/30 bg-rose-500/10 text-rose-200",
-    good: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
-    muted: "border-ink-700 bg-ink-950/40 text-ink-300",
-    warn: "border-amber-400/30 bg-amber-500/10 text-amber-200",
-  }[tone];
-  return <span className={`rounded-full border px-2.5 py-1 text-xs capitalize ${classes}`}>{children}</span>;
-}
-
-function Status({ tone, children }: { tone: "error" | "success"; children: ReactNode }) {
-  const classes = tone === "error"
-    ? "border-rose-400/40 bg-rose-500/10 text-rose-200"
-    : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200";
-  return <div className={`mb-6 rounded-xl border px-4 py-3 text-sm ${classes}`}>{children}</div>;
-}
-
+// Re-export a no-op DashboardStyles so other pages that imported it continue to compile.
 export function DashboardStyles() {
-  return (
-    <style>{`
-      .dashboard-input {
-        width: 100%;
-        border: 1px solid rgb(38 38 46 / 0.95);
-        border-radius: 14px;
-        background: rgb(8 8 12 / 0.58);
-        padding: 10px 12px;
-        color: rgb(244 244 245);
-        font-size: 14px;
-        outline: none;
-        transition: border-color 150ms, box-shadow 150ms, background 150ms;
-      }
-      .dashboard-input::placeholder { color: rgb(113 113 122); }
-      .dashboard-input:focus {
-        border-color: rgb(212 212 216 / 0.42);
-        box-shadow: 0 0 0 3px rgb(212 212 216 / 0.11);
-        background: rgb(8 8 12 / 0.75);
-      }
-      .dashboard-input:disabled { opacity: 0.65; cursor: not-allowed; }
-    `}</style>
-  );
+  return null;
 }

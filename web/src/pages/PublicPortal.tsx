@@ -1,5 +1,4 @@
 import { useState, type FormEvent } from "react";
-import { ArrowUp, ChevronDown, Paperclip } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { brand } from "@/config/brand";
 
@@ -13,76 +12,92 @@ export default function PublicPortalPage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#32342f] px-5 py-8 text-zinc-100">
-      <header className="mx-auto flex max-w-[672px] items-center justify-between gap-4">
-        <img src={brand.logoPath} alt={brand.name} className="h-8 w-auto" />
-        <Link
-          to="/sign-in"
-          className="rounded-full border border-white/10 bg-black/10 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:bg-black/20 hover:text-white"
-        >
-          Log in
-        </Link>
-      </header>
+    <main className="min-h-screen bg-ink-950 text-ink-200">
+      <div className="bg-grid-fine">
+        <header className="mx-auto flex max-w-7xl items-center justify-between px-12 py-8 max-md:px-5">
+          <div className="flex items-center gap-3">
+            <img src={brand.logoPath} alt={brand.name} className="h-7 w-auto" />
+            <span className="kicker">v0.1 · OPEN SOURCE</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link to="/sign-in" className="btn-ghost">Sign in</Link>
+            <Link to="/sign-up" className="btn-primary">Create workspace</Link>
+          </div>
+        </header>
 
-      <div className="mx-auto mt-8 max-w-[672px] sm:mt-6">
-        <section className="flex flex-col items-center">
-          <h1 className="text-center font-serif text-[34px] font-semibold leading-tight tracking-wide text-zinc-100 sm:text-[38px]">
-            What do you want to automate?
-          </h1>
-          <p className="mt-3 max-w-xl text-center text-sm leading-6 text-zinc-300/70">
-            Open-source agent builder. Bring your own API key, provider, or Agent SDK integration.
-          </p>
+        <section className="mx-auto grid max-w-7xl gap-12 px-12 pb-20 pt-12 md:grid-cols-[1.7fr_1fr] max-md:px-5">
+          <div>
+            <div className="kicker mb-6">§ 01 · WORKSPACE PORTAL</div>
+            <h1 className="display-xl">
+              Activation,<br />
+              workflows,<br />
+              and agents — <span className="text-signal-amber">in one workspace.</span>
+            </h1>
+            <p className="mt-8 max-w-xl font-sans text-lg leading-7 text-ink-300">
+              Taskloom is an open-source workspace for tracking activation, defining workflows, and running persistent agents — with a provider abstraction across Anthropic, OpenAI, MiniMax, and Ollama.
+            </p>
 
-          <form
-            onSubmit={enterWorkspace}
-            className="mt-6 w-full rounded-2xl border border-black/30 bg-[#3b3d38] shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_16px_44px_rgba(0,0,0,0.12)]"
-          >
-            <label className="sr-only" htmlFor="automation-intent">Automation request</label>
-            <textarea
-              id="automation-intent"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  enterWorkspace();
-                }
-              }}
-              placeholder="Every morning, scan my Gmail for new support emails, classify by urgency, draft a response, and alert me"
-              rows={3}
-              className="block min-h-20 w-full resize-none bg-transparent px-5 pt-4 text-[17px] leading-7 text-zinc-100 outline-none placeholder:text-zinc-300/45"
-            />
-
-            <div className="flex items-center justify-between gap-4 px-5 pb-4">
-              <button
-                type="button"
-                className="grid h-8 w-8 place-items-center rounded-full text-zinc-300/70 transition-colors hover:bg-black/10 hover:text-zinc-100"
-                aria-label="Attach context"
-                title="Attach context"
-              >
-                <Paperclip className="h-4 w-4" strokeWidth={1.8} />
-              </button>
-
-              <div className="flex items-center gap-5">
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1.5 text-sm text-zinc-200 transition-colors hover:text-white"
-                >
-                  New workspace <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.8} />
-                </button>
-                <button
-                  type="submit"
-                  className="grid h-8 w-8 place-items-center rounded-full bg-zinc-300 text-[#32342f] transition-colors hover:bg-white"
-                  aria-label="Continue"
-                  title="Continue"
-                >
-                  <ArrowUp className="h-5 w-5" strokeWidth={2} />
-                </button>
+            <form
+              onSubmit={enterWorkspace}
+              className="mt-10 max-w-xl border border-ink-700 bg-ink-875"
+            >
+              <div className="border-b border-ink-700 px-4 py-2 font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                DESCRIBE WHAT YOU WANT TO AUTOMATE
               </div>
-            </div>
-          </form>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    enterWorkspace();
+                  }
+                }}
+                placeholder="Every morning, scan Gmail for support email, classify by urgency, draft a response, and alert me…"
+                rows={4}
+                className="w-full resize-none bg-transparent px-4 py-4 text-sm leading-7 text-ink-100 outline-none placeholder:text-ink-500"
+              />
+              <div className="flex items-center justify-between border-t border-ink-700 px-4 py-3">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                  enter sends · shift+enter newline
+                </span>
+                <button type="submit" className="btn-primary">→ Continue</button>
+              </div>
+            </form>
+          </div>
+
+          <aside className="border-l border-ink-700 pl-10 max-md:border-l-0 max-md:border-t max-md:pl-0 max-md:pt-10">
+            <div className="kicker mb-6">CAPABILITIES · 06</div>
+            <ol>
+              {CAPABILITIES.map((cap, i) => (
+                <li key={cap.title} className="border-t border-ink-700 py-4 first:border-t-0">
+                  <div className="font-mono text-[10px] text-ink-500">
+                    {String(i + 1).padStart(2, "0")} ·
+                  </div>
+                  <h3 className="mt-1 font-serif text-xl text-ink-100">{cap.title}</h3>
+                  <p className="mt-1 text-sm leading-6 text-ink-400">{cap.description}</p>
+                </li>
+              ))}
+            </ol>
+          </aside>
         </section>
       </div>
+
+      <footer className="border-t border-ink-700">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-12 py-6 font-mono text-[11px] text-ink-500 max-md:px-5">
+          <span>© Taskloom · open source</span>
+          <span>github.com/packetloss404/taskloom</span>
+        </div>
+      </footer>
     </main>
   );
 }
+
+const CAPABILITIES = [
+  { title: "Activation tracking", description: "Track milestones, risk signals, and stage transitions across every workspace." },
+  { title: "Workflow drafting", description: "Brief, requirements, plan items, blockers, validation evidence, and release confirmation in one continuous chain." },
+  { title: "Agent runtime", description: "Persistent agents with playbooks, structured input schemas, and per-step transcripts." },
+  { title: "Provider abstraction", description: "One interface across Anthropic, OpenAI, MiniMax, and Ollama. Bring your own keys or run local." },
+  { title: "Job queue + cron", description: "Persistent queue with retry/cancel and scheduled recurring runs." },
+  { title: "Operations console", description: "Token + cost ledger, SSE streaming, env-var vault, release preflight." },
+];

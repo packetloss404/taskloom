@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { Archive, Bot, CalendarClock, ChevronDown, ChevronRight, Loader2, Play, Plus, Save, Trash2, Zap } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
   AgentInputField,
@@ -15,14 +15,26 @@ import type {
   SaveAgentInput,
 } from "@/lib/types";
 import { relative } from "@/lib/format";
-import { describeNextRun, triggerLabel, triggerToneClass, TRIGGER_KINDS } from "@/lib/agent-runtime";
+import { describeNextRun, triggerLabel, TRIGGER_KINDS } from "@/lib/agent-runtime";
 import PlaybookEditor from "@/components/PlaybookEditor";
 import RunTranscript from "@/components/RunTranscript";
-import { DashboardStyles } from "./Dashboard";
 
 type LocationState = { prompt?: string };
 
 const FIELD_TYPES: AgentInputFieldType[] = ["string", "number", "boolean", "url", "enum"];
+
+function statusPillClass(status: AgentRunRecord["status"]) {
+  if (status === "success") return "pill pill--good";
+  if (status === "failed") return "pill pill--danger";
+  if (status === "running") return "pill pill--warn";
+  return "pill";
+}
+
+function agentStatusPillClass(status: string) {
+  if (status === "active") return "pill pill--good";
+  if (status === "paused") return "pill pill--warn";
+  return "pill pill--muted";
+}
 
 export default function AgentEditorPage() {
   const { id } = useParams();
@@ -67,9 +79,6 @@ export default function AgentEditorPage() {
           setExpandedRun(detail.runs[0]?.id ?? null);
           setInputSchema(detail.agent.inputSchema ?? []);
           setRunInputs(seedRunInputs(detail.agent.inputSchema ?? []));
-        } else {
-          setInputSchema([]);
-          setRunInputs({});
         }
       } catch (loadError) {
         if (mounted) setError((loadError as Error).message);
@@ -78,9 +87,7 @@ export default function AgentEditorPage() {
       }
     };
     void load();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [id]);
 
   const defaults = useMemo<SaveAgentInput>(() => ({
@@ -169,408 +176,392 @@ export default function AgentEditorPage() {
   };
 
   if (loading) {
-    return <div className="flex items-center gap-3 text-sm text-ink-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading agent...</div>;
+    return (
+      <div className="page-frame flex items-center gap-3 text-sm text-ink-400">
+        <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING AGENT</span>
+      </div>
+    );
   }
 
   return (
-    <>
-      <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
+    <div className="page-frame">
+      <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
         <div>
-          <Link to="/agents" className="text-sm text-ink-400 hover:text-ink-100">Agents</Link>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink-100">{isNew ? "New Agent" : agent?.name}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-400">
-            Configure instructions, the playbook the agent runs, its trigger, provider, and a typed input schema. Runs validate inputs and capture both transcripts and step logs.
-          </p>
+          <Link to="/agents" className="kicker hover:text-signal-amber">← AGENTS</Link>
+          <div className="kicker mt-2 mb-3">{isNew ? "AGENT · NEW" : `AGENT · ${agent?.id ?? ""}`}</div>
+          <h1 className="display-xl">{isNew ? "New agent." : (agent?.name || "Untitled.")}</h1>
+          {agent && (
+            <p className="mt-4 font-mono text-xs text-ink-400">
+              <span className={agentStatusPillClass(agent.status)}>{agent.status}</span>
+              <span className="ml-3 text-ink-500">UPDATED {relative(agent.updatedAt).toUpperCase()}</span>
+              {agent.templateId && <span className="ml-3 text-ink-500">CLONED FROM {agent.templateId}</span>}
+            </p>
+          )}
         </div>
         {!isNew && agent && (
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-ghost" onClick={run} disabled={running || saving}>
-              {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run now
+              {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} Run now
             </button>
-            <button type="button" className="btn-ghost border-rose-500/30 text-rose-200 hover:border-rose-400/50 hover:bg-rose-500/10" onClick={archive} disabled={saving}>
-              <Archive className="h-4 w-4" /> Archive
+            <button type="button" className="btn-ghost" onClick={archive} disabled={saving}>
+              × Archive
             </button>
           </div>
         )}
       </header>
 
-      {error && <Status tone="error">{error}</Status>}
-      {message && !error && <Status tone="success">{message}</Status>}
+      {error && (
+        <div className="mb-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
+          ERR · {error}
+        </div>
+      )}
+      {message && !error && (
+        <div className="mb-6 border border-signal-green/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-green">
+          OK · {message}
+        </div>
+      )}
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
-        <form className="space-y-6" onSubmit={saveAgent}>
-          <section className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5">
+      <div className="grid gap-10 xl:grid-cols-[1fr_360px]">
+        <form className="space-y-0" onSubmit={saveAgent}>
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
+              <div>
+                <div className="kicker mb-2">CONFIGURATION</div>
+                <h2 className="display text-2xl">Identity & instructions</h2>
+              </div>
+              <span className="section-marker">§ 01 / 04</span>
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Name"><input name="name" defaultValue={defaults.name} className="dashboard-input" required /></Field>
-              <Field label="Status">
-                <select name="status" defaultValue={defaults.status} className="dashboard-input">
-                  <option value="active">Active</option>
-                  <option value="paused">Paused</option>
+              <Field label="NAME"><input name="name" defaultValue={defaults.name} className="workflow-input" required /></Field>
+              <Field label="STATUS">
+                <select name="status" defaultValue={defaults.status} className="workflow-input">
+                  <option value="active">active</option>
+                  <option value="paused">paused</option>
                 </select>
               </Field>
             </div>
-
             <div className="mt-4">
-              <Field label="Description"><input name="description" defaultValue={defaults.description} className="dashboard-input" placeholder="What this agent does" /></Field>
-            </div>
-
-            <div className="mt-4">
-              <Field label="Instructions / system prompt">
-                <textarea name="instructions" defaultValue={defaults.instructions} rows={6} className="dashboard-input resize-none" required />
+              <Field label="DESCRIPTION">
+                <input name="description" defaultValue={defaults.description} className="workflow-input" placeholder="What this agent does" />
               </Field>
             </div>
-
+            <div className="mt-4">
+              <Field label="INSTRUCTIONS · SYSTEM PROMPT">
+                <textarea name="instructions" defaultValue={defaults.instructions} rows={6} className="workflow-input resize-none" required />
+              </Field>
+            </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <Field label="Provider">
-                <select name="providerId" defaultValue={defaults.providerId} className="dashboard-input">
-                  <option value="">No provider yet</option>
+              <Field label="PROVIDER">
+                <select name="providerId" defaultValue={defaults.providerId} className="workflow-input">
+                  <option value="">— no provider yet —</option>
                   {providers.map((provider) => (
                     <option key={provider.id} value={provider.id}>{provider.name}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="Model"><input name="model" defaultValue={defaults.model} className="dashboard-input" placeholder="gpt-4.1-mini" /></Field>
+              <Field label="MODEL"><input name="model" defaultValue={defaults.model} className="workflow-input" placeholder="gpt-4.1-mini" /></Field>
             </div>
-
             <div className="mt-4">
-              <Field label="Tools / integrations"><input name="tools" defaultValue={defaults.tools?.join(", ")} className="dashboard-input" placeholder="gmail, slack, github" /></Field>
+              <Field label="TOOLS / INTEGRATIONS">
+                <input name="tools" defaultValue={defaults.tools?.join(", ")} className="workflow-input" placeholder="gmail, slack, github" />
+              </Field>
             </div>
           </section>
 
-          <section className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5">
-            <div className="mb-4 flex items-center gap-3">
-              <div className="grid h-9 w-9 place-items-center rounded-xl bg-ink-850 text-ink-300"><Zap className="h-4 w-4" /></div>
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-ink-100">Trigger</h2>
-                <p className="text-xs text-ink-500">How this agent gets invoked. Manual triggers always work; schedules drive the next-run estimate.</p>
+                <div className="kicker mb-2">TRIGGER</div>
+                <h2 className="display text-2xl">Invocation rules</h2>
+                <p className="mt-2 max-w-md font-mono text-xs text-ink-500">
+                  How this agent gets invoked. Manual always works; schedules drive the next-run estimate.
+                </p>
               </div>
+              <span className="section-marker">§ 02 / 04</span>
             </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Trigger kind">
-                <select
-                  className="dashboard-input"
-                  value={triggerKind}
-                  onChange={(event) => setTriggerKind(event.target.value as AgentTriggerKind)}
+            <div className="mb-4 flex flex-wrap gap-2">
+              {TRIGGER_KINDS.map((kind) => (
+                <button
+                  type="button"
+                  key={kind}
+                  className={triggerKind === kind ? "btn-primary" : "btn-ghost"}
+                  onClick={() => setTriggerKind(kind)}
                 >
-                  {TRIGGER_KINDS.map((kind) => (
-                    <option key={kind} value={kind}>{triggerLabel(kind)}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Cron schedule">
+                  {triggerLabel(kind)}
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="CRON SCHEDULE">
                 <input
                   name="schedule"
-                  className="dashboard-input"
+                  className="workflow-input"
                   value={schedule}
                   onChange={(event) => setSchedule(event.target.value)}
                   placeholder="0 8 * * 1-5"
                 />
               </Field>
-            </div>
-
-            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-ink-700 bg-ink-950/40 px-3 py-1 text-xs text-ink-300">
-              <CalendarClock className="h-3.5 w-3.5" /> {nextRunLabel}
+              <div>
+                <div className="kicker mb-1.5">NEXT RUN</div>
+                <div className="border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs text-ink-300">
+                  {nextRunLabel}
+                </div>
+              </div>
             </div>
           </section>
 
-          <section className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-ink-100">Playbook</h2>
-                <p className="text-xs text-ink-500">Ordered steps the agent walks through. Each run captures one transcript entry per step.</p>
+                <div className="kicker mb-2">PLAYBOOK · {playbook.length} STEP{playbook.length === 1 ? "" : "S"}</div>
+                <h2 className="display text-2xl">Ordered steps</h2>
               </div>
-              <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs text-ink-300">
-                {playbook.length} step{playbook.length === 1 ? "" : "s"}
-              </span>
+              <span className="section-marker">§ 03 / 04</span>
             </div>
-
             <PlaybookEditor steps={playbook} onChange={setPlaybook} />
           </section>
 
-          <InputSchemaEditor schema={inputSchema} onChange={setInputSchema} />
+          <section className="section-band">
+            <div className="mb-5 flex items-end justify-between">
+              <div>
+                <div className="kicker mb-2">INPUT SCHEMA</div>
+                <h2 className="display text-2xl">Typed parameters</h2>
+                <p className="mt-2 max-w-md font-mono text-xs text-ink-500">
+                  Validated server-side. Coerced into typed inputs on every run.
+                </p>
+              </div>
+              <span className="section-marker">§ 04 / 04</span>
+            </div>
+            <InputSchemaEditor schema={inputSchema} onChange={setInputSchema} />
+          </section>
 
-          <div className="flex justify-end">
-            <button type="submit" className="btn-primary bg-ink-100 text-ink-950 hover:bg-white" disabled={saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {isNew ? "Create Agent" : "Save Agent"}
+          <div className="mt-8 flex justify-end border-t border-ink-700 pt-6">
+            <button type="submit" className="btn-primary" disabled={saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "✓"} {isNew ? "Create agent" : "Save agent"}
             </button>
           </div>
         </form>
 
-        <aside className="space-y-6">
-          <section className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5">
-            <div className="flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-ink-850 text-ink-300"><Bot className="h-5 w-5" /></div>
-              <div>
-                <h2 className="text-sm font-semibold text-ink-100">Backend state</h2>
-                <p className="mt-1 text-xs text-ink-500">{agent ? `Updated ${relative(agent.updatedAt)}` : "New unsaved agent"}</p>
-                {agent?.templateId && <p className="mt-1 text-xs text-ink-500">Cloned from template <span className="text-ink-300">{agent.templateId}</span></p>}
-              </div>
-            </div>
-            {agent && (
-              <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                <span className={`rounded-full border px-2.5 py-1 capitalize ${triggerToneClass(agent.triggerKind)}`}>
-                  {triggerLabel(agent.triggerKind)}
-                </span>
-                <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-ink-300">
-                  {(agent.playbook?.length ?? 0)} playbook step{(agent.playbook?.length ?? 0) === 1 ? "" : "s"}
-                </span>
-              </div>
-            )}
-          </section>
-
+        <aside className="space-y-8">
           {!isNew && agent && (
-            <section className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Run with inputs</h2>
+            <section>
+              <div className="kicker mb-3">RUN WITH INPUTS</div>
               {inputSchema.length === 0 ? (
-                <p className="text-xs text-ink-500">No inputs defined. Add fields above to capture per-run parameters.</p>
+                <p className="border border-dashed border-ink-700 px-3 py-4 font-mono text-xs text-ink-500">
+                  — NO INPUTS DEFINED —
+                </p>
               ) : (
                 <div className="space-y-3">
-                  {inputSchema.map((field) => (
+                  {inputSchema.map((f) => (
                     <RunInputControl
-                      key={field.key}
-                      field={field}
-                      value={runInputs[field.key] ?? ""}
-                      onChange={(next) => setRunInputs((prev) => ({ ...prev, [field.key]: next }))}
+                      key={f.key}
+                      field={f}
+                      value={runInputs[f.key] ?? ""}
+                      onChange={(next) => setRunInputs((prev) => ({ ...prev, [f.key]: next }))}
                     />
                   ))}
                 </div>
               )}
-              <button type="button" className="btn-primary mt-4 w-full justify-center bg-ink-100 text-ink-950 hover:bg-white" onClick={run} disabled={running || saving}>
-                {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                Run agent
+              <button type="button" className="btn-primary mt-4 w-full justify-center" onClick={run} disabled={running || saving}>
+                {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} Execute
               </button>
             </section>
           )}
 
           <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Recent runs</h2>
+            <div className="kicker mb-3">RECENT RUNS</div>
             {runs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-ink-700 p-5 text-sm text-ink-500">No runs recorded for this agent.</div>
+              <p className="border border-dashed border-ink-700 px-3 py-4 font-mono text-xs text-ink-500">
+                — NO RUNS RECORDED —
+              </p>
             ) : (
-              <div className="space-y-3">
+              <ol>
                 {runs.map((runRecord) => {
                   const expanded = expandedRun === runRecord.id;
                   return (
-                    <div key={runRecord.id} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
+                    <li key={runRecord.id} className="border-t border-ink-700 py-3 first:border-t-0">
                       <button
                         type="button"
                         className="flex w-full items-start justify-between gap-3 text-left"
                         onClick={() => setExpandedRun(expanded ? null : runRecord.id)}
                       >
                         <div className="min-w-0">
-                          <div className="text-sm font-medium text-ink-100">{runRecord.title}</div>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-500">
-                            <span className={statusBadgeClass(runRecord.status)}>{runRecord.status}</span>
-                            <span>· {relative(runRecord.createdAt)}</span>
-                            <span className={`rounded-full border px-2 py-0.5 capitalize ${triggerToneClass(runRecord.triggerKind)}`}>
-                              {triggerLabel(runRecord.triggerKind)}
-                            </span>
+                          <div className="flex items-center gap-2">
+                            <span className={statusPillClass(runRecord.status)}>{runRecord.status}</span>
+                            <span className="truncate font-serif text-sm text-ink-100">{runRecord.title}</span>
+                          </div>
+                          <div className="mt-1 font-mono text-[10px] text-ink-500">
+                            {relative(runRecord.createdAt).toUpperCase()} · {triggerLabel(runRecord.triggerKind).toUpperCase()}
                           </div>
                           {runRecord.inputs && Object.keys(runRecord.inputs).length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-ink-400">
+                            <div className="mt-2 flex flex-wrap gap-1.5 font-mono text-[10px] text-ink-400">
                               {Object.entries(runRecord.inputs).map(([key, val]) => (
-                                <span key={key} className="rounded-md border border-ink-800 bg-ink-950/40 px-2 py-0.5">
+                                <span key={key}>
                                   <span className="text-ink-500">{key}:</span> {String(val)}
                                 </span>
                               ))}
                             </div>
                           )}
                         </div>
-                        {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-ink-400" />}
+                        <span className="font-mono text-xs text-ink-500">{expanded ? "[ − ]" : "[ + ]"}</span>
                       </button>
-                      {runRecord.error && <div className="mt-2 text-xs text-rose-300">{runRecord.error}</div>}
+                      {runRecord.error && (
+                        <div className="mt-2 font-mono text-xs text-signal-red">ERR · {runRecord.error}</div>
+                      )}
                       {expanded && (
-                        <div className="mt-3 space-y-3 border-t border-ink-800/60 pt-3">
+                        <div className="mt-3 space-y-3 border-t border-ink-800 pt-3">
                           <RunTranscript steps={runRecord.transcript} />
-                          {runRecord.output && <p className="text-sm leading-6 text-ink-300">{runRecord.output}</p>}
+                          {runRecord.output && (
+                            <pre className="border border-ink-700 bg-ink-950 p-3 font-mono text-xs leading-5 text-ink-200 whitespace-pre-wrap">{runRecord.output}</pre>
+                          )}
                           {runRecord.logs && runRecord.logs.length > 0 && <RunLogTimeline logs={runRecord.logs} />}
                         </div>
                       )}
-                    </div>
+                    </li>
                   );
                 })}
-              </div>
+              </ol>
             )}
           </section>
         </aside>
       </div>
-
-      <DashboardStyles />
-    </>
+    </div>
   );
 }
 
 function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; onChange: (next: AgentInputField[]) => void }) {
   const update = (index: number, patch: Partial<AgentInputField>) => {
-    onChange(schema.map((field, i) => (i === index ? { ...field, ...patch } : field)));
+    onChange(schema.map((f, i) => (i === index ? { ...f, ...patch } : f)));
   };
 
-  const remove = (index: number) => {
-    onChange(schema.filter((_, i) => i !== index));
-  };
+  const remove = (index: number) => onChange(schema.filter((_, i) => i !== index));
 
   const add = () => {
-    onChange([
-      ...schema,
-      { key: `field_${schema.length + 1}`, label: `Field ${schema.length + 1}`, type: "string", required: false },
-    ]);
+    onChange([...schema, { key: `field_${schema.length + 1}`, label: `Field ${schema.length + 1}`, type: "string", required: false }]);
   };
 
   return (
-    <div className="mt-6 rounded-2xl border border-ink-800 bg-ink-950/35 p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-ink-100">Input schema</h3>
-          <p className="mt-1 text-xs text-ink-500">Typed parameters captured on every run. Validated server-side.</p>
-        </div>
-        <button type="button" className="btn-ghost" onClick={add}>
-          <Plus className="h-4 w-4" /> Add field
-        </button>
-      </div>
-
+    <div>
       {schema.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-ink-700 p-4 text-xs text-ink-500">No input fields. Add one to capture per-run parameters.</div>
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center">
+          <div className="kicker mb-1.5">EMPTY SCHEMA</div>
+          <p className="font-mono text-xs text-ink-500">Add a field to capture per-run parameters.</p>
+        </div>
       ) : (
-        <div className="space-y-3">
-          {schema.map((field, index) => (
-            <div key={index} className="rounded-xl border border-ink-800 bg-ink-900/40 p-3">
-              <div className="grid gap-2 md:grid-cols-[1fr_1fr_120px_auto]">
-                <input
-                  className="dashboard-input"
-                  placeholder="key"
-                  value={field.key}
-                  onChange={(event) => update(index, { key: event.target.value.replace(/[^a-zA-Z0-9_]/g, "") })}
-                />
-                <input
-                  className="dashboard-input"
-                  placeholder="Label"
-                  value={field.label}
-                  onChange={(event) => update(index, { label: event.target.value })}
-                />
-                <select
-                  className="dashboard-input"
-                  value={field.type}
-                  onChange={(event) => update(index, { type: event.target.value as AgentInputFieldType })}
-                >
-                  {FIELD_TYPES.map((type) => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-                <button type="button" className="btn-ghost" onClick={() => remove(index)} aria-label="Remove field">
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="mt-2 grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                <input
-                  className="dashboard-input"
-                  placeholder="Description (optional)"
-                  value={field.description ?? ""}
-                  onChange={(event) => update(index, { description: event.target.value })}
-                />
-                <input
-                  className="dashboard-input"
-                  placeholder="Default value (optional)"
-                  value={field.defaultValue ?? ""}
-                  onChange={(event) => update(index, { defaultValue: event.target.value })}
-                />
-                <label className="flex items-center gap-2 text-xs text-ink-300">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Label</th>
+              <th>Type</th>
+              <th>Required</th>
+              <th>Default</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {schema.map((f, index) => (
+              <tr key={index}>
+                <td>
+                  <input
+                    className="workflow-input font-mono text-[11px]"
+                    placeholder="key"
+                    value={f.key}
+                    onChange={(event) => update(index, { key: event.target.value.replace(/[^a-zA-Z0-9_]/g, "") })}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="workflow-input"
+                    placeholder="Label"
+                    value={f.label}
+                    onChange={(event) => update(index, { label: event.target.value })}
+                  />
+                </td>
+                <td>
+                  <select
+                    className="workflow-input font-mono text-[11px]"
+                    value={f.type}
+                    onChange={(event) => update(index, { type: event.target.value as AgentInputFieldType })}
+                  >
+                    {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </td>
+                <td>
                   <input
                     type="checkbox"
-                    className="h-4 w-4 rounded border-ink-700 bg-ink-950"
-                    checked={field.required}
+                    className="h-3.5 w-3.5 accent-signal-amber"
+                    checked={f.required}
                     onChange={(event) => update(index, { required: event.target.checked })}
                   />
-                  Required
-                </label>
-              </div>
-              {field.type === "enum" && (
-                <input
-                  className="dashboard-input mt-2"
-                  placeholder="Comma-separated options (e.g. low, medium, high)"
-                  value={(field.options ?? []).join(", ")}
-                  onChange={(event) => update(index, { options: event.target.value.split(",").map((entry) => entry.trim()).filter(Boolean) })}
-                />
-              )}
-            </div>
-          ))}
-        </div>
+                </td>
+                <td>
+                  <input
+                    className="workflow-input"
+                    placeholder="—"
+                    value={f.defaultValue ?? ""}
+                    onChange={(event) => update(index, { defaultValue: event.target.value })}
+                  />
+                </td>
+                <td>
+                  <button type="button" className="font-mono text-xs text-ink-500 hover:text-signal-red" onClick={() => remove(index)}>
+                    × DEL
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
+      <div className="mt-4">
+        <button type="button" className="btn-ghost" onClick={add}>+ Add field</button>
+      </div>
     </div>
   );
 }
 
-function RunInputControl({ field, value, onChange }: { field: AgentInputField; value: string; onChange: (next: string) => void }) {
-  if (field.type === "enum") {
+function RunInputControl({ field: f, value, onChange }: { field: AgentInputField; value: string; onChange: (next: string) => void }) {
+  if (f.type === "enum") {
     return (
-      <Field label={`${field.label}${field.required ? " *" : ""}`}>
-        <select className="dashboard-input" value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">Select...</option>
-          {(field.options ?? []).map((option) => (
-            <option key={option} value={option}>{option}</option>
-          ))}
+      <Field label={`${f.label.toUpperCase()}${f.required ? " *" : ""}`}>
+        <select className="workflow-input" value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">— select —</option>
+          {(f.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
         </select>
       </Field>
     );
   }
-  if (field.type === "boolean") {
+  if (f.type === "boolean") {
     return (
-      <label className="flex items-center gap-2 text-sm text-ink-200">
+      <label className="flex items-center gap-2 font-mono text-xs text-ink-200">
         <input
           type="checkbox"
-          className="h-4 w-4 rounded border-ink-700 bg-ink-950"
+          className="h-3.5 w-3.5 accent-signal-amber"
           checked={value === "true"}
           onChange={(event) => onChange(event.target.checked ? "true" : "false")}
         />
-        {field.label}
+        {f.label.toUpperCase()}
       </label>
     );
   }
   return (
-    <Field label={`${field.label}${field.required ? " *" : ""}`}>
+    <Field label={`${f.label.toUpperCase()}${f.required ? " *" : ""}`}>
       <input
-        className="dashboard-input"
-        type={field.type === "number" ? "number" : field.type === "url" ? "url" : "text"}
+        className="workflow-input"
+        type={f.type === "number" ? "number" : f.type === "url" ? "url" : "text"}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder={field.description}
+        placeholder={f.description}
       />
     </Field>
   );
 }
 
-function RunCard({ run }: { run: AgentRunRecord }) {
-  return (
-    <div className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-ink-100">{run.title}</div>
-          <div className="mt-1 text-xs text-ink-500">{relative(run.createdAt)}</div>
-        </div>
-        <span className={statusBadgeClass(run.status)}>{run.status}</span>
-      </div>
-      {run.inputs && Object.keys(run.inputs).length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5 text-xs text-ink-400">
-          {Object.entries(run.inputs).map(([key, val]) => (
-            <span key={key} className="rounded-md border border-ink-800 bg-ink-950/40 px-2 py-0.5">
-              <span className="text-ink-500">{key}:</span> {String(val)}
-            </span>
-          ))}
-        </div>
-      )}
-      {run.output && <p className="mt-3 text-sm leading-6 text-ink-300">{run.output}</p>}
-      {run.error && <div className="mt-3 text-xs text-rose-300">{run.error}</div>}
-      {run.logs && run.logs.length > 0 && <RunLogTimeline logs={run.logs} />}
-    </div>
-  );
-}
-
 function RunLogTimeline({ logs }: { logs: AgentRunLogEntry[] }) {
   return (
-    <ol className="mt-3 space-y-1.5 border-l border-ink-800 pl-3">
+    <ol className="border-l border-ink-700 pl-3">
       {logs.map((entry, index) => (
-        <li key={index} className="text-xs">
+        <li key={index} className="font-mono text-xs">
           <span className={logLevelClass(entry.level)}>{entry.level.toUpperCase()}</span>
           <span className="ml-2 text-ink-300">{entry.message}</span>
         </li>
@@ -579,30 +570,19 @@ function RunLogTimeline({ logs }: { logs: AgentRunLogEntry[] }) {
   );
 }
 
-function statusBadgeClass(status: AgentRunRecord["status"]) {
-  const tone = status === "success"
-    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
-    : status === "failed"
-      ? "border-rose-400/30 bg-rose-500/10 text-rose-200"
-      : "border-ink-700 bg-ink-950/40 text-ink-300";
-  return `rounded-full border px-2.5 py-1 text-xs capitalize ${tone}`;
-}
-
 function logLevelClass(level: AgentRunLogEntry["level"]) {
-  if (level === "error") return "font-semibold text-rose-300";
-  if (level === "warn") return "font-semibold text-amber-300";
-  return "font-semibold text-ink-500";
+  if (level === "error") return "text-signal-red font-semibold";
+  if (level === "warn") return "text-signal-amber font-semibold";
+  return "text-ink-500 font-semibold";
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="block"><span className="mb-1.5 block text-sm font-medium text-ink-200">{label}</span>{children}</label>;
-}
-
-function Status({ tone, children }: { tone: "error" | "success"; children: ReactNode }) {
-  const classes = tone === "error"
-    ? "border-rose-400/40 bg-rose-500/10 text-rose-200"
-    : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200";
-  return <div className={`mb-6 rounded-xl border px-4 py-3 text-sm ${classes}`}>{children}</div>;
+  return (
+    <label className="block">
+      <span className="kicker mb-1.5 block">{label}</span>
+      {children}
+    </label>
+  );
 }
 
 function field(form: FormData, key: string) {

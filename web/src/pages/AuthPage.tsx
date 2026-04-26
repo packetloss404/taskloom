@@ -35,89 +35,110 @@ export default function AuthPage({ mode }: { mode: "sign-in" | "sign-up" }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#32342f] px-5 py-10 text-zinc-100">
-      <section className="w-full max-w-md rounded-2xl border border-black/30 bg-[#3b3d38] p-7 shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_18px_50px_rgba(0,0,0,0.18)]">
-        <Link to="/" className="inline-flex items-center">
-          <img src={brand.logoPath} alt={brand.name} className="h-8 w-auto" />
+    <div className="min-h-screen bg-ink-950 text-ink-200">
+      <header className="mx-auto flex max-w-7xl items-center justify-between px-12 py-8 max-md:px-5">
+        <Link to="/" className="flex items-center gap-3">
+          <img src={brand.logoPath} alt={brand.name} className="h-7 w-auto" />
+          <span className="kicker">v0.1</span>
         </Link>
-        <h1 className="mt-6 text-3xl font-semibold tracking-tight text-zinc-100">
-          {mode === "sign-up" ? "Create account" : "Log in"}
-        </h1>
-        <p className="mt-2 text-sm text-zinc-400">
-          {mode === "sign-up" ? "Create an account to use your own agents." : "Sign in to use your agents."}
-        </p>
+        <Link to="/" className="btn-ghost">← Back</Link>
+      </header>
 
-        <form className="mt-8 space-y-4" onSubmit={submit}>
-          {mode === "sign-up" && (
-            <Field label="Display name">
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="field-input" placeholder="New Owner" required />
+      <main className="mx-auto grid max-w-7xl gap-16 px-12 pb-20 md:grid-cols-[1.4fr_1fr] max-md:px-5">
+        <section>
+          <div className="kicker mb-6">{mode === "sign-up" ? "§ NEW WORKSPACE" : "§ AUTHENTICATE"}</div>
+          <h1 className="display-xl">
+            {mode === "sign-up" ? "Create workspace." : "Sign in."}
+          </h1>
+          <p className="mt-8 max-w-lg font-sans text-lg leading-7 text-ink-300">
+            {mode === "sign-up"
+              ? "A self-hosted workspace for activation tracking, workflow drafting, and persistent agents — across Anthropic, OpenAI, MiniMax, and Ollama."
+              : "Resume your workspace. Pick up briefs, plans, blockers, validation evidence, runs, and agent telemetry where you left them."}
+          </p>
+
+          <div className="mt-10 max-w-md space-y-4 font-mono text-xs text-ink-500">
+            <div className="border-t border-ink-700 pt-3">
+              <span className="text-ink-300">PROVIDERS</span> · ANTHROPIC · OPENAI · MINIMAX · OLLAMA
+            </div>
+            <div className="border-t border-ink-700 pt-3">
+              <span className="text-ink-300">SECRETS</span> · AES-256-GCM AT REST · MASKED ON READ
+            </div>
+            <div className="border-t border-ink-700 pt-3">
+              <span className="text-ink-300">RUNTIME</span> · PERSISTENT JOB QUEUE · CRON · SSE STREAM
+            </div>
+          </div>
+        </section>
+
+        <section className="border-l border-ink-700 pl-10 max-md:border-l-0 max-md:border-t max-md:pl-0 max-md:pt-10">
+          <div className="tab-strip">
+            <Link to="/sign-in" className={`tab-strip__item ${mode === "sign-in" ? "tab-strip__item--active" : ""}`}>
+              Sign in
+            </Link>
+            <Link to="/sign-up" className={`tab-strip__item ${mode === "sign-up" ? "tab-strip__item--active" : ""}`}>
+              Create
+            </Link>
+          </div>
+
+          <form className="mt-8 space-y-5" onSubmit={submit}>
+            {mode === "sign-up" && (
+              <Field label="DISPLAY NAME">
+                <input
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="workflow-input"
+                  placeholder="New Owner"
+                  required
+                />
+              </Field>
+            )}
+
+            <Field label="EMAIL">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="workflow-input"
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
             </Field>
+
+            <Field label="PASSWORD">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="workflow-input"
+                placeholder="••••••••"
+                autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
+                required
+              />
+            </Field>
+
+            {error && (
+              <div className="border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
+                ERR · {error}
+              </div>
+            )}
+
+            <button type="submit" className="btn-primary w-full justify-center" disabled={submitting}>
+              {submitting
+                ? (mode === "sign-up" ? "Creating…" : "Authenticating…")
+                : (mode === "sign-up" ? "→ Create account" : "→ Sign in")}
+            </button>
+          </form>
+
+          {showSeedAccounts && (
+            <details className="mt-8 border border-ink-700 px-4 py-3 font-mono text-[11px] text-ink-400">
+              <summary className="cursor-pointer select-none text-ink-200">DEV SEED ACCOUNTS</summary>
+              <p className="mt-2 leading-5">
+                <code>alpha@taskloom.local</code>, <code>beta@taskloom.local</code>, <code>gamma@taskloom.local</code> · password <code>demo12345</code>
+              </p>
+            </details>
           )}
-
-          <Field label="Email">
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="field-input" placeholder="you@example.com" autoComplete="email" required />
-          </Field>
-
-          <Field label="Password">
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="field-input"
-              placeholder="Password"
-              autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
-              required
-            />
-          </Field>
-
-          {error && <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
-
-          <button
-            type="submit"
-            className="w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-[#32342f] transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
-            disabled={submitting}
-          >
-            {submitting ? (mode === "sign-up" ? "Creating account..." : "Logging in...") : mode === "sign-up" ? "Create account" : "Log in"}
-          </button>
-        </form>
-
-        <p className="mt-5 text-center text-sm text-zinc-400">
-          {mode === "sign-up" ? "Already have an account?" : "Need an account?"}{" "}
-          <Link to={mode === "sign-up" ? "/sign-in" : "/sign-up"} className="font-medium text-zinc-100 hover:text-white">
-            {mode === "sign-up" ? "Log in" : "Create one"}
-          </Link>
-        </p>
-
-        {showSeedAccounts && (
-          <details className="mt-5 rounded-xl border border-black/25 bg-black/10 px-4 py-3 text-xs text-zinc-400">
-            <summary className="cursor-pointer select-none font-medium text-zinc-300">Development accounts</summary>
-            <p className="mt-2 leading-5">
-              Local seed accounts are available for contributors: <code>alpha@taskloom.local</code>,{" "}
-              <code>beta@taskloom.local</code>, or <code>gamma@taskloom.local</code> with password{" "}
-              <code>demo12345</code>.
-            </p>
-          </details>
-        )}
-      </section>
-
-      <style>{`
-        .field-input {
-          width: 100%;
-          background: rgb(0 0 0 / 0.14);
-          border: 1px solid rgb(0 0 0 / 0.26);
-          border-radius: 12px;
-          padding: 10px 12px;
-          font-size: 14px;
-          color: rgb(244 244 245);
-          outline: none;
-          transition: border-color 150ms, box-shadow 150ms;
-        }
-        .field-input::placeholder { color: rgb(161 161 170); }
-        .field-input:focus {
-          border-color: rgb(244 244 245 / 0.42);
-          box-shadow: 0 0 0 3px rgb(244 244 245 / 0.12);
-        }
-      `}</style>
+        </section>
+      </main>
     </div>
   );
 }
@@ -125,7 +146,7 @@ export default function AuthPage({ mode }: { mode: "sign-in" | "sign-up" }) {
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <div className="mb-1.5 text-sm font-medium text-zinc-200">{label}</div>
+      <span className="kicker mb-1.5 block">{label}</span>
       {children}
     </label>
   );

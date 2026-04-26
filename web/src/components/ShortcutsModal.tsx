@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Keyboard, X } from "lucide-react";
+import { X } from "lucide-react";
 
 interface Shortcut {
   keys: string[];
@@ -102,76 +102,75 @@ export default function ShortcutsModal() {
       <button
         type="button"
         aria-label="Close shortcuts"
-        className="absolute inset-0 bg-ink-950/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-ink-950/85"
         onClick={() => setOpen(false)}
       />
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="card relative z-10 max-h-[calc(100dvh-4rem)] w-full max-w-lg overflow-y-auto p-6 outline-none"
+        className="relative z-10 max-h-[calc(100dvh-4rem)] w-full max-w-2xl overflow-y-auto border border-ink-700 bg-ink-900 outline-none"
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Keyboard className="h-4 w-4 text-ink-300" strokeWidth={1.75} />
-            <h2 className="text-base font-semibold text-ink-100">Keyboard shortcuts</h2>
-          </div>
+        <div className="flex items-center justify-between border-b border-ink-700 px-5 py-3">
+          <span className="kicker-amber">KEYBOARD SHORTCUTS</span>
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="grid h-7 w-7 place-items-center rounded-md text-ink-400 hover:bg-ink-800 hover:text-ink-100"
+            className="font-mono text-xs text-ink-400 hover:text-signal-amber"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="mt-5">
-          <SectionTitle>General</SectionTitle>
-          <div className="mt-2 divide-y divide-ink-800 rounded-xl border border-ink-800">
-            {generalShortcuts.map((shortcut) => (
-              <Row key={shortcut.label} label={shortcut.label}>
-                {shortcut.keys.map((key, index) => (
-                  <Kbd key={`${shortcut.label}-${index}`}>{key}</Kbd>
-                ))}
-              </Row>
-            ))}
-          </div>
+        <div className="px-5 pt-5">
+          <div className="kicker mb-3">GENERAL</div>
+          <table className="data-table">
+            <thead>
+              <tr><th>Key</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {generalShortcuts.map((s) => (
+                <tr key={s.label}>
+                  <td className="whitespace-nowrap">
+                    {s.keys.map((k, i) => <Kbd key={i}>{k}</Kbd>)}
+                  </td>
+                  <td className="text-sm text-ink-200">{s.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
-        <div className="mt-5">
-          <SectionTitle>Navigation</SectionTitle>
-          <p className="mt-1 text-xs text-ink-500">Press <Kbd>g</Kbd> then the indicated key.</p>
-          <div className="mt-2 divide-y divide-ink-800 rounded-xl border border-ink-800">
-            {navShortcuts.map((shortcut) => (
-              <Row key={shortcut.to} label={shortcut.label}>
-                <Kbd>g</Kbd>
-                <span className="text-ink-600">then</span>
-                <Kbd>{shortcut.chord}</Kbd>
-              </Row>
-            ))}
-          </div>
+        <div className="px-5 py-5">
+          <div className="kicker mb-3">NAVIGATION · PRESS <Kbd>g</Kbd> THEN KEY</div>
+          <table className="data-table">
+            <thead>
+              <tr><th>Chord</th><th>Destination</th></tr>
+            </thead>
+            <tbody>
+              {navShortcuts.map((s) => (
+                <tr key={s.to}>
+                  <td className="whitespace-nowrap">
+                    <Kbd>g</Kbd> <span className="text-ink-500">+</span> <Kbd>{s.chord}</Kbd>
+                  </td>
+                  <td className="text-sm text-ink-200">{s.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="border-t border-ink-700 bg-ink-950/40 px-5 py-2 font-mono text-[10px] uppercase tracking-wider text-ink-500">
+          [ESC] CLOSE · [?] TOGGLE
         </div>
       </div>
     </div>
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">{children}</h3>;
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-      <span className="text-ink-200">{label}</span>
-      <span className="flex items-center gap-1.5 text-xs">{children}</span>
-    </div>
-  );
-}
-
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex min-w-[1.5rem] items-center justify-center rounded-md border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[11px] text-ink-200 shadow-[inset_0_-1px_0_rgba(0,0,0,0.5)]">
+    <kbd className="mr-1 inline-flex min-w-[1.5rem] items-center justify-center border border-ink-700 bg-ink-950 px-1.5 py-0.5 font-mono text-[10px] text-ink-200">
       {children}
     </kbd>
   );

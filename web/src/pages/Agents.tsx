@@ -1,11 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Bot, CalendarClock, ListChecks, Loader2, Plus, Search, Sparkles } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type { AgentRecord, AgentTemplate } from "@/lib/types";
-import { describeNextRun, triggerLabel, triggerToneClass } from "@/lib/agent-runtime";
-import { DashboardStyles } from "./Dashboard";
+import { describeNextRun, triggerLabel } from "@/lib/agent-runtime";
+
+function statusPillClass(status: string): string {
+  if (status === "active") return "pill pill--good";
+  if (status === "paused") return "pill pill--warn";
+  if (status === "archived" || status === "draft") return "pill pill--muted";
+  return "pill";
+}
 
 export default function AgentsPage() {
   const navigate = useNavigate();
@@ -44,119 +50,175 @@ export default function AgentsPage() {
     }
   };
 
-  const filtered = agents.filter((agent) => {
+  const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return true;
-    return [agent.name, agent.description, agent.instructions, agent.provider?.name, agent.model, agent.schedule]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(q));
-  });
+    if (!q) return agents;
+    return agents.filter((agent) =>
+      [agent.name, agent.description, agent.instructions, agent.provider?.name, agent.model, agent.schedule]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q)),
+    );
+  }, [agents, query]);
+
+  const total = agents.length;
+  const active = agents.filter((a) => a.status === "active").length;
 
   return (
-    <>
-      <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
+    <div className="page-frame">
+      <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink-100">Agents</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-400">
-            Create, edit, schedule, and run persistent workspace agents.
+          <div className="kicker mb-3">AGENTS · WORKSPACE CATALOG</div>
+          <h1 className="display-xl">Agents.</h1>
+          <p className="mt-4 max-w-xl font-mono text-xs text-ink-400">
+            <span className="text-ink-200">{total}</span> registered ·{" "}
+            <span className="text-signal-green">{active}</span> active ·{" "}
+            <span className="text-ink-500">create, schedule, and run persistent workspace agents.</span>
           </p>
         </div>
-        <Link to="/agents/new" className="btn-primary bg-ink-100 text-ink-950 hover:bg-white">
-          <Plus className="h-4 w-4" /> New Agent
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link to="/agents/new" className="btn-primary">+ New agent</Link>
+        </div>
       </header>
 
-      <div className="mb-5 flex items-center gap-3">
-        <div className="relative w-full max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500" />
-          <input className="dashboard-input h-10 pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search agents" />
-        </div>
+      <div className="rule mb-5" />
+
+      <div className="mb-6 flex items-center gap-3">
+        <div className="kicker">FILTER</div>
+        <input
+          className="workflow-input max-w-md"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search agents by name, model, or description"
+        />
       </div>
 
-      {error && <div className="mb-6 rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</div>}
+      {error && (
+        <div className="mb-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
+          ERR · {error}
+        </div>
+      )}
 
       {loading ? (
-        <div className="flex items-center gap-3 text-sm text-ink-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading agents...</div>
+        <div className="flex items-center gap-2 text-sm text-ink-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING AGENTS</span>
+        </div>
       ) : (
         <>
-          {filtered.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-ink-700 bg-ink-900/25 p-8 text-center">
-              <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-ink-850 text-ink-300"><Bot className="h-5 w-5" /></div>
-              <h2 className="mt-3 text-sm font-semibold text-ink-100">No agents yet</h2>
-              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-ink-500">Start from a template below or create one from scratch.</p>
-              <div className="mt-4"><Link to="/agents/new" className="btn-primary bg-ink-100 text-ink-950 hover:bg-white"><Plus className="h-4 w-4" /> New Agent</Link></div>
-            </div>
-          ) : (
-            <div className="grid gap-3 lg:grid-cols-2">
-              {filtered.map((agent) => {
-                const stepCount = agent.playbook?.length ?? 0;
-                return (
-                  <Link key={agent.id} to={`/agents/${agent.id}`} className="rounded-2xl border border-ink-800/80 bg-ink-900/45 p-4 transition-colors hover:border-ink-600 hover:bg-ink-900/75">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h2 className="truncate text-base font-semibold text-ink-100">{agent.name}</h2>
-                        <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-400">{agent.description || "No description yet."}</p>
-                      </div>
-                      <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs capitalize text-ink-300">{agent.status}</span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                      <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${triggerToneClass(agent.triggerKind)}`}>
-                        {triggerLabel(agent.triggerKind)}
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-950/40 px-2 py-0.5 text-ink-300">
-                        <ListChecks className="h-3 w-3" /> {stepCount} step{stepCount === 1 ? "" : "s"}
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-950/40 px-2 py-0.5 text-ink-300">
-                        <CalendarClock className="h-3 w-3" /> {describeNextRun(agent.schedule, agent.triggerKind)}
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-ink-500">
-                      <span>{agent.provider?.name ?? "No provider"}</span>
-                      {agent.model && <span>· {agent.model}</span>}
-                      {agent.inputSchema && agent.inputSchema.length > 0 && <span>· {agent.inputSchema.length} inputs</span>}
-                      {agent.templateId && <span>· From template</span>}
-                      <span>· Updated {relative(agent.updatedAt)}</span>
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          )}
-
-          <section className="mt-10">
-            <header className="mb-4 flex items-center gap-3">
-              <div className="grid h-9 w-9 place-items-center rounded-xl bg-ink-850 text-ink-300"><Sparkles className="h-4 w-4" /></div>
+          <section className="section-band">
+            <div className="mb-4 flex items-end justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-ink-100">Agent template catalog</h2>
-                <p className="mt-1 text-xs text-ink-500">Built-in starting points. One click clones the template into a new workspace agent.</p>
+                <div className="kicker mb-2">REGISTERED AGENTS</div>
+                <h2 className="display text-2xl">Catalog</h2>
               </div>
-            </header>
-            <div className="grid gap-3 lg:grid-cols-2">
+              <span className="section-marker">§ 01 / 02</span>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="border border-dashed border-ink-700 px-6 py-12 text-center">
+                <div className="kicker mb-3">NO AGENTS</div>
+                <p className="font-serif text-2xl text-ink-200">
+                  {agents.length === 0 ? "This workspace has no agents yet." : "No matches for that search."}
+                </p>
+                <p className="mt-3 font-mono text-xs text-ink-500">
+                  {agents.length === 0 ? "Start from a template below or create one from scratch." : "Refine the filter or clear it to see all agents."}
+                </p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Trigger</th>
+                    <th>Model</th>
+                    <th>Steps</th>
+                    <th>Status</th>
+                    <th>Last update</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((agent) => {
+                    const stepCount = agent.playbook?.length ?? 0;
+                    return (
+                      <tr
+                        key={agent.id}
+                        className="cursor-pointer"
+                        onClick={() => navigate(`/agents/${agent.id}`)}
+                      >
+                        <td>
+                          <div className="font-serif text-base text-ink-100">{agent.name}</div>
+                          <div className="mt-0.5 font-mono text-[10px] text-ink-500">
+                            {agent.id} · {agent.description ? agent.description.slice(0, 60) : "no description"}
+                          </div>
+                        </td>
+                        <td>
+                          <span className="pill">{triggerLabel(agent.triggerKind)}</span>
+                          <div className="mt-1 font-mono text-[10px] text-ink-500">
+                            {describeNextRun(agent.schedule, agent.triggerKind)}
+                          </div>
+                        </td>
+                        <td className="font-mono text-[11px] text-ink-300">
+                          {agent.provider?.name ?? "—"}
+                          {agent.model && <span className="text-ink-500"> · {agent.model}</span>}
+                        </td>
+                        <td className="num">{stepCount}</td>
+                        <td>
+                          <span className={statusPillClass(agent.status)}>{agent.status}</span>
+                        </td>
+                        <td className="font-mono text-[11px] text-ink-400">{relative(agent.updatedAt)}</td>
+                        <td className="font-mono text-ink-500">›</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section className="section-band">
+            <div className="mb-6 flex items-end justify-between">
+              <div>
+                <div className="kicker-amber mb-2">STARTER TEMPLATES</div>
+                <h2 className="display text-2xl">From the catalog</h2>
+                <p className="mt-2 max-w-xl font-mono text-xs text-ink-500">
+                  Built-in starting points. One click clones the template into a new workspace agent.
+                </p>
+              </div>
+              <span className="section-marker">§ 02 / 02</span>
+            </div>
+            <div className="grid gap-px bg-ink-700 md:grid-cols-2 xl:grid-cols-3">
               {templates.map((template) => (
-                <article key={template.id} className="flex flex-col rounded-2xl border border-ink-800/80 bg-ink-900/35 p-4">
+                <article key={template.id} className="flex flex-col bg-ink-875 p-5">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-ink-100">{template.name}</h3>
-                      <p className="mt-1 text-sm leading-6 text-ink-400">{template.summary}</p>
-                    </div>
-                    <span className="rounded-full border border-ink-700 bg-ink-950/40 px-2.5 py-1 text-xs capitalize text-ink-300">{template.category}</span>
+                    <div className="kicker">{template.category}</div>
+                    <span className="font-mono text-[10px] text-ink-500">{template.id}</span>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-ink-500">
-                    {template.tools.slice(0, 4).map((tool) => (
-                      <span key={tool} className="rounded-md border border-ink-800 bg-ink-950/40 px-2 py-0.5">{tool}</span>
+                  <h3 className="mt-3 font-serif text-xl text-ink-100">{template.name}</h3>
+                  <p className="mt-3 flex-1 text-sm leading-6 text-ink-300">{template.summary}</p>
+                  <div className="mt-4 flex flex-wrap gap-1.5">
+                    {template.tools.slice(0, 5).map((tool) => (
+                      <span key={tool} className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                        {tool}
+                      </span>
                     ))}
-                    {template.schedule && <span>· {template.schedule}</span>}
-                    {template.inputSchema.length > 0 && <span>· {template.inputSchema.length} inputs</span>}
                   </div>
-                  <div className="mt-4 flex justify-end">
+                  <div className="mt-4 flex items-center justify-between border-t border-ink-700 pt-3 font-mono text-[10px] text-ink-500">
+                    <span>
+                      {template.inputSchema.length > 0 && `${template.inputSchema.length} INPUTS · `}
+                      {template.schedule ? `SCHED ${template.schedule}` : "ON DEMAND"}
+                    </span>
                     <button
                       type="button"
                       className="btn-ghost"
                       onClick={() => void createFromTemplate(template)}
                       disabled={creatingTemplateId === template.id}
                     >
-                      {creatingTemplateId === template.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                      Use template
+                      {creatingTemplateId === template.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        "+"
+                      )}
+                      Use
                     </button>
                   </div>
                 </article>
@@ -165,8 +227,6 @@ export default function AgentsPage() {
           </section>
         </>
       )}
-
-      <DashboardStyles />
-    </>
+    </div>
   );
 }

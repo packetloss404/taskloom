@@ -165,35 +165,38 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[10vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 px-4 pt-[10vh]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-xl overflow-hidden rounded-2xl border border-ink-700/80 bg-ink-900/95 shadow-card"
+        className="w-full max-w-2xl border border-ink-700 bg-ink-900"
         onKeyDown={onKeyDown}
       >
-        <div className="flex items-center gap-3 border-b border-ink-800 px-4 py-3">
-          <Search className="h-4 w-4 shrink-0 text-ink-400" />
+        <div className="flex items-center justify-between border-b border-ink-700 px-4 py-2">
+          <span className="kicker-amber">COMMAND PALETTE</span>
+          <span className="font-mono text-[10px] text-ink-500">ESC TO CLOSE</span>
+        </div>
+        <div className="flex items-center gap-3 border-b border-ink-700 px-4 py-3">
+          <Search className="h-4 w-4 shrink-0 text-ink-500" />
           <input
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search pages, agents, or actions…"
-            className="flex-1 bg-transparent text-sm text-ink-100 outline-none placeholder:text-ink-500"
+            placeholder="search pages, agents, actions…"
+            className="flex-1 bg-transparent font-mono text-sm text-ink-100 outline-none placeholder:text-ink-500"
           />
-          <kbd className="rounded border border-ink-700 bg-ink-950 px-1.5 py-0.5 text-[10px] font-medium text-ink-400">ESC</kbd>
         </div>
 
-        <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-2">
+        <div ref={listRef} className="max-h-[60vh] overflow-y-auto">
           {filtered.length === 0 ? (
-            <div className="px-4 py-10 text-center text-sm text-ink-500">No matches.</div>
+            <div className="px-4 py-10 text-center font-mono text-xs text-ink-500">— NO MATCHES —</div>
           ) : (
             Object.entries(grouped).map(([group, entries]) => (
-              <div key={group} className="px-2 pb-2">
-                <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-500">
-                  {group}
+              <div key={group}>
+                <div className="border-b border-ink-800 bg-ink-950/40 px-4 py-2">
+                  <span className="kicker">{group.toUpperCase()}</span>
                 </div>
                 {entries.map(({ command, index }) => {
                   const Icon = command.icon;
@@ -204,18 +207,19 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       type="button"
                       data-index={index}
                       onMouseEnter={() => setActiveIndex(index)}
-                      onClick={() => {
-                        void command.perform();
-                      }}
+                      onClick={() => { void command.perform(); }}
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                        active ? "bg-ink-800/90 text-ink-100" : "text-ink-200 hover:bg-ink-850/70",
+                        "flex w-full items-center gap-3 border-b border-ink-800 px-4 py-2.5 text-left text-sm transition-colors",
+                        active ? "bg-ink-800 text-ink-100" : "text-ink-300 hover:bg-ink-850",
                       )}
                     >
-                      <Icon className="h-4 w-4 shrink-0 text-ink-400" strokeWidth={1.75} />
+                      <span className={cn("font-mono text-xs", active ? "text-signal-amber" : "text-ink-600")}>
+                        {active ? "▸" : " "}
+                      </span>
+                      <Icon className="h-3.5 w-3.5 shrink-0 text-ink-500" strokeWidth={1.75} />
                       <span className="min-w-0 flex-1 truncate">{command.label}</span>
-                      {command.hint && <span className="hidden truncate text-xs text-ink-500 sm:inline">{command.hint}</span>}
-                      {active && <CornerDownLeft className="h-3.5 w-3.5 text-ink-400" />}
+                      {command.hint && <span className="hidden truncate font-mono text-[10px] text-ink-500 sm:inline">{command.hint}</span>}
+                      {active && <CornerDownLeft className="h-3 w-3 text-signal-amber" />}
                     </button>
                   );
                 })}
@@ -224,27 +228,15 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-ink-800 px-4 py-2 text-[11px] text-ink-500">
-          <div className="flex items-center gap-3">
-            <span><kbd className="kbd">↑</kbd><kbd className="kbd">↓</kbd> navigate</span>
-            <span><kbd className="kbd">↵</kbd> select</span>
+        <div className="flex items-center justify-between border-t border-ink-700 bg-ink-950/40 px-4 py-2 font-mono text-[10px] uppercase tracking-wider text-ink-500">
+          <div className="flex items-center gap-4">
+            <span>[↑↓] NAVIGATE</span>
+            <span>[↵] SELECT</span>
+            <span>[ESC] CLOSE</span>
           </div>
-          <span>{filtered.length} result{filtered.length === 1 ? "" : "s"}</span>
+          <span>{filtered.length} RESULT{filtered.length === 1 ? "" : "S"}</span>
         </div>
       </div>
-      <style>{`
-        .kbd {
-          display: inline-block;
-          margin-right: 2px;
-          border: 1px solid rgb(38 38 46);
-          background: rgb(8 8 12);
-          color: rgb(161 161 170);
-          border-radius: 4px;
-          padding: 1px 5px;
-          font-size: 10px;
-          font-weight: 500;
-        }
-      `}</style>
     </div>
   );
 }
