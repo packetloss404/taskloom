@@ -44,7 +44,7 @@ npm run dev
 http://localhost:7341
 ```
 
-The local app uses `data/taskloom.json` for file-backed persistence by default. If the file is missing, the server recreates it from the built-in seed data on first store load. To run the same store API against SQLite, start the app with `TASKLOOM_STORE=sqlite`; it targets `data/taskloom.sqlite` unless `TASKLOOM_DB_PATH=path/to/taskloom.sqlite` is set. SQLite mode persists the full app runtime through migrated `app_records` rows, with relational app tables available for future query-optimized repository work.
+The local app uses `data/taskloom.json` for file-backed persistence by default. If the file is missing, the server recreates it from the built-in seed data on first store load. To run the same store API against SQLite, start the app with `TASKLOOM_STORE=sqlite`; it targets `data/taskloom.sqlite` unless `TASKLOOM_DB_PATH=path/to/taskloom.sqlite` is set. SQLite mode persists the full app runtime through migrated `app_records` rows and query-indexed metadata while keeping JSON as the default contributor workflow.
 
 ## Local Data
 
@@ -240,7 +240,13 @@ Backend route policies are the security boundary. Frontend role-aware controls h
 
 Member-management APIs allow workspace members to be listed by any authenticated workspace member. Invitation tokens are only exposed to `admin` and `owner` list responses. Invitations, role updates, and member removals require `admin` or `owner`; only `owner` can grant or modify the `owner` role, and the backend prevents removing or demoting the final workspace owner. Invitation acceptance requires a signed-in user whose email matches the invitation.
 
-Session cookies are HTTP-only, use `SameSite=Lax`, and are marked `Secure` when `NODE_ENV=production`. Production deployments should terminate HTTPS before the Node server and run the scheduled `cleanup-sessions` job to remove expired sessions.
+Invitation delivery is local-store-backed today: create and resend record `invitationEmailDeliveries` rows with provider `local` and include an `emailDelivery` summary in the API response. The default `TASKLOOM_INVITATION_EMAIL_MODE=dev` records deliveries as `sent`; set `TASKLOOM_INVITATION_EMAIL_MODE=skip` to record them as skipped for local runs that should not simulate sending. No SMTP or external email provider is wired, so for local testing copy the returned invitation token into `POST /api/app/invitations/:token/accept` while signed in as the matching invited email. A production handoff needs a real delivery adapter, sender/domain configuration, and token-redaction policy for logs and admin surfaces.
+
+Session cookies are HTTP-only, use `SameSite=Lax`, and are marked `Secure` when `NODE_ENV=production`. Login and registration also set a readable `taskloom_csrf` cookie. Private mutating app routes reject browser requests with an `Origin` host that does not match `Host` or `X-Forwarded-Host`; same-origin browser mutations must echo the CSRF cookie in `X-CSRF-Token`. Requests without `Origin`, such as same-process tests and non-browser local clients, are allowed.
+
+Auth register/login and invitation create/accept/resend routes have store-backed rate limits of 20 attempts per client key per 60 seconds. The client key comes from `X-Forwarded-For`, then `X-Real-IP`, then `local`; limited responses are `429` with `Retry-After`. In JSON mode the buckets live in `data/taskloom.json`; in SQLite mode they live in `app_records`. Multi-process or multi-region production deployments should still add shared edge or database coordination before relying on them for abuse prevention.
+
+Production deployments should terminate HTTPS before the Node server and run the scheduled `cleanup-sessions` job to remove expired sessions.
 
 Workflow writes update the local workflow records, emit workflow activity, and refresh activation facts used by dashboard and activation views.
 
@@ -256,7 +262,7 @@ Share-token routes and frontend wiring exist for `brief`, `plan`, and `overview`
 
 ## Jobs
 
-Maintenance commands run against the local `data/taskloom.json` store:
+Maintenance commands run against the active local store. By default that is `data/taskloom.json`; with `TASKLOOM_STORE=sqlite`, commands use `data/taskloom.sqlite` or `TASKLOOM_DB_PATH`.
 
 ```bash
 npm run jobs:recompute-activation

@@ -211,6 +211,7 @@ function makeStore(): TaskloomData {
   return {
     users: [],
     sessions: [],
+    rateLimits: [],
     workspaces: [
       {
         id: "alpha",
@@ -265,6 +266,7 @@ function makeStore(): TaskloomData {
     jobs: [],
     shareTokens: [],
     workspaceInvitations: [],
+    invitationEmailDeliveries: [],
     activationMilestones: {},
     activationReadModels: {},
   };

@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { Hono } from "hono";
 import { appRoutes, resetAppRouteSecurityForTests } from "./app-routes.js";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
+import { TASKLOOM_INVITATION_EMAIL_MODE_ENV } from "./invitation-email.js";
+import {
+  listInvitationEmailDeliveryRecordsForTests,
+  resetInvitationEmailDeliveryForTests,
+  setInvitationEmailDeliveryAdapterForTests,
+} from "./invitation-email-delivery.js";
 import { login } from "./taskloom-services.js";
-import { loadStore, mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
+import { clearStoreCacheForTests, listInvitationEmailDeliveriesIndexed, loadStore, mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
 
 function createTestApp() {
   const app = new Hono();
@@ -21,6 +30,22 @@ function cookieValue(response: Response) {
   const match = cookie.match(new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`));
   assert.ok(match?.[1], "expected response to set a session cookie");
   return match[1];
+}
+
+function csrfCookieValue(response: Response) {
+  const cookie = response.headers.get("set-cookie") ?? "";
+  const match = cookie.match(/taskloom_csrf=([^;]+)/);
+  assert.ok(match?.[1], "expected response to set a csrf cookie");
+  return match[1];
+}
+
+function browserAuthHeaders(cookie: string, csrfToken: string) {
+  return {
+    Cookie: `${SESSION_COOKIE_NAME}=${cookie}; taskloom_csrf=${csrfToken}`,
+    Origin: "http://localhost",
+    Host: "localhost",
+    "X-CSRF-Token": csrfToken,
+  };
 }
 
 function setAlphaRole(role: WorkspaceRole) {
@@ -115,6 +140,109 @@ test("auth routes rate limit repeated local attempts", async () => {
   });
   assert.equal(limitedLogin.status, 429);
   assert.deepEqual(await limitedLogin.json(), { error: "too many requests" });
+});
+
+test("auth route rate limits persist across app instances and store reloads", { concurrency: false }, async () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-rate-limit-"));
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const headers = { "content-type": "application/json", "x-forwarded-for": "203.0.113.12" };
+    const resetAt = new Date(Date.now() + 60_000).toISOString();
+
+    mutateStore((data) => {
+      data.rateLimits = [{ id: "auth:login:203.0.113.12", count: 20, resetAt, updatedAt: new Date().toISOString() }];
+    });
+
+    clearStoreCacheForTests();
+    const app = createTestApp();
+
+    const limited = await app.request("/api/auth/login", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(limited.status, 429);
+    assert.deepEqual(await limited.json(), { error: "too many requests" });
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("browser private mutations enforce same-origin and session-bound csrf", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+
+  const loginResponse = await app.request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "alpha@taskloom.local", password: "demo12345" }),
+  });
+  const sessionCookie = cookieValue(loginResponse);
+  const csrfToken = csrfCookieValue(loginResponse);
+
+  const crossOrigin = await app.request("/api/app/profile", {
+    method: "PATCH",
+    headers: {
+      ...browserAuthHeaders(sessionCookie, csrfToken),
+      Origin: "https://evil.example",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ displayName: "Blocked", timezone: "UTC" }),
+  });
+  assert.equal(crossOrigin.status, 403);
+  assert.deepEqual(await crossOrigin.json(), { error: "cross-origin requests are not allowed" });
+
+  const missingCsrf = await app.request("/api/app/profile", {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(sessionCookie),
+      Origin: "http://localhost",
+      Host: "localhost",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ displayName: "Missing", timezone: "UTC" }),
+  });
+  assert.equal(missingCsrf.status, 403);
+  assert.deepEqual(await missingCsrf.json(), { error: "invalid csrf token" });
+
+  const invalidCsrf = await app.request("/api/app/profile", {
+    method: "PATCH",
+    headers: {
+      Cookie: `${SESSION_COOKIE_NAME}=${sessionCookie}; taskloom_csrf=invalid`,
+      Origin: "http://localhost",
+      Host: "localhost",
+      "X-CSRF-Token": "invalid",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ displayName: "Invalid", timezone: "UTC" }),
+  });
+  assert.equal(invalidCsrf.status, 403);
+  assert.deepEqual(await invalidCsrf.json(), { error: "invalid csrf token" });
+
+  const sameOrigin = await app.request("/api/app/profile", {
+    method: "PATCH",
+    headers: { ...browserAuthHeaders(sessionCookie, csrfToken), "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Same Origin", timezone: "UTC" }),
+  });
+  assert.equal(sameOrigin.status, 200);
+
+  const apiClientCompatible = await app.request("/api/app/profile", {
+    method: "PATCH",
+    headers: { ...authHeaders(sessionCookie), "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "API Client", timezone: "UTC" }),
+  });
+  assert.equal(apiClientCompatible.status, 200);
 });
 
 test("logout removes the current session so subsequent session reads are anonymous", async () => {
@@ -527,6 +655,130 @@ test("admins can resend invitations by rotating token and expiry", async () => {
     headers: authHeaders(beta.cookieValue),
   });
   assert.equal(accepted.status, 200);
+});
+
+test("invitation create and resend record email deliveries", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  resetInvitationEmailDeliveryForTests();
+  delete process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "Delivery@Test.Example", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { id: string; token: string }; emailDelivery: { status: string; action: string } };
+
+  assert.equal(created.status, 201);
+  assert.equal(createdBody.emailDelivery.status, "sent");
+  assert.equal(createdBody.emailDelivery.action, "create");
+  let deliveries = listInvitationEmailDeliveryRecordsForTests();
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].email, "delivery@test.example");
+  assert.equal(deliveries[0].token, createdBody.invitation.token);
+  assert.equal(deliveries[0].status, "sent");
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha", createdBody.invitation.id).length, 1);
+
+  const resent = await app.request(`/api/app/invitations/${createdBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const resentBody = await resent.json() as { invitation: { token: string }; emailDelivery: { status: string; action: string } };
+
+  assert.equal(resent.status, 200);
+  assert.equal(resentBody.emailDelivery.status, "sent");
+  assert.equal(resentBody.emailDelivery.action, "resend");
+  deliveries = listInvitationEmailDeliveryRecordsForTests();
+  assert.equal(deliveries.length, 2);
+  assert.equal(deliveries[1].token, resentBody.invitation.token);
+  assert.notEqual(deliveries[1].token, createdBody.invitation.token);
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha", createdBody.invitation.id).length, 2);
+});
+
+test("invitation delivery failures are recorded without rolling back invitation state", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  resetInvitationEmailDeliveryForTests();
+  delete process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+  setInvitationEmailDeliveryAdapterForTests(() => {
+    throw new Error("smtp unavailable");
+  });
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "failure@test.example", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { id: string; status: string }; emailDelivery: { status: string; error: string | null } };
+
+  assert.equal(created.status, 201);
+  assert.equal(createdBody.invitation.status, "pending");
+  assert.equal(createdBody.emailDelivery.status, "failed");
+  assert.equal(createdBody.emailDelivery.error, "smtp unavailable");
+  assert.ok(loadStore().workspaceInvitations.some((entry) => entry.id === createdBody.invitation.id && !entry.revokedAt && !entry.acceptedAt));
+  assert.equal(listInvitationEmailDeliveryRecordsForTests()[0]?.status, "failed");
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha", createdBody.invitation.id)[0]?.status, "failed");
+  assert.ok(loadStore().activities.some((entry) => entry.event === "workspace.invitation_email_delivery" && entry.data.status === "failed"));
+});
+
+test("revoked and accepted invitations do not send email on resend failures", async () => {
+  resetStoreForTests();
+  resetAppRouteSecurityForTests();
+  resetInvitationEmailDeliveryForTests();
+  delete process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
+  setAlphaRole("admin");
+
+  const revokedCreate = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "revoked@test.example", role: "member" }),
+  });
+  const revokedBody = await revokedCreate.json() as { invitation: { id: string } };
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha").length, 1);
+
+  const revoked = await app.request(`/api/app/invitations/${revokedBody.invitation.id}/revoke`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(revoked.status, 200);
+  const revokedResend = await app.request(`/api/app/invitations/${revokedBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(revokedResend.status, 400);
+  assert.deepEqual(await revokedResend.json(), { error: "invitation has been revoked" });
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha").length, 1);
+
+  const acceptedCreate = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "beta@taskloom.local", role: "member" }),
+  });
+  const acceptedBody = await acceptedCreate.json() as { invitation: { id: string; token: string } };
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha").length, 2);
+
+  const accepted = await app.request(`/api/app/invitations/${acceptedBody.invitation.token}/accept`, {
+    method: "POST",
+    headers: authHeaders(beta.cookieValue),
+  });
+  assert.equal(accepted.status, 200);
+  const acceptedResend = await app.request(`/api/app/invitations/${acceptedBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(acceptedResend.status, 400);
+  assert.deepEqual(await acceptedResend.json(), { error: "invitation has already been accepted" });
+  assert.equal(listInvitationEmailDeliveriesIndexed("alpha").length, 2);
 });
 
 test("invitation revoke and resend enforce workspace roles", async () => {

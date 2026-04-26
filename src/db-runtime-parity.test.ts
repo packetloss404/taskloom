@@ -326,6 +326,7 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
     delete process.env.TASKLOOM_DB_PATH;
   }
 
+  modules.appRoutesModule.resetAppRouteSecurityForTests();
   modules.store.resetStoreForTests();
   const app = createTestApp(modules);
   const alpha = modules.services.login({ email: "alpha@taskloom.local", password: "demo12345" });
@@ -338,10 +339,30 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
     headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
     body: JSON.stringify({ email: "indexed.parity@example.com", role: "member" }),
   });
-  const invitationBody = await invitation.json() as { invitation: { email: string; role: string; status: string; token?: string } };
+  const invitationBody = await invitation.json() as { invitation: { id: string; email: string; role: string; status: string; token?: string } };
 
   const members = await app.request("/api/app/members", { headers: authHeaders(alpha.cookieValue) });
   const membersBody = await members.json() as { invitations: Array<{ email: string; role: string; status: string; token?: string }> };
+
+  const resent = await app.request(`/api/app/invitations/${invitationBody.invitation.id}/resend`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const resentBody = await resent.json() as { invitation: { token?: string; status: string } };
+
+  const revoked = await app.request(`/api/app/invitations/${invitationBody.invitation.id}/revoke`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const revokedBody = await revoked.json() as { invitation: { status: string; revokedAt: string | null } };
+
+  const revokedAccept = await app.request(`/api/app/invitations/${resentBody.invitation.token ?? "missing"}/accept`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const invitationDeliveryCount = modules.store.loadStore().invitationEmailDeliveries
+    .filter((entry: { invitationId: string }) => entry.invitationId === invitationBody.invitation.id)
+    .length;
 
   const share = await app.request("/api/app/share", {
     method: "POST",
@@ -356,6 +377,43 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
   const shareList = await app.request("/api/app/share", { headers: authHeaders(alpha.cookieValue) });
   const shareListBody = await shareList.json() as { tokens: Array<{ id: string; scope: string; readCount: number; lastReadAt?: string }> };
   const listedToken = shareListBody.tokens.find((token) => token.id === shareBody.token.id);
+
+  const crossOriginMutation = await app.request("/api/app/workspace", {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(alpha.cookieValue),
+      "content-type": "application/json",
+      host: "localhost",
+      origin: "https://evil.example",
+    },
+    body: JSON.stringify({ name: "Blocked", website: "", automationGoal: "" }),
+  });
+  const crossOriginBody = await crossOriginMutation.json() as { error: string };
+
+  const sameOriginMissingCsrf = await app.request("/api/app/workspace", {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(alpha.cookieValue),
+      "content-type": "application/json",
+      host: "localhost",
+      origin: "http://localhost",
+    },
+    body: JSON.stringify({ name: "Blocked", website: "", automationGoal: "" }),
+  });
+  const sameOriginMissingCsrfBody = await sameOriginMissingCsrf.json() as { error: string };
+
+  const rateLimitIp = "203.0.113.77";
+  let rateLimitAttemptStatus = 0;
+  for (let index = 0; index < 21; index += 1) {
+    const response = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": rateLimitIp },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    rateLimitAttemptStatus = response.status;
+  }
+  const rateLimitBucket = (modules.store.loadStore().rateLimits ?? [])
+    .find((entry: { id: string }) => entry.id === `auth:login:${rateLimitIp}`);
 
   return {
     session: {
@@ -374,6 +432,13 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
         hasToken: Boolean(invitationBody.invitation.token),
       },
       listed: membersBody.invitations.some((entry) => entry.email === "indexed.parity@example.com" && entry.role === "member" && entry.status === "pending" && Boolean(entry.token)),
+      resendStatus: resent.status,
+      resendRotatedToken: Boolean(resentBody.invitation.token) && resentBody.invitation.token !== invitationBody.invitation.token,
+      revokeStatus: revoked.status,
+      revokedStatus: revokedBody.invitation.status,
+      revokedAt: Boolean(revokedBody.invitation.revokedAt),
+      revokedAcceptStatus: revokedAccept.status,
+      deliveryCount: invitationDeliveryCount,
     },
     share: {
       createStatus: share.status,
@@ -385,6 +450,14 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
       publicWorkspaceId: publicShareBody.shared.workspace.id,
       listedReadCount: listedToken?.readCount,
       listedLastReadAt: Boolean(listedToken?.lastReadAt),
+    },
+    security: {
+      crossOriginStatus: crossOriginMutation.status,
+      crossOriginError: crossOriginBody.error,
+      sameOriginMissingCsrfStatus: sameOriginMissingCsrf.status,
+      sameOriginMissingCsrfError: sameOriginMissingCsrfBody.error,
+      rateLimitStatus: rateLimitAttemptStatus,
+      rateLimitCount: rateLimitBucket?.count,
     },
   };
 }

@@ -1,6 +1,6 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about hardening production auth/member workflows and broader storage concurrency without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records, same-origin plus CSRF-token mutation checks, store-backed auth/invitation rate limits, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about hardening production auth/member workflows and broader storage concurrency without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
@@ -12,6 +12,8 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - The workflow route module implements private `/api/app/workflow` endpoints for briefs, templates, versions, requirements, plan items, blockers, questions, validation evidence, release confirmation, prompt-generated drafts, and Plan Mode.
 - RBAC defines owner, admin, member, and viewer roles with view workspace data, edit workflow, and manage workspace/operations permissions.
 - Private app, workflow, job, agent, provider, env-var, webhook, API-key, usage, LLM, and share routes enforce workspace membership and role-aware permissions.
+- Private mutating app routes reject browser requests whose `Origin` host does not match `Host` or `X-Forwarded-Host`, and same-origin browser mutations must echo the readable `taskloom_csrf` cookie in `X-CSRF-Token`.
+- Auth register/login and invitation create/accept/resend routes have store-backed rate limits in the active local store. They are useful for dev-mode abuse checks but still need production edge/distributed coordination for multi-process deployments.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
 - Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
@@ -149,6 +151,16 @@ Phase 11 is implemented for the high-value routes that were still doing broad JS
 - The app is not yet split into fully relational repositories for every collection; relational backfills remain future work only if later phases move high-value records out of `app_records` into dedicated tables.
 - Coverage now includes direct helper synchronization checks plus JSON-default versus SQLite-opt-in route parity for auth/session, invitation listing, workflow, jobs, agents, and share-token public/private reads.
 
+### Phase 12 Auth/Invitation Hardening Documentation And Parity
+
+Phase 12 is landed for the local runtime, with production email-provider and distributed-rate-limit follow-up still future work:
+
+- Invitation create, accept, resend, and revoke APIs are present. Create/resend record local `invitationEmailDeliveries` rows and return an `emailDelivery` summary. `TASKLOOM_INVITATION_EMAIL_MODE=dev` records sent deliveries; `TASKLOOM_INVITATION_EMAIL_MODE=skip` records skipped deliveries. No SMTP or external email provider is wired yet.
+- Invitation acceptance requires a signed-in user whose normalized email matches the invitation. Revoked, expired, accepted, and stale rotated tokens are rejected.
+- Store-backed rate limiting covers auth register/login and invitation create/accept/resend with 20 attempts per client key per 60 seconds. Buckets are keyed by forwarded IP headers and stored in JSON by default or SQLite `app_records` when `TASKLOOM_STORE=sqlite`.
+- CSRF behavior is a same-origin `Origin` host check plus double-submit token for browser mutations. Login/register set `taskloom_csrf`; same-origin browser mutations must send `X-CSRF-Token`; requests without `Origin` are allowed for local clients/tests.
+- Runtime parity coverage now checks JSON-default and SQLite-opt-in behavior for session reads, invitation create/list/resend/revoke/revoked-token rejection, local delivery rows, share-token reads, CSRF rejection, cross-origin mutation rejection, and rate-limit bucket persistence.
+
 ## Roadmap
 
 Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
@@ -173,10 +185,12 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 - [x] Apply owner/admin/member/viewer RBAC to private route policies.
 - [x] Enforce workspace membership before workspace reads, workflow edits, or operational mutations.
 - [x] Add backend invitation and member management APIs.
-- [ ] Add email delivery for invitations; member-management UI and invitation revoke/resend are already locally wired.
+- [x] Add local invitation email delivery recording for create/resend; production SMTP/provider delivery remains future work.
 - [x] Add session cleanup for expired sessions.
 - [x] Document production session cookie behavior and cleanup expectations.
-- [ ] Add production hardening beyond local in-memory rate limiting and same-origin checks, such as distributed rate limiting and CSRF review.
+- [x] Add store-backed rate limiting for auth and invitation routes in JSON default and SQLite opt-in modes.
+- [x] Add local same-origin and CSRF-token checks for private app browser mutations.
+- [ ] Add production hardening beyond local store-backed rate limiting and CSRF checks, such as edge/distributed rate limiting and deployment-specific CSRF review.
 
 ### 3. Real Activation Signals
 
@@ -219,13 +233,13 @@ Strengthen the project rails before larger product work accumulates.
 - [x] Keep roadmap, README, and activation docs current as milestones land.
 - [ ] Continue broadening API route coverage as new route policies and product surfaces land.
 - [x] Maintain frontend smoke/static contract tests for auth, onboarding, dashboard, activation, role-aware controls, workflow wiring, integrations, agents, runs, and share routes.
-- [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, workflow activation, jobs, agents, and share links.
+- [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, invitation resend/revoke and delivery-row behavior, workflow activation, jobs, agents, share links, CSRF rejection, cross-origin mutation rejection, and rate-limit bucket persistence.
 - [ ] Maintain local development, reset, seed, build, and release flow documentation as scripts change.
 - [x] Keep generated `web/dist` assets ignored unless release packaging requirements change.
 
 ## Recommended Order
 
-1. Invitation email delivery, distributed rate limiting, and CSRF review beyond the current local hardening.
+1. Production invitation email provider integration, edge/distributed rate limiting, and deployment-specific CSRF review beyond the current local hardening.
 2. Production storage hardening: concurrency and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
 3. Continued workflow/UI, test, and release hardening.
 

@@ -26,6 +26,13 @@ export interface SessionRecord {
   expiresAt: string;
 }
 
+export interface RateLimitRecord {
+  id: string;
+  count: number;
+  resetAt: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceRecord {
   id: string;
   slug: string;
@@ -57,6 +64,23 @@ export interface WorkspaceInvitationRecord {
   revokedAt?: string;
   expiresAt: string;
   createdAt: string;
+}
+
+export type InvitationEmailDeliveryStatus = "pending" | "sent" | "skipped" | "failed";
+export type InvitationEmailDeliveryMode = "dev" | "skip";
+
+export interface InvitationEmailDeliveryRecord {
+  id: string;
+  workspaceId: string;
+  invitationId: string;
+  recipientEmail: string;
+  subject: string;
+  status: InvitationEmailDeliveryStatus;
+  provider: string;
+  mode: InvitationEmailDeliveryMode;
+  createdAt: string;
+  sentAt?: string;
+  error?: string;
 }
 
 export interface WorkspaceBriefRecord {
@@ -436,9 +460,11 @@ export interface JobRecord {
 export interface TaskloomData {
   users: UserRecord[];
   sessions: SessionRecord[];
+  rateLimits?: RateLimitRecord[];
   workspaces: WorkspaceRecord[];
   memberships: WorkspaceMemberRecord[];
   workspaceInvitations: WorkspaceInvitationRecord[];
+  invitationEmailDeliveries: InvitationEmailDeliveryRecord[];
   workspaceBriefs: WorkspaceBriefCollection;
   workspaceBriefVersions: WorkspaceBriefVersionRecord[];
   requirements: RequirementRecord[];
@@ -613,6 +639,7 @@ function applyStoreMigrations(db: DatabaseSync): void {
 type StoreCollectionKey = keyof TaskloomData;
 
 export interface WorkspaceRecordCollectionMap {
+  invitationEmailDeliveries: InvitationEmailDeliveryRecord;
   activities: ActivityRecord;
   jobs: JobRecord;
   agents: AgentRecord;
@@ -652,9 +679,11 @@ export interface ListWorkspaceRecordsOptions<TRecord> {
 const RECORD_COLLECTIONS = [
   "users",
   "sessions",
+  "rateLimits",
   "workspaces",
   "memberships",
   "workspaceInvitations",
+  "invitationEmailDeliveries",
   "workspaceBriefs",
   "workspaceBriefVersions",
   "requirements",
@@ -755,6 +784,7 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
     "workspaces",
     "memberships",
     "workspaceInvitations",
+    "invitationEmailDeliveries",
     "shareTokens",
     "activationSignals",
     "workspaceBriefs",
@@ -785,6 +815,7 @@ type IndexedCollection =
   | "workspaces"
   | "memberships"
   | "workspaceInvitations"
+  | "invitationEmailDeliveries"
   | "workspaceBriefs"
   | "workspaceBriefVersions"
   | "requirements"
@@ -1051,6 +1082,15 @@ export function listWorkspaceInvitationsIndexed(workspaceId: string): WorkspaceI
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
+export function listInvitationEmailDeliveriesIndexed(workspaceId: string, invitationId?: string): InvitationEmailDeliveryRecord[] {
+  return sqliteIndexedRecords<InvitationEmailDeliveryRecord>(
+    "invitationEmailDeliveries",
+    `app_record_search.workspace_id = ?${invitationId ? " and json_extract(app_records.payload, '$.invitationId') = ?" : ""}`,
+    invitationId ? [workspaceId, invitationId] : [workspaceId],
+    "json_extract(app_records.payload, '$.createdAt') desc, app_records.id desc",
+  ) ?? listInvitationEmailDeliveries(loadStore(), workspaceId, invitationId);
+}
+
 export function findShareTokenByTokenIndexed(token: string): ShareTokenRecord | null {
   return sqliteIndexedRecord<ShareTokenRecord>("shareTokens", "app_record_search.token = ?", [token])
     ?? loadStore().shareTokens.find((entry) => entry.token === token) ?? null;
@@ -1156,6 +1196,7 @@ export function findJobIndexed(jobId: string): JobRecord | null {
 function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {
   if (collection === "workspaceBriefs") return workspaceBriefEntries(data.workspaceBriefs);
   if (collection === "releaseConfirmations") return releaseConfirmationEntries(data.releaseConfirmations);
+  if (collection === "rateLimits") return data.rateLimits ?? [];
   return data[collection] as unknown[];
 }
 
@@ -1183,9 +1224,11 @@ export function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
   return {
     users: data.users ?? [],
     sessions: data.sessions ?? [],
+    rateLimits: data.rateLimits ?? [],
     workspaces: data.workspaces ?? [],
     memberships: data.memberships ?? [],
     workspaceInvitations: data.workspaceInvitations ?? [],
+    invitationEmailDeliveries: data.invitationEmailDeliveries ?? [],
     workspaceBriefs: normalizeWorkspaceBriefCollection(data.workspaceBriefs),
     workspaceBriefVersions: data.workspaceBriefVersions ?? [],
     requirements: data.requirements ?? [],
@@ -1886,9 +1929,11 @@ function seedStore(): TaskloomData {
   return {
     users,
     sessions: [],
+    rateLimits: [],
     workspaces,
     memberships,
     workspaceInvitations: [],
+    invitationEmailDeliveries: [],
     workspaceBriefs,
     workspaceBriefVersions: [],
     requirements,
@@ -2166,6 +2211,72 @@ export function upsertWorkspaceInvitation(
 
   data.workspaceInvitations.push(input);
   return input;
+}
+
+export type CreateInvitationEmailDeliveryInput = Omit<InvitationEmailDeliveryRecord, "id" | "createdAt" | "status"> & {
+  id?: string;
+  createdAt?: string;
+  status?: InvitationEmailDeliveryStatus;
+};
+
+export function createInvitationEmailDelivery(
+  data: TaskloomData,
+  input: CreateInvitationEmailDeliveryInput,
+  timestamp = now(),
+): InvitationEmailDeliveryRecord {
+  const delivery: InvitationEmailDeliveryRecord = {
+    id: input.id ?? generateId(),
+    workspaceId: input.workspaceId,
+    invitationId: input.invitationId,
+    recipientEmail: normalizeEmail(input.recipientEmail),
+    subject: input.subject,
+    status: input.status ?? "pending",
+    provider: input.provider,
+    mode: input.mode,
+    createdAt: input.createdAt ?? timestamp,
+    sentAt: input.sentAt,
+    error: input.error,
+  };
+
+  data.invitationEmailDeliveries.push(delivery);
+  return delivery;
+}
+
+export function listInvitationEmailDeliveries(data: TaskloomData, workspaceId: string, invitationId?: string): InvitationEmailDeliveryRecord[] {
+  return data.invitationEmailDeliveries
+    .filter((entry) => entry.workspaceId === workspaceId && (!invitationId || entry.invitationId === invitationId))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+}
+
+export function findInvitationEmailDelivery(data: TaskloomData, deliveryId: string): InvitationEmailDeliveryRecord | null {
+  return data.invitationEmailDeliveries.find((entry) => entry.id === deliveryId) ?? null;
+}
+
+export function markInvitationEmailDeliverySent(data: TaskloomData, deliveryId: string, timestamp = now()): InvitationEmailDeliveryRecord | null {
+  const delivery = findInvitationEmailDelivery(data, deliveryId);
+  if (!delivery) return null;
+  delivery.status = "sent";
+  delivery.sentAt = timestamp;
+  delete delivery.error;
+  return delivery;
+}
+
+export function markInvitationEmailDeliverySkipped(data: TaskloomData, deliveryId: string, reason?: string): InvitationEmailDeliveryRecord | null {
+  const delivery = findInvitationEmailDelivery(data, deliveryId);
+  if (!delivery) return null;
+  delivery.status = "skipped";
+  delete delivery.sentAt;
+  delivery.error = reason;
+  return delivery;
+}
+
+export function markInvitationEmailDeliveryFailed(data: TaskloomData, deliveryId: string, error: string): InvitationEmailDeliveryRecord | null {
+  const delivery = findInvitationEmailDelivery(data, deliveryId);
+  if (!delivery) return null;
+  delivery.status = "failed";
+  delete delivery.sentAt;
+  delivery.error = error;
+  return delivery;
 }
 
 export type WorkspaceBriefUpsertInput = Omit<WorkspaceBriefRecord, "createdAt" | "updatedAt"> &

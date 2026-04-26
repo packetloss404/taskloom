@@ -1,5 +1,7 @@
 import { Hono, type Context } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
+import { hashSessionSecret, SESSION_COOKIE_NAME, SESSION_TTL_MS } from "./auth-utils.js";
 import {
   applySessionCookie,
   acceptWorkspaceInvitation,
@@ -24,19 +26,17 @@ import {
   updateProfile,
   updateWorkspace,
 } from "./taskloom-services.js";
-import { findWorkspaceMembership, loadStore } from "./taskloom-store.js";
+import { findWorkspaceMembership, loadStore, mutateStore } from "./taskloom-store.js";
 
 export const appRoutes = new Hono();
 
 const AUTH_RATE_LIMIT = { maxAttempts: 20, windowMs: 60_000 };
 const INVITATION_RATE_LIMIT = { maxAttempts: 20, windowMs: 60_000 };
-
-type RateLimitBucket = { count: number; resetAt: number };
-
-const rateLimitBuckets = new Map<string, RateLimitBucket>();
+const CSRF_COOKIE_NAME = "taskloom_csrf";
+const CSRF_HEADER_NAME = "x-csrf-token";
 
 export function resetAppRouteSecurityForTests() {
-  rateLimitBuckets.clear();
+  // Security state is store-backed; tests reset it through resetStoreForTests().
 }
 
 appRoutes.get("/auth/session", (c) => {
@@ -63,6 +63,7 @@ appRoutes.post("/auth/register", async (c) => {
       displayName: body.displayName ?? "",
     });
     applySessionCookie(c, result.cookieValue);
+    applyCsrfCookie(c, result.cookieValue);
     c.status(201);
     return c.json(getSessionPayload(result.context));
   } catch (error) {
@@ -79,6 +80,7 @@ appRoutes.post("/auth/login", async (c) => {
       password: body.password ?? "",
     });
     applySessionCookie(c, result.cookieValue);
+    applyCsrfCookie(c, result.cookieValue);
     return c.json(getSessionPayload(result.context));
   } catch (error) {
     return errorResponse(c, error);
@@ -89,6 +91,7 @@ appRoutes.post("/auth/logout", (c) => {
   const blocked = rejectCrossOriginPrivateMutation(c);
   if (blocked) return blocked;
   logout(c);
+  clearCsrfCookie(c);
   return c.json({ ok: true });
 });
 
@@ -210,7 +213,7 @@ appRoutes.post("/app/invitations", async (c) => {
     requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json()) as { email?: string; role?: string };
     c.status(201);
-    return c.json(createWorkspaceInvitation(context, {
+    return c.json(await createWorkspaceInvitation(context, {
       email: body.email ?? "",
       role: body.role ?? "member",
     }));
@@ -230,13 +233,13 @@ appRoutes.post("/app/invitations/:token/accept", (c) => {
   }
 });
 
-appRoutes.post("/app/invitations/:invitationId/resend", (c) => {
+appRoutes.post("/app/invitations/:invitationId/resend", async (c) => {
   try {
     rejectCrossOriginPrivateMutationOrThrow(c);
     enforceRateLimit(c, "invitation:resend", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
-    return c.json(resendWorkspaceInvitation(context, c.req.param("invitationId")));
+    return c.json(await resendWorkspaceInvitation(context, c.req.param("invitationId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -286,16 +289,28 @@ function requireWorkspacePermission(context: AuthenticatedRouteContext, permissi
 function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number }) {
   const key = `${scope}:${clientKey(c)}`;
   const timestamp = Date.now();
-  const bucket = rateLimitBuckets.get(key);
 
-  if (!bucket || bucket.resetAt <= timestamp) {
-    rateLimitBuckets.set(key, { count: 1, resetAt: timestamp + options.windowMs });
-    return;
-  }
+  const limitedUntil = mutateStore((data) => {
+    data.rateLimits = (data.rateLimits ?? []).filter((entry) => new Date(entry.resetAt).getTime() > timestamp);
+    const bucket = data.rateLimits.find((entry) => entry.id === key);
 
-  bucket.count += 1;
-  if (bucket.count > options.maxAttempts) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt - timestamp) / 1000));
+    if (!bucket) {
+      data.rateLimits.push({
+        id: key,
+        count: 1,
+        resetAt: new Date(timestamp + options.windowMs).toISOString(),
+        updatedAt: new Date(timestamp).toISOString(),
+      });
+      return null;
+    }
+
+    bucket.count += 1;
+    bucket.updatedAt = new Date(timestamp).toISOString();
+    return bucket.count > options.maxAttempts ? new Date(bucket.resetAt).getTime() : null;
+  });
+
+  if (limitedUntil) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((limitedUntil - timestamp) / 1000));
     c.header("Retry-After", String(retryAfterSeconds));
     throw httpRouteError(429, "too many requests");
   }
@@ -322,12 +337,41 @@ function rejectCrossOriginPrivateMutationOrThrow(c: Context) {
 
   const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? new URL(c.req.url).host;
   try {
-    if (new URL(origin).host === host) return;
+    if (new URL(origin).host !== host) throw httpRouteError(403, "cross-origin requests are not allowed");
   } catch {
     throw httpRouteError(403, "cross-origin requests are not allowed");
   }
 
-  throw httpRouteError(403, "cross-origin requests are not allowed");
+  enforceBrowserCsrf(c);
+}
+
+function enforceBrowserCsrf(c: Context) {
+  const sessionCookie = getCookie(c, SESSION_COOKIE_NAME) ?? "";
+  const csrfCookie = getCookie(c, CSRF_COOKIE_NAME) ?? "";
+  const csrfHeader = c.req.header(CSRF_HEADER_NAME) ?? "";
+  const expected = csrfTokenForSessionCookie(sessionCookie);
+
+  if (!expected || csrfCookie !== expected || csrfHeader !== expected) {
+    throw httpRouteError(403, "invalid csrf token");
+  }
+}
+
+function applyCsrfCookie(c: Context, sessionCookie: string) {
+  setCookie(c, CSRF_COOKIE_NAME, csrfTokenForSessionCookie(sessionCookie), {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Lax",
+    path: "/",
+    maxAge: Math.floor(SESSION_TTL_MS / 1000),
+  });
+}
+
+function clearCsrfCookie(c: Context) {
+  deleteCookie(c, CSRF_COOKIE_NAME, { path: "/" });
+}
+
+function csrfTokenForSessionCookie(sessionCookie: string) {
+  return sessionCookie ? hashSessionSecret(`csrf:${sessionCookie}`) : "";
 }
 
 function httpRouteError(status: number, message: string) {

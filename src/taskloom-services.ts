@@ -33,6 +33,7 @@ import {
   listWorkspaceEnvVars,
   loadStore,
   mutateStore,
+  persistStore,
   nextIncompleteStep,
   type ActivityRecord,
   type ActivationSignalRecord,
@@ -68,6 +69,8 @@ import {
   upsertWorkspaceEnvVar,
 } from "./taskloom-store";
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
+import { invitationEmailSubject } from "./invitation-email.js";
+import { deliverInvitationEmail, type InvitationEmailDeliveryAction } from "./invitation-email-delivery.js";
 import { maintainScheduledAgentJobs } from "./jobs/store.js";
 import {
   buildSessionCookieValue,
@@ -371,13 +374,13 @@ export function listWorkspaceMembers(context: AuthenticatedContext) {
   };
 }
 
-export function createWorkspaceInvitation(context: AuthenticatedContext, input: { email: string; role: string }) {
+export async function createWorkspaceInvitation(context: AuthenticatedContext, input: { email: string; role: string }) {
   const email = normalizeEmail(input.email);
   const role = parseWorkspaceRole(input.role);
   if (!email.includes("@")) throw httpError(400, "valid email is required");
   assertCanManageRole(context.role, role);
 
-  return mutateStore((data) => {
+  const result = mutateStore((data) => {
     const existingUser = findUserByEmailIndexed(email);
     if (existingUser && findWorkspaceMembership(data, context.workspace.id, existingUser.id)) {
       throw httpError(409, "user is already a workspace member");
@@ -410,8 +413,11 @@ export function createWorkspaceInvitation(context: AuthenticatedContext, input: 
       displayName: context.user.displayName,
     }, { title: `Invitation created for ${email}`, email, role }, timestamp));
 
-    return { invitation: summarizeWorkspaceInvitation(invitation) };
+    return { invitation: summarizeWorkspaceInvitation(invitation), invitationRecord: { ...invitation } };
   });
+
+  const emailDelivery = await recordWorkspaceInvitationEmailDelivery(context, result.invitationRecord, "create");
+  return { invitation: result.invitation, emailDelivery };
 }
 
 export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: string) {
@@ -450,10 +456,10 @@ export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: 
   });
 }
 
-export function resendWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
+export async function resendWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
   if (!invitationId.trim()) throw httpError(400, "invitation id is required");
 
-  return mutateStore((data) => {
+  const result = mutateStore((data) => {
     const invitation = data.workspaceInvitations.find((entry) => {
       return entry.id === invitationId.trim() && entry.workspaceId === context.workspace.id;
     });
@@ -473,8 +479,11 @@ export function resendWorkspaceInvitation(context: AuthenticatedContext, invitat
       displayName: context.user.displayName,
     }, { title: `Invitation resent for ${invitation.email}`, email: invitation.email, role: invitation.role }, timestamp));
 
-    return { invitation: summarizeWorkspaceInvitation(invitation) };
+    return { invitation: summarizeWorkspaceInvitation(invitation), invitationRecord: { ...invitation } };
   });
+
+  const emailDelivery = await recordWorkspaceInvitationEmailDelivery(context, result.invitationRecord, "resend");
+  return { invitation: result.invitation, emailDelivery };
 }
 
 export function revokeWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
@@ -1903,6 +1912,48 @@ function summarizeWorkspaceInvitation(
     expiresAt: invitation.expiresAt,
     createdAt: invitation.createdAt,
     status: invitation.acceptedAt ? "accepted" : invitation.revokedAt ? "revoked" : expired ? "expired" : "pending",
+  };
+}
+
+async function recordWorkspaceInvitationEmailDelivery(
+  context: AuthenticatedContext,
+  invitation: WorkspaceInvitationRecord,
+  action: InvitationEmailDeliveryAction,
+) {
+  const data = loadStore();
+  const delivery = await deliverInvitationEmail(data, {
+    action,
+    workspaceId: invitation.workspaceId,
+    workspaceName: context.workspace.name,
+    invitationId: invitation.id,
+    email: invitation.email,
+    token: invitation.token,
+    subject: invitationEmailSubject(context.workspace.name),
+  });
+  persistStore(data);
+
+  mutateStore((data) => {
+    data.activities.unshift(makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, {
+      title: delivery.status === "sent" ? `Invitation email sent to ${invitation.email}` : `Invitation email ${delivery.status} for ${invitation.email}`,
+      invitationId: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      action,
+      deliveryId: delivery.id,
+      status: delivery.status,
+      ...(delivery.error ? { error: delivery.error } : {}),
+    }, new Date().toISOString()));
+  });
+
+  return {
+    id: delivery.id,
+    status: delivery.status,
+    action,
+    error: delivery.error ?? null,
   };
 }
 

@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import {
   activationSignalRepository,
   clearStoreCacheForTests,
+  createInvitationEmailDelivery,
+  findInvitationEmailDelivery,
   findSessionByIdIndexed,
   findShareTokenByTokenIndexed,
   findUserByEmailIndexed,
@@ -25,6 +27,8 @@ import {
   listSessionsForUserIndexed,
   listShareTokensForWorkspaceIndexed,
   listActivationSignalsForWorkspace,
+  listInvitationEmailDeliveries,
+  listInvitationEmailDeliveriesIndexed,
   listValidationEvidenceForWorkspaceIndexed,
   listWorkspaceBriefVersionsIndexed,
   listWorkspaceRecordsIndexed,
@@ -39,6 +43,9 @@ import {
   listRequirementsForWorkspace,
   listValidationEvidenceForWorkspace,
   listWorkflowConcernsForWorkspace,
+  markInvitationEmailDeliveryFailed,
+  markInvitationEmailDeliverySent,
+  markInvitationEmailDeliverySkipped,
   mutateStore,
   resetStoreForTests,
   upsertActivationSignal,
@@ -47,6 +54,7 @@ import {
   upsertWorkspaceMembership,
   type WorkspaceRole,
 } from "./taskloom-store";
+import { recordLocalInvitationEmailDelivery, TASKLOOM_INVITATION_EMAIL_MODE_ENV } from "./invitation-email";
 
 test("seed store includes product workflow records for each workspace", () => {
   const store = resetStoreForTests();
@@ -116,6 +124,77 @@ test("workspace memberships support expanded roles", () => {
   });
 
   assert.equal(findWorkspaceMembership(store, "alpha", "user_beta")?.role, "viewer");
+});
+
+test("invitation email deliveries record local sent and skipped attempts", () => {
+  const previousMode = process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+
+  try {
+    delete process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+    const store = resetStoreForTests();
+    const invitation = {
+      id: "invite_email_delivery",
+      workspaceId: "alpha",
+      email: "Invitee@Example.Com",
+      role: "member" as const,
+      token: "invite-email-delivery-token",
+      invitedByUserId: "user_alpha",
+      expiresAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+
+    const sent = recordLocalInvitationEmailDelivery(store, {
+      invitation,
+      workspaceName: "Alpha Workspace",
+      deliveryId: "delivery_sent",
+      timestamp: "2026-04-01T00:00:01.000Z",
+    });
+
+    assert.equal(sent.status, "sent");
+    assert.equal(sent.mode, "dev");
+    assert.equal(sent.provider, "local");
+    assert.equal(sent.recipientEmail, "invitee@example.com");
+    assert.equal(sent.subject, "You're invited to Alpha Workspace on Taskloom");
+    assert.equal(sent.sentAt, "2026-04-01T00:00:01.000Z");
+
+    process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "skip";
+    const skipped = recordLocalInvitationEmailDelivery(store, {
+      invitation: { ...invitation, id: "invite_email_delivery_skipped" },
+      deliveryId: "delivery_skipped",
+      timestamp: "2026-04-01T00:00:02.000Z",
+    });
+
+    assert.equal(skipped.status, "skipped");
+    assert.equal(skipped.mode, "skip");
+    assert.equal(skipped.sentAt, undefined);
+    assert.equal(skipped.error, `${TASKLOOM_INVITATION_EMAIL_MODE_ENV}=skip`);
+    assert.deepEqual(listInvitationEmailDeliveries(store, "alpha").map((entry) => entry.id), ["delivery_skipped", "delivery_sent"]);
+    assert.deepEqual(listInvitationEmailDeliveries(store, "alpha", "invite_email_delivery").map((entry) => entry.id), ["delivery_sent"]);
+  } finally {
+    if (previousMode === undefined) delete process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+    else process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = previousMode;
+  }
+});
+
+test("invitation email delivery helpers create and mark durable records", () => {
+  const store = resetStoreForTests();
+  const delivery = createInvitationEmailDelivery(store, {
+    id: "delivery_marking",
+    workspaceId: "alpha",
+    invitationId: "invite_marking",
+    recipientEmail: "Mark.Me@Example.Com",
+    subject: "Invitation",
+    provider: "local",
+    mode: "dev",
+  }, "2026-04-02T00:00:00.000Z");
+
+  assert.equal(delivery.status, "pending");
+  assert.equal(delivery.recipientEmail, "mark.me@example.com");
+  assert.equal(markInvitationEmailDeliverySent(store, "delivery_marking", "2026-04-02T00:00:01.000Z")?.sentAt, "2026-04-02T00:00:01.000Z");
+  assert.equal(markInvitationEmailDeliverySkipped(store, "delivery_marking", "not needed")?.status, "skipped");
+  assert.equal(findInvitationEmailDelivery(store, "delivery_marking")?.sentAt, undefined);
+  assert.equal(markInvitationEmailDeliveryFailed(store, "delivery_marking", "boom")?.error, "boom");
+  assert.equal(findInvitationEmailDelivery(store, "missing_delivery"), null);
 });
 
 test("activation signal repository deduplicates JSON records by stable key", () => {
@@ -312,6 +391,18 @@ test("sqlite indexed helpers read high-value records and stay in sync", () => {
         expiresAt: "2026-04-01T00:00:00.000Z",
         createdAt: "2026-03-01T00:00:00.000Z",
       });
+      data.invitationEmailDeliveries.push({
+        id: "delivery_sqlite_index",
+        workspaceId: "workspace_sqlite_index",
+        invitationId: "invite_sqlite_index",
+        recipientEmail: "invitee@example.com",
+        subject: "You're invited to SQLite Index on Taskloom",
+        status: "sent",
+        provider: "local",
+        mode: "dev",
+        createdAt: "2026-03-01T00:00:01.000Z",
+        sentAt: "2026-03-01T00:00:01.000Z",
+      });
       data.shareTokens.push({
         id: "share_sqlite_index",
         workspaceId: "workspace_sqlite_index",
@@ -333,6 +424,8 @@ test("sqlite indexed helpers read high-value records and stay in sync", () => {
     assert.equal(listWorkspaceMembershipsIndexed("workspace_sqlite_index").some((entry) => entry.userId === "user_sqlite_index"), true);
     assert.equal(findWorkspaceInvitationByTokenIndexed("invite-token-sqlite-index")?.id, "invite_sqlite_index");
     assert.equal(listWorkspaceInvitationsIndexed("workspace_sqlite_index")[0]?.id, "invite_sqlite_index");
+    assert.equal(listInvitationEmailDeliveriesIndexed("workspace_sqlite_index")[0]?.id, "delivery_sqlite_index");
+    assert.equal(listInvitationEmailDeliveriesIndexed("workspace_sqlite_index", "invite_sqlite_index")[0]?.recipientEmail, "invitee@example.com");
     assert.equal(findShareTokenByTokenIndexed("share-token-sqlite-index")?.id, "share_sqlite_index");
     assert.equal(listShareTokensForWorkspaceIndexed("workspace_sqlite_index")[0]?.id, "share_sqlite_index");
 

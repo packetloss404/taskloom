@@ -53,12 +53,16 @@ import type {
 import { pushExternalToast } from "@/context/ToastContext";
 
 let lastAuthToastAt = 0;
+const CSRF_COOKIE_NAME = "taskloom_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
+  const csrfToken = csrfTokenForRequest(init);
   const response = await fetch(url, {
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      ...(csrfToken ? { [CSRF_HEADER_NAME]: csrfToken } : {}),
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -87,6 +91,17 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
     throw error;
   }
   return payload as T;
+}
+
+function csrfTokenForRequest(init?: RequestInit) {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return "";
+  if (typeof document === "undefined") return "";
+  return document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${CSRF_COOKIE_NAME}=`))
+    ?.slice(CSRF_COOKIE_NAME.length + 1) ?? "";
 }
 
 export const api = {
