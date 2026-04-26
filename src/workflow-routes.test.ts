@@ -24,6 +24,72 @@ test("workflow routes require authentication", async () => {
   assert.deepEqual(body, { error: "authentication required" });
 });
 
+test("workflow route reports invalid JSON bodies as bad requests", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const app = createTestApp();
+
+  const response = await app.request("/api/app/workflow/brief", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      cookie: `taskloom_session=${auth.cookieValue}`,
+    },
+    body: "{not json",
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(body, { error: "request body must be valid JSON" });
+});
+
+test("brief template apply uses the route template id", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const app = createTestApp();
+
+  const response = await app.request("/api/app/workflow/brief/templates/saas-activation/apply", {
+    method: "POST",
+    headers: { cookie: `taskloom_session=${auth.cookieValue}` },
+  });
+  const body = await response.json() as { summary: string; targetCustomers: string[] };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.summary, "Roll out a guided activation experience that lifts the percentage of new accounts reaching first value within their first session.");
+  assert.deepEqual(body.targetCustomers, ["Self-serve trial accounts", "Pilot customers in the first 30 days"]);
+});
+
+test("plan-mode apply filters empty items and normalizes statuses", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const app = createTestApp();
+
+  const response = await app.request("/api/app/workflow/plan-mode/apply", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `taskloom_session=${auth.cookieValue}`,
+    },
+    body: JSON.stringify({
+      planItems: [
+        { summary: "Draft implementation plan", status: "doing" },
+        { summary: "", status: "done" },
+        { summary: "Confirm release", status: "done" },
+        { summary: "Unknown status falls back", status: "blocked" },
+      ],
+    }),
+  });
+  const body = await response.json() as { planItems: { title: string; status: string }[] };
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.planItems.map((item) => item.title), [
+    "Draft implementation plan",
+    "Confirm release",
+    "Unknown status falls back",
+  ]);
+  assert.deepEqual(body.planItems.map((item) => item.status), ["in_progress", "done", "todo"]);
+});
+
 test("generate-from-prompt applies the LLM-shaped draft", async () => {
   resetStoreForTests();
   const router = new ProviderRouter({ "workflow.draft": { provider: "stub", model: "stub-small" } });

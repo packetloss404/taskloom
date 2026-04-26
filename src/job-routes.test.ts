@@ -74,6 +74,52 @@ test("job creation rejects invalid scheduling fields", async () => {
   }
 });
 
+test("job list filters to the authenticated workspace with status and limit", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  enqueueJob({ workspaceId: "alpha", type: "test.oldest" });
+  enqueueJob({ workspaceId: "beta", type: "test.beta" });
+  const newestAlpha = enqueueJob({ workspaceId: "alpha", type: "test.newest" });
+
+  const response = await app.request("/api/app/jobs?status=queued&limit=1", {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const body = await response.json() as { jobs: { id: string; workspaceId: string; status: string; type: string }[] };
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.jobs.map((job) => job.id), [newestAlpha.id]);
+  assert.equal(body.jobs[0]?.workspaceId, "alpha");
+  assert.equal(body.jobs[0]?.status, "queued");
+});
+
+test("job creation stores optional scheduling fields in the authenticated workspace", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const response = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({
+      type: "test.scheduled",
+      payload: { source: "route-test" },
+      scheduledAt: "2026-01-01T00:00:00.000Z",
+      cron: "0 9 * * 1",
+      maxAttempts: 5,
+    }),
+  });
+  const body = await response.json() as { job: { workspaceId: string; type: string; payload: unknown; scheduledAt: string; cron: string; maxAttempts: number } };
+
+  assert.equal(response.status, 201);
+  assert.equal(body.job.workspaceId, "alpha");
+  assert.equal(body.job.type, "test.scheduled");
+  assert.deepEqual(body.job.payload, { source: "route-test" });
+  assert.equal(body.job.scheduledAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(body.job.cron, "0 9 * * 1");
+  assert.equal(body.job.maxAttempts, 5);
+});
+
 test("job creation rejects agent runs outside the authenticated workspace", async () => {
   resetStoreForTests();
   const app = createTestApp();

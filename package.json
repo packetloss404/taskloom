@@ -16,7 +16,9 @@
     "jobs:recompute-activation": "node --import tsx src/jobs.ts recompute-activation",
     "jobs:cleanup-sessions": "node --import tsx src/jobs.ts cleanup-sessions",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "npm run test:api && npm run test:web",
+    "test:api": "node --import tsx --test src/**/*.test.ts",
+    "test:web": "tsx --tsconfig web/tsconfig.json --test web/src/**/*.test.tsx"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",

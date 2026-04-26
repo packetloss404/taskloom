@@ -1,0 +1,151 @@
+import { Hono, type Context } from "hono";
+import {
+  applySessionCookie,
+  completeOnboardingStep,
+  getActivationDetail,
+  getOnboarding,
+  getPrivateBootstrap,
+  getSessionPayload,
+  getWorkspaceActivityDetail,
+  listWorkspaceActivities,
+  login,
+  logout,
+  register,
+  requireAuthenticatedContext,
+  restoreSession,
+  updateProfile,
+  updateWorkspace,
+} from "./taskloom-services.js";
+
+export const appRoutes = new Hono();
+
+appRoutes.get("/auth/session", (c) => {
+  const context = restoreSession(c);
+  if (!context) {
+    return c.json({ authenticated: false, user: null, workspace: null, onboarding: null });
+  }
+
+  return c.json(getSessionPayload(context));
+});
+
+appRoutes.post("/auth/register", async (c) => {
+  try {
+    const body = (await c.req.json()) as { email?: string; password?: string; displayName?: string };
+    const result = register({
+      email: body.email ?? "",
+      password: body.password ?? "",
+      displayName: body.displayName ?? "",
+    });
+    applySessionCookie(c, result.cookieValue);
+    c.status(201);
+    return c.json(getSessionPayload(result.context));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.post("/auth/login", async (c) => {
+  try {
+    const body = (await c.req.json()) as { email?: string; password?: string };
+    const result = login({
+      email: body.email ?? "",
+      password: body.password ?? "",
+    });
+    applySessionCookie(c, result.cookieValue);
+    return c.json(getSessionPayload(result.context));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.post("/auth/logout", (c) => {
+  logout(c);
+  return c.json({ ok: true });
+});
+
+appRoutes.get("/app/bootstrap", async (c) => {
+  try {
+    return c.json(await getPrivateBootstrap(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.get("/app/activation", async (c) => {
+  try {
+    return c.json(await getActivationDetail(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.get("/app/activity", (c) => {
+  try {
+    return c.json({ activities: listWorkspaceActivities(requireAuthenticatedContext(c)) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.get("/app/activity/:id", (c) => {
+  try {
+    return c.json(getWorkspaceActivityDetail(requireAuthenticatedContext(c), c.req.param("id")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.get("/app/onboarding", (c) => {
+  try {
+    return c.json({ onboarding: getOnboarding(requireAuthenticatedContext(c)) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.post("/app/onboarding/steps/:stepKey/complete", async (c) => {
+  try {
+    return c.json({ onboarding: await completeOnboardingStep(requireAuthenticatedContext(c), c.req.param("stepKey")) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.patch("/app/profile", async (c) => {
+  try {
+    const body = (await c.req.json()) as { displayName?: string; timezone?: string };
+    const user = await updateProfile(requireAuthenticatedContext(c), {
+      displayName: body.displayName ?? "",
+      timezone: body.timezone ?? "",
+    });
+    return c.json({
+      profile: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        timezone: user.timezone,
+      },
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+appRoutes.patch("/app/workspace", async (c) => {
+  try {
+    const body = (await c.req.json()) as { name?: string; website?: string; automationGoal?: string };
+    const workspace = await updateWorkspace(requireAuthenticatedContext(c), {
+      name: body.name ?? "",
+      website: body.website ?? "",
+      automationGoal: body.automationGoal ?? "",
+    });
+    return c.json({ workspace });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+function errorResponse(c: Context, error: unknown) {
+  c.status(((error as Error & { status?: number }).status ?? 500) as any);
+  return c.json({ error: (error as Error).message });
+}

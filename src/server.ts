@@ -3,44 +3,31 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import {
-  applySessionCookie,
   archiveAgent,
   cancelAgentRun,
-  completeOnboardingStep,
   createAgent,
   createAgentFromTemplate,
   createProvider,
   createWorkspaceEnvVar,
   deleteWorkspaceEnvVarById,
-  getActivationDetail,
   getAgent,
-  getOnboarding,
-  getPrivateBootstrap,
   getPublicActivationSummary,
-  getWorkspaceActivityDetail,
-  getSessionPayload,
   listPublicActivationSummaries,
   listAgentRuns,
   listAgentTemplates,
   listAgents,
   listProviders,
   listReleaseHistory,
-  listWorkspaceActivities,
   listWorkspaceEnvVarsForUser,
-  login,
-  logout,
-  register,
   requireAuthenticatedContext,
-  restoreSession,
   retryAgentRun,
   recordRunAsPlaybook,
   runAgent,
   updateAgent,
   updateProvider,
-  updateProfile,
-  updateWorkspace,
   updateWorkspaceEnvVar,
 } from "./taskloom-services.js";
+import { appRoutes } from "./app-routes.js";
 import { workflowRoutes } from "./workflow-routes.js";
 import { apiKeyRoutes } from "./api-key-routes.js";
 import { usageRoutes } from "./usage-routes.js";
@@ -73,131 +60,7 @@ app.get("/api/activation/:workspaceId", async (c) => {
   return c.json(summary);
 });
 
-app.get("/api/auth/session", (c) => {
-  const context = restoreSession(c);
-  if (!context) {
-    return c.json({ authenticated: false, user: null, workspace: null, onboarding: null });
-  }
-
-  return c.json(getSessionPayload(context));
-});
-
-app.post("/api/auth/register", async (c) => {
-  try {
-    const body = (await c.req.json()) as { email?: string; password?: string; displayName?: string };
-    const result = register({
-      email: body.email ?? "",
-      password: body.password ?? "",
-      displayName: body.displayName ?? "",
-    });
-    applySessionCookie(c, result.cookieValue);
-    c.status(201);
-    return c.json(getSessionPayload(result.context));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post("/api/auth/login", async (c) => {
-  try {
-    const body = (await c.req.json()) as { email?: string; password?: string };
-    const result = login({
-      email: body.email ?? "",
-      password: body.password ?? "",
-    });
-    applySessionCookie(c, result.cookieValue);
-    return c.json(getSessionPayload(result.context));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post("/api/auth/logout", (c) => {
-  logout(c);
-  return c.json({ ok: true });
-});
-
-app.get("/api/app/bootstrap", async (c) => {
-  try {
-    return c.json(await getPrivateBootstrap(requireAuthenticatedContext(c)));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/activation", async (c) => {
-  try {
-    return c.json(await getActivationDetail(requireAuthenticatedContext(c)));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/onboarding", (c) => {
-  try {
-    return c.json({ onboarding: getOnboarding(requireAuthenticatedContext(c)) });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post("/api/app/onboarding/steps/:stepKey/complete", async (c) => {
-  try {
-    return c.json({ onboarding: await completeOnboardingStep(requireAuthenticatedContext(c), c.req.param("stepKey")) });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.patch("/api/app/profile", async (c) => {
-  try {
-    const body = (await c.req.json()) as { displayName?: string; timezone?: string };
-    const user = await updateProfile(requireAuthenticatedContext(c), {
-      displayName: body.displayName ?? "",
-      timezone: body.timezone ?? "",
-    });
-    return c.json({
-      profile: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        timezone: user.timezone,
-      },
-    });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.patch("/api/app/workspace", async (c) => {
-  try {
-    const body = (await c.req.json()) as { name?: string; website?: string; automationGoal?: string };
-    const workspace = await updateWorkspace(requireAuthenticatedContext(c), {
-      name: body.name ?? "",
-      website: body.website ?? "",
-      automationGoal: body.automationGoal ?? "",
-    });
-    return c.json({ workspace });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/activity", (c) => {
-  try {
-    return c.json({ activities: listWorkspaceActivities(requireAuthenticatedContext(c)) });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/activity/:id", (c) => {
-  try {
-    return c.json(getWorkspaceActivityDetail(requireAuthenticatedContext(c), c.req.param("id")));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
+app.route("/api", appRoutes);
 
 app.get("/api/app/agents", (c) => {
   try {

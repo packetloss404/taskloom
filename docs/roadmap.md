@@ -17,6 +17,8 @@ Taskloom currently has a local activation domain, file-backed app services, auth
 - React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, and activity.
 - The frontend API layer has typed workflow calls for brief, requirements, plan items, blockers, questions, validation evidence, and release confirmation.
 - Build, typecheck, and test scripts are available through `npm run build`.
+- Local development uses an ignored `data/taskloom.json` file that is recreated from built-in seed data when missing.
+- README and activation docs cover local development, reset-by-removing-store, seed, build, and release hygiene flows.
 
 ## Landed In This Branch
 
@@ -95,6 +97,16 @@ Phase 5 product workflow surfaces are now wired through the private workflow API
 
 Dashboard filtering and richer activity detail views are present in the UI/API seam, with backend activity context available for workflow-related events.
 
+### Dev And Release Hygiene
+
+Phase 6 dev and release hygiene is now in place:
+
+- `README.md` documents prerequisites, dev server ports, seed accounts, local data reset, activation recompute, session cleanup, build checks, and release handoff hygiene.
+- `docs/activation/*` describes the current activation boundary, signal mapping, and remaining persistence/backfill work without stale PR-only framing.
+- Backend API route coverage now exercises auth/session/workspace/onboarding, private activation/activity scoping, workflow route validation, jobs, and public/private webhook behavior.
+- Frontend smoke tests cover auth, onboarding, dashboard, and activation surfaces through import/static contract checks and server-render loading shells.
+- Generated local artifacts remain ignored: `data/taskloom.json`, `data/artifacts/`, `web/dist/`, logs, and environment files.
+
 ## Roadmap
 
 ### 1. Persistence Foundation
@@ -104,7 +116,7 @@ Replace the JSON store with a real database-backed persistence layer while keepi
 - Add migration tooling around the existing activation schema.
 - Extend the existing JSON-backed model into migrations for users, sessions, memberships, workspaces, workflow records, onboarding state, activities, activation facts, milestones, and activation read models.
 - Introduce database-backed repository implementations behind the existing services.
-- Add seed and reset commands for local development.
+- Add formal seed and reset commands for local development; until then, deleting `data/taskloom.json` recreates the built-in seed data on next store load.
 - Preserve deterministic activation recalculation.
 
 ### 2. Auth And RBAC
@@ -148,11 +160,11 @@ Build the day-to-day workflow surfaces that make activation useful.
 
 Strengthen the project rails before larger product work accumulates.
 
-- Keep roadmap, README, and activation docs current as milestones land.
+- Keep roadmap, README, and activation docs current as milestones land. Current docs cover the Phase 6 local workflow baseline.
 - Broaden API route coverage beyond smoke tests.
 - Add frontend smoke tests for auth, onboarding, dashboard, and activation.
-- Document local development, reset, seed, build, and release flows.
-- Decide whether built `web/dist` assets should remain committed.
+- Maintain local development, reset, seed, build, and release flow documentation as scripts change.
+- Keep generated `web/dist` assets ignored unless release packaging requirements change.
 
 ## Recommended Order
 

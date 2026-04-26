@@ -20,6 +20,11 @@ Taskloom is an open source workspace portal for activation tracking, onboarding 
 
 ## Run locally
 
+Prerequisites:
+
+- Node.js `>=22.5.0`
+- npm
+
 1. Install dependencies:
 
 ```bash
@@ -38,6 +43,54 @@ npm run dev
 http://localhost:7341
 ```
 
+The local app uses `data/taskloom.json` for file-backed persistence. If the file is missing, the server recreates it from the built-in seed data on first store load.
+
+## Local Data
+
+For local contributor access, the seed data includes these workspace accounts:
+
+- `alpha@taskloom.local`
+- `beta@taskloom.local`
+- `gamma@taskloom.local`
+
+Each uses the password `demo12345`. You can also create a new account from the sign-up page.
+
+To reset local data back to the seed state, stop the dev server, remove the ignored local store, then start the app again:
+
+```powershell
+Remove-Item -Force data/taskloom.json
+npm run dev
+```
+
+To refresh activation read models after editing local data manually:
+
+```bash
+npm run jobs:recompute-activation
+```
+
+To clean expired sessions:
+
+```bash
+npm run jobs:cleanup-sessions
+```
+
+## Build And Release Checks
+
+Run the full local release gate before handing off a change:
+
+```bash
+npm run build
+```
+
+This runs the Vite web build, TypeScript checks for the API and web app, backend API tests, and frontend smoke tests. The generated `web/dist/` output is ignored and should be rebuilt locally instead of committed.
+
+To run the test layers independently:
+
+```bash
+npm run test:api
+npm run test:web
+```
+
 For a built local run:
 
 ```bash
@@ -51,13 +104,14 @@ Then open:
 http://localhost:8484
 ```
 
-For local contributor access, the seed data includes these workspace accounts:
+Release hygiene checklist:
 
-- `alpha@taskloom.local`
-- `beta@taskloom.local`
-- `gamma@taskloom.local`
+- Run `npm run build` from a clean working tree before release handoff.
+- Run `npm run jobs:recompute-activation` if seed data, workflow records, or activation facts changed.
+- Keep `README.md`, `docs/roadmap.md`, and `docs/activation/*` aligned with any landed product milestone.
+- Do not commit `data/taskloom.json`, `data/artifacts/`, `web/dist/`, logs, or environment files.
 
-Each uses the password `demo12345`. You can also create a new account from the sign-up page.
+## API Endpoints
 
 Available endpoints include:
 
