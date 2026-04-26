@@ -295,6 +295,61 @@ export type ConfirmWorkflowReleaseInput = {
   confirmedBy?: string;
 };
 
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  brief: {
+    summary: string;
+    problemStatement: string;
+    desiredOutcome: string;
+    audience: string;
+    constraints: string;
+    targetCustomers: string[];
+    successMetrics: string[];
+    goals: string[];
+  };
+  requirements: Array<{ title: string; detail: string; priority: WorkflowRequirementPriority }>;
+  planItems: Array<{ title: string; description: string }>;
+}
+
+export interface WorkflowTemplateApplyResult {
+  template: WorkflowTemplate;
+  brief: WorkflowBrief;
+  requirements: WorkflowRequirement[];
+  planItems: WorkflowPlanItem[];
+}
+
+export interface WorkflowDraft {
+  prompt: string;
+  brief: {
+    summary: string;
+    problemStatement: string;
+    desiredOutcome: string;
+    targetCustomers: string[];
+    successMetrics: string[];
+    goals: string[];
+    audience: string;
+    constraints: string;
+  };
+  requirements: Array<{
+    title: string;
+    detail: string;
+    priority: WorkflowRequirementPriority;
+    status: "accepted";
+  }>;
+  planItems: Array<{ title: string; description: string; status: "todo" }>;
+}
+
+export interface WorkflowDraftResult {
+  draft: WorkflowDraft;
+  applied: boolean;
+  brief?: WorkflowBrief;
+  requirements?: WorkflowRequirement[];
+  planItems?: WorkflowPlanItem[];
+}
+
 export interface DashboardFilterMetadata {
   stages?: Array<{ value: string; label: string; count: number }>;
   risks?: Array<{ value: ActivationSummary["riskLevel"]; label: string; count: number }>;
