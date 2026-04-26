@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Hono } from "hono";
 import { appRoutes, resetAppRouteSecurityForTests } from "./app-routes.js";
@@ -172,6 +173,11 @@ test("auth route rate limits persist across app instances and store reloads", { 
     assert.equal(buckets.length, 1);
     assert.match(buckets[0]?.id ?? "", /^auth:login:sha256:[a-f0-9]{64}$/);
     assert.equal(buckets[0]?.id.includes("203.0.113.12"), false);
+    assert.deepEqual(rateLimitSqliteSnapshot(process.env.TASKLOOM_DB_PATH), {
+      appRecordRateLimits: 0,
+      buckets: 1,
+      count: 20,
+    });
 
     clearStoreCacheForTests();
     const app = createTestApp();
@@ -183,6 +189,11 @@ test("auth route rate limits persist across app instances and store reloads", { 
     });
     assert.equal(limited.status, 429);
     assert.deepEqual(await limited.json(), { error: "too many requests" });
+    assert.deepEqual(rateLimitSqliteSnapshot(process.env.TASKLOOM_DB_PATH), {
+      appRecordRateLimits: 0,
+      buckets: 1,
+      count: 21,
+    });
   } finally {
     clearStoreCacheForTests();
     restoreEnv("TASKLOOM_STORE", previousStore);
@@ -192,6 +203,18 @@ test("auth route rate limits persist across app instances and store reloads", { 
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+function rateLimitSqliteSnapshot(dbPath: string | undefined) {
+  assert.ok(dbPath, "expected TASKLOOM_DB_PATH");
+  const db = new DatabaseSync(dbPath);
+  try {
+    const appRecords = db.prepare("select count(*) as count from app_records where collection = 'rateLimits'").get() as { count: number };
+    const buckets = db.prepare("select count(*) as buckets, coalesce(max(count), 0) as count from rate_limit_buckets").get() as { buckets: number; count: number };
+    return { appRecordRateLimits: appRecords.count, buckets: buckets.buckets, count: buckets.count };
+  } finally {
+    db.close();
+  }
+}
 
 test("rate limit client keys only trust forwarded headers when enabled", async () => {
   const previousTrustProxy = process.env.TASKLOOM_TRUST_PROXY;

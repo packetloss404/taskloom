@@ -1,6 +1,6 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam, same-origin plus CSRF-token mutation checks, store-backed auth/invitation rate limits, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about hardening production auth/member workflows and broader storage concurrency without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, local SQLite write/concurrency hardening, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam, same-origin plus CSRF-token mutation checks, store-backed auth/invitation rate limits, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about production/deployment hardening and continued workflow polish without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
@@ -13,7 +13,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - RBAC defines owner, admin, member, and viewer roles with view workspace data, edit workflow, and manage workspace/operations permissions.
 - Private app, workflow, job, agent, provider, env-var, webhook, API-key, usage, LLM, and share routes enforce workspace membership and role-aware permissions.
 - Private mutating app routes reject browser requests whose `Origin` host does not match `Host` or `X-Forwarded-Host`, and same-origin browser mutations must echo the readable `taskloom_csrf` cookie in `X-CSRF-Token`.
-- Auth register/login and invitation create/accept/resend routes have store-backed rate limits in the active local store. They are useful for dev-mode abuse checks, but the current thresholds are code constants and still need production edge/distributed coordination for multi-process deployments.
+- Auth register/login and invitation create/accept/resend routes have store-backed rate limits in the active local store. JSON keeps buckets in the default app store; SQLite uses dedicated `rate_limit_buckets` storage. They are useful for dev-mode abuse checks, but the current thresholds are code constants and still need production edge/distributed coordination for multi-process deployments.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
 - Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
@@ -24,7 +24,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - Local development uses ignored `data/taskloom.json` and `data/taskloom.sqlite` files that are recreated or migrated from built-in seed data and CLI commands.
 - README and activation docs cover local development, seed/reset, build, and release hygiene flows.
 - Durable activation signal records exist in the local app model for retry and scope-change signals. Runtime snapshots prefer those records and activation-scoped activity events before falling back to legacy activation fact counters, and an app-store activation signal repository now provides JSON and opt-in SQLite list/upsert access with stable-key dedupe and first-class origin metadata.
-- SQLite route hardening is implemented for the current local runtime through `app_record_search` metadata, `app_records` workspace indexes, and indexed helper functions for auth/session lookup, workspace membership/invitations, share tokens, workflow reads, activities, agents/runs, jobs, providers, and usage calls. JSON remains the default runtime, and SQLite remains opt-in through `TASKLOOM_STORE=sqlite`.
+- SQLite route and local write hardening is implemented for the current local runtime through `app_record_search` metadata, `app_records` workspace indexes, indexed helper functions for auth/session lookup, workspace membership/invitations, share tokens, workflow reads, activities, agents/runs, jobs, providers, and usage calls, and safer `mutateStore()` whole-store writes. SQLite opens with `busy_timeout`, WAL mode, `synchronous=normal`, and `foreign_keys=on`; SQLite `mutateStore()` writes use `BEGIN IMMEDIATE` and fresh state to avoid stale-cache whole-store overwrites. JSON remains the default runtime, and SQLite remains opt-in through `TASKLOOM_STORE=sqlite`.
 
 ## Landed In This Branch
 
@@ -157,9 +157,18 @@ Phase 13 is landed for the local runtime, with webhook invitation delivery and h
 
 - Invitation create, accept, resend, and revoke APIs are present. Create/resend record `invitationEmailDeliveries` rows and return an `emailDelivery` summary. `TASKLOOM_INVITATION_EMAIL_MODE=dev` records local sent deliveries, `skip` records skipped deliveries, and `webhook` posts delivery requests to `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL` with optional provider name and shared-secret header configuration. Delivery adapter and webhook failures are recorded without rolling back invitation state.
 - Invitation acceptance requires a signed-in user whose normalized email matches the invitation. Revoked, expired, accepted, and stale rotated tokens are rejected.
-- Store-backed rate limiting covers auth register/login and invitation create/accept/resend with 20 attempts per client key per 60 seconds. Buckets use `local` by default, trust forwarded IP headers only when `TASKLOOM_TRUST_PROXY=true`, store salted SHA-256 bucket IDs, and are kept in JSON by default or SQLite `app_records` when `TASKLOOM_STORE=sqlite`; the threshold and window are currently code constants rather than deployment environment knobs.
+- Store-backed rate limiting covers auth register/login and invitation create/accept/resend with 20 attempts per client key per 60 seconds. Buckets use `local` by default, trust forwarded IP headers only when `TASKLOOM_TRUST_PROXY=true`, and store salted SHA-256 bucket IDs. Buckets stay in JSON for the default runtime; after Phase 14, SQLite mode keeps them in dedicated `rate_limit_buckets` storage. The threshold and window are currently code constants rather than deployment environment knobs.
 - CSRF behavior is a same-origin `Origin` host check plus double-submit token for browser mutations. Login/register set `taskloom_csrf`; same-origin browser mutations must send `X-CSRF-Token`; requests without `Origin` are allowed for local clients/tests.
 - Runtime parity coverage now checks JSON-default and SQLite-opt-in behavior for session reads, invitation create/list/resend/revoke/revoked-token rejection, local delivery rows including skip mode, share-token reads, CSRF rejection, cross-origin mutation rejection, and rate-limit bucket persistence.
+
+### Phase 14 SQLite Local Storage And Concurrency Hardening
+
+Phase 14 is landed for the opt-in local SQLite runtime. It makes SQLite safer for local concurrent writers without claiming distributed or production-grade multi-process coordination:
+
+- SQLite connections open with `busy_timeout`, WAL mode, `synchronous=normal`, and `foreign_keys=on`.
+- SQLite `mutateStore()` writes use `BEGIN IMMEDIATE` and reload fresh store state inside the write transaction before writing changed collections, avoiding stale-cache whole-store overwrites when another local writer has committed newer state.
+- Auth and invitation rate-limit buckets use dedicated SQLite `rate_limit_buckets` storage in SQLite mode instead of `app_records`; JSON mode remains unchanged and keeps buckets in the default JSON app store.
+- The hardening targets local SQLite runtime correctness and parity. Edge/distributed rate limiting, deployment-specific abuse controls, and broader production storage topology choices remain future work.
 
 ## Roadmap
 
@@ -173,6 +182,7 @@ Replace the JSON-only runtime with a database-backed persistence layer while kee
 - [x] Extend the existing JSON-backed model into SQLite migrations for users, sessions, memberships, invitations, workspaces, workflow records, onboarding state, activities, activation facts, milestones, activation read models, agents, jobs, provider calls, and share tokens.
 - [x] Add an opt-in SQLite-backed runtime behind the existing `loadStore()` / `mutateStore()` surface.
 - [x] Harden high-value SQLite route reads with query-indexed helpers while keeping JSON-payload `app_records` as the local compatibility layer.
+- [x] Harden local SQLite mutating writes with `BEGIN IMMEDIATE`, fresh in-transaction state, and connection pragmas for `busy_timeout`, WAL, `synchronous=normal`, and `foreign_keys=on`.
 - [x] Add formal seed and reset commands for local development.
 - [x] Add JSON-to-SQLite app backfill commands.
 - [x] Add local SQLite migration status plus validated backup/restore commands. Executable rollback remains intentionally unsupported; restore from a pre-migration backup is the rollback strategy.
@@ -189,6 +199,7 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 - [x] Add session cleanup for expired sessions.
 - [x] Document production session cookie behavior and cleanup expectations.
 - [x] Add store-backed rate limiting for auth and invitation routes in JSON default and SQLite opt-in modes.
+- [x] Keep SQLite rate-limit buckets in dedicated `rate_limit_buckets` storage while leaving the JSON default store shape unchanged.
 - [x] Add local same-origin and CSRF-token checks for private app browser mutations.
 - [ ] Add production hardening beyond local store-backed rate limiting, webhook email delivery, and CSRF checks, such as edge/distributed rate limiting, deployment-specific rate-limit knobs, provider-specific delivery retries/dead-letter handling, token-redaction review, and deployment-specific CSRF review.
 
@@ -233,16 +244,16 @@ Strengthen the project rails before larger product work accumulates.
 - [x] Keep roadmap, README, and activation docs current as milestones land.
 - [ ] Continue broadening API route coverage as new route policies and product surfaces land.
 - [x] Maintain frontend smoke/static contract tests for auth, onboarding, dashboard, activation, role-aware controls, workflow wiring, integrations, agents, runs, and share routes.
-- [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, invitation resend/revoke and delivery-row behavior including skip mode, workflow activation, jobs, agents, share links, CSRF rejection, cross-origin mutation rejection, and rate-limit bucket persistence.
+- [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, invitation resend/revoke and delivery-row behavior including skip mode, workflow activation, jobs, agents, share links, CSRF rejection, cross-origin mutation rejection, dedicated SQLite rate-limit bucket persistence, and local mutating-write concurrency behavior.
 - [ ] Maintain local development, reset, seed, build, and release flow documentation as scripts change.
 - [x] Keep generated `web/dist` assets ignored unless release packaging requirements change.
 
 ## Recommended Order
 
 1. Production invitation email provider integration/configuration, edge/distributed rate limiting with deployment knobs, and deployment-specific CSRF review beyond the current local hardening.
-2. Production storage hardening: concurrency and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
+2. Production storage planning: deployment-specific SQLite/database concurrency posture, operational backup/restore policy, and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
 3. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The next phase is complete when production auth/member flows have a configured email provider path, distributed rate-limit deployment guidance, SQLite mode is safer for concurrent local use, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.
+The next phase is complete when production auth/member flows have a configured email provider path, distributed rate-limit deployment guidance, deployment-specific SQLite/database hardening guidance is documented, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.

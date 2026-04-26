@@ -44,7 +44,7 @@ npm run dev
 http://localhost:7341
 ```
 
-The local app uses `data/taskloom.json` for file-backed persistence by default. If the file is missing, the server recreates it from the built-in seed data on first store load. To run the same store API against SQLite, start the app with `TASKLOOM_STORE=sqlite`; it targets `data/taskloom.sqlite` unless `TASKLOOM_DB_PATH=path/to/taskloom.sqlite` is set. SQLite mode persists the full app runtime through migrated `app_records` rows and query-indexed metadata while keeping JSON as the default contributor workflow.
+The local app uses `data/taskloom.json` for file-backed persistence by default. If the file is missing, the server recreates it from the built-in seed data on first store load. To run the same store API against SQLite, start the app with `TASKLOOM_STORE=sqlite`; it targets `data/taskloom.sqlite` unless `TASKLOOM_DB_PATH=path/to/taskloom.sqlite` is set. SQLite mode persists the full app runtime through migrated `app_records` rows and query-indexed metadata while keeping JSON as the default contributor workflow. SQLite opens with `busy_timeout`, WAL mode, `synchronous=normal`, and `foreign_keys=on`; SQLite `mutateStore()` writes run inside `BEGIN IMMEDIATE` and reload fresh state before writing so local concurrent writers do not overwrite newer whole-store state from a stale cache.
 
 ## Local Data
 
@@ -126,7 +126,7 @@ Release hygiene checklist:
 
 - Run `npm run build` from a clean working tree before release handoff.
 - Run `npm run jobs:recompute-activation` or `npm run jobs:repair-activation` if seed data, workflow records, or activation facts changed.
-- Keep `README.md`, `docs/roadmap.md`, and `docs/activation/*` aligned with any landed product milestone.
+- Keep `README.md`, `docs/roadmap.md`, and `docs/activation/*` aligned with any landed product, storage, or hardening milestone.
 - Do not commit `data/taskloom.json`, `data/artifacts/`, `web/dist/`, logs, or environment files.
 
 ## API Endpoints
@@ -244,7 +244,7 @@ Invitation delivery records `invitationEmailDeliveries` rows for create and rese
 
 Session cookies are HTTP-only, use `SameSite=Lax`, and are marked `Secure` when `NODE_ENV=production`. Login and registration also set a readable `taskloom_csrf` cookie. Private mutating app routes reject browser requests with an `Origin` host that does not match `Host` or `X-Forwarded-Host`; same-origin browser mutations must echo the CSRF cookie in `X-CSRF-Token`. Requests without `Origin`, such as same-process tests and non-browser local clients, are allowed.
 
-Auth register/login and invitation create/accept/resend routes have store-backed rate limits of 20 attempts per client key per 60 seconds. The default client key is `local`; set `TASKLOOM_TRUST_PROXY=true` to trust `X-Forwarded-For`, then `X-Real-IP`. Stored bucket IDs include a SHA-256 hash salted by `TASKLOOM_RATE_LIMIT_KEY_SALT`, and expired or excess buckets are pruned with `TASKLOOM_RATE_LIMIT_MAX_BUCKETS` defaulting to 5000. Limited responses are `429` with `Retry-After`. In JSON mode the buckets live in `data/taskloom.json`; in SQLite mode they live in `app_records`. The window and attempt count are currently code constants, not environment knobs. Multi-process or multi-region production deployments should still add shared edge or database coordination before relying on them for abuse prevention.
+Auth register/login and invitation create/accept/resend routes have store-backed rate limits of 20 attempts per client key per 60 seconds. The default client key is `local`; set `TASKLOOM_TRUST_PROXY=true` to trust `X-Forwarded-For`, then `X-Real-IP`. Stored bucket IDs include a SHA-256 hash salted by `TASKLOOM_RATE_LIMIT_KEY_SALT`, and expired or excess buckets are pruned with `TASKLOOM_RATE_LIMIT_MAX_BUCKETS` defaulting to 5000. Limited responses are `429` with `Retry-After`. In JSON mode the buckets live in `data/taskloom.json`; in SQLite mode they live in dedicated `rate_limit_buckets` storage instead of `app_records`. The window and attempt count are currently code constants, not environment knobs. Multi-process or multi-region production deployments should still add shared edge or deployment-specific database coordination before relying on them for abuse prevention.
 
 Production deployments should terminate HTTPS before the Node server and run the scheduled `cleanup-sessions` job to remove expired sessions.
 

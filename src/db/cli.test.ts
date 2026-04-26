@@ -65,6 +65,7 @@ test("migrateDatabase creates runtime app tables", () => {
       "provider_calls",
       "jobs",
       "share_tokens",
+      "rate_limit_buckets",
       "activation_facts",
       "activation_read_models",
     ];
@@ -81,6 +82,57 @@ test("migrateDatabase creates runtime app tables", () => {
       assert.deepEqual(rows.map((row) => row.name), [...expectedTables].sort());
     } finally {
       db.close();
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("rate limit bucket migration backfills legacy app_records buckets", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    const legacyBucket = {
+      id: "auth:login:sha256:legacy",
+      count: 7,
+      resetAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    };
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec("create table schema_migrations (name text primary key, applied_at text not null default (datetime('now'))) ");
+      db.exec(`
+        create table app_records (
+          collection text not null,
+          id text not null,
+          workspace_id text null,
+          payload text not null check (json_valid(payload)),
+          updated_at text null,
+          primary key (collection, id)
+        )
+      `);
+      const insertMigration = db.prepare("insert into schema_migrations (name) values (?)");
+      for (const name of expectedMigrations.filter((entry) => entry !== "0009_rate_limit_buckets.sql")) {
+        insertMigration.run(name);
+      }
+      db.prepare("insert into app_records (collection, id, workspace_id, payload, updated_at) values ('rateLimits', ?, null, json(?), ?)")
+        .run(legacyBucket.id, JSON.stringify(legacyBucket), legacyBucket.updatedAt);
+    } finally {
+      db.close();
+    }
+
+    const migrated = migrateDatabase({ dbPath });
+    assert.deepEqual(migrated.applied, ["0009_rate_limit_buckets.sql"]);
+
+    const migratedDb = new DatabaseSync(dbPath);
+    try {
+      const bucket = migratedDb.prepare("select id, count, reset_at as resetAt, updated_at as updatedAt from rate_limit_buckets where id = ?").get(legacyBucket.id) as typeof legacyBucket | undefined;
+      const legacyRows = migratedDb.prepare("select count(*) as count from app_records where collection = 'rateLimits'").get() as { count: number };
+      assert.deepEqual(bucket ? { ...bucket } : undefined, legacyBucket);
+      assert.equal(legacyRows.count, 0);
+    } finally {
+      migratedDb.close();
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -165,6 +217,12 @@ test("backfillAppDatabase reads a JSON store path into SQLite", () => {
     const jsonPath = join(tempDir, "taskloom.json");
     const data = createSeedStore();
     data.workspaces[0] = { ...data.workspaces[0], name: "Backfilled Workspace" };
+    data.rateLimits = [{
+      id: "auth:login:sha256:backfill",
+      count: 3,
+      resetAt: "2026-05-02T00:00:00.000Z",
+      updatedAt: "2026-04-02T00:00:00.000Z",
+    }];
     writeFileSync(jsonPath, JSON.stringify(data));
 
     const result = backfillAppDatabase({ dbPath, jsonPath });
@@ -172,6 +230,17 @@ test("backfillAppDatabase reads a JSON store path into SQLite", () => {
 
     assert.equal(result.source, "backfill");
     assert.equal(stored?.workspaces[0]?.name, "Backfilled Workspace");
+    assert.equal(stored?.rateLimits?.[0]?.id, "auth:login:sha256:backfill");
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const bucketRows = db.prepare("select count(*) as count from rate_limit_buckets").get() as { count: number };
+      const appRecordRows = db.prepare("select count(*) as count from app_records where collection = 'rateLimits'").get() as { count: number };
+      assert.equal(bucketRows.count, 1);
+      assert.equal(appRecordRows.count, 0);
+    } finally {
+      db.close();
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

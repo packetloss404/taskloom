@@ -505,10 +505,36 @@ export function loadStore(): TaskloomData {
 }
 
 export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return mutateSqliteStore(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE), mutator);
+  }
+
   const data = loadStore();
   const result = mutator(data);
   persistStore(data);
   return result;
+}
+
+function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T): T {
+  const db = openStoreDatabase(dbPath);
+  const backendKey = `sqlite:${dbPath}`;
+  try {
+    db.exec("begin immediate");
+    try {
+      const data = loadSqliteStore(db) ?? seedStore();
+      const result = mutator(data);
+      persistSqliteStoreRows(db, data);
+      db.exec("commit");
+      cache = data;
+      cacheBackendKey = backendKey;
+      return result;
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
 }
 
 export function persistStore(data: TaskloomData): void {
@@ -610,6 +636,9 @@ export function persistSqliteAppData(dbPath: string, data: TaskloomData): void {
 function openStoreDatabase(dbPath: string): DatabaseSync {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  db.exec("pragma busy_timeout = 5000");
+  db.exec("pragma journal_mode = wal");
+  db.exec("pragma synchronous = normal");
   db.exec("pragma foreign_keys = on");
   applyStoreMigrations(db);
   return db;
@@ -679,7 +708,6 @@ export interface ListWorkspaceRecordsOptions<TRecord> {
 const RECORD_COLLECTIONS = [
   "users",
   "sessions",
-  "rateLimits",
   "workspaces",
   "memberships",
   "workspaceInvitations",
@@ -711,11 +739,19 @@ interface SqliteStoreRow {
   payload: string;
 }
 
+interface SqliteRateLimitRow {
+  id: string;
+  count: number;
+  reset_at: string;
+  updated_at: string;
+}
+
 function loadSqliteStore(db: DatabaseSync): TaskloomData | null {
   const rows = db.prepare("select collection, payload from app_records order by collection, id").all() as unknown as SqliteStoreRow[];
-  if (rows.length === 0) return null;
+  const rateLimits = loadSqliteRateLimitBuckets(db);
+  if (rows.length === 0 && rateLimits.length === 0) return null;
 
-  const partial: Partial<TaskloomData> = {};
+  const partial: Partial<TaskloomData> = { rateLimits };
   for (const row of rows) {
     const payload = JSON.parse(row.payload) as unknown;
     if (MAP_COLLECTIONS.includes(row.collection as (typeof MAP_COLLECTIONS)[number])) {
@@ -731,41 +767,45 @@ function loadSqliteStore(db: DatabaseSync): TaskloomData | null {
 }
 
 function persistSqliteStore(db: DatabaseSync, data: TaskloomData): void {
-  db.exec("begin");
+  db.exec("begin immediate");
   try {
-    db.exec("delete from app_record_search");
-    db.exec("delete from app_records");
-    const insert = db.prepare(`
-      insert into app_records (collection, id, workspace_id, payload, updated_at)
-      values (?, ?, ?, json(?), ?)
-    `);
-    const insertSearch = db.prepare(`
-      insert into app_record_search (collection, id, workspace_id, user_id, email, token)
-      values (?, ?, ?, ?, ?, ?)
-    `);
-
-    for (const collection of RECORD_COLLECTIONS) {
-      for (const payload of recordsForCollection(data, collection)) {
-        const id = recordId(collection, payload);
-        insert.run(collection, id, workspaceIdForRecord(payload), JSON.stringify(payload), updatedAtForRecord(payload));
-        const searchValues = searchValuesForRecord(collection, payload);
-        if (searchValues) {
-          insertSearch.run(collection, id, searchValues.workspaceId, searchValues.userId, searchValues.email, searchValues.token);
-        }
-      }
-    }
-
-    for (const collection of MAP_COLLECTIONS) {
-      const map = data[collection] as Record<string, unknown>;
-      for (const [workspaceId, payload] of Object.entries(map)) {
-        insert.run(collection, workspaceId, workspaceId, JSON.stringify({ [workspaceId]: payload }), null);
-      }
-    }
-
+    persistSqliteStoreRows(db, data);
     db.exec("commit");
   } catch (error) {
     db.exec("rollback");
     throw error;
+  }
+}
+
+function persistSqliteStoreRows(db: DatabaseSync, data: TaskloomData): void {
+  db.exec("delete from app_record_search");
+  db.exec("delete from app_records");
+  persistSqliteRateLimitBuckets(db, data.rateLimits ?? []);
+  const insert = db.prepare(`
+    insert into app_records (collection, id, workspace_id, payload, updated_at)
+    values (?, ?, ?, json(?), ?)
+  `);
+  const insertSearch = db.prepare(`
+    insert into app_record_search (collection, id, workspace_id, user_id, email, token)
+    values (?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const collection of RECORD_COLLECTIONS) {
+    for (const payload of recordsForCollection(data, collection)) {
+      const id = recordId(collection, payload);
+      insert.run(collection, id, workspaceIdForRecord(payload), JSON.stringify(payload), updatedAtForRecord(payload));
+      const searchValues = searchValuesForRecord(collection, payload);
+      if (searchValues) {
+        insertSearch.run(collection, id, searchValues.workspaceId, searchValues.userId, searchValues.email, searchValues.token);
+      }
+    }
+  }
+
+  for (const collection of MAP_COLLECTIONS) {
+    const map = data[collection] as Record<string, unknown>;
+    for (const [workspaceId, payload] of Object.entries(map)) {
+      insert.run(collection, workspaceId, workspaceId, JSON.stringify({ [workspaceId]: payload }), null);
+    }
   }
 }
 
@@ -1196,8 +1236,28 @@ export function findJobIndexed(jobId: string): JobRecord | null {
 function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {
   if (collection === "workspaceBriefs") return workspaceBriefEntries(data.workspaceBriefs);
   if (collection === "releaseConfirmations") return releaseConfirmationEntries(data.releaseConfirmations);
-  if (collection === "rateLimits") return data.rateLimits ?? [];
   return data[collection] as unknown[];
+}
+
+function loadSqliteRateLimitBuckets(db: DatabaseSync): RateLimitRecord[] {
+  const rows = db.prepare("select id, count, reset_at, updated_at from rate_limit_buckets order by id").all() as unknown as SqliteRateLimitRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    count: row.count,
+    resetAt: row.reset_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function persistSqliteRateLimitBuckets(db: DatabaseSync, rateLimits: RateLimitRecord[]): void {
+  db.exec("delete from rate_limit_buckets");
+  const insert = db.prepare(`
+    insert into rate_limit_buckets (id, count, reset_at, updated_at)
+    values (?, ?, ?, ?)
+  `);
+  for (const bucket of rateLimits) {
+    insert.run(bucket.id, bucket.count, bucket.resetAt, bucket.updatedAt);
+  }
 }
 
 function recordId(collection: StoreCollectionKey, payload: unknown): string {
@@ -2016,6 +2076,65 @@ export function upsertRateLimit(data: TaskloomData, input: RateLimitUpsertInput)
   return bucket.count > input.maxAttempts ? new Date(bucket.resetAt).getTime() : null;
 }
 
+export interface RateLimitRepository {
+  upsert(input: RateLimitUpsertInput): number | null;
+}
+
+export function rateLimitRepository(): RateLimitRepository {
+  if (process.env.TASKLOOM_STORE === "sqlite") return sqliteRateLimitRepository(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  return jsonRateLimitRepository();
+}
+
+function jsonRateLimitRepository(): RateLimitRepository {
+  return {
+    upsert(input) {
+      return mutateStore((data) => upsertRateLimit(data, input));
+    },
+  };
+}
+
+function sqliteRateLimitRepository(dbPath: string): RateLimitRepository {
+  return {
+    upsert(input) {
+      const db = openStoreDatabase(dbPath);
+      const updatedAt = new Date(input.timestamp).toISOString();
+      const resetAt = new Date(input.timestamp + input.windowMs).toISOString();
+      try {
+        db.exec("begin immediate");
+        try {
+          const appRecords = db.prepare("select count(*) as count from app_records").get() as { count: number };
+          if (appRecords.count === 0) persistSqliteStoreRows(db, seedStore());
+          db.prepare("delete from rate_limit_buckets where reset_at <= ?").run(updatedAt);
+          const bucket = db.prepare("select count, reset_at from rate_limit_buckets where id = ?").get(input.bucketId) as { count: number; reset_at: string } | undefined;
+          const count = bucket ? bucket.count + 1 : 1;
+          db.prepare(`
+            insert into rate_limit_buckets (id, count, reset_at, updated_at)
+            values (?, ?, ?, ?)
+            on conflict(id) do update set
+              count = excluded.count,
+              reset_at = excluded.reset_at,
+              updated_at = excluded.updated_at
+          `).run(input.bucketId, count, bucket?.reset_at ?? resetAt, updatedAt);
+          db.prepare(`
+            delete from rate_limit_buckets
+            where id not in (
+              select id from rate_limit_buckets order by updated_at desc limit ?
+            )
+          `).run(Math.max(1, Math.floor(input.maxBuckets)));
+          db.exec("commit");
+          clearStoreCache();
+          return count > input.maxAttempts ? new Date(bucket?.reset_at ?? resetAt).getTime() : null;
+        } catch (error) {
+          db.exec("rollback");
+          throw error;
+        }
+      } finally {
+        db.close();
+      }
+    },
+  };
+}
+
 function pruneRateLimitBuckets(data: TaskloomData, maxBuckets: number) {
   const limit = Math.max(1, Math.floor(maxBuckets));
   if (!data.rateLimits || data.rateLimits.length <= limit) return;
@@ -2606,18 +2725,18 @@ function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepos
     upsert(input, timestamp = now()) {
       const db = openStoreDatabase(dbPath);
       try {
-        const existing = findSqliteActivationSignalForUpsert(db, input);
-        const id = existing?.id ?? input.id ?? generateId();
-        const record: ActivationSignalRecord = {
-          ...existing,
-          ...input,
-          id,
-          origin: input.origin ?? inferActivationSignalOrigin(input.source) ?? existing?.origin,
-          createdAt: input.createdAt ?? existing?.createdAt ?? timestamp,
-          updatedAt: input.updatedAt ?? timestamp,
-        };
-        db.exec("begin");
+        db.exec("begin immediate");
         try {
+          const existing = findSqliteActivationSignalForUpsert(db, input);
+          const id = existing?.id ?? input.id ?? generateId();
+          const record: ActivationSignalRecord = {
+            ...existing,
+            ...input,
+            id,
+            origin: input.origin ?? inferActivationSignalOrigin(input.source) ?? existing?.origin,
+            createdAt: input.createdAt ?? existing?.createdAt ?? timestamp,
+            updatedAt: input.updatedAt ?? timestamp,
+          };
           db.prepare(`
             insert into app_records (collection, id, workspace_id, payload, updated_at)
             values ('activationSignals', ?, ?, json(?), ?)
@@ -2632,12 +2751,12 @@ function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepos
             on conflict(collection, id) do update set workspace_id = excluded.workspace_id
           `).run(record.id, record.workspaceId);
           db.exec("commit");
+          clearStoreCache();
+          return record;
         } catch (error) {
           db.exec("rollback");
           throw error;
         }
-        clearStoreCache();
-        return record;
       } finally {
         db.close();
       }

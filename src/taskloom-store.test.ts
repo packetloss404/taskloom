@@ -47,6 +47,7 @@ import {
   markInvitationEmailDeliverySent,
   markInvitationEmailDeliverySkipped,
   mutateStore,
+  persistSqliteAppData,
   resetStoreForTests,
   upsertActivationSignal,
   upsertRequirement,
@@ -277,6 +278,98 @@ test("sqlite store persists mutations across cache reloads", () => {
 
     assert.equal(reloaded.requirements.some((entry) => entry.id === "req_sqlite_reload"), true);
     assert.equal(findWorkspaceBrief(reloaded, "alpha")?.workspaceId, "alpha");
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("sqlite mutateStore loads fresh state before persisting cached mutations", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-fresh-mutate-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+
+    const cached = resetStoreForTests();
+    const external = structuredClone(cached);
+    upsertRequirement(external, {
+      id: "req_sqlite_external",
+      workspaceId: "alpha",
+      title: "Externally persisted requirement",
+      detail: "Must survive a mutation started with stale cache.",
+      priority: "should",
+      status: "approved",
+      source: "test",
+      createdByUserId: "user_alpha",
+    }, "2026-02-04T00:00:00.000Z");
+    persistSqliteAppData(dbPath, external);
+
+    mutateStore((data) => {
+      assert.equal(data.requirements.some((entry) => entry.id === "req_sqlite_external"), true);
+      upsertRequirement(data, {
+        id: "req_sqlite_mutation",
+        workspaceId: "alpha",
+        title: "Mutation requirement",
+        detail: "Persists alongside fresh database state.",
+        priority: "must",
+        status: "approved",
+        source: "test",
+        createdByUserId: "user_alpha",
+      }, "2026-02-04T00:01:00.000Z");
+    });
+
+    clearStoreCacheForTests();
+    const reloaded = loadStore();
+    assert.equal(reloaded.requirements.some((entry) => entry.id === "req_sqlite_external"), true);
+    assert.equal(reloaded.requirements.some((entry) => entry.id === "req_sqlite_mutation"), true);
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("sqlite mutateStore rolls back and preserves cache when mutator throws", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-rollback-"));
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
+
+    resetStoreForTests();
+
+    assert.throws(() => {
+      mutateStore((data) => {
+        upsertRequirement(data, {
+          id: "req_sqlite_rollback",
+          workspaceId: "alpha",
+          title: "Rolled back requirement",
+          detail: "Should not persist after a mutator failure.",
+          priority: "must",
+          status: "draft",
+          source: "test",
+          createdByUserId: "user_alpha",
+        }, "2026-02-05T00:00:00.000Z");
+        throw new Error("stop mutation");
+      });
+    }, /stop mutation/);
+
+    assert.equal(loadStore().requirements.some((entry) => entry.id === "req_sqlite_rollback"), false);
+    clearStoreCacheForTests();
+    assert.equal(loadStore().requirements.some((entry) => entry.id === "req_sqlite_rollback"), false);
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;

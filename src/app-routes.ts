@@ -26,7 +26,7 @@ import {
   updateProfile,
   updateWorkspace,
 } from "./taskloom-services.js";
-import { findWorkspaceMembership, loadStore, mutateStore, upsertRateLimit } from "./taskloom-store.js";
+import { findWorkspaceMembership, loadStore, rateLimitRepository } from "./taskloom-store.js";
 
 export const appRoutes = new Hono();
 
@@ -278,13 +278,13 @@ function requireWorkspacePermission(context: AuthenticatedRouteContext, permissi
 
 function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number }) {
   const timestamp = Date.now();
-  const limitedUntil = mutateStore((data) => upsertRateLimit(data, {
+  const limitedUntil = rateLimitRepository().upsert({
     bucketId: `${scope}:${hashedClientKey(clientKey(c))}`,
     maxAttempts: options.maxAttempts,
     windowMs: options.windowMs,
     timestamp,
     maxBuckets: configuredPositiveInteger("TASKLOOM_RATE_LIMIT_MAX_BUCKETS", RATE_LIMIT_MAX_BUCKETS),
-  }));
+  });
 
   if (limitedUntil) {
     const retryAfterSeconds = Math.max(1, Math.ceil((limitedUntil - timestamp) / 1000));
