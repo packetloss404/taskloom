@@ -147,6 +147,7 @@ export interface AgentRunToolCall {
   input: Record<string, unknown>;
   output?: unknown;
   error?: string;
+  artifacts?: { path: string; bytes: number; kind: string }[];
   durationMs: number;
   startedAt: string;
   completedAt: string;

@@ -40,6 +40,7 @@ import {
   upsertWorkspaceEnvVar,
 } from "./taskloom-store";
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
+import { maintainScheduledAgentJobs } from "./jobs/store.js";
 import {
   buildSessionCookieValue,
   generateId,
@@ -383,7 +384,7 @@ export function getWorkspaceActivityDetail(context: AuthenticatedContext, activi
 export function listAgents(context: AuthenticatedContext) {
   const data = loadStore();
   return {
-    agents: listAgentsForWorkspace(data, context.workspace.id).map((agent) => decorateAgent(data, agent)),
+    agents: listAgentsForWorkspace(data, context.workspace.id).map((agent) => decorateAgent(data, agent, { includeWebhookToken: false })),
   };
 }
 
@@ -404,7 +405,7 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
   const normalized = normalizeAgentInput(input);
   const timestamp = now();
 
-  return mutateStore((data) => {
+  const result = mutateStore((data) => {
     validateProvider(data, context.workspace.id, normalized.providerId);
 
     const agent = upsertAgent(data, {
@@ -415,6 +416,8 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
       providerId: normalized.providerId,
       model: normalized.model,
       tools: normalized.tools,
+      enabledTools: normalized.enabledTools,
+      routeKey: normalized.routeKey,
       schedule: normalized.schedule,
       triggerKind: normalized.triggerKind,
       playbook: normalized.playbook,
@@ -432,12 +435,14 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
 
     return { agent: decorateAgent(data, agent) };
   });
+  maintainScheduledAgentJobs(result.agent.id);
+  return result;
 }
 
 export function updateAgent(context: AuthenticatedContext, agentId: string, input: Partial<AgentInput>) {
   const timestamp = now();
 
-  return mutateStore((data) => {
+  const result = mutateStore((data) => {
     const existing = findAgent(data, agentId);
     if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
       throw httpError(404, "agent not found");
@@ -454,6 +459,8 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
       providerId: normalized.providerId,
       model: normalized.model,
       tools: normalized.tools,
+      enabledTools: normalized.enabledTools,
+      routeKey: normalized.routeKey,
       schedule: normalized.schedule,
       triggerKind: normalized.triggerKind,
       playbook: normalized.playbook,
@@ -470,12 +477,14 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
 
     return { agent: decorateAgent(data, agent) };
   });
+  maintainScheduledAgentJobs(result.agent.id);
+  return result;
 }
 
 export function archiveAgent(context: AuthenticatedContext, agentId: string) {
   const timestamp = now();
 
-  return mutateStore((data) => {
+  const result = mutateStore((data) => {
     const existing = findAgent(data, agentId);
     if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
       throw httpError(404, "agent not found");
@@ -495,6 +504,8 @@ export function archiveAgent(context: AuthenticatedContext, agentId: string) {
 
     return { agent: decorateAgent(data, agent) };
   });
+  maintainScheduledAgentJobs(result.agent.id);
+  return result;
 }
 
 export async function runAgent(
@@ -666,6 +677,7 @@ async function runAgentWithToolLoop(args: {
         input: tc.input,
         output: tc.output,
         ...(tc.error ? { error: tc.error } : {}),
+        ...(tc.artifacts ? { artifacts: tc.artifacts } : {}),
         durationMs: tc.durationMs,
         startedAt: tc.startedAt,
         completedAt: tc.completedAt,
@@ -1071,10 +1083,11 @@ type ProviderInput = {
   status?: "connected" | "missing_key" | "disabled";
 };
 
-function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord) {
+function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord, opts: { includeWebhookToken?: boolean } = {}) {
   const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
+  const responseAgent = opts.includeWebhookToken === false ? { ...agent, webhookToken: undefined } : agent;
   return {
-    ...agent,
+    ...responseAgent,
     provider: provider
       ? {
           id: provider.id,

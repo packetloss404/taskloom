@@ -1,11 +1,47 @@
 import { Hono, type Context } from "hono";
 import { requireAuthenticatedContext } from "./taskloom-services.js";
 import { cancelJob, enqueueJob, findJob, listJobs } from "./jobs/store.js";
+import { parseCron } from "./jobs/cron.js";
+import { findAgent, loadStore } from "./taskloom-store.js";
 import type { JobStatus } from "./taskloom-store.js";
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
   return c.json({ error: (error as Error).message });
+}
+
+function badRequest(message: string) {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+function validateJobInput(body: Partial<{
+  type: string;
+  payload: Record<string, unknown>;
+  scheduledAt: string;
+  cron: string;
+  maxAttempts: number;
+}>, workspaceId: string) {
+  if (body.scheduledAt !== undefined && Number.isNaN(Date.parse(body.scheduledAt))) {
+    throw badRequest("scheduledAt must be a valid date");
+  }
+  if (body.cron !== undefined) {
+    try {
+      parseCron(body.cron);
+    } catch {
+      throw badRequest("cron must be a valid 5-field expression");
+    }
+  }
+  if (body.maxAttempts !== undefined && (!Number.isInteger(body.maxAttempts) || body.maxAttempts < 1)) {
+    throw badRequest("maxAttempts must be a positive integer");
+  }
+  if (body.type === "agent.run") {
+    const agentId = body.payload?.agentId;
+    if (typeof agentId !== "string") throw badRequest("agent.run payload.agentId is required");
+    const agent = findAgent(loadStore(), agentId);
+    if (!agent || agent.workspaceId !== workspaceId) {
+      throw badRequest("agent.run payload.agentId must reference an agent in this workspace");
+    }
+  }
 }
 
 export const jobRoutes = new Hono();
@@ -31,7 +67,8 @@ jobRoutes.post("/", async (c) => {
       cron: string;
       maxAttempts: number;
     }>;
-    if (!body.type) return errorResponse(c, Object.assign(new Error("type is required"), { status: 400 }));
+    if (!body.type) return errorResponse(c, badRequest("type is required"));
+    validateJobInput(body, workspace.id);
     const job = enqueueJob({
       workspaceId: workspace.id,
       type: body.type,
@@ -48,9 +85,9 @@ jobRoutes.post("/", async (c) => {
 
 jobRoutes.get("/:id", (c) => {
   try {
-    requireAuthenticatedContext(c);
+    const { workspace } = requireAuthenticatedContext(c);
     const job = findJob(c.req.param("id"));
-    if (!job) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
+    if (!job || job.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     return c.json({ job });
   } catch (error) {
     return errorResponse(c, error);
@@ -59,9 +96,10 @@ jobRoutes.get("/:id", (c) => {
 
 jobRoutes.post("/:id/cancel", (c) => {
   try {
-    requireAuthenticatedContext(c);
-    const job = cancelJob(c.req.param("id"));
-    if (!job) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
+    const { workspace } = requireAuthenticatedContext(c);
+    const existing = findJob(c.req.param("id"));
+    if (!existing || existing.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
+    const job = cancelJob(existing.id);
     return c.json({ ok: true, job });
   } catch (error) {
     return errorResponse(c, error);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, HelpCircle, History, Loader2, RefreshCw, Rocket, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, HelpCircle, History, Loader2, RefreshCw, Rocket, ShieldCheck, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import StreamingTextDemo from "@/components/StreamingTextDemo";
 import UsageSummaryCard from "@/components/UsageSummaryCard";
@@ -7,6 +7,8 @@ import { relative } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import type {
   ConfirmWorkflowReleaseInput,
+  JobRecord,
+  JobStatus,
   ReleaseHistoryPayload,
   SaveWorkflowBlockerInput,
   SaveWorkflowQuestionInput,
@@ -48,6 +50,8 @@ type WorkflowApi = typeof api &
     confirmWorkflowRelease: (
       body: ConfirmWorkflowReleaseInput,
     ) => Promise<SinglePayload<WorkflowReleaseConfirmation, "releaseConfirmation">>;
+    listJobs: (limit?: number) => Promise<JobRecord[]>;
+    cancelJob: (id: string) => Promise<JobRecord>;
   }>;
 
 interface OperationsState {
@@ -56,6 +60,7 @@ interface OperationsState {
   validationEvidence: WorkflowValidationEvidence[];
   releaseConfirmation: WorkflowReleaseConfirmation | null;
   releaseHistory: ReleaseHistoryPayload;
+  jobs: JobRecord[];
 }
 
 const workflowApi = api as WorkflowApi;
@@ -69,6 +74,7 @@ const EMPTY_STATE: OperationsState = {
   validationEvidence: [],
   releaseConfirmation: null,
   releaseHistory: EMPTY_HISTORY,
+  jobs: [],
 };
 
 export default function OperationsPage() {
@@ -101,7 +107,9 @@ export default function OperationsPage() {
     const openQuestions = state.questions.filter((question) => question.status === "open").length;
     const failedValidation = state.validationEvidence.filter((evidence) => evidence.status === "failed").length;
     const passedValidation = state.validationEvidence.filter((evidence) => evidence.status === "passed").length;
-    return { openBlockers, openQuestions, failedValidation, passedValidation };
+    const activeJobs = state.jobs.filter((job) => job.status === "queued" || job.status === "running").length;
+    const failedJobs = state.jobs.filter((job) => job.status === "failed").length;
+    return { openBlockers, openQuestions, failedValidation, passedValidation, activeJobs, failedJobs };
   }, [state]);
 
   const runUpdate = async (label: string, action: () => Promise<OperationsState | void>) => {
@@ -215,6 +223,11 @@ export default function OperationsPage() {
     });
   };
 
+  const cancelJob = (job: JobRecord) =>
+    runUpdate(`job-${job.id}`, async () => {
+      await workflowApi.cancelJob?.(job.id);
+    });
+
   return (
     <div className="page-frame">
       <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
@@ -222,7 +235,7 @@ export default function OperationsPage() {
           <div className="kicker mb-3">OPERATIONS · LIVE WORKSPACE STATUS</div>
           <h1 className="display-xl">Operations.</h1>
           <p className="mt-4 max-w-xl font-mono text-xs text-ink-400">
-            <span className="text-ink-500">blockers · questions · validation evidence · release confirmation</span>
+            <span className="text-ink-500">blockers · questions · validation evidence · release confirmation · job queue</span>
           </p>
         </div>
         <button className="btn-ghost" type="button" onClick={loadOperations} disabled={loading || Boolean(saving)}>
@@ -230,11 +243,12 @@ export default function OperationsPage() {
         </button>
       </header>
 
-      <section className="grid grid-cols-2 divide-x divide-ink-700 border-y border-ink-700 lg:grid-cols-4">
+      <section className="grid grid-cols-2 divide-x divide-ink-700 border-y border-ink-700 lg:grid-cols-5">
         <Stat label="OPEN BLOCKERS" value={counts.openBlockers} tone={counts.openBlockers > 0 ? "danger" : "good"} />
         <Stat label="OPEN QUESTIONS" value={counts.openQuestions} tone={counts.openQuestions > 0 ? "warn" : "good"} />
         <Stat label="PASSED EVIDENCE" value={counts.passedValidation} tone="good" />
         <Stat label="FAILED CHECKS" value={counts.failedValidation} tone={counts.failedValidation > 0 ? "danger" : "muted"} />
+        <Stat label="ACTIVE JOBS" value={counts.activeJobs} tone={counts.failedJobs > 0 ? "warn" : counts.activeJobs > 0 ? "good" : "muted"} />
       </section>
 
       {error && (
@@ -254,6 +268,48 @@ export default function OperationsPage() {
         </div>
       ) : (
         <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
+          <WorkflowSection
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            title="Job Queue"
+            action={
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="kicker mb-1">QUEUE HEALTH</div>
+                  <p className="font-mono text-xs text-ink-500">
+                    {state.jobs.length} recent jobs · {counts.activeJobs} active · {counts.failedJobs} failed
+                  </p>
+                </div>
+                <button className="btn-ghost" type="button" onClick={loadOperations} disabled={loading || Boolean(saving)}>
+                  <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh queue
+                </button>
+              </div>
+            }
+          >
+            {state.jobs.length === 0 ? (
+              <EmptyState>No queued jobs.</EmptyState>
+            ) : (
+              <div className="space-y-3">
+                {state.jobs.map((job) => (
+                  <RecordRow
+                    key={job.id}
+                    title={job.type}
+                    detail={job.error || summarizeJobPayload(job.payload)}
+                    meta={jobMeta(job)}
+                    badge={<StatusBadge value={job.status} tone={jobTone(job.status)} />}
+                    action={
+                      canCancelJob(job) ? (
+                        <button className="btn-ghost" type="button" onClick={() => cancelJob(job)} disabled={saving === `job-${job.id}`}>
+                          {saving === `job-${job.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+                          Cancel
+                        </button>
+                      ) : null
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </WorkflowSection>
+
           <WorkflowSection
             icon={<AlertTriangle className="h-4 w-4" />}
             title="Blockers"
@@ -597,6 +653,34 @@ function validationTone(status: WorkflowValidationStatus) {
   return "warn";
 }
 
+function jobTone(status: JobStatus) {
+  if (status === "success") return "good";
+  if (status === "failed") return "danger";
+  if (status === "queued" || status === "running") return "warn";
+  return "muted";
+}
+
+function canCancelJob(job: JobRecord) {
+  return job.status === "queued" || job.status === "running";
+}
+
+function jobMeta(job: JobRecord) {
+  const timestamps = [
+    `created ${relative(job.createdAt)}`,
+    `scheduled ${relative(job.scheduledAt)}`,
+    job.startedAt ? `started ${relative(job.startedAt)}` : null,
+    job.completedAt ? `completed ${relative(job.completedAt)}` : null,
+  ].filter(Boolean);
+
+  return `#${job.id} · attempts ${job.attempts}/${job.maxAttempts}${job.cancelRequested ? " · cancel requested" : ""} · ${timestamps.join(" · ")}`;
+}
+
+function summarizeJobPayload(payload: JobRecord["payload"]) {
+  const keys = Object.keys(payload);
+  if (keys.length === 0) return "No payload";
+  return keys.slice(0, 4).join(" · ");
+}
+
 function ReleasePreflightPanel({ preflight }: { preflight: ReleaseHistoryPayload["preflight"] }) {
   const checks = [
     {
@@ -678,15 +762,20 @@ function ReleaseHistoryList({ history }: { history: ReleaseHistoryPayload }) {
 }
 
 async function fetchOperations(): Promise<OperationsState> {
-  const [blockers, questions, validationEvidence, releaseConfirmation, releaseHistory] = await Promise.all([
+  const [blockers, questions, validationEvidence, releaseConfirmation, releaseHistory, jobs] = await Promise.all([
     listBlockers(),
     listQuestions(),
     listValidationEvidence(),
     getReleaseConfirmation(),
     getReleaseHistory(),
+    listJobs(),
   ]);
 
-  return { blockers, questions, validationEvidence, releaseConfirmation, releaseHistory };
+  return { blockers, questions, validationEvidence, releaseConfirmation, releaseHistory, jobs };
+}
+
+async function listJobs() {
+  return workflowApi.listJobs ? workflowApi.listJobs(50) : [];
 }
 
 async function getReleaseHistory(): Promise<ReleaseHistoryPayload> {

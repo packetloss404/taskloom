@@ -282,6 +282,7 @@ export interface AgentRunToolCall {
   input: Record<string, unknown>;
   output?: unknown;
   error?: string;
+  artifacts?: { path: string; bytes: number; kind: string }[];
   durationMs: number;
   startedAt: string;
   completedAt: string;
@@ -1014,6 +1015,43 @@ function seedStore(): TaskloomData {
     }),
   ];
 
+  const jobs: JobRecord[] = [
+    {
+      id: "job_alpha_support_schedule",
+      workspaceId: "alpha",
+      type: "agent.run",
+      payload: {
+        agentId: "agent_alpha_support",
+        triggerKind: "schedule",
+        inputs: { mailbox: "support@alpha.example.com", urgency_threshold: "medium" },
+      },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 3,
+      scheduledAt: isoDaysAgo(-1),
+      cron: "*/15 * * * *",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: "job_alpha_daily_brief_schedule",
+      workspaceId: "alpha",
+      type: "agent.run",
+      payload: {
+        agentId: "agent_alpha_daily_brief",
+        triggerKind: "schedule",
+        inputs: { lookback_hours: 24, include_runs: true },
+      },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 3,
+      scheduledAt: isoDaysAgo(-1),
+      cron: "0 8 * * 1-5",
+      createdAt,
+      updatedAt: createdAt,
+    },
+  ];
+
   const releaseConfirmations: ReleaseConfirmationCollection = {
     alpha: {
       id: "release_alpha_pending",
@@ -1139,7 +1177,7 @@ function seedStore(): TaskloomData {
     workspaceEnvVars,
     apiKeys: [],
     providerCalls: [],
-    jobs: [],
+    jobs,
     shareTokens: [],
     activationFacts,
     activationMilestones: {},

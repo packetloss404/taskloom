@@ -421,6 +421,7 @@ scheduler.register({
     const data = loadStore();
     const agent = data.agents.find((a) => a.id === payload.agentId);
     if (!agent) throw new Error(`agent ${payload.agentId} not found`);
+    if (agent.workspaceId !== job.workspaceId) throw new Error(`agent ${payload.agentId} is not in job workspace`);
     const owner = data.users.find((u) => u.id === agent.createdByUserId);
     if (!owner) throw new Error(`agent owner not found`);
     const context = {

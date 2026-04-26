@@ -31,8 +31,10 @@ export function triggerToneClass(kind: AgentTriggerKind | undefined): string {
 }
 
 export function describeNextRun(schedule: string | undefined, kind: AgentTriggerKind | undefined, from: Date = new Date()): string {
+  if (kind === "manual") return "Manual runs only";
+  if (kind === "webhook") return "Webhook-triggered";
+  if (kind === "email") return "Email-triggered";
   if (!schedule || schedule.trim().length === 0) return "No schedule set";
-  if (kind && kind !== "schedule") return `Triggered by ${triggerLabel(kind).toLowerCase()}`;
   const next = nextCronRun(schedule.trim(), from);
   if (!next) return schedule.trim();
   const diffMs = next.getTime() - from.getTime();
@@ -43,6 +45,53 @@ export function describeNextRun(schedule: string | undefined, kind: AgentTrigger
   if (hours < 24) return `Next run in ~${hours}h`;
   const days = Math.round(hours / 24);
   return `Next run in ~${days}d`;
+}
+
+export function validateCronSchedule(schedule: string): string | null {
+  const parts = schedule.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "Enter a five-field cron schedule.";
+  if (parts.length !== 5) return "Use five cron fields: minute hour day-of-month month day-of-week.";
+
+  const fieldRanges: Array<[name: string, min: number, max: number]> = [
+    ["minute", 0, 59],
+    ["hour", 0, 23],
+    ["day-of-month", 1, 31],
+    ["month", 1, 12],
+    ["day-of-week", 0, 7],
+  ];
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const [name, min, max] = fieldRanges[index];
+    if (!isValidCronField(parts[index], min, max)) return `Invalid ${name} field: ${parts[index]}`;
+  }
+
+  return null;
+}
+
+function isValidCronField(field: string, min: number, max: number): boolean {
+  return field.split(",").every((part) => isValidCronPart(part, min, max));
+}
+
+function isValidCronPart(part: string, min: number, max: number): boolean {
+  if (!part) return false;
+  const [range, step, extra] = part.split("/");
+  if (extra !== undefined) return false;
+  if (step !== undefined && (!/^\d+$/.test(step) || Number(step) < 1)) return false;
+  if (range === "*") return true;
+
+  if (range.includes("-")) {
+    const [start, end, trailing] = range.split("-");
+    if (trailing !== undefined || !isCronNumber(start, min, max) || !isCronNumber(end, min, max)) return false;
+    return Number(start) <= Number(end);
+  }
+
+  return isCronNumber(range, min, max);
+}
+
+function isCronNumber(value: string, min: number, max: number): boolean {
+  if (!/^\d+$/.test(value)) return false;
+  const parsed = Number(value);
+  return parsed >= min && parsed <= max;
 }
 
 export function nextCronRun(expr: string, from: Date): Date | null {

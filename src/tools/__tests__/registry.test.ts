@@ -39,6 +39,16 @@ const failingTool: ToolDefinition = {
   },
 };
 
+const artifactTool: ToolDefinition = {
+  name: "artifact",
+  description: "Returns an artifact.",
+  inputSchema: { type: "object" },
+  side: "read",
+  async handle() {
+    return { ok: true, output: { path: "data/artifacts/run-1/page.png" }, artifacts: [{ path: "data/artifacts/run-1/page.png", bytes: 12, kind: "image/png" }] };
+  },
+};
+
 test("register and list", () => {
   const r = new ToolRegistry();
   r.register(echoTool);
@@ -70,6 +80,16 @@ test("executeTool returns ok status with output", async () => {
   assert.deepEqual(record.output, { echo: "hi" });
   assert.equal(record.toolName, "echo");
   assert.ok(record.durationMs >= 0);
+});
+
+test("executeTool preserves artifact metadata", async () => {
+  const record = await executeTool({
+    tool: artifactTool,
+    input: {},
+    context: { workspaceId: "w", userId: "u" },
+  });
+  assert.equal(record.status, "ok");
+  assert.deepEqual(record.artifacts, [{ path: "data/artifacts/run-1/page.png", bytes: 12, kind: "image/png" }]);
 });
 
 test("executeTool catches thrown errors and returns error status", async () => {

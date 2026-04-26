@@ -9,6 +9,7 @@ import {
   getAgent,
   getPrivateBootstrap,
   listAgentRuns,
+  listAgents,
   listReleaseHistory,
   listWorkspaceEnvVarsForUser,
   login,
@@ -90,6 +91,51 @@ test("agent playbook is persisted and runs produce a step transcript", async () 
   assert.equal(updated.agent.triggerKind, "webhook");
   assert.equal(updated.agent.playbook?.length, 1);
   assert.equal(updated.agent.playbook?.[0].instruction, "Updated instruction.");
+});
+
+test("agent tool runtime settings persist on create and update", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Tool Runner",
+    description: "Uses registered tools.",
+    instructions: "Use the selected tools to complete the requested workflow.",
+    enabledTools: ["read_workflow_brief", "browser_screenshot"],
+    routeKey: "agent.reasoning",
+  });
+
+  assert.deepEqual(created.agent.enabledTools, ["read_workflow_brief", "browser_screenshot"]);
+  assert.equal(created.agent.routeKey, "agent.reasoning");
+
+  const updated = updateAgent(auth.context, created.agent.id, {
+    enabledTools: ["list_agents"],
+    routeKey: "agent.fast",
+  });
+
+  assert.deepEqual(updated.agent.enabledTools, ["list_agents"]);
+  assert.equal(updated.agent.routeKey, "agent.fast");
+});
+
+test("agent lists do not expose webhook tokens", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Webhook Agent",
+    description: "Receives webhook calls.",
+    instructions: "Process incoming webhook payloads for the workspace.",
+  });
+
+  const store = loadStore();
+  const agent = store.agents.find((entry) => entry.id === created.agent.id);
+  assert.ok(agent);
+  agent.webhookToken = "whk_test_secret";
+
+  const detail = getAgent(auth.context, created.agent.id);
+  assert.equal(detail.agent.webhookToken, "whk_test_secret");
+  const listed = listAgents(auth.context).agents.find((entry) => entry.id === created.agent.id);
+  assert.equal(listed?.webhookToken, undefined);
 });
 
 test("env vars: create masks secrets, prevents duplicate keys, supports update and delete", async () => {

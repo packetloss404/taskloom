@@ -6,5 +6,6 @@ coverage/
 .env
 .env.*
 data/*.json
+data/artifacts/
 !.gitkeep
 .claude/

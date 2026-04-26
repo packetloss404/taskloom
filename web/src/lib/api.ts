@@ -173,7 +173,7 @@ export const api = {
   listJobs: (limit = 50) => j<{ jobs: JobRecord[] }>(`/api/app/jobs?limit=${limit}`).then((payload) => payload.jobs),
   enqueueJob: (body: { type: string; payload: Record<string, unknown>; cron?: string; scheduledAt?: string; maxAttempts?: number }) =>
     j<{ job: JobRecord }>("/api/app/jobs", { method: "POST", body: JSON.stringify(body) }).then((p) => p.job),
-  cancelJob: (id: string) => j<{ ok: boolean }>(`/api/app/jobs/${id}/cancel`, { method: "POST" }),
+  cancelJob: (id: string) => j<{ ok: boolean; job: JobRecord }>(`/api/app/jobs/${id}/cancel`, { method: "POST" }).then((p) => p.job),
   requestPlanMode: () => j<PlanModeResult>("/api/app/workflow/plan-mode", { method: "POST", body: "{}" }),
   applyPlanMode: (planItems: PlanModePlanItem[]) =>
     j<{ planItems: WorkflowPlanItem[] }>("/api/app/workflow/plan-mode/apply", { method: "POST", body: JSON.stringify({ planItems }) }).then((p) => p.planItems),

@@ -16,7 +16,7 @@ import type {
   SaveAgentInput,
 } from "@/lib/types";
 import { relative } from "@/lib/format";
-import { describeNextRun, triggerLabel, TRIGGER_KINDS } from "@/lib/agent-runtime";
+import { describeNextRun, triggerLabel, TRIGGER_KINDS, validateCronSchedule } from "@/lib/agent-runtime";
 import PlaybookEditor from "@/components/PlaybookEditor";
 import RunTranscript from "@/components/RunTranscript";
 import ToolCallTimeline from "@/components/ToolCallTimeline";
@@ -36,6 +36,10 @@ function agentStatusPillClass(status: string) {
   if (status === "active") return "pill pill--good";
   if (status === "paused") return "pill pill--warn";
   return "pill pill--muted";
+}
+
+function webhookOrigin(): string {
+  return typeof window === "undefined" ? "" : window.location.origin;
 }
 
 export default function AgentEditorPage() {
@@ -63,6 +67,7 @@ export default function AgentEditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [scheduleTouched, setScheduleTouched] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -113,6 +118,8 @@ export default function AgentEditorPage() {
   }), [agent, incomingPrompt, providers]);
 
   const nextRunLabel = useMemo(() => describeNextRun(schedule, triggerKind), [schedule, triggerKind]);
+  const scheduleValidation = triggerKind === "schedule" ? validateCronSchedule(schedule) : null;
+  const showScheduleValidation = triggerKind === "schedule" && scheduleValidation && scheduleTouched;
 
   const saveAgent = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -131,6 +138,13 @@ export default function AgentEditorPage() {
       inputSchema,
       enabledTools,
     };
+
+    if (scheduleValidation) {
+      setScheduleTouched(true);
+      setError(scheduleValidation);
+      setMessage(null);
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -348,17 +362,29 @@ export default function AgentEditorPage() {
               ))}
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="CRON SCHEDULE">
+              <Field label={triggerKind === "schedule" ? "CRON SCHEDULE *" : "CRON SCHEDULE · OPTIONAL"}>
                 <input
                   name="schedule"
                   className="workflow-input"
                   value={schedule}
-                  onChange={(event) => setSchedule(event.target.value)}
+                  onBlur={() => setScheduleTouched(true)}
+                  onChange={(event) => {
+                    setSchedule(event.target.value);
+                    setScheduleTouched(true);
+                  }}
                   placeholder="0 8 * * 1-5"
+                  required={triggerKind === "schedule"}
+                  aria-invalid={Boolean(showScheduleValidation)}
                 />
+                <p className="mt-2 font-mono text-[10px] leading-4 text-ink-500">
+                  Five-field cron in workspace time. Examples: <span className="text-ink-300">0 8 * * 1-5</span> weekdays at 08:00, <span className="text-ink-300">*/30 * * * *</span> every 30 minutes, <span className="text-ink-300">15 14 * * *</span> daily at 14:15.
+                </p>
+                {showScheduleValidation && (
+                  <p className="mt-2 font-mono text-[10px] text-signal-red">ERR · {scheduleValidation}</p>
+                )}
               </Field>
               <div>
-                <div className="kicker mb-1.5">NEXT RUN</div>
+                <div className="kicker mb-1.5">{triggerKind === "schedule" ? "NEXT RUN" : "TRIGGER MODE"}</div>
                 <div className="border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs text-ink-300">
                   {nextRunLabel}
                 </div>
@@ -370,7 +396,7 @@ export default function AgentEditorPage() {
                 {agent.webhookToken ? (
                   <div className="grid gap-2">
                     <div className="break-all border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-[11px] text-ink-200">
-                      POST {window.location.origin}/api/public/webhooks/agents/{agent.webhookToken}
+                      POST {webhookOrigin()}/api/public/webhooks/agents/{agent.webhookToken}
                     </div>
                     <p className="font-mono text-[10px] text-ink-500">
                       Body is forwarded as the run's `inputs`. Trigger kind = webhook.

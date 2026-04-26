@@ -1,6 +1,6 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, file-backed app services, auth/onboarding/activity/workflow flows, command-driven maintenance jobs, and a React/Vite interface. The next phase is about turning that scaffold into a durable workspace product without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, file-backed app services, auth/onboarding/activity/workflow flows, command-driven maintenance jobs, queue-driven agent runs, public webhook triggers, and a React/Vite interface. The next phase is about turning that scaffold into a durable workspace product without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
@@ -12,6 +12,8 @@ Taskloom currently has a local activation domain, file-backed app services, auth
 - The workflow route module defines the expected private `/api/app/workflow` endpoint shape.
 - RBAC helpers define owner, admin, member, and viewer roles with view, edit workflow, and manage workspace permissions.
 - Jobs scripts can recompute activation read models and clean up expired sessions against the local store.
+- The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
+- Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
 - React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, and activity.
 - The frontend API layer has typed workflow calls for brief, requirements, plan items, blockers, questions, validation evidence, and release confirmation.
 - Build, typecheck, and test scripts are available through `npm run build`.
@@ -69,6 +71,18 @@ Two maintenance commands are available:
 
 The recompute job refreshes activation read models and milestone records for every workspace by default, with `--workspace-ids=alpha,beta` for targeted runs. The cleanup job removes expired or invalid sessions.
 
+### Automation Scheduling And Operations
+
+Phase 4 automation operations now have documented queue and webhook behavior:
+
+- Private job queue routes live under `/api/app/jobs` for listing, enqueueing, reading, and canceling jobs in the signed-in workspace.
+- Runtime scheduling is queue-driven. Active scheduled agents need a queued `agent.run` job with matching `cron`; the agent `schedule` field is metadata and does not start runs by itself.
+- Successful cron jobs re-enqueue their next occurrence. Failed jobs retry with backoff until `maxAttempts`, and stale running jobs are swept back to queued on scheduler startup.
+- Public webhook delivery is `POST /api/public/webhooks/agents/:token`; token rotation/removal lives under `/api/app/webhooks/agents/:agentId`.
+- Seed data includes queued cron jobs for the active scheduled Alpha agents and leaves the paused Beta scheduled agent without an active queued job.
+
+Browser tools are available to agent runs but remain operationally constrained: they require a run-scoped `runId`, depend on optional Playwright/browser binaries, block localhost/loopback navigation, and write screenshots under `data/artifacts/:runId/`.
+
 ## Roadmap
 
 ### 1. Persistence Foundation
@@ -105,7 +119,7 @@ Move activation snapshots from onboarding-derived facts toward product-observed 
 
 Make activation updates reliable outside request-time reads.
 
-- Decide whether command-driven jobs are enough for local deployment or whether a background scheduler is needed.
+- Expand the existing background scheduler beyond local `agent.run` jobs when persistence moves out of JSON.
 - Add a database backfill command for existing workspaces after persistence moves out of JSON.
 - Ensure activity emission is idempotent.
 - Add stale read-model detection and repair checks.

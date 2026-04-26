@@ -15,10 +15,14 @@ const FIELD_RANGES: [number, number][] = [
   [0, 23],
   [1, 31],
   [1, 12],
-  [0, 6],
+  [0, 7],
 ];
 
-function parseField(token: string, [min, max]: [number, number]): CronField {
+function normalizeDayOfWeek(value: number): number {
+  return value === 7 ? 0 : value;
+}
+
+function parseField(token: string, [min, max]: [number, number], normalize: (value: number) => number = (value) => value): CronField {
   const values = new Set<number>();
   for (const piece of token.split(",")) {
     let step = 1;
@@ -35,6 +39,7 @@ function parseField(token: string, [min, max]: [number, number]): CronField {
     } else if (body.includes("-")) {
       const [a, b] = body.split("-").map(Number);
       if (!Number.isFinite(a) || !Number.isFinite(b)) throw new Error(`cron: invalid range "${piece}"`);
+      if (a > b) throw new Error(`cron: invalid range "${piece}"`);
       range = [a, b];
     } else {
       const v = Number(body);
@@ -42,7 +47,7 @@ function parseField(token: string, [min, max]: [number, number]): CronField {
       range = [v, v];
     }
     if (range[0] < min || range[1] > max) throw new Error(`cron: out-of-range value in "${piece}"`);
-    for (let v = range[0]; v <= range[1]; v += step) values.add(v);
+    for (let v = range[0]; v <= range[1]; v += step) values.add(normalize(v));
   }
   return { values };
 }
@@ -55,7 +60,7 @@ export function parseCron(expr: string): CronExpression {
     hour: parseField(tokens[1], FIELD_RANGES[1]),
     dayOfMonth: parseField(tokens[2], FIELD_RANGES[2]),
     month: parseField(tokens[3], FIELD_RANGES[3]),
-    dayOfWeek: parseField(tokens[4], FIELD_RANGES[4]),
+    dayOfWeek: parseField(tokens[4], FIELD_RANGES[4], normalizeDayOfWeek),
   };
 }
 

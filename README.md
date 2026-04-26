@@ -15,6 +15,7 @@ Taskloom is an open source workspace portal for activation tracking, onboarding 
 - workspace auth, onboarding, activity, and workflow flows
 - workspace membership records and RBAC helper utilities
 - command-driven maintenance jobs
+- queue-driven agent runs, recurring job scheduling, and public webhook triggers
 
 ## Run locally
 
@@ -73,6 +74,19 @@ Available endpoints include:
 - `PATCH /api/app/workspace`
 - `GET /api/app/activity`
 - `GET /api/app/activity/:id`
+- `GET /api/app/agents`
+- `POST /api/app/agents`
+- `GET /api/app/agents/:agentId`
+- `PATCH /api/app/agents/:agentId`
+- `DELETE /api/app/agents/:agentId`
+- `POST /api/app/agents/:agentId/runs`
+- `GET /api/app/jobs`
+- `POST /api/app/jobs`
+- `GET /api/app/jobs/:id`
+- `POST /api/app/jobs/:id/cancel`
+- `POST /api/app/webhooks/agents/:agentId/rotate`
+- `DELETE /api/app/webhooks/agents/:agentId`
+- `POST /api/public/webhooks/agents/:token`
 
 Workflow route module endpoint shape under `/api/app/workflow`:
 
@@ -117,6 +131,30 @@ To recompute a subset of workspaces:
 ```bash
 node --import tsx src/jobs.ts recompute-activation --workspace-ids=alpha,beta
 ```
+
+The app runtime also starts a lightweight persisted job scheduler. Private job queue routes are available under `/api/app/jobs` for the signed-in workspace:
+
+- `GET /api/app/jobs?status=queued&limit=50` lists recent jobs.
+- `POST /api/app/jobs` enqueues a job with `type`, optional `payload`, optional ISO `scheduledAt`, optional five-field `cron`, and optional `maxAttempts`.
+- `GET /api/app/jobs/:id` reads one job.
+- `POST /api/app/jobs/:id/cancel` requests cancellation, or immediately cancels a queued job.
+
+The registered runtime job type is `agent.run`. A scheduled agent runs when there is a queued `agent.run` job whose payload includes the `agentId`, normally with `triggerKind: "schedule"` and a matching `cron`. After a cron job succeeds, the scheduler enqueues the next occurrence. Agent `schedule` fields are display/configuration metadata; the queue entry is what actually drives execution.
+
+Public webhooks enqueue agent runs through:
+
+```text
+POST /api/public/webhooks/agents/:token
+```
+
+Webhook tokens are generated or rotated with `POST /api/app/webhooks/agents/:agentId/rotate` and removed with `DELETE /api/app/webhooks/agents/:agentId`. A webhook request accepts a JSON body and enqueues an `agent.run` job with `triggerKind: "webhook"`; the response includes `{ accepted: true, jobId }`.
+
+Browser-capable tools are available to agent runs, with operational caveats:
+
+- Browser tools require a run-scoped `runId` and keep one headless browser session per run.
+- Playwright is optional; if it or browser binaries are unavailable, browser tool calls return an error instead of launching.
+- `browser_goto` only allows `http` and `https` URLs and blocks localhost/private loopback hostnames.
+- Screenshots are written under `data/artifacts/:runId/` and served by the app from `/data/artifacts/*`.
 
 ## Frontend
 

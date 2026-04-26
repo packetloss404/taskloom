@@ -1,5 +1,5 @@
 import type { JobRecord } from "../taskloom-store.js";
-import { claimNextJob, enqueueJob, findJob, sweepStaleRunningJobs, updateJob } from "./store.js";
+import { claimNextJob, enqueueRecurringJob, findJob, maintainScheduledAgentJobs, sweepStaleRunningJobs, updateJob } from "./store.js";
 import { nextAfter } from "./cron.js";
 
 export interface JobHandlerContext {
@@ -38,6 +38,7 @@ export class JobScheduler {
   start(): void {
     if (this.polling) return;
     this.polling = true;
+    maintainScheduledAgentJobs();
     sweepStaleRunningJobs();
     this.scheduleNext(0);
   }
@@ -92,14 +93,7 @@ export class JobScheduler {
       if (job.cron) {
         try {
           const next = nextAfter(job.cron, new Date());
-          enqueueJob({
-            workspaceId: job.workspaceId,
-            type: job.type,
-            payload: job.payload,
-            cron: job.cron,
-            scheduledAt: next.toISOString(),
-            maxAttempts: job.maxAttempts,
-          });
+          enqueueRecurringJob(job, next.toISOString());
         } catch { /* invalid cron => stop recurring */ }
       }
     } catch (error) {
