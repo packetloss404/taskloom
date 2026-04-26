@@ -25,6 +25,9 @@ import type {
   WorkflowRequirement,
   WorkflowValidationEvidence,
 } from "@/lib/types";
+import { pushExternalToast } from "@/context/ToastContext";
+
+let lastAuthToastAt = 0;
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -39,6 +42,23 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const error = new Error(typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`) as Error & { status?: number };
     error.status = response.status;
+    if (response.status === 401 && !url.includes("/api/auth/")) {
+      const now = Date.now();
+      if (now - lastAuthToastAt > 4000) {
+        lastAuthToastAt = now;
+        pushExternalToast({
+          tone: "warn",
+          title: "Your session expired",
+          description: "Please sign in again to continue.",
+        });
+      }
+    } else if (response.status >= 500) {
+      pushExternalToast({
+        tone: "error",
+        title: "Server error",
+        description: error.message,
+      });
+    }
     throw error;
   }
   return payload as T;
