@@ -83,6 +83,18 @@ Phase 4 automation operations now have documented queue and webhook behavior:
 
 Browser tools are available to agent runs but remain operationally constrained: they require a run-scoped `runId`, depend on optional Playwright/browser binaries, block localhost/loopback navigation, and write screenshots under `data/artifacts/:runId/`.
 
+### Product Workflow Expansion
+
+Phase 5 product workflow surfaces are now wired through the private workflow API and React API client:
+
+- Brief editor support includes reusable brief templates and brief version restore.
+- Requirements, implementation plan items, blockers, open questions, validation evidence, and release confirmation write durable local records and activation facts.
+- Workflow templates can seed a brief, requirements, and plan items together.
+- Prompt-generated workflow drafts can be previewed or applied; applied drafts persist the LLM-shaped brief, requirements, and plan items.
+- Plan Mode can suggest implementation plan items from the current brief and requirements, then apply those items back into the workflow plan.
+
+Dashboard filtering and richer activity detail views are present in the UI/API seam, with backend activity context available for workflow-related events.
+
 ## Roadmap
 
 ### 1. Persistence Foundation
@@ -128,9 +140,9 @@ Make activation updates reliable outside request-time reads.
 
 Build the day-to-day workflow surfaces that make activation useful.
 
-- Complete or verify frontend pages for the workflow API surfaces: brief editor, requirements checklist, implementation plan tracker, blockers/open questions, validation evidence capture, and release confirmation.
-- Dashboard filters for stage, risk, status, and recency.
-- Richer activity detail views.
+- Continue hardening the workflow page UX around brief editor, requirements checklist, implementation plan tracker, blockers/open questions, validation evidence capture, release confirmation, templates, prompt-generated drafts, and Plan Mode.
+- Keep dashboard filters for stage, risk, status, and recency aligned with backend activation summary metadata.
+- Keep richer activity detail views aligned with workflow activity context emitted by backend services.
 
 ### 6. Dev And Release Hygiene
 

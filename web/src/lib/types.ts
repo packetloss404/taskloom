@@ -48,7 +48,7 @@ export interface ActivityRecord {
   event: string;
   occurredAt: string;
   actor: { type: "user" | "system"; id: string; displayName?: string };
-  data: Record<string, string | number | boolean | null | undefined>;
+  data: Record<string, unknown>;
 }
 
 export type AgentStatus = "active" | "paused" | "archived";
@@ -531,6 +531,32 @@ export interface ActivityDetailPayload {
   activity: ActivityRecord;
   previous: ActivityRecord | null;
   next: ActivityRecord | null;
+  related?: ActivityRelatedContext;
+  agent?: Partial<AgentRecord> | null;
+  run?: Partial<AgentRunRecord> | null;
+  workflow?: ActivityWorkflowContext | null;
+}
+
+export interface ActivityRelatedContext {
+  agent?: Partial<AgentRecord> | null;
+  run?: Partial<AgentRunRecord> | null;
+  blocker?: Partial<WorkflowBlocker> | null;
+  question?: Partial<WorkflowQuestion> | null;
+  planItem?: Partial<WorkflowPlanItem> | null;
+  requirement?: Partial<WorkflowRequirement> | null;
+  evidence?: Partial<WorkflowValidationEvidence> | null;
+  release?: Partial<WorkflowReleaseConfirmation> | null;
+  workflow?: ActivityWorkflowContext | null;
+}
+
+export interface ActivityWorkflowContext {
+  brief?: Partial<WorkflowBrief> | null;
+  requirements?: Partial<WorkflowRequirement>[];
+  planItems?: Partial<WorkflowPlanItem>[];
+  blockers?: Partial<WorkflowBlocker>[];
+  questions?: Partial<WorkflowQuestion>[];
+  validationEvidence?: Partial<WorkflowValidationEvidence>[];
+  releaseConfirmation?: Partial<WorkflowReleaseConfirmation> | null;
 }
 
 export interface BootstrapPayload {

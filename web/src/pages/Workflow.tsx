@@ -17,18 +17,22 @@ import { buildLineageGraph, lineageNeighbors, type LineageNode } from "@/lib/lin
 import type {
   SaveWorkflowRequirementInput,
   WorkflowBlocker,
+  WorkflowBlockerSeverity,
+  WorkflowBlockerStatus,
   WorkflowBrief,
   WorkflowBriefTemplate,
   WorkflowBriefVersion,
   WorkflowPlanItem,
   WorkflowPlanItemStatus,
   WorkflowQuestion,
+  WorkflowQuestionStatus,
   WorkflowReleaseConfirmation,
   WorkflowRequirement,
   WorkflowRequirementPriority,
   WorkflowRequirementStatus,
   WorkflowTemplate,
   WorkflowValidationEvidence,
+  WorkflowValidationStatus,
 } from "@/lib/types";
 
 interface WorkflowState {
@@ -319,6 +323,112 @@ export default function WorkflowPage() {
       await api.updateWorkflowPlanItem(item.id, {
         title: item.title,
         description: item.description,
+        status,
+      });
+    });
+
+  const addEvidence = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const title = fieldValue(form, "title");
+    if (!title) return;
+    const formEl = event.currentTarget;
+    await runUpdate("evidence", async () => {
+      await api.createWorkflowValidationEvidence({
+        title,
+        detail: fieldValue(form, "detail"),
+        source: fieldValue(form, "source"),
+        status: fieldValue(form, "status") as WorkflowValidationStatus,
+      });
+      formEl.reset();
+    });
+  };
+
+  const updateEvidenceStatus = (evidence: WorkflowValidationEvidence, status: WorkflowValidationStatus) =>
+    runUpdate(`evidence-${evidence.id}`, async () => {
+      await api.updateWorkflowValidationEvidence(evidence.id, {
+        title: evidence.title,
+        detail: evidence.detail,
+        source: evidence.source,
+        status,
+      });
+    });
+
+  const saveRelease = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await runUpdate("release", async () => {
+      await api.confirmWorkflowRelease({
+        confirmed: form.get("confirmed") === "on",
+        summary: fieldValue(form, "summary"),
+        confirmedBy: fieldValue(form, "confirmedBy"),
+      });
+    });
+  };
+
+  const addBlocker = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const title = fieldValue(form, "title");
+    if (!title) return;
+    const formEl = event.currentTarget;
+    await runUpdate("blocker", async () => {
+      await api.createWorkflowBlocker({
+        title,
+        detail: fieldValue(form, "detail"),
+        severity: fieldValue(form, "severity") as WorkflowBlockerSeverity,
+        dependency: form.get("dependency") === "on",
+        status: "open",
+      });
+      formEl.reset();
+    });
+  };
+
+  const updateBlockerStatus = (blocker: WorkflowBlocker, status: WorkflowBlockerStatus) =>
+    runUpdate(`blocker-${blocker.id}`, async () => {
+      await api.updateWorkflowBlocker(blocker.id, {
+        title: blocker.title,
+        detail: blocker.detail,
+        severity: blocker.severity,
+        dependency: blocker.dependency,
+        status,
+      });
+    });
+
+  const addQuestion = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const prompt = fieldValue(form, "prompt");
+    if (!prompt) return;
+    const formEl = event.currentTarget;
+    await runUpdate("question", async () => {
+      await api.createWorkflowQuestion({
+        prompt,
+        answer: "",
+        status: "open",
+      });
+      formEl.reset();
+    });
+  };
+
+  const saveQuestionAnswer = (question: WorkflowQuestion, event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const answer = fieldValue(form, "answer");
+    return runUpdate(`question-${question.id}`, async () => {
+      await api.updateWorkflowQuestion(question.id, {
+        prompt: question.prompt,
+        answer,
+        status: answer ? "answered" : "open",
+      });
+    });
+  };
+
+  const updateQuestionStatus = (question: WorkflowQuestion, status: WorkflowQuestionStatus) =>
+    runUpdate(`question-${question.id}`, async () => {
+      await api.updateWorkflowQuestion(question.id, {
+        prompt: question.prompt,
+        answer: question.answer,
         status,
       });
     });
@@ -796,41 +906,63 @@ export default function WorkflowPage() {
               meta="Evidence chain feeding the release confirmation gate."
             />
             <div className="mt-8 grid gap-px bg-ink-700 lg:grid-cols-2">
-              <div className="bg-ink-950 p-6">
-                <div className="kicker mb-3">EVIDENCE LOG</div>
+              <div className="space-y-5 bg-ink-950 p-6">
+                <div>
+                  <div className="kicker mb-3">EVIDENCE LOG</div>
+                  <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_130px_auto] sm:items-end" onSubmit={addEvidence}>
+                    <Field label="TITLE">
+                      <input name="title" className="workflow-input" required />
+                    </Field>
+                    <Field label="STATUS">
+                      <select name="status" className="workflow-input" defaultValue="pending">
+                        <option value="pending">Pending</option>
+                        <option value="passed">Passed</option>
+                        <option value="failed">Failed</option>
+                      </select>
+                    </Field>
+                    <button className="btn-primary justify-center" type="submit" disabled={saving === "evidence"}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </button>
+                    <Field label="SOURCE">
+                      <input name="source" className="workflow-input" />
+                    </Field>
+                    <div className="sm:col-span-2">
+                      <Field label="DETAIL">
+                        <input name="detail" className="workflow-input" />
+                      </Field>
+                    </div>
+                  </form>
+                </div>
                 {state.validationEvidence.length === 0 ? (
                   <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
-                    NO EVIDENCE RECORDED
+                    NO EVIDENCE RECORDED — ADD ONE ABOVE
                   </div>
                 ) : (
                   <ul className="divide-y divide-ink-800">
                     {state.validationEvidence.map((evidence, index) => (
-                      <li key={evidence.id} className="grid gap-2 py-3 sm:grid-cols-[60px_1fr_auto] sm:items-baseline">
+                      <li key={evidence.id} className="grid gap-2 py-3 sm:grid-cols-[60px_1fr_140px] sm:items-baseline">
                         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                           EV-{String(index + 1).padStart(3, "0")}
                         </span>
                         <div>
                           <div className="text-sm text-ink-100">{evidence.title}</div>
-                          {evidence.detail && (
-                            <div className="mt-0.5 text-xs text-ink-400">{evidence.detail}</div>
-                          )}
+                          {evidence.detail && <div className="mt-0.5 text-xs text-ink-400">{evidence.detail}</div>}
                           {evidence.source && (
                             <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                               SOURCE · {evidence.source}
                             </div>
                           )}
                         </div>
-                        <span
-                          className={`pill ${
-                            evidence.status === "passed"
-                              ? "pill--good"
-                              : evidence.status === "failed"
-                              ? "pill--danger"
-                              : "pill--muted"
-                          }`}
+                        <select
+                          className="workflow-input min-w-32"
+                          value={evidence.status}
+                          onChange={(event) => updateEvidenceStatus(evidence, event.target.value as WorkflowValidationStatus)}
+                          disabled={saving === `evidence-${evidence.id}`}
                         >
-                          {evidence.status.toUpperCase()}
-                        </span>
+                          <option value="pending">Pending</option>
+                          <option value="passed">Passed</option>
+                          <option value="failed">Failed</option>
+                        </select>
                       </li>
                     ))}
                   </ul>
@@ -838,61 +970,163 @@ export default function WorkflowPage() {
               </div>
               <div className="bg-ink-950 p-6">
                 <div className="kicker mb-3">RELEASE CONFIRMATION</div>
-                <div className="space-y-4">
+                <form key={state.release?.updatedAt ?? "release-new"} className="space-y-4" onSubmit={saveRelease}>
                   <div className="flex items-center gap-3">
-                    <span className={`pill pill--${releaseStatus.tone}`}>
-                      {releaseStatus.label}
-                    </span>
+                    <span className={`pill pill--${releaseStatus.tone}`}>{releaseStatus.label}</span>
                     {state.release?.confirmedAt && (
                       <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                         CONFIRMED {(relative(state.release.confirmedAt) || "—").toUpperCase()}
                       </span>
                     )}
                   </div>
-                  {state.release?.summary ? (
-                    <p className="text-sm leading-6 text-ink-200">{state.release.summary}</p>
-                  ) : (
-                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
-                      NO RELEASE SUMMARY ON FILE
-                    </p>
-                  )}
-                  {state.release?.confirmedBy && (
-                    <MetaRow label="CONFIRMED BY" value={state.release.confirmedBy} mono />
-                  )}
-                  {(state.blockers.length > 0 || state.questions.length > 0) && (
-                    <div className="mt-4 space-y-2 border-t border-ink-800 pt-4">
-                      <div className="kicker">OPEN CONCERNS</div>
-                      {state.blockers
-                        .filter((b) => b.status === "open")
-                        .map((blocker) => (
-                          <div
-                            key={blocker.id}
-                            className="flex items-start gap-3 border-l border-signal-red bg-ink-900 px-3 py-2 text-xs text-ink-200"
-                          >
-                            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-red">
-                              BLOCKER
-                            </span>
-                            <span>{blocker.title}</span>
-                          </div>
-                        ))}
-                      {state.questions
-                        .filter((q) => q.status === "open")
-                        .map((question) => (
-                          <div
-                            key={question.id}
-                            className="flex items-start gap-3 border-l border-signal-amber bg-ink-900 px-3 py-2 text-xs text-ink-200"
-                          >
-                            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-amber">
-                              QUESTION
-                            </span>
-                            <span>{question.prompt}</span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
+                  <Field label="SUMMARY">
+                    <textarea name="summary" defaultValue={state.release?.summary ?? ""} rows={5} className="workflow-input resize-none" />
+                  </Field>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                    <Field label="CONFIRMED BY">
+                      <input name="confirmedBy" defaultValue={state.release?.confirmedBy ?? ""} className="workflow-input" />
+                    </Field>
+                    <label className="flex h-10 items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-300">
+                      <input name="confirmed" type="checkbox" defaultChecked={state.release?.confirmed ?? false} className="h-4 w-4 rounded border-ink-600 bg-ink-950 text-signal-amber" />
+                      Confirmed
+                    </label>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-ink-800 pt-4">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                      UPDATED {(relative(state.release?.updatedAt) || "—").toUpperCase()}
+                    </span>
+                    <button className="btn-primary" type="submit" disabled={saving === "release"}>
+                      <Save className="h-3.5 w-3.5" /> Save release
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
+
+            <div className="mt-px grid gap-px bg-ink-700 lg:grid-cols-2">
+              <div className="space-y-5 bg-ink-950 p-6">
+                <div>
+                  <div className="kicker mb-3">BLOCKERS</div>
+                  <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_140px_auto] sm:items-end" onSubmit={addBlocker}>
+                    <Field label="TITLE">
+                      <input name="title" className="workflow-input" required />
+                    </Field>
+                    <Field label="SEVERITY">
+                      <select name="severity" className="workflow-input" defaultValue="medium">
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                      </select>
+                    </Field>
+                    <button className="btn-primary justify-center" type="submit" disabled={saving === "blocker"}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </button>
+                    <div className="sm:col-span-2">
+                      <Field label="DETAIL">
+                        <input name="detail" className="workflow-input" />
+                      </Field>
+                    </div>
+                    <label className="flex h-10 items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-300">
+                      <input name="dependency" type="checkbox" className="h-4 w-4 rounded border-ink-600 bg-ink-950 text-signal-amber" />
+                      Dependency
+                    </label>
+                  </form>
+                </div>
+                {state.blockers.length === 0 ? (
+                  <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">NO BLOCKERS RECORDED — ADD ONE ABOVE</div>
+                ) : (
+                  <ul className="divide-y divide-ink-800">
+                    {state.blockers.map((blocker, index) => (
+                      <li key={blocker.id} className="grid gap-3 py-3 sm:grid-cols-[60px_1fr_auto] sm:items-start">
+                        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">BL-{String(index + 1).padStart(3, "0")}</span>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm text-ink-100">{blocker.title}</span>
+                            <span className={`pill ${blocker.status === "open" ? "pill--danger" : "pill--good"}`}>{blocker.status.toUpperCase()}</span>
+                            <span className="pill pill--muted">{blocker.severity.toUpperCase()}</span>
+                          </div>
+                          {blocker.detail && <div className="mt-1 text-xs text-ink-400">{blocker.detail}</div>}
+                          <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                            UPDATED {(relative(blocker.updatedAt) || "—").toUpperCase()}
+                          </div>
+                        </div>
+                        <button type="button" className="btn-ghost justify-center" onClick={() => updateBlockerStatus(blocker, blocker.status === "open" ? "resolved" : "open")} disabled={saving === `blocker-${blocker.id}`}>
+                          {blocker.status === "open" ? "Resolve" : "Reopen"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="space-y-5 bg-ink-950 p-6">
+                <div>
+                  <div className="kicker mb-3">OPEN QUESTIONS</div>
+                  <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={addQuestion}>
+                    <Field label="QUESTION">
+                      <input name="prompt" className="workflow-input" required />
+                    </Field>
+                    <button className="btn-primary justify-center" type="submit" disabled={saving === "question"}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </button>
+                  </form>
+                </div>
+                {state.questions.length === 0 ? (
+                  <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">NO QUESTIONS RECORDED — ADD ONE ABOVE</div>
+                ) : (
+                  <ul className="divide-y divide-ink-800">
+                    {state.questions.map((question, index) => (
+                      <li key={question.id} className="py-3">
+                        <div className="grid gap-3 sm:grid-cols-[60px_1fr_auto] sm:items-start">
+                          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">Q-{String(index + 1).padStart(3, "0")}</span>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm text-ink-100">{question.prompt}</span>
+                              <span className={`pill ${question.status === "answered" ? "pill--good" : "pill--warn"}`}>{question.status.toUpperCase()}</span>
+                            </div>
+                            {question.answer && <div className="mt-1 text-xs text-ink-400">{question.answer}</div>}
+                            <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                              UPDATED {(relative(question.updatedAt) || "—").toUpperCase()}
+                            </div>
+                          </div>
+                          {question.status === "answered" && (
+                            <button type="button" className="btn-ghost justify-center" onClick={() => updateQuestionStatus(question, "open")} disabled={saving === `question-${question.id}`}>
+                              Reopen
+                            </button>
+                          )}
+                        </div>
+                        <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={(event) => saveQuestionAnswer(question, event)}>
+                          <Field label="ANSWER">
+                            <input name="answer" defaultValue={question.answer} className="workflow-input" />
+                          </Field>
+                          <button className="btn-primary justify-center" type="submit" disabled={saving === `question-${question.id}`}>
+                            Save answer
+                          </button>
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            {(state.blockers.some((b) => b.status === "open") || state.questions.some((q) => q.status === "open")) && (
+              <div className="mt-px space-y-2 border border-ink-700 bg-ink-950 p-6">
+                <div className="kicker">OPEN CONCERNS</div>
+                {state.blockers.filter((b) => b.status === "open").map((blocker) => (
+                  <div key={blocker.id} className="flex items-start gap-3 border-l border-signal-red bg-ink-900 px-3 py-2 text-xs text-ink-200">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-red">BLOCKER</span>
+                    <span>{blocker.title}</span>
+                  </div>
+                ))}
+                {state.questions.filter((q) => q.status === "open").map((question) => (
+                  <div key={question.id} className="flex items-start gap-3 border-l border-signal-amber bg-ink-900 px-3 py-2 text-xs text-ink-200">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-amber">QUESTION</span>
+                    <span>{question.prompt}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         </>
       )}

@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
 import { requireAuthenticatedContext } from "./taskloom-services.js";
 import {
+  applyWorkflowDraft,
   applyWorkflowTemplate,
-  generateAndApplyWorkflowDraft,
   listWorkflowTemplates,
 } from "./workflow-prompt-service.js";
 import { llmDraftWorkflow, llmPlanMode } from "./workflow-llm-service.js";
@@ -120,9 +120,7 @@ workflowRoutes.post("/generate-from-prompt", async (c) => {
     if (!apply) {
       return c.json({ draft: llm.draft, applied: false, modelUsed: llm.modelUsed, costUsd: llm.costUsd });
     }
-    const applied = await generateAndApplyWorkflowDraft(context, { prompt, apply: false });
-    applied.draft = llm.draft;
-    return c.json({ ...await generateAndApplyWorkflowDraft(context, { prompt, apply: true }), modelUsed: llm.modelUsed, costUsd: llm.costUsd });
+    return c.json({ ...applyWorkflowDraft(context, llm.draft), modelUsed: llm.modelUsed, costUsd: llm.costUsd });
   } catch (error) {
     return errorResponse(c, error);
   }

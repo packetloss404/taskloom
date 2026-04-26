@@ -16,6 +16,7 @@ Taskloom is an open source workspace portal for activation tracking, onboarding 
 - workspace membership records and RBAC helper utilities
 - command-driven maintenance jobs
 - queue-driven agent runs, recurring job scheduling, and public webhook triggers
+- Product Workflow Expansion surfaces for briefs, requirements, plans, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, and Plan Mode
 
 ## Run locally
 
@@ -93,6 +94,10 @@ Workflow route module endpoint shape under `/api/app/workflow`:
 - `GET /api/app/workflow`
 - `GET /api/app/workflow/brief`
 - `PUT /api/app/workflow/brief`
+- `GET /api/app/workflow/brief/templates`
+- `POST /api/app/workflow/brief/templates/:templateId/apply`
+- `GET /api/app/workflow/brief/versions`
+- `POST /api/app/workflow/brief/versions/:versionId/restore`
 - `GET /api/app/workflow/requirements`
 - `PUT /api/app/workflow/requirements`
 - `GET /api/app/workflow/plan-items`
@@ -114,8 +119,21 @@ Workflow route module endpoint shape under `/api/app/workflow`:
 - `GET /api/app/workflow/release-confirmation`
 - `PUT /api/app/workflow/release-confirmation`
 - `POST /api/app/workflow/release-confirmation`
+- `GET /api/app/workflow/templates`
+- `POST /api/app/workflow/templates/:templateId/apply`
+- `POST /api/app/workflow/generate-from-prompt`
+- `POST /api/app/workflow/plan-mode`
+- `POST /api/app/workflow/plan-mode/apply`
 
-Workflow endpoints are private app endpoints and require an authenticated session. They operate on the signed-in user's current workspace.
+Workflow endpoints are private app endpoints and require an authenticated session. They operate on the signed-in user's current workspace. Workflow writes update the local workflow records, emit workflow activity, and refresh activation facts used by dashboard and activation views.
+
+Product Workflow Expansion currently includes:
+
+- Workspace brief editing with templates and version restore.
+- Requirement and implementation plan capture, including Plan Mode suggestions.
+- Blocker and open question tracking.
+- Validation evidence capture and release confirmation.
+- Prompt-generated workflow drafts that can be previewed or applied.
 
 ## Jobs
 
@@ -167,7 +185,7 @@ Taskloom now uses a React/Vite GUI modeled on the Automate shell and patterns:
 - activity page
 - activation detail page
 - activity detail page
-- workflow API client types for brief, requirements, plan items, blockers, questions, validation evidence, and release confirmation
+- workflow page and API client types for brief, requirements, plan items, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, and Plan Mode
 
 Key docs:
 

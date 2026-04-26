@@ -8,6 +8,7 @@ import {
   deleteWorkspaceEnvVarById,
   getAgent,
   getPrivateBootstrap,
+  getWorkspaceActivityDetail,
   listAgentRuns,
   listAgents,
   listReleaseHistory,
@@ -136,6 +137,89 @@ test("agent lists do not expose webhook tokens", () => {
   assert.equal(detail.agent.webhookToken, "whk_test_secret");
   const listed = listAgents(auth.context).agents.find((entry) => entry.id === created.agent.id);
   assert.equal(listed?.webhookToken, undefined);
+});
+
+test("activity detail includes lightweight related domain context", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+  const timestamp = new Date().toISOString();
+
+  store.workflowConcerns.push({
+    id: "blocker_alpha_test",
+    workspaceId: "alpha",
+    kind: "blocker",
+    title: "Validation handoff is blocked",
+    description: "The handoff needs an owner before release.",
+    status: "open",
+    severity: "high",
+    relatedRequirementId: "req_alpha_validation",
+    relatedPlanItemId: "plan_alpha_validation",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  store.activities.unshift({
+    id: "activity_alpha_related",
+    workspaceId: "alpha",
+    scope: "activation",
+    event: "test.related_context",
+    actor: { type: "system", id: "test" },
+    data: {
+      title: "Related context activity",
+      agentId: "agent_alpha_support",
+      runId: "run_alpha_support_latest",
+      blockerId: "blocker_alpha_test",
+      questionId: "question_alpha_reporting",
+      planItemId: "plan_alpha_validation",
+      requirementId: "req_alpha_validation",
+      evidenceId: "evidence_alpha_tests",
+      releaseId: "release_alpha_pending",
+    },
+    occurredAt: timestamp,
+  });
+
+  const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_related");
+
+  assert.equal(detail.activity.id, "activity_alpha_related");
+  assert.equal(detail.related.agent?.name, "Support inbox triage");
+  assert.equal(detail.related.run?.title, "Support inbox scanned");
+  assert.equal(detail.related.blocker?.title, "Validation handoff is blocked");
+  assert.equal(detail.related.question?.title, "Is reporting required for the first release?");
+  assert.equal(detail.related.planItem?.title, "Collect validation proof");
+  assert.equal(detail.related.requirement?.title, "Capture validation evidence before release");
+  assert.equal(detail.related.evidence?.title, "Activation validation checks passed");
+  assert.equal(detail.related.release?.versionLabel, "alpha-validation");
+  assert.doesNotThrow(() => JSON.stringify(detail));
+});
+
+test("activity detail related context is workspace isolated", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+
+  store.activities.unshift({
+    id: "activity_alpha_cross_workspace_refs",
+    workspaceId: "alpha",
+    scope: "activation",
+    event: "test.cross_workspace_refs",
+    actor: { type: "system", id: "test" },
+    data: {
+      title: "Cross workspace references",
+      agentId: "agent_beta_dependency_watch",
+      runId: "run_beta_dependency_latest",
+      blockerId: "blocker_beta_dependency",
+      questionId: "question_beta_scope",
+      planItemId: "plan_beta_restart",
+      requirementId: "req_beta_dependencies",
+      evidenceId: "evidence_beta_failed_retry",
+      releaseId: "release_beta_blocked",
+    },
+    occurredAt: new Date().toISOString(),
+  });
+
+  const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_cross_workspace_refs");
+
+  assert.deepEqual(detail.related, {});
 });
 
 test("env vars: create masks secrets, prevents duplicate keys, supports update and delete", async () => {

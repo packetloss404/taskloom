@@ -49,6 +49,7 @@ import { jobRoutes } from "./job-routes.js";
 import { JobScheduler } from "./jobs/scheduler.js";
 import { registerDefaultProviders } from "./providers/bootstrap.js";
 import { registerDefaultTools } from "./tools/bootstrap.js";
+import { getDefaultToolRegistry } from "./tools/registry.js";
 import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 import { agentWebhookRoutes, publicWebhookRoutes } from "./webhook-routes.js";
 
@@ -347,7 +348,6 @@ app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
 app.get("/api/app/tools", (c) => {
   try {
     requireAuthenticatedContext(c);
-    const { getDefaultToolRegistry } = require("./tools/registry.js");
     const registry = getDefaultToolRegistry();
     return c.json({
       tools: registry.list().map((t: { name: string; description: string; side: string }) => ({

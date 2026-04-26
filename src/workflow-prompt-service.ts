@@ -106,6 +106,13 @@ export async function generateAndApplyWorkflowDraft(
     return { draft, applied: false };
   }
 
+  return applyWorkflowDraft(context, draft);
+}
+
+export function applyWorkflowDraft(
+  context: WorkflowContext,
+  draft: WorkflowDraft,
+): WorkflowDraftResult {
   const brief = updateWorkspaceBrief(context, {
     summary: draft.brief.summary,
     problemStatement: draft.brief.problemStatement,
