@@ -2,19 +2,22 @@ import { useEffect, useState } from "react";
 import { Activity, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
-import type { ActivityRecord, AgentRunRecord } from "@/lib/types";
+import RunTelemetry from "@/components/RunTelemetry";
+import type { ActivityRecord, AgentRecord, AgentRunRecord } from "@/lib/types";
 
 export default function RunsPage() {
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
   const [activities, setActivities] = useState<ActivityRecord[]>([]);
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.listAgentRuns(), api.listActivity()])
-      .then(([nextRuns, nextActivities]) => {
+    Promise.all([api.listAgentRuns(), api.listActivity(), api.listAgents()])
+      .then(([nextRuns, nextActivities, nextAgents]) => {
         setRuns(nextRuns);
         setActivities(nextActivities);
+        setAgents(nextAgents);
       })
       .catch((loadError) => setError((loadError as Error).message))
       .finally(() => setLoading(false));
@@ -34,6 +37,10 @@ export default function RunsPage() {
       {loading ? (
         <div className="flex items-center gap-3 text-sm text-ink-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading runs...</div>
       ) : (
+        <>
+        <div className="mb-6">
+          <RunTelemetry runs={runs} agents={agents} />
+        </div>
         <div className="grid gap-6 xl:grid-cols-2">
           <section>
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Agent runs</h2>
@@ -74,6 +81,7 @@ export default function RunsPage() {
             )}
           </section>
         </div>
+        </>
       )}
     </>
   );

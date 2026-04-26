@@ -164,6 +164,7 @@ export interface WorkflowPlanItem {
   ownerUserId?: string;
   dueDate?: string;
   order: number;
+  requirementIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +206,8 @@ export interface WorkflowValidationEvidence {
   description?: string;
   status: WorkflowValidationStatus;
   source: string;
+  planItemId?: string;
+  requirementIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
