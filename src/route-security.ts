@@ -1,0 +1,82 @@
+import type { Context, MiddlewareHandler } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { hashSessionSecret, SESSION_COOKIE_NAME, SESSION_TTL_MS } from "./auth-utils.js";
+
+export const CSRF_COOKIE_NAME = "taskloom_csrf";
+export const CSRF_HEADER_NAME = "x-csrf-token";
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export const enforcePrivateAppMutationSecurity: MiddlewareHandler = async (c, next) => {
+  try {
+    rejectCrossOriginPrivateMutationOrThrow(c);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+  await next();
+};
+
+export function rejectCrossOriginPrivateMutation(c: Context) {
+  try {
+    rejectCrossOriginPrivateMutationOrThrow(c);
+    return null;
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+export function rejectCrossOriginPrivateMutationOrThrow(c: Context) {
+  if (SAFE_METHODS.has(c.req.method.toUpperCase())) return;
+
+  const origin = c.req.header("origin");
+  if (!origin) return;
+
+  const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? new URL(c.req.url).host;
+  try {
+    if (new URL(origin).host !== host) throw httpRouteError(403, "cross-origin requests are not allowed");
+  } catch {
+    throw httpRouteError(403, "cross-origin requests are not allowed");
+  }
+
+  enforceBrowserCsrf(c);
+}
+
+export function applyCsrfCookie(c: Context, sessionCookie: string) {
+  setCookie(c, CSRF_COOKIE_NAME, csrfTokenForSessionCookie(sessionCookie), {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Lax",
+    path: "/",
+    maxAge: Math.floor(SESSION_TTL_MS / 1000),
+  });
+}
+
+export function clearCsrfCookie(c: Context) {
+  deleteCookie(c, CSRF_COOKIE_NAME, { path: "/" });
+}
+
+function enforceBrowserCsrf(c: Context) {
+  const sessionCookie = getCookie(c, SESSION_COOKIE_NAME) ?? "";
+  const csrfCookie = getCookie(c, CSRF_COOKIE_NAME) ?? "";
+  const csrfHeader = c.req.header(CSRF_HEADER_NAME) ?? "";
+  const expected = csrfTokenForSessionCookie(sessionCookie);
+
+  if (!expected || csrfCookie !== expected || csrfHeader !== expected) {
+    throw httpRouteError(403, "invalid csrf token");
+  }
+}
+
+function csrfTokenForSessionCookie(sessionCookie: string) {
+  return sessionCookie ? hashSessionSecret(`csrf:${sessionCookie}`) : "";
+}
+
+function httpRouteError(status: number, message: string) {
+  const error = new Error(message) as Error & { status?: number };
+  error.status = status;
+  return error;
+}
+
+function errorResponse(c: Context, error: unknown) {
+  c.status(((error as Error & { status?: number }).status ?? 500) as any);
+  return c.json({ error: (error as Error).message });
+}

@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { createHash } from "node:crypto";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
-import { hashSessionSecret, SESSION_COOKIE_NAME, SESSION_TTL_MS } from "./auth-utils.js";
+import { applyCsrfCookie, clearCsrfCookie, rejectCrossOriginPrivateMutation } from "./route-security.js";
 import {
   applySessionCookie,
   acceptWorkspaceInvitation,
@@ -26,14 +26,13 @@ import {
   updateProfile,
   updateWorkspace,
 } from "./taskloom-services.js";
-import { findWorkspaceMembership, loadStore, mutateStore } from "./taskloom-store.js";
+import { findWorkspaceMembership, loadStore, mutateStore, upsertRateLimit } from "./taskloom-store.js";
 
 export const appRoutes = new Hono();
 
 const AUTH_RATE_LIMIT = { maxAttempts: 20, windowMs: 60_000 };
 const INVITATION_RATE_LIMIT = { maxAttempts: 20, windowMs: 60_000 };
-const CSRF_COOKIE_NAME = "taskloom_csrf";
-const CSRF_HEADER_NAME = "x-csrf-token";
+const RATE_LIMIT_MAX_BUCKETS = 5_000;
 
 export function resetAppRouteSecurityForTests() {
   // Security state is store-backed; tests reset it through resetStoreForTests().
@@ -147,7 +146,6 @@ appRoutes.get("/app/onboarding", (c) => {
 
 appRoutes.post("/app/onboarding/steps/:stepKey/complete", async (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "editWorkflow");
     return c.json({ onboarding: await completeOnboardingStep(context, c.req.param("stepKey")) });
@@ -158,7 +156,6 @@ appRoutes.post("/app/onboarding/steps/:stepKey/complete", async (c) => {
 
 appRoutes.patch("/app/profile", async (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     const context = requireAuthenticatedContext(c);
     const body = (await c.req.json()) as { displayName?: string; timezone?: string };
     const user = await updateProfile(context, {
@@ -180,7 +177,6 @@ appRoutes.patch("/app/profile", async (c) => {
 
 appRoutes.patch("/app/workspace", async (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json()) as { name?: string; website?: string; automationGoal?: string };
@@ -207,7 +203,6 @@ appRoutes.get("/app/members", (c) => {
 
 appRoutes.post("/app/invitations", async (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     enforceRateLimit(c, "invitation:create", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
@@ -224,7 +219,6 @@ appRoutes.post("/app/invitations", async (c) => {
 
 appRoutes.post("/app/invitations/:token/accept", (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     enforceRateLimit(c, "invitation:accept", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     return c.json(acceptWorkspaceInvitation(context, c.req.param("token")));
@@ -235,7 +229,6 @@ appRoutes.post("/app/invitations/:token/accept", (c) => {
 
 appRoutes.post("/app/invitations/:invitationId/resend", async (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     enforceRateLimit(c, "invitation:resend", INVITATION_RATE_LIMIT);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
@@ -247,7 +240,6 @@ appRoutes.post("/app/invitations/:invitationId/resend", async (c) => {
 
 appRoutes.post("/app/invitations/:invitationId/revoke", (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
     return c.json(revokeWorkspaceInvitation(context, c.req.param("invitationId")));
@@ -258,7 +250,6 @@ appRoutes.post("/app/invitations/:invitationId/revoke", (c) => {
 
 appRoutes.patch("/app/members/:userId", async (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json()) as { role?: string };
@@ -270,7 +261,6 @@ appRoutes.patch("/app/members/:userId", async (c) => {
 
 appRoutes.delete("/app/members/:userId", (c) => {
   try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
     const context = requireAuthenticatedContext(c);
     requireWorkspacePermission(context, "manageWorkspace");
     return c.json(removeWorkspaceMember(context, c.req.param("userId")));
@@ -287,27 +277,14 @@ function requireWorkspacePermission(context: AuthenticatedRouteContext, permissi
 }
 
 function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number }) {
-  const key = `${scope}:${clientKey(c)}`;
   const timestamp = Date.now();
-
-  const limitedUntil = mutateStore((data) => {
-    data.rateLimits = (data.rateLimits ?? []).filter((entry) => new Date(entry.resetAt).getTime() > timestamp);
-    const bucket = data.rateLimits.find((entry) => entry.id === key);
-
-    if (!bucket) {
-      data.rateLimits.push({
-        id: key,
-        count: 1,
-        resetAt: new Date(timestamp + options.windowMs).toISOString(),
-        updatedAt: new Date(timestamp).toISOString(),
-      });
-      return null;
-    }
-
-    bucket.count += 1;
-    bucket.updatedAt = new Date(timestamp).toISOString();
-    return bucket.count > options.maxAttempts ? new Date(bucket.resetAt).getTime() : null;
-  });
+  const limitedUntil = mutateStore((data) => upsertRateLimit(data, {
+    bucketId: `${scope}:${hashedClientKey(clientKey(c))}`,
+    maxAttempts: options.maxAttempts,
+    windowMs: options.windowMs,
+    timestamp,
+    maxBuckets: configuredPositiveInteger("TASKLOOM_RATE_LIMIT_MAX_BUCKETS", RATE_LIMIT_MAX_BUCKETS),
+  }));
 
   if (limitedUntil) {
     const retryAfterSeconds = Math.max(1, Math.ceil((limitedUntil - timestamp) / 1000));
@@ -317,61 +294,24 @@ function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: num
 }
 
 function clientKey(c: Context) {
+  if (!trustedProxyEnabled()) return "local";
   return c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
     || c.req.header("x-real-ip")?.trim()
     || "local";
 }
 
-function rejectCrossOriginPrivateMutation(c: Context) {
-  try {
-    rejectCrossOriginPrivateMutationOrThrow(c);
-    return null;
-  } catch (error) {
-    return errorResponse(c, error);
-  }
+function hashedClientKey(clientIdentity: string) {
+  const salt = process.env.TASKLOOM_RATE_LIMIT_KEY_SALT ?? "taskloom-rate-limit";
+  return `sha256:${createHash("sha256").update(`${salt}:${clientIdentity}`).digest("hex")}`;
 }
 
-function rejectCrossOriginPrivateMutationOrThrow(c: Context) {
-  const origin = c.req.header("origin");
-  if (!origin) return;
-
-  const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? new URL(c.req.url).host;
-  try {
-    if (new URL(origin).host !== host) throw httpRouteError(403, "cross-origin requests are not allowed");
-  } catch {
-    throw httpRouteError(403, "cross-origin requests are not allowed");
-  }
-
-  enforceBrowserCsrf(c);
+function trustedProxyEnabled() {
+  return ["1", "true", "yes"].includes((process.env.TASKLOOM_TRUST_PROXY ?? "").trim().toLowerCase());
 }
 
-function enforceBrowserCsrf(c: Context) {
-  const sessionCookie = getCookie(c, SESSION_COOKIE_NAME) ?? "";
-  const csrfCookie = getCookie(c, CSRF_COOKIE_NAME) ?? "";
-  const csrfHeader = c.req.header(CSRF_HEADER_NAME) ?? "";
-  const expected = csrfTokenForSessionCookie(sessionCookie);
-
-  if (!expected || csrfCookie !== expected || csrfHeader !== expected) {
-    throw httpRouteError(403, "invalid csrf token");
-  }
-}
-
-function applyCsrfCookie(c: Context, sessionCookie: string) {
-  setCookie(c, CSRF_COOKIE_NAME, csrfTokenForSessionCookie(sessionCookie), {
-    httpOnly: false,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "Lax",
-    path: "/",
-    maxAge: Math.floor(SESSION_TTL_MS / 1000),
-  });
-}
-
-function clearCsrfCookie(c: Context) {
-  deleteCookie(c, CSRF_COOKIE_NAME, { path: "/" });
-}
-
-function csrfTokenForSessionCookie(sessionCookie: string) {
-  return sessionCookie ? hashSessionSecret(`csrf:${sessionCookie}`) : "";
+function configuredPositiveInteger(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function httpRouteError(status: number, message: string) {

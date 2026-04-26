@@ -1,6 +1,12 @@
 import { now } from "./auth-utils";
 import { createInvitationEmailDelivery, type InvitationEmailDeliveryRecord, type TaskloomData } from "./taskloom-store";
-import { LOCAL_INVITATION_EMAIL_PROVIDER, resolveInvitationEmailMode, TASKLOOM_INVITATION_EMAIL_MODE_ENV } from "./invitation-email";
+import {
+  LOCAL_INVITATION_EMAIL_PROVIDER,
+  resolveInvitationEmailMode,
+  resolveInvitationEmailWebhookConfig,
+  TASKLOOM_INVITATION_EMAIL_MODE_ENV,
+  TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV,
+} from "./invitation-email";
 
 export type InvitationEmailDeliveryAction = "create" | "resend";
 
@@ -30,8 +36,10 @@ export interface InvitationEmailDeliveryTestRecord extends InvitationEmailDelive
 }
 
 type InvitationEmailDeliveryAdapter = (request: InvitationEmailDeliveryRequest) => void | Promise<void>;
+type InvitationEmailFetch = typeof fetch;
 
 let adapter: InvitationEmailDeliveryAdapter | null = null;
+let fetchForTests: InvitationEmailFetch | null = null;
 let recordsForTests: InvitationEmailDeliveryTestRecord[] = [];
 
 export async function deliverInvitationEmail(
@@ -43,10 +51,17 @@ export async function deliverInvitationEmail(
   const skipped = mode === "skip";
   let status: InvitationEmailDeliveryRecord["status"] = skipped ? "skipped" : "sent";
   let error: string | undefined = skipped ? `${TASKLOOM_INVITATION_EMAIL_MODE_ENV}=skip` : undefined;
+  let provider = LOCAL_INVITATION_EMAIL_PROVIDER;
 
   if (!skipped) {
     try {
-      await (adapter?.(request) ?? undefined);
+      if (mode === "webhook") {
+        const webhook = resolveInvitationEmailWebhookConfig();
+        provider = webhook.provider;
+        await sendInvitationEmailWebhook(request, webhook, fetchForTests ?? fetch);
+      } else {
+        await (adapter?.(request) ?? undefined);
+      }
     } catch (caught) {
       status = "failed";
       error = caught instanceof Error ? caught.message : String(caught);
@@ -59,7 +74,7 @@ export async function deliverInvitationEmail(
     recipientEmail: request.email,
     subject: request.subject,
     status,
-    provider: LOCAL_INVITATION_EMAIL_PROVIDER,
+    provider,
     mode,
     sentAt: status === "sent" ? timestamp : undefined,
     error,
@@ -82,11 +97,43 @@ export function setInvitationEmailDeliveryAdapterForTests(nextAdapter: Invitatio
   adapter = nextAdapter;
 }
 
+export function setInvitationEmailFetchForTests(nextFetch: InvitationEmailFetch): void {
+  fetchForTests = nextFetch;
+}
+
 export function listInvitationEmailDeliveryRecordsForTests(): InvitationEmailDeliveryTestRecord[] {
   return recordsForTests.slice();
 }
 
 export function resetInvitationEmailDeliveryForTests(): void {
   adapter = null;
+  fetchForTests = null;
   recordsForTests = [];
+}
+
+async function sendInvitationEmailWebhook(
+  request: InvitationEmailDeliveryRequest,
+  webhook: ReturnType<typeof resolveInvitationEmailWebhookConfig>,
+  fetchImplementation: InvitationEmailFetch,
+): Promise<void> {
+  if (!webhook.url) throw new Error(`${TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV} is required when ${TASKLOOM_INVITATION_EMAIL_MODE_ENV}=webhook`);
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (webhook.secret) headers[webhook.secretHeader] = webhook.secret;
+
+  const response = await fetchImplementation(webhook.url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      workspaceId: request.workspaceId,
+      workspaceName: request.workspaceName,
+      invitationId: request.invitationId,
+      email: request.email,
+      token: request.token,
+      subject: request.subject,
+      action: request.action,
+    }),
+  });
+
+  if (!response.ok) throw new Error(`webhook invitation email provider returned ${response.status} ${response.statusText}`.trim());
 }

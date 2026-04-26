@@ -249,10 +249,12 @@ test("JSON default and SQLite opt-in keep indexed route behavior aligned", async
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-indexed-routes-"));
   const previousStore = process.env.TASKLOOM_STORE;
   const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const previousInvitationEmailMode = process.env.TASKLOOM_INVITATION_EMAIL_MODE;
 
   t.after(() => {
     restoreEnv("TASKLOOM_STORE", previousStore);
     restoreEnv("TASKLOOM_DB_PATH", previousDbPath);
+    restoreEnv("TASKLOOM_INVITATION_EMAIL_MODE", previousInvitationEmailMode);
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -262,6 +264,30 @@ test("JSON default and SQLite opt-in keep indexed route behavior aligned", async
   process.env.TASKLOOM_STORE = "sqlite";
   process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
   const sqliteResult = await runIndexedRouteScenario(modules, "sqlite");
+
+  assert.deepEqual(sqliteResult, jsonResult);
+});
+
+test("JSON default and SQLite opt-in keep invitation delivery skip mode aligned", async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-invitation-delivery-"));
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const previousInvitationEmailMode = process.env.TASKLOOM_INVITATION_EMAIL_MODE;
+
+  t.after(() => {
+    restoreEnv("TASKLOOM_STORE", previousStore);
+    restoreEnv("TASKLOOM_DB_PATH", previousDbPath);
+    restoreEnv("TASKLOOM_INVITATION_EMAIL_MODE", previousInvitationEmailMode);
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  process.env.TASKLOOM_INVITATION_EMAIL_MODE = "skip";
+  const modules = await loadRuntimeModules();
+  const jsonResult = await runInvitationDeliveryModeScenario(modules, "json");
+
+  process.env.TASKLOOM_STORE = "sqlite";
+  process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
+  const sqliteResult = await runInvitationDeliveryModeScenario(modules, "sqlite");
 
   assert.deepEqual(sqliteResult, jsonResult);
 });
@@ -413,7 +439,7 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
     rateLimitAttemptStatus = response.status;
   }
   const rateLimitBucket = (modules.store.loadStore().rateLimits ?? [])
-    .find((entry: { id: string }) => entry.id === `auth:login:${rateLimitIp}`);
+    .find((entry: { id: string }) => entry.id.startsWith("auth:login:sha256:"));
 
   return {
     session: {
@@ -458,7 +484,42 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
       sameOriginMissingCsrfError: sameOriginMissingCsrfBody.error,
       rateLimitStatus: rateLimitAttemptStatus,
       rateLimitCount: rateLimitBucket?.count,
+      rateLimitRawIpStored: rateLimitBucket?.id.includes(rateLimitIp) ?? false,
     },
+  };
+}
+
+async function runInvitationDeliveryModeScenario(modules: RuntimeModules, label: string) {
+  if (label === "json") {
+    delete process.env.TASKLOOM_STORE;
+    delete process.env.TASKLOOM_DB_PATH;
+  }
+
+  modules.appRoutesModule.resetAppRouteSecurityForTests();
+  modules.store.resetStoreForTests();
+  const app = createTestApp(modules);
+  const alpha = modules.services.login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = await app.request("/api/app/invitations", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ email: "skip.delivery@example.com", role: "member" }),
+  });
+  const createdBody = await created.json() as { invitation: { id: string }; emailDelivery: { status: string; error: string | null } };
+  const deliveries = modules.store.loadStore().invitationEmailDeliveries
+    .filter((entry: { invitationId: string }) => entry.invitationId === createdBody.invitation.id);
+  const delivery = deliveries[0] as { status: string; provider: string; mode: string; sentAt?: string; error?: string } | undefined;
+
+  return {
+    createStatus: created.status,
+    responseDeliveryStatus: createdBody.emailDelivery.status,
+    responseDeliveryError: createdBody.emailDelivery.error,
+    deliveryCount: deliveries.length,
+    deliveryStatus: delivery?.status,
+    deliveryProvider: delivery?.provider,
+    deliveryMode: delivery?.mode,
+    deliverySentAt: Boolean(delivery?.sentAt),
+    deliveryError: delivery?.error,
   };
 }
 

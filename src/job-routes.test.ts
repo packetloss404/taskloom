@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils";
+import { appRoutes } from "./app-routes";
 import { jobRoutes } from "./job-routes";
 import { enqueueJob, findJob } from "./jobs/store";
+import { enforcePrivateAppMutationSecurity } from "./route-security";
 import { login } from "./taskloom-services";
 import { mutateStore, resetStoreForTests } from "./taskloom-store";
 
 function createTestApp() {
   const app = new Hono();
+  app.use("/api/app/*", enforcePrivateAppMutationSecurity);
+  app.route("/api", appRoutes);
   app.route("/api/app/jobs", jobRoutes);
   return app;
 }
@@ -16,6 +20,95 @@ function createTestApp() {
 function authHeaders(cookieValue: string) {
   return { Cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
 }
+
+function cookieValue(response: Response) {
+  const cookie = response.headers.get("set-cookie") ?? "";
+  const match = cookie.match(new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`));
+  assert.ok(match?.[1], "expected response to set a session cookie");
+  return match[1];
+}
+
+function csrfCookieValue(response: Response) {
+  const cookie = response.headers.get("set-cookie") ?? "";
+  const match = cookie.match(/taskloom_csrf=([^;]+)/);
+  assert.ok(match?.[1], "expected response to set a csrf cookie");
+  return match[1];
+}
+
+function browserAuthHeaders(cookie: string, csrfToken: string) {
+  return {
+    Cookie: `${SESSION_COOKIE_NAME}=${cookie}; taskloom_csrf=${csrfToken}`,
+    Origin: "http://localhost",
+    Host: "localhost",
+    "X-CSRF-Token": csrfToken,
+  };
+}
+
+test("job mutations use central browser csrf and same-origin guard", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+
+  const loginResponse = await app.request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "alpha@taskloom.local", password: "demo12345" }),
+  });
+  const sessionCookie = cookieValue(loginResponse);
+  const csrfToken = csrfCookieValue(loginResponse);
+
+  const crossOrigin = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: {
+      ...browserAuthHeaders(sessionCookie, csrfToken),
+      Origin: "https://evil.example",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ type: "test.cross-origin" }),
+  });
+  assert.equal(crossOrigin.status, 403);
+  assert.deepEqual(await crossOrigin.json(), { error: "cross-origin requests are not allowed" });
+
+  const missingCsrf = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: {
+      ...authHeaders(sessionCookie),
+      Origin: "http://localhost",
+      Host: "localhost",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ type: "test.missing-csrf" }),
+  });
+  assert.equal(missingCsrf.status, 403);
+  assert.deepEqual(await missingCsrf.json(), { error: "invalid csrf token" });
+
+  const invalidCsrf = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: {
+      Cookie: `${SESSION_COOKIE_NAME}=${sessionCookie}; taskloom_csrf=invalid`,
+      Origin: "http://localhost",
+      Host: "localhost",
+      "X-CSRF-Token": "invalid",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ type: "test.invalid-csrf" }),
+  });
+  assert.equal(invalidCsrf.status, 403);
+  assert.deepEqual(await invalidCsrf.json(), { error: "invalid csrf token" });
+
+  const sameOrigin = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: { ...browserAuthHeaders(sessionCookie, csrfToken), "content-type": "application/json" },
+    body: JSON.stringify({ type: "test.same-origin" }),
+  });
+  assert.equal(sameOrigin.status, 201);
+
+  const apiClientCompatible = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: { ...authHeaders(sessionCookie), "content-type": "application/json" },
+    body: JSON.stringify({ type: "test.api-client" }),
+  });
+  assert.equal(apiClientCompatible.status, 201);
+});
 
 test("job detail does not expose jobs from another workspace", async () => {
   resetStoreForTests();

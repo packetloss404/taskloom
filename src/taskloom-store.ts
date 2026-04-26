@@ -67,7 +67,7 @@ export interface WorkspaceInvitationRecord {
 }
 
 export type InvitationEmailDeliveryStatus = "pending" | "sent" | "skipped" | "failed";
-export type InvitationEmailDeliveryMode = "dev" | "skip";
+export type InvitationEmailDeliveryMode = "dev" | "skip" | "webhook";
 
 export interface InvitationEmailDeliveryRecord {
   id: string;
@@ -1983,6 +1983,45 @@ export function resetStoreForTests(): TaskloomData {
 
 export function clearStoreCacheForTests(): void {
   clearStoreCache();
+}
+
+export interface RateLimitUpsertInput {
+  bucketId: string;
+  maxAttempts: number;
+  windowMs: number;
+  timestamp: number;
+  maxBuckets: number;
+}
+
+export function upsertRateLimit(data: TaskloomData, input: RateLimitUpsertInput): number | null {
+  const updatedAt = new Date(input.timestamp).toISOString();
+  const resetAtTimestamp = input.timestamp + input.windowMs;
+  data.rateLimits = (data.rateLimits ?? []).filter((entry) => new Date(entry.resetAt).getTime() > input.timestamp);
+
+  const bucket = data.rateLimits.find((entry) => entry.id === input.bucketId);
+  if (!bucket) {
+    data.rateLimits.push({
+      id: input.bucketId,
+      count: 1,
+      resetAt: new Date(resetAtTimestamp).toISOString(),
+      updatedAt,
+    });
+    pruneRateLimitBuckets(data, input.maxBuckets);
+    return null;
+  }
+
+  bucket.count += 1;
+  bucket.updatedAt = updatedAt;
+  pruneRateLimitBuckets(data, input.maxBuckets);
+  return bucket.count > input.maxAttempts ? new Date(bucket.resetAt).getTime() : null;
+}
+
+function pruneRateLimitBuckets(data: TaskloomData, maxBuckets: number) {
+  const limit = Math.max(1, Math.floor(maxBuckets));
+  if (!data.rateLimits || data.rateLimits.length <= limit) return;
+  data.rateLimits = [...data.rateLimits]
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+    .slice(0, limit);
 }
 
 function clearStoreCache(): void {

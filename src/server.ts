@@ -39,6 +39,7 @@ import { registerDefaultTools } from "./tools/bootstrap.js";
 import { getDefaultToolRegistry } from "./tools/registry.js";
 import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 import { agentWebhookRoutes, publicWebhookRoutes } from "./webhook-routes.js";
+import { enforcePrivateAppMutationSecurity } from "./route-security.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -59,6 +60,8 @@ app.get("/api/activation/:workspaceId", async (c) => {
   }
   return c.json(summary);
 });
+
+app.use("/api/app/*", enforcePrivateAppMutationSecurity);
 
 app.route("/api", appRoutes);
 

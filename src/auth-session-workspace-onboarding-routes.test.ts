@@ -6,6 +6,7 @@ import test from "node:test";
 import { Hono } from "hono";
 import { appRoutes, resetAppRouteSecurityForTests } from "./app-routes.js";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
+import { enforcePrivateAppMutationSecurity } from "./route-security.js";
 import { TASKLOOM_INVITATION_EMAIL_MODE_ENV } from "./invitation-email.js";
 import {
   listInvitationEmailDeliveryRecordsForTests,
@@ -17,6 +18,7 @@ import { clearStoreCacheForTests, listInvitationEmailDeliveriesIndexed, loadStor
 
 function createTestApp() {
   const app = new Hono();
+  app.use("/api/app/*", enforcePrivateAppMutationSecurity);
   app.route("/api", appRoutes);
   return app;
 }
@@ -145,19 +147,31 @@ test("auth routes rate limit repeated local attempts", async () => {
 test("auth route rate limits persist across app instances and store reloads", { concurrency: false }, async () => {
   const previousStore = process.env.TASKLOOM_STORE;
   const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const previousTrustProxy = process.env.TASKLOOM_TRUST_PROXY;
+  const previousSalt = process.env.TASKLOOM_RATE_LIMIT_KEY_SALT;
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-rate-limit-"));
 
   try {
     process.env.TASKLOOM_STORE = "sqlite";
     process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
+    process.env.TASKLOOM_TRUST_PROXY = "true";
+    process.env.TASKLOOM_RATE_LIMIT_KEY_SALT = "test-rate-limit-salt";
     resetStoreForTests();
     resetAppRouteSecurityForTests();
     const headers = { "content-type": "application/json", "x-forwarded-for": "203.0.113.12" };
-    const resetAt = new Date(Date.now() + 60_000).toISOString();
 
-    mutateStore((data) => {
-      data.rateLimits = [{ id: "auth:login:203.0.113.12", count: 20, resetAt, updatedAt: new Date().toISOString() }];
-    });
+    for (let index = 0; index < 20; index += 1) {
+      const response = await createTestApp().request("/api/auth/login", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+      });
+      assert.equal(response.status, 401);
+    }
+    const buckets = loadStore().rateLimits ?? [];
+    assert.equal(buckets.length, 1);
+    assert.match(buckets[0]?.id ?? "", /^auth:login:sha256:[a-f0-9]{64}$/);
+    assert.equal(buckets[0]?.id.includes("203.0.113.12"), false);
 
     clearStoreCacheForTests();
     const app = createTestApp();
@@ -171,11 +185,90 @@ test("auth route rate limits persist across app instances and store reloads", { 
     assert.deepEqual(await limited.json(), { error: "too many requests" });
   } finally {
     clearStoreCacheForTests();
-    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
-    else process.env.TASKLOOM_STORE = previousStore;
-    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
-    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    restoreEnv("TASKLOOM_STORE", previousStore);
+    restoreEnv("TASKLOOM_DB_PATH", previousDbPath);
+    restoreEnv("TASKLOOM_TRUST_PROXY", previousTrustProxy);
+    restoreEnv("TASKLOOM_RATE_LIMIT_KEY_SALT", previousSalt);
     rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("rate limit client keys only trust forwarded headers when enabled", async () => {
+  const previousTrustProxy = process.env.TASKLOOM_TRUST_PROXY;
+  const previousSalt = process.env.TASKLOOM_RATE_LIMIT_KEY_SALT;
+  try {
+    process.env.TASKLOOM_RATE_LIMIT_KEY_SALT = "test-rate-limit-salt";
+    delete process.env.TASKLOOM_TRUST_PROXY;
+    resetStoreForTests();
+    const app = createTestApp();
+
+    for (let index = 0; index < 20; index += 1) {
+      const response = await app.request("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": `203.0.113.${index}` },
+        body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+      });
+      assert.equal(response.status, 401);
+    }
+    const untrustedLimited = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.200" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(untrustedLimited.status, 429);
+
+    process.env.TASKLOOM_TRUST_PROXY = "true";
+    resetStoreForTests();
+    for (let index = 0; index < 20; index += 1) {
+      const response = await app.request("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": `203.0.113.${index}` },
+        body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+      });
+      assert.equal(response.status, 401);
+    }
+    const trustedSeparateClient = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.200" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+    assert.equal(trustedSeparateClient.status, 401);
+    assert.equal((loadStore().rateLimits ?? []).some((entry) => entry.id.includes("203.0.113")), false);
+  } finally {
+    restoreEnv("TASKLOOM_TRUST_PROXY", previousTrustProxy);
+    restoreEnv("TASKLOOM_RATE_LIMIT_KEY_SALT", previousSalt);
+  }
+});
+
+test("rate limit cleanup drops expired buckets and caps retained buckets", async () => {
+  const previousMaxBuckets = process.env.TASKLOOM_RATE_LIMIT_MAX_BUCKETS;
+  try {
+    process.env.TASKLOOM_RATE_LIMIT_MAX_BUCKETS = "2";
+    resetStoreForTests();
+    mutateStore((data) => {
+      data.rateLimits = [
+        { id: "expired", count: 3, resetAt: new Date(Date.now() - 1_000).toISOString(), updatedAt: new Date(Date.now() - 1_000).toISOString() },
+        { id: "old-active", count: 1, resetAt: new Date(Date.now() + 60_000).toISOString(), updatedAt: new Date(Date.now() - 500).toISOString() },
+      ];
+    });
+    const app = createTestApp();
+
+    await app.request("/api/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "not-an-email", password: "demo12345", displayName: "New User" }),
+    });
+    await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "wrong-password" }),
+    });
+
+    const buckets = loadStore().rateLimits ?? [];
+    assert.equal(buckets.some((entry) => entry.id === "expired"), false);
+    assert.equal(buckets.length, 2);
+  } finally {
+    restoreEnv("TASKLOOM_RATE_LIMIT_MAX_BUCKETS", previousMaxBuckets);
   }
 });
 
@@ -556,12 +649,15 @@ test("admins can invite an existing user and that user can accept", async () => 
 });
 
 test("invitation create, accept, and resend routes are rate limited", async () => {
-  resetStoreForTests();
-  resetAppRouteSecurityForTests();
-  const app = createTestApp();
-  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
-  const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
-  setAlphaRole("admin");
+  const previousTrustProxy = process.env.TASKLOOM_TRUST_PROXY;
+  try {
+    process.env.TASKLOOM_TRUST_PROXY = "true";
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
+    setAlphaRole("admin");
 
   for (let index = 0; index < 20; index += 1) {
     const response = await app.request("/api/app/invitations", {
@@ -609,7 +705,10 @@ test("invitation create, accept, and resend routes are rate limited", async () =
     method: "POST",
     headers: { ...authHeaders(beta.cookieValue), "x-forwarded-for": "203.0.113.23" },
   });
-  assert.equal(acceptLimited.status, 429);
+    assert.equal(acceptLimited.status, 429);
+  } finally {
+    restoreEnv("TASKLOOM_TRUST_PROXY", previousTrustProxy);
+  }
 });
 
 test("admins can resend invitations by rotating token and expiry", async () => {
@@ -872,3 +971,8 @@ test("member role updates and removals protect owner-only operations", async () 
   assert.equal(removed.status, 200);
   assert.equal(loadStore().memberships.some((entry) => entry.workspaceId === "alpha" && entry.userId === "user_beta"), false);
 });
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
