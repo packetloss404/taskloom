@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, CheckCircle2, Clock, Loader2, Timer, X } from "lucide-react";
+import { Activity, CheckCircle2, ChevronDown, ChevronRight, Clock, Loader2, Timer, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import RunTelemetry from "@/components/RunTelemetry";
+import RunTranscript from "@/components/RunTranscript";
+import { triggerLabel, triggerToneClass } from "@/lib/agent-runtime";
 import type { ActivityRecord, AgentRecord, AgentRunRecord, AgentRunStatus } from "@/lib/types";
 
 const STATUS_TONE: Record<AgentRunStatus, "good" | "danger" | "warn" | "muted"> = {
@@ -22,6 +24,7 @@ export default function RunsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | AgentRunStatus>("all");
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.listAgentRuns(), api.listActivity(), api.listAgents()])
@@ -106,36 +109,70 @@ export default function RunsPage() {
             </div>
             {filteredRuns.length === 0 ? <Empty text={runs.length === 0 ? "No agent runs recorded." : "No runs match this filter."} /> : (
               <div className="space-y-3">
-                {filteredRuns.map((run) => (
-                  <button
-                    key={run.id}
-                    type="button"
-                    onClick={() => setSelectedRunId(run.id)}
-                    className={cn(
-                      "block w-full rounded-2xl border p-4 text-left transition-colors",
-                      selectedRunId === run.id
-                        ? "border-ink-600 bg-ink-850/60"
-                        : "border-ink-800/80 bg-ink-900/45 hover:border-ink-700 hover:bg-ink-900/70",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-ink-100">{run.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-500">
-                          <span>{relative(run.createdAt)}</span>
-                          {durationLabel(run) && (
-                            <span className="inline-flex items-center gap-1">
-                              <Timer className="h-3 w-3" />
-                              {durationLabel(run)}
+                {filteredRuns.map((run) => {
+                  const expanded = expandedRun === run.id;
+                  const stepCount = run.transcript?.length ?? 0;
+                  return (
+                    <div
+                      key={run.id}
+                      className={cn(
+                        "rounded-2xl border transition-colors",
+                        selectedRunId === run.id
+                          ? "border-ink-600 bg-ink-850/60"
+                          : "border-ink-800/80 bg-ink-900/45 hover:border-ink-700",
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3 p-4">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRunId(run.id)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <div className="truncate text-sm font-medium text-ink-100">{run.title}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-500">
+                            <span>{relative(run.createdAt)}</span>
+                            {durationLabel(run) && (
+                              <span className="inline-flex items-center gap-1">
+                                <Timer className="h-3 w-3" />
+                                {durationLabel(run)}
+                              </span>
+                            )}
+                            {stepCount > 0 && <span>{stepCount} step{stepCount === 1 ? "" : "s"}</span>}
+                            <span className={cn("rounded-full border px-2 py-0.5 capitalize", triggerToneClass(run.triggerKind))}>
+                              {triggerLabel(run.triggerKind)}
                             </span>
+                          </div>
+                          {run.error && <div className="mt-2 truncate text-xs text-rose-300">{run.error}</div>}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <StatusPill status={run.status} />
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setExpandedRun(expanded ? null : run.id);
+                            }}
+                            className="grid h-7 w-7 place-items-center rounded-lg border border-ink-700 text-ink-400 hover:bg-ink-850 hover:text-ink-100"
+                            aria-label={expanded ? "Collapse run details" : "Expand run details"}
+                          >
+                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+                      {expanded && (
+                        <div className="space-y-3 border-t border-ink-800/60 px-4 py-3">
+                          <RunTranscript steps={run.transcript} />
+                          {run.output && (
+                            <div>
+                              <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">Output</div>
+                              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-ink-800 bg-ink-950/60 p-3 text-xs leading-5 text-ink-200">{run.output}</pre>
+                            </div>
                           )}
                         </div>
-                        {run.error && <div className="mt-2 truncate text-xs text-rose-300">{run.error}</div>}
-                      </div>
-                      <StatusPill status={run.status} />
+                      )}
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -318,6 +355,11 @@ function RunDetailDrawer({ run, onClose }: { run: AgentRunRecord; onClose: () =>
         <div className="flex-1 overflow-y-auto px-5 py-5">
           <div className="mb-5 flex items-center gap-2">
             <StatusPill status={run.status} />
+            {run.triggerKind && (
+              <span className={cn("rounded-full border px-2 py-0.5 text-xs capitalize", triggerToneClass(run.triggerKind))}>
+                {triggerLabel(run.triggerKind)}
+              </span>
+            )}
             {run.agentId && <span className="text-xs text-ink-500">Agent <span className="font-mono text-ink-300">{run.agentId.slice(0, 8)}</span></span>}
           </div>
 
@@ -329,6 +371,12 @@ function RunDetailDrawer({ run, onClose }: { run: AgentRunRecord; onClose: () =>
             <DetailRow label="Execution" value={execution == null ? "—" : formatDuration(execution)} />
             <DetailRow label="Total" value={total == null ? "—" : formatDuration(Math.max(0, total))} />
           </DetailGroup>
+
+          {run.transcript && run.transcript.length > 0 && (
+            <DetailGroup title="Transcript">
+              <RunTranscript steps={run.transcript} />
+            </DetailGroup>
+          )}
 
           {run.error && (
             <DetailGroup title="Error" tone="danger">
@@ -388,4 +436,3 @@ function absolute(iso: string | undefined | null) {
 function Empty({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed border-ink-700 p-6 text-center text-sm text-ink-500">{text}</div>;
 }
-

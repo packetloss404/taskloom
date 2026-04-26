@@ -16,8 +16,11 @@ import {
   mutateStore,
   nextIncompleteStep,
   type ActivityRecord,
+  type AgentPlaybookStep,
   type AgentRecord,
+  type AgentRunStep,
   type AgentStatus,
+  type AgentTriggerKind,
   type ProviderKind,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
@@ -401,6 +404,8 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
       model: normalized.model,
       tools: normalized.tools,
       schedule: normalized.schedule,
+      triggerKind: normalized.triggerKind,
+      playbook: normalized.playbook,
       status: normalized.status,
       createdByUserId: context.user.id,
     }, timestamp);
@@ -436,6 +441,8 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
       model: normalized.model,
       tools: normalized.tools,
       schedule: normalized.schedule,
+      triggerKind: normalized.triggerKind,
+      playbook: normalized.playbook,
       status: normalized.status,
     }, timestamp);
 
@@ -474,8 +481,12 @@ export function archiveAgent(context: AuthenticatedContext, agentId: string) {
   });
 }
 
-export function runAgent(context: AuthenticatedContext, agentId: string) {
+export function runAgent(context: AuthenticatedContext, agentId: string, input?: { triggerKind?: string }) {
   const timestamp = now();
+  const requestedTriggerRaw = stringOrUndefined(input?.triggerKind);
+  const triggerKind: AgentTriggerKind = requestedTriggerRaw && (TRIGGER_KINDS as string[]).includes(requestedTriggerRaw)
+    ? (requestedTriggerRaw as AgentTriggerKind)
+    : "manual";
 
   return mutateStore((data) => {
     const agent = findAgent(data, agentId);
@@ -485,11 +496,14 @@ export function runAgent(context: AuthenticatedContext, agentId: string) {
 
     const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
     const providerReady = !provider || provider.status === "connected";
+    const transcript = buildRunTranscript(agent.playbook ?? [], providerReady, timestamp);
     const run = upsertAgentRun(data, {
       workspaceId: context.workspace.id,
       agentId: agent.id,
       title: providerReady ? `${agent.name} run completed` : `${agent.name} run failed`,
       status: providerReady ? "success" : "failed",
+      triggerKind,
+      transcript,
       startedAt: timestamp,
       completedAt: timestamp,
       output: providerReady ? "Run recorded locally. SDK execution adapter can be attached here." : undefined,
@@ -500,10 +514,47 @@ export function runAgent(context: AuthenticatedContext, agentId: string) {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
-    }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status }, timestamp));
+    }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status, triggerKind }, timestamp));
 
     return { run };
   });
+}
+
+function buildRunTranscript(playbook: AgentPlaybookStep[], providerReady: boolean, timestamp: string): AgentRunStep[] {
+  if (playbook.length === 0) {
+    return [
+      {
+        id: generateId(),
+        title: "Execute instructions",
+        status: providerReady ? "success" : "failed",
+        output: providerReady
+          ? "Instructions executed against the configured provider."
+          : "Provider API key is not configured.",
+        durationMs: providerReady ? 420 : 60,
+        startedAt: timestamp,
+      },
+    ];
+  }
+
+  if (!providerReady) {
+    return playbook.map((step, index) => ({
+      id: generateId(),
+      title: step.title,
+      status: index === 0 ? "failed" : "skipped",
+      output: index === 0 ? "Provider API key is not configured." : "Skipped because the previous step failed.",
+      durationMs: index === 0 ? 60 : 0,
+      startedAt: timestamp,
+    }));
+  }
+
+  return playbook.map((step) => ({
+    id: generateId(),
+    title: step.title,
+    status: "success",
+    output: step.instruction ? `Completed: ${step.instruction.slice(0, 160)}` : "Step completed.",
+    durationMs: 200 + Math.floor(Math.random() * 600),
+    startedAt: timestamp,
+  }));
 }
 
 export function listProviders(context: AuthenticatedContext) {
@@ -569,8 +620,12 @@ type AgentInput = {
   model?: string | null;
   tools?: string[] | string;
   schedule?: string | null;
+  triggerKind?: AgentTriggerKind | string | null;
+  playbook?: Array<Partial<AgentPlaybookStep>> | null;
   status?: AgentStatus;
 };
+
+const TRIGGER_KINDS: AgentTriggerKind[] = ["manual", "schedule", "webhook", "email"];
 
 type ProviderInput = {
   name?: string;
@@ -599,7 +654,7 @@ function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord) {
 }
 
 function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status">> &
-  Pick<AgentRecord, "providerId" | "model" | "schedule"> {
+  Pick<AgentRecord, "providerId" | "model" | "schedule" | "triggerKind" | "playbook"> {
   const name = String(input.name ?? "").trim();
   if (name.length < 2) throw httpError(400, "agent name must be at least 2 characters");
   if (name.length > 80) throw httpError(400, "agent name must be 80 characters or fewer");
@@ -616,6 +671,13 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
         .filter(Boolean);
   const status = input.status && ["active", "paused", "archived"].includes(input.status) ? input.status : "active";
 
+  const triggerKindRaw = stringOrUndefined(input.triggerKind);
+  const triggerKind: AgentTriggerKind | undefined = triggerKindRaw && (TRIGGER_KINDS as string[]).includes(triggerKindRaw)
+    ? (triggerKindRaw as AgentTriggerKind)
+    : undefined;
+
+  const playbook = normalizePlaybook(input.playbook ?? undefined);
+
   return {
     name,
     description,
@@ -624,8 +686,27 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
     model: stringOrUndefined(input.model),
     tools: tools.slice(0, 12),
     schedule: stringOrUndefined(input.schedule),
+    triggerKind,
+    playbook,
     status,
   };
+}
+
+function normalizePlaybook(input: Array<Partial<AgentPlaybookStep>> | undefined): AgentPlaybookStep[] | undefined {
+  if (!input) return undefined;
+  if (!Array.isArray(input)) return [];
+  const cleaned: AgentPlaybookStep[] = [];
+  for (const entry of input.slice(0, 20)) {
+    const title = String(entry?.title ?? "").trim();
+    if (!title) continue;
+    const instruction = String(entry?.instruction ?? "").trim();
+    cleaned.push({
+      id: stringOrUndefined(entry?.id) ?? generateId(),
+      title: title.slice(0, 120),
+      instruction: instruction.slice(0, 600),
+    });
+  }
+  return cleaned;
 }
 
 function validateProvider(data: ReturnType<typeof loadStore>, workspaceId: string, providerId?: string) {

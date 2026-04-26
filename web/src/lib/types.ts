@@ -52,9 +52,26 @@ export interface ActivityRecord {
 }
 
 export type AgentStatus = "active" | "paused" | "archived";
+export type AgentTriggerKind = "manual" | "schedule" | "webhook" | "email";
 export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | "custom";
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 export type AgentRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
+export type AgentRunStepStatus = "success" | "failed" | "skipped";
+
+export interface AgentPlaybookStep {
+  id: string;
+  title: string;
+  instruction: string;
+}
+
+export interface AgentRunStep {
+  id: string;
+  title: string;
+  status: AgentRunStepStatus;
+  output: string;
+  durationMs: number;
+  startedAt: string;
+}
 
 export interface ProviderRecord {
   id: string;
@@ -80,6 +97,8 @@ export interface AgentRecord {
   model?: string;
   tools: string[];
   schedule?: string;
+  triggerKind?: AgentTriggerKind;
+  playbook?: AgentPlaybookStep[];
   status: AgentStatus;
   createdByUserId: string;
   createdAt: string;
@@ -93,6 +112,8 @@ export interface AgentRunRecord {
   agentId?: string;
   title: string;
   status: AgentRunStatus;
+  triggerKind?: AgentTriggerKind;
+  transcript?: AgentRunStep[];
   startedAt?: string;
   completedAt?: string;
   output?: string;
@@ -109,6 +130,8 @@ export type SaveAgentInput = {
   model?: string;
   tools?: string[];
   schedule?: string;
+  triggerKind?: AgentTriggerKind;
+  playbook?: AgentPlaybookStep[];
   status?: AgentStatus;
 };
 

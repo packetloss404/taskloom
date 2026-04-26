@@ -92,7 +92,8 @@ export const api = {
   updateAgent: (id: string, body: Partial<SaveAgentInput>) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.agent),
   archiveAgent: (id: string) => j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "DELETE" }).then((payload) => payload.agent),
-  runAgent: (id: string) => j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST" }).then((payload) => payload.run),
+  runAgent: (id: string, body?: { triggerKind?: string }) =>
+    j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST", body: JSON.stringify(body ?? {}) }).then((payload) => payload.run),
   listProviders: () => j<{ providers: ProviderRecord[] }>("/api/app/providers").then((payload) => payload.providers),
   createProvider: (body: SaveProviderInput) =>
     j<{ provider: ProviderRecord }>("/api/app/providers", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.provider),
