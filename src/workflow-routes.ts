@@ -1,5 +1,10 @@
 import { Hono, type Context } from "hono";
 import { requireAuthenticatedContext } from "./taskloom-services.js";
+import {
+  applyWorkflowTemplate,
+  generateAndApplyWorkflowDraft,
+  listWorkflowTemplates,
+} from "./workflow-prompt-service.js";
 
 type AuthenticatedContext = ReturnType<typeof requireAuthenticatedContext>;
 type WorkflowServiceFunction = (context: AuthenticatedContext, input?: unknown) => unknown;
@@ -9,6 +14,10 @@ const workflowServiceFunctions = {
   getOverview: ["getWorkflowOverview", "getOverview"],
   getBrief: ["getWorkflowBrief", "readWorkspaceBrief", "getBrief"],
   saveBrief: ["saveWorkflowBrief", "updateWorkspaceBrief", "updateWorkflowBrief", "upsertWorkflowBrief"],
+  listBriefVersions: ["listWorkspaceBriefHistory", "listBriefVersions"],
+  restoreBriefVersion: ["restoreWorkspaceBriefVersion", "restoreBriefVersion"],
+  listBriefTemplates: ["listWorkspaceBriefTemplates", "listBriefTemplates"],
+  applyBriefTemplate: ["applyWorkspaceBriefTemplate", "applyBriefTemplate"],
   getRequirements: ["getWorkflowRequirements", "listRequirements", "getRequirements"],
   saveRequirements: ["saveWorkflowRequirements", "replaceRequirements", "updateWorkflowRequirements", "upsertWorkflowRequirements"],
   listPlanItems: ["listWorkflowPlanItems", "listPlanItems", "getWorkflowPlanItems"],
@@ -40,6 +49,16 @@ workflowRoutes.get("/", (c) => runWorkflowOperation(c, "getOverview"));
 workflowRoutes.get("/brief", (c) => runWorkflowOperation(c, "getBrief"));
 workflowRoutes.put("/brief", (c) => runWorkflowOperation(c, "saveBrief", readJsonBody));
 
+workflowRoutes.get("/brief/templates", (c) => runWorkflowOperation(c, "listBriefTemplates"));
+workflowRoutes.post("/brief/templates/:templateId/apply", (c) =>
+  runWorkflowOperation(c, "applyBriefTemplate", readJsonBody, ["templateId"]),
+);
+
+workflowRoutes.get("/brief/versions", (c) => runWorkflowOperation(c, "listBriefVersions"));
+workflowRoutes.post("/brief/versions/:versionId/restore", (c) =>
+  runWorkflowOperation(c, "restoreBriefVersion", readJsonBody, ["versionId"]),
+);
+
 workflowRoutes.get("/requirements", (c) => runWorkflowOperation(c, "getRequirements"));
 workflowRoutes.put("/requirements", (c) => runWorkflowOperation(c, "saveRequirements", readJsonBody));
 
@@ -69,6 +88,39 @@ workflowRoutes.patch("/validation-evidence/:evidenceId", (c) =>
 workflowRoutes.get("/release-confirmation", (c) => runWorkflowOperation(c, "getReleaseConfirmation"));
 workflowRoutes.put("/release-confirmation", (c) => runWorkflowOperation(c, "confirmRelease", readJsonBody));
 workflowRoutes.post("/release-confirmation", (c) => runWorkflowOperation(c, "confirmRelease", readJsonBody));
+
+workflowRoutes.get("/templates", (c) => {
+  try {
+    requireAuthenticatedContext(c);
+    return c.json({ templates: listWorkflowTemplates() });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+workflowRoutes.post("/templates/:templateId/apply", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    const result = await applyWorkflowTemplate(context, c.req.param("templateId"));
+    return c.json(result);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+workflowRoutes.post("/generate-from-prompt", async (c) => {
+  try {
+    const context = requireAuthenticatedContext(c);
+    const body = (await readJsonBody(c)) as { prompt?: string; apply?: boolean } | undefined;
+    const result = await generateAndApplyWorkflowDraft(context, {
+      prompt: body?.prompt ?? "",
+      apply: Boolean(body?.apply),
+    });
+    return c.json(result);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
 
 export default workflowRoutes;
 

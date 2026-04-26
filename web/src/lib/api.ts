@@ -3,14 +3,18 @@ import type {
   ActivityRecord,
   AgentRecord,
   AgentRunRecord,
+  AgentTemplate,
   ActivationDetailPayload,
   BootstrapPayload,
   ConfirmWorkflowReleaseInput,
   ProviderRecord,
   PublicDashboardPayload,
+  ReleaseHistoryPayload,
   SaveAgentInput,
   SaveProviderInput,
   SaveWorkflowBlockerInput,
+  SaveWorkspaceEnvVarInput,
+  WorkspaceEnvVarRecord,
   SaveWorkflowBriefInput,
   SaveWorkflowPlanItemInput,
   SaveWorkflowQuestionInput,
@@ -19,12 +23,20 @@ import type {
   Session,
   WorkflowBlocker,
   WorkflowBrief,
+  WorkflowBriefTemplate,
+  WorkflowBriefVersion,
+  WorkflowDraftResult,
   WorkflowPlanItem,
   WorkflowQuestion,
   WorkflowReleaseConfirmation,
   WorkflowRequirement,
+  WorkflowTemplate,
+  WorkflowTemplateApplyResult,
   WorkflowValidationEvidence,
 } from "@/lib/types";
+import { pushExternalToast } from "@/context/ToastContext";
+
+let lastAuthToastAt = 0;
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -39,6 +51,23 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const error = new Error(typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`) as Error & { status?: number };
     error.status = response.status;
+    if (response.status === 401 && !url.includes("/api/auth/")) {
+      const now = Date.now();
+      if (now - lastAuthToastAt > 4000) {
+        lastAuthToastAt = now;
+        pushExternalToast({
+          tone: "warn",
+          title: "Your session expired",
+          description: "Please sign in again to continue.",
+        });
+      }
+    } else if (response.status >= 500) {
+      pushExternalToast({
+        tone: "error",
+        title: "Server error",
+        description: error.message,
+      });
+    }
     throw error;
   }
   return payload as T;
@@ -67,15 +96,36 @@ export const api = {
   updateAgent: (id: string, body: Partial<SaveAgentInput>) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.agent),
   archiveAgent: (id: string) => j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "DELETE" }).then((payload) => payload.agent),
-  runAgent: (id: string) => j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST" }).then((payload) => payload.run),
+  runAgent: (id: string, body?: { triggerKind?: string; inputs?: Record<string, string | number | boolean> }) =>
+    j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST", body: JSON.stringify(body ?? {}) }).then((payload) => payload.run),
+  listAgentTemplates: () => j<{ templates: AgentTemplate[] }>("/api/app/agent-templates").then((payload) => payload.templates),
+  createAgentFromTemplate: (templateId: string, body: { name?: string; providerId?: string; model?: string } = {}) =>
+    j<{ agent: AgentRecord }>(`/api/app/agents/from-template/${templateId}`, { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
   listProviders: () => j<{ providers: ProviderRecord[] }>("/api/app/providers").then((payload) => payload.providers),
   createProvider: (body: SaveProviderInput) =>
     j<{ provider: ProviderRecord }>("/api/app/providers", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.provider),
   updateProvider: (id: string, body: Partial<SaveProviderInput>) =>
     j<{ provider: ProviderRecord }>(`/api/app/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.provider),
   listAgentRuns: () => j<{ runs: AgentRunRecord[] }>("/api/app/agent-runs").then((payload) => payload.runs),
+  cancelAgentRun: (runId: string) =>
+    j<{ run: AgentRunRecord }>(`/api/app/agent-runs/${runId}/cancel`, { method: "POST" }).then((payload) => payload.run),
+  retryAgentRun: (runId: string) =>
+    j<{ run: AgentRunRecord }>(`/api/app/agent-runs/${runId}/retry`, { method: "POST" }).then((payload) => payload.run),
+  listEnvVars: () => j<{ envVars: WorkspaceEnvVarRecord[] }>("/api/app/env-vars").then((payload) => payload.envVars),
+  createEnvVar: (body: SaveWorkspaceEnvVarInput) =>
+    j<{ envVar: WorkspaceEnvVarRecord }>("/api/app/env-vars", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.envVar),
+  updateEnvVar: (id: string, body: Partial<SaveWorkspaceEnvVarInput>) =>
+    j<{ envVar: WorkspaceEnvVarRecord }>(`/api/app/env-vars/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.envVar),
+  deleteEnvVar: (id: string) => j<{ ok: boolean }>(`/api/app/env-vars/${id}`, { method: "DELETE" }),
+  getReleaseHistory: () => j<ReleaseHistoryPayload>("/api/app/release-history"),
   getWorkflowBrief: () => j<WorkflowBrief>("/api/app/workflow/brief"),
   saveWorkflowBrief: (body: SaveWorkflowBriefInput) => j<WorkflowBrief>("/api/app/workflow/brief", { method: "PUT", body: JSON.stringify(body) }),
+  listWorkflowBriefTemplates: () => j<WorkflowBriefTemplate[]>("/api/app/workflow/brief/templates"),
+  applyWorkflowBriefTemplate: (templateId: string) =>
+    j<WorkflowBrief>(`/api/app/workflow/brief/templates/${templateId}/apply`, { method: "POST", body: "{}" }),
+  listWorkflowBriefVersions: () => j<WorkflowBriefVersion[]>("/api/app/workflow/brief/versions"),
+  restoreWorkflowBriefVersion: (versionId: string) =>
+    j<WorkflowBrief>(`/api/app/workflow/brief/versions/${versionId}/restore`, { method: "POST", body: "{}" }),
   listWorkflowRequirements: () => j<WorkflowRequirement[]>("/api/app/workflow/requirements"),
   saveWorkflowRequirements: (requirements: SaveWorkflowRequirementInput[]) =>
     j<WorkflowRequirement[]>("/api/app/workflow/requirements", { method: "PUT", body: JSON.stringify(requirements) }),
@@ -99,4 +149,10 @@ export const api = {
   getWorkflowReleaseConfirmation: () => j<WorkflowReleaseConfirmation>("/api/app/workflow/release-confirmation"),
   confirmWorkflowRelease: (body: ConfirmWorkflowReleaseInput) =>
     j<WorkflowReleaseConfirmation>("/api/app/workflow/release-confirmation", { method: "POST", body: JSON.stringify(body) }),
+  listWorkflowTemplates: () =>
+    j<{ templates: WorkflowTemplate[] }>("/api/app/workflow/templates").then((payload) => payload.templates),
+  applyWorkflowTemplate: (templateId: string) =>
+    j<WorkflowTemplateApplyResult>(`/api/app/workflow/templates/${templateId}/apply`, { method: "POST" }),
+  generateWorkflowFromPrompt: (body: { prompt: string; apply?: boolean }) =>
+    j<WorkflowDraftResult>("/api/app/workflow/generate-from-prompt", { method: "POST", body: JSON.stringify(body) }),
 };

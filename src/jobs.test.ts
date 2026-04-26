@@ -67,6 +67,7 @@ function makeStore(): TaskloomData {
     ],
     memberships: [],
     workspaceBriefs: [],
+    workspaceBriefVersions: [],
     requirements: [],
     implementationPlanItems: [],
     workflowConcerns: [],
@@ -91,6 +92,7 @@ function makeStore(): TaskloomData {
     agents: [],
     providers: [],
     agentRuns: [],
+    workspaceEnvVars: [],
     activationMilestones: {},
     activationReadModels: {},
   };

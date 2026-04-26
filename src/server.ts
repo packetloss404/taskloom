@@ -5,9 +5,13 @@ import { Hono, type Context } from "hono";
 import {
   applySessionCookie,
   archiveAgent,
+  cancelAgentRun,
   completeOnboardingStep,
   createAgent,
+  createAgentFromTemplate,
   createProvider,
+  createWorkspaceEnvVar,
+  deleteWorkspaceEnvVarById,
   getActivationDetail,
   getAgent,
   getOnboarding,
@@ -17,19 +21,24 @@ import {
   getSessionPayload,
   listPublicActivationSummaries,
   listAgentRuns,
+  listAgentTemplates,
   listAgents,
   listProviders,
+  listReleaseHistory,
   listWorkspaceActivities,
+  listWorkspaceEnvVarsForUser,
   login,
   logout,
   register,
   requireAuthenticatedContext,
   restoreSession,
+  retryAgentRun,
   runAgent,
   updateAgent,
   updateProvider,
   updateProfile,
   updateWorkspace,
+  updateWorkspaceEnvVar,
 } from "./taskloom-services.js";
 import { workflowRoutes } from "./workflow-routes.js";
 
@@ -216,9 +225,36 @@ app.delete("/api/app/agents/:agentId", (c) => {
   }
 });
 
-app.post("/api/app/agents/:agentId/runs", (c) => {
+app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
-    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId")), 201);
+    const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
+    const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
+    return c.json(runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), {
+      triggerKind: body?.triggerKind,
+      inputs,
+    }), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/agent-templates", (c) => {
+  try {
+    requireAuthenticatedContext(c);
+    return c.json(listAgentTemplates());
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agents/from-template/:templateId", async (c) => {
+  try {
+    const body = await readJsonBody(c);
+    return c.json(createAgentFromTemplate(requireAuthenticatedContext(c), c.req.param("templateId"), {
+      name: typeof body.name === "string" ? body.name : undefined,
+      providerId: typeof body.providerId === "string" ? body.providerId : undefined,
+      model: typeof body.model === "string" ? body.model : undefined,
+    }), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -251,6 +287,62 @@ app.patch("/api/app/providers/:providerId", async (c) => {
 app.get("/api/app/agent-runs", (c) => {
   try {
     return c.json(listAgentRuns(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agent-runs/:runId/cancel", (c) => {
+  try {
+    return c.json(cancelAgentRun(requireAuthenticatedContext(c), c.req.param("runId")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agent-runs/:runId/retry", (c) => {
+  try {
+    return c.json(retryAgentRun(requireAuthenticatedContext(c), c.req.param("runId")), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/env-vars", (c) => {
+  try {
+    return c.json(listWorkspaceEnvVarsForUser(requireAuthenticatedContext(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/env-vars", async (c) => {
+  try {
+    return c.json(createWorkspaceEnvVar(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.patch("/api/app/env-vars/:envVarId", async (c) => {
+  try {
+    return c.json(updateWorkspaceEnvVar(requireAuthenticatedContext(c), c.req.param("envVarId"), await readJsonBody(c)));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.delete("/api/app/env-vars/:envVarId", (c) => {
+  try {
+    return c.json(deleteWorkspaceEnvVarById(requireAuthenticatedContext(c), c.req.param("envVarId")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/release-history", (c) => {
+  try {
+    return c.json(listReleaseHistory(requireAuthenticatedContext(c)));
   } catch (error) {
     return errorResponse(c, error);
   }

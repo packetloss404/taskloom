@@ -1,6 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getPrivateBootstrap, login, register, updateWorkspace, completeOnboardingStep } from "./taskloom-services";
+import {
+  cancelAgentRun,
+  completeOnboardingStep,
+  createAgent,
+  createWorkspaceEnvVar,
+  deleteWorkspaceEnvVarById,
+  getAgent,
+  getPrivateBootstrap,
+  listAgentRuns,
+  listReleaseHistory,
+  listWorkspaceEnvVarsForUser,
+  login,
+  register,
+  retryAgentRun,
+  runAgent,
+  updateAgent,
+  updateWorkspace,
+  updateWorkspaceEnvVar,
+} from "./taskloom-services";
 import { loadStore, resetStoreForTests } from "./taskloom-store";
 
 test("register creates a new user and workspace", async () => {
@@ -26,6 +44,127 @@ test("login rejects invalid credentials", () => {
     () => login({ email: "alpha@taskloom.local", password: "wrongpass" }),
     /invalid email or password/,
   );
+});
+
+test("agent playbook is persisted and runs produce a step transcript", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Playbook Tester",
+    description: "Walks through ordered steps.",
+    instructions: "Run the playbook end to end and report results.",
+    triggerKind: "schedule",
+    schedule: "*/30 * * * *",
+    playbook: [
+      { id: "step-1", title: "Read latest signals", instruction: "Pull recent activity events." },
+      { title: "Decide next action", instruction: "Pick the highest-priority follow-up." },
+      { title: "", instruction: "Should be dropped because title is blank." },
+    ],
+  });
+
+  const agent = created.agent;
+  assert.equal(agent.triggerKind, "schedule");
+  assert.equal(agent.schedule, "*/30 * * * *");
+  assert.ok(Array.isArray(agent.playbook));
+  assert.equal(agent.playbook?.length, 2);
+  assert.equal(agent.playbook?.[0].title, "Read latest signals");
+  assert.ok(agent.playbook?.[1].id, "second step should receive a generated id");
+
+  const runResult = runAgent(auth.context, agent.id, { triggerKind: "manual" });
+  assert.equal(runResult.run.triggerKind, "manual");
+  assert.equal(runResult.run.status, "success");
+  assert.ok(Array.isArray(runResult.run.transcript));
+  assert.equal(runResult.run.transcript?.length, 2);
+  assert.equal(runResult.run.transcript?.[0].title, "Read latest signals");
+  assert.equal(runResult.run.transcript?.[0].status, "success");
+
+  const detail = getAgent(auth.context, agent.id);
+  assert.equal(detail.runs[0].id, runResult.run.id);
+  assert.equal(detail.agent.playbook?.length, 2);
+
+  const updated = updateAgent(auth.context, agent.id, {
+    triggerKind: "webhook",
+    playbook: [{ id: "step-1", title: "Read latest signals", instruction: "Updated instruction." }],
+  });
+  assert.equal(updated.agent.triggerKind, "webhook");
+  assert.equal(updated.agent.playbook?.length, 1);
+  assert.equal(updated.agent.playbook?.[0].instruction, "Updated instruction.");
+});
+
+test("env vars: create masks secrets, prevents duplicate keys, supports update and delete", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createWorkspaceEnvVar(auth.context, {
+    key: "test_token",
+    value: "super-secret-value-1234",
+    scope: "runtime",
+    secret: true,
+    description: "Token for tests",
+  });
+
+  assert.equal(created.envVar.key, "TEST_TOKEN");
+  assert.notEqual(created.envVar.value, "super-secret-value-1234");
+  assert.match(created.envVar.value, /1234$/);
+  assert.equal(created.envVar.valueLength, "super-secret-value-1234".length);
+
+  assert.throws(
+    () => createWorkspaceEnvVar(auth.context, { key: "TEST_TOKEN", value: "other" }),
+    /already exists/,
+  );
+
+  assert.throws(
+    () => createWorkspaceEnvVar(auth.context, { key: "1bad", value: "x" }),
+    /key must start with a letter/,
+  );
+
+  const updated = updateWorkspaceEnvVar(auth.context, created.envVar.id, { secret: false });
+  assert.equal(updated.envVar.secret, false);
+  assert.equal(updated.envVar.value, "super-secret-value-1234");
+
+  const list = listWorkspaceEnvVarsForUser(auth.context);
+  assert.ok(list.envVars.some((entry) => entry.id === created.envVar.id));
+
+  const deleted = deleteWorkspaceEnvVarById(auth.context, created.envVar.id);
+  assert.equal(deleted.ok, true);
+  const after = listWorkspaceEnvVarsForUser(auth.context);
+  assert.equal(after.envVars.find((entry) => entry.id === created.envVar.id), undefined);
+});
+
+test("agent runs: list adds duration and capability flags; cancel and retry behave correctly", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "beta@taskloom.local", password: "demo12345" });
+
+  const list = listAgentRuns(auth.context);
+  const failed = list.runs.find((entry) => entry.status === "failed");
+  assert.ok(failed, "expected a failed seed run");
+  assert.equal(typeof failed.durationMs, "number");
+  assert.equal(failed.canRetry, true);
+  assert.equal(failed.canCancel, false);
+
+  assert.throws(
+    () => cancelAgentRun(auth.context, failed.id),
+    /only queued or running runs can be canceled/,
+  );
+
+  const retried = retryAgentRun(auth.context, failed.id);
+  assert.ok(retried.run.id !== failed.id);
+});
+
+test("release history exposes preflight and prior confirmations", async () => {
+  resetStoreForTests();
+  const gamma = login({ email: "gamma@taskloom.local", password: "demo12345" });
+  const history = listReleaseHistory(gamma.context);
+  assert.ok(history.releases.length > 0);
+  assert.equal(history.preflight.failedEvidence, 0);
+  assert.equal(history.preflight.openBlockers, 0);
+  assert.equal(history.preflight.ready, true);
+
+  const beta = login({ email: "beta@taskloom.local", password: "demo12345" });
+  const betaHistory = listReleaseHistory(beta.context);
+  assert.equal(betaHistory.preflight.ready, false);
+  assert.ok(betaHistory.preflight.openBlockers > 0 || betaHistory.preflight.failedEvidence > 0);
 });
 
 test("workspace update and onboarding completion affect private bootstrap", async () => {

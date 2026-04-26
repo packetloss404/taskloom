@@ -1,11 +1,14 @@
 import { generateId, now } from "./auth-utils";
 import {
+  appendWorkspaceBriefVersion,
   findWorkspaceBrief,
+  findWorkspaceBriefVersion,
   listImplementationPlanItemsForWorkspace,
   listReleaseConfirmationsForWorkspace,
   listRequirementsForWorkspace,
   listValidationEvidenceForWorkspace,
   listWorkflowConcernsForWorkspace,
+  listWorkspaceBriefVersions,
   loadStore,
   mutateStore,
   nextIncompleteStep,
@@ -29,6 +32,7 @@ import {
   type WorkflowConcernSeverity,
   type WorkflowConcernStatus,
   type WorkspaceBriefRecord,
+  type WorkspaceBriefVersionRecord,
   type WorkspaceRecord,
 } from "./taskloom-store";
 
@@ -106,6 +110,92 @@ export type UpdateReleaseConfirmationInput = {
   validationEvidenceIds?: string[];
 };
 
+export interface WorkspaceBriefTemplate {
+  id: string;
+  name: string;
+  description: string;
+  brief: UpdateWorkspaceBriefInput;
+}
+
+export const WORKSPACE_BRIEF_TEMPLATES: WorkspaceBriefTemplate[] = [
+  {
+    id: "saas-activation",
+    name: "SaaS activation rollout",
+    description: "Capture an activation rollout for a SaaS product going through onboarding.",
+    brief: {
+      summary: "Roll out a guided activation experience that lifts the percentage of new accounts reaching first value within their first session.",
+      problemStatement: "New accounts complete sign-up but stall before reaching the activation milestone, leaving the team blind to where users drop off.",
+      desiredOutcome: "Operators can see exactly which onboarding steps are working and intervene the moment a workspace stalls.",
+      audience: "Activation lead, customer success manager, product manager",
+      constraints: "First release must work without changes to the existing sign-up form and reuse the in-product help widget.",
+      goals: [
+        "Surface stalled accounts within one business day",
+        "Provide a single owner per stalled account",
+        "Trigger a follow-up nudge when a workspace stays idle for 48 hours",
+      ],
+      targetCustomers: ["Self-serve trial accounts", "Pilot customers in the first 30 days"],
+      successMetrics: [
+        "60% of new workspaces reach activation within 7 days",
+        "Stalled workspaces have an owner assigned within 24 hours",
+        "Activation playbook is documented and adopted",
+      ],
+    },
+  },
+  {
+    id: "internal-workflow",
+    name: "Internal workflow automation",
+    description: "Frame an internal automation that consolidates work currently spread across a few teams.",
+    brief: {
+      summary: "Automate the operational handoffs that slow down our weekly release cycle and recover team focus time.",
+      problemStatement: "Cross-team handoffs rely on chat threads and shared docs, which causes work to stall and forces leads to chase status.",
+      desiredOutcome: "Each handoff has a clear owner, a status, and an audit trail without leaving the team's existing tools.",
+      audience: "Engineering lead, operations partner, release manager",
+      constraints: "Automation should fit inside the current release window and avoid replacing existing tooling outright.",
+      goals: [
+        "Capture every handoff as a tracked task",
+        "Notify the next owner automatically",
+        "Surface stalled handoffs to the release manager",
+      ],
+      targetCustomers: ["Release managers", "Engineering leads", "Operations partners"],
+      successMetrics: [
+        "Average handoff age drops below one business day",
+        "Release retros stop logging missed handoffs",
+        "Lead status sync time drops to under 15 minutes per week",
+      ],
+    },
+  },
+  {
+    id: "release-readiness",
+    name: "Release readiness checklist",
+    description: "Lock in the validation evidence and launch checklist for an upcoming release.",
+    brief: {
+      summary: "Stand up a release readiness checklist so every shipped change carries the validation evidence the team needs to confirm the release.",
+      problemStatement: "Recent releases shipped without recorded validation evidence, making it hard to audit whether each change passed its checks.",
+      desiredOutcome: "Releases ship only after the checklist is green, and every confirmation links back to the evidence that supports it.",
+      audience: "Release manager, QA partner, product manager",
+      constraints: "Checklist must work with the existing CI pipeline and complete inside the release window.",
+      goals: [
+        "Document the validation evidence required per release type",
+        "Block release confirmation until evidence is attached",
+        "Capture the release confirmation owner for the audit trail",
+      ],
+      targetCustomers: ["Release managers", "Engineering leads", "Customer success owners"],
+      successMetrics: [
+        "100% of releases have linked validation evidence",
+        "Release confirmation has a named owner",
+        "Audit review turnaround drops below one business day",
+      ],
+    },
+  },
+];
+
+export function listWorkspaceBriefTemplates(): WorkspaceBriefTemplate[] {
+  return WORKSPACE_BRIEF_TEMPLATES.map((template) => ({
+    ...template,
+    brief: { ...template.brief },
+  }));
+}
+
 export function getWorkflowOverview(context: WorkflowContext) {
   return {
     brief: readWorkspaceBrief(context),
@@ -125,6 +215,57 @@ export function readWorkspaceBrief(context: WorkflowContext): WorkspaceBriefReco
 export function updateWorkspaceBrief(
   context: WorkflowContext,
   input: UpdateWorkspaceBriefInput,
+): WorkspaceBriefRecord {
+  return saveWorkspaceBriefInternal(context, input, { source: "manual" });
+}
+
+export function applyWorkspaceBriefTemplate(
+  context: WorkflowContext,
+  input: { templateId?: string },
+): WorkspaceBriefRecord {
+  const templateId = input.templateId?.trim();
+  if (!templateId) throw httpError(400, "template id is required");
+  const template = WORKSPACE_BRIEF_TEMPLATES.find((entry) => entry.id === templateId);
+  if (!template) throw httpError(404, "brief template not found");
+  return saveWorkspaceBriefInternal(context, template.brief, {
+    source: "template",
+    sourceLabel: template.name,
+  });
+}
+
+export function listWorkspaceBriefHistory(context: WorkflowContext): WorkspaceBriefVersionRecord[] {
+  return listWorkspaceBriefVersions(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+}
+
+export function restoreWorkspaceBriefVersion(
+  context: WorkflowContext,
+  input: { versionId?: string },
+): WorkspaceBriefRecord {
+  const versionId = input.versionId?.trim();
+  if (!versionId) throw httpError(400, "brief version id is required");
+  const data = loadCheckedStore(context.workspace.id);
+  const version = findWorkspaceBriefVersion(data, context.workspace.id, versionId);
+  if (!version) throw httpError(404, "brief version not found");
+  return saveWorkspaceBriefInternal(
+    context,
+    {
+      summary: version.summary,
+      goals: version.goals,
+      audience: version.audience,
+      constraints: version.constraints,
+      problemStatement: version.problemStatement,
+      targetCustomers: version.targetCustomers,
+      desiredOutcome: version.desiredOutcome,
+      successMetrics: version.successMetrics,
+    },
+    { source: "restore", sourceLabel: `Restored v${version.versionNumber}` },
+  );
+}
+
+function saveWorkspaceBriefInternal(
+  context: WorkflowContext,
+  input: UpdateWorkspaceBriefInput,
+  options: { source: WorkspaceBriefVersionRecord["source"]; sourceLabel?: string },
 ): WorkspaceBriefRecord {
   const timestamp = now();
   const summary = requireText(input.summary, "brief summary", 2);
@@ -155,6 +296,26 @@ export function updateWorkspaceBrief(
       timestamp,
     );
 
+    appendWorkspaceBriefVersion(
+      data,
+      {
+        workspaceId: workspace.id,
+        summary,
+        goals,
+        audience,
+        constraints,
+        problemStatement,
+        targetCustomers,
+        desiredOutcome,
+        successMetrics,
+        source: options.source,
+        sourceLabel: options.sourceLabel,
+        createdByUserId: context.user.id,
+        createdByDisplayName: context.user.displayName,
+      },
+      timestamp,
+    );
+
     workspace.automationGoal = summary;
     workspace.updatedAt = timestamp;
     const facts = ensureActivationFacts(data, workspace.id, timestamp);
@@ -165,6 +326,8 @@ export function updateWorkspaceBrief(
       goalCount: goals.length,
       targetCustomerCount: targetCustomers.length,
       successMetricCount: successMetrics.length,
+      source: options.source,
+      sourceLabel: options.sourceLabel,
     }, timestamp);
     return copyRecord(brief);
   });

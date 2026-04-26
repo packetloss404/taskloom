@@ -52,9 +52,56 @@ export interface ActivityRecord {
 }
 
 export type AgentStatus = "active" | "paused" | "archived";
+export type AgentTriggerKind = "manual" | "schedule" | "webhook" | "email";
 export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | "custom";
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 export type AgentRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
+export type AgentRunStepStatus = "success" | "failed" | "skipped";
+export type AgentInputFieldType = "string" | "number" | "boolean" | "url" | "enum";
+export type AgentRunLogLevel = "info" | "warn" | "error";
+
+export interface AgentPlaybookStep {
+  id: string;
+  title: string;
+  instruction: string;
+}
+
+export interface AgentRunStep {
+  id: string;
+  title: string;
+  status: AgentRunStepStatus;
+  output: string;
+  durationMs: number;
+  startedAt: string;
+}
+
+export interface AgentInputField {
+  key: string;
+  label: string;
+  type: AgentInputFieldType;
+  required: boolean;
+  description?: string;
+  options?: string[];
+  defaultValue?: string;
+}
+
+export interface AgentRunLogEntry {
+  at: string;
+  level: AgentRunLogLevel;
+  message: string;
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  category: "support" | "operations" | "release" | "research" | "comms";
+  summary: string;
+  description: string;
+  instructions: string;
+  tools: string[];
+  schedule?: string;
+  inputSchema: AgentInputField[];
+}
 
 export interface ProviderRecord {
   id: string;
@@ -80,8 +127,12 @@ export interface AgentRecord {
   model?: string;
   tools: string[];
   schedule?: string;
+  triggerKind?: AgentTriggerKind;
+  playbook?: AgentPlaybookStep[];
   status: AgentStatus;
   createdByUserId: string;
+  templateId?: string;
+  inputSchema?: AgentInputField[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -93,12 +144,71 @@ export interface AgentRunRecord {
   agentId?: string;
   title: string;
   status: AgentRunStatus;
+  triggerKind?: AgentTriggerKind;
+  transcript?: AgentRunStep[];
   startedAt?: string;
   completedAt?: string;
+  inputs?: Record<string, string | number | boolean>;
   output?: string;
   error?: string;
+  logs?: AgentRunLogEntry[];
   createdAt: string;
   updatedAt: string;
+  durationMs?: number | null;
+  canCancel?: boolean;
+  canRetry?: boolean;
+}
+
+export type WorkspaceEnvVarScope = "all" | "build" | "runtime";
+
+export interface WorkspaceEnvVarRecord {
+  id: string;
+  workspaceId: string;
+  key: string;
+  value: string;
+  scope: WorkspaceEnvVarScope;
+  secret: boolean;
+  description?: string;
+  createdByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+  valuePreview?: string | null;
+  valueLength?: number;
+}
+
+export type SaveWorkspaceEnvVarInput = {
+  key: string;
+  value: string;
+  scope?: WorkspaceEnvVarScope;
+  secret?: boolean;
+  description?: string;
+};
+
+export interface ReleaseHistoryEntry {
+  id: string;
+  workspaceId: string;
+  versionLabel: string;
+  status: "pending" | "confirmed" | "rolled_back";
+  confirmed: boolean;
+  summary: string;
+  confirmedBy: string;
+  confirmedAt: string | null;
+  validationEvidenceIds: string[];
+  updatedAt: string;
+}
+
+export interface ReleasePreflight {
+  passedEvidence: number;
+  failedEvidence: number;
+  pendingEvidence: number;
+  openBlockers: number;
+  openQuestions: number;
+  ready: boolean;
+}
+
+export interface ReleaseHistoryPayload {
+  releases: ReleaseHistoryEntry[];
+  preflight: ReleasePreflight;
 }
 
 export type SaveAgentInput = {
@@ -109,7 +219,11 @@ export type SaveAgentInput = {
   model?: string;
   tools?: string[];
   schedule?: string;
+  triggerKind?: AgentTriggerKind;
+  playbook?: AgentPlaybookStep[];
   status?: AgentStatus;
+  templateId?: string;
+  inputSchema?: AgentInputField[];
 };
 
 export type SaveProviderInput = {
@@ -143,6 +257,32 @@ export interface WorkflowBrief {
   updatedAt: string;
 }
 
+export interface WorkflowBriefVersion {
+  id: string;
+  workspaceId: string;
+  versionNumber: number;
+  summary: string;
+  goals: string[];
+  audience: string;
+  constraints: string;
+  problemStatement: string;
+  targetCustomers: string[];
+  desiredOutcome: string;
+  successMetrics: string[];
+  source: "manual" | "template" | "restore";
+  sourceLabel?: string;
+  createdByUserId?: string;
+  createdByDisplayName?: string;
+  createdAt: string;
+}
+
+export interface WorkflowBriefTemplate {
+  id: string;
+  name: string;
+  description: string;
+  brief: SaveWorkflowBriefInput;
+}
+
 export interface WorkflowRequirement {
   id: string;
   workspaceId: string;
@@ -164,6 +304,7 @@ export interface WorkflowPlanItem {
   ownerUserId?: string;
   dueDate?: string;
   order: number;
+  requirementIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +346,8 @@ export interface WorkflowValidationEvidence {
   description?: string;
   status: WorkflowValidationStatus;
   source: string;
+  planItemId?: string;
+  requirementIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -294,6 +437,61 @@ export type ConfirmWorkflowReleaseInput = {
   summary?: string;
   confirmedBy?: string;
 };
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  brief: {
+    summary: string;
+    problemStatement: string;
+    desiredOutcome: string;
+    audience: string;
+    constraints: string;
+    targetCustomers: string[];
+    successMetrics: string[];
+    goals: string[];
+  };
+  requirements: Array<{ title: string; detail: string; priority: WorkflowRequirementPriority }>;
+  planItems: Array<{ title: string; description: string }>;
+}
+
+export interface WorkflowTemplateApplyResult {
+  template: WorkflowTemplate;
+  brief: WorkflowBrief;
+  requirements: WorkflowRequirement[];
+  planItems: WorkflowPlanItem[];
+}
+
+export interface WorkflowDraft {
+  prompt: string;
+  brief: {
+    summary: string;
+    problemStatement: string;
+    desiredOutcome: string;
+    targetCustomers: string[];
+    successMetrics: string[];
+    goals: string[];
+    audience: string;
+    constraints: string;
+  };
+  requirements: Array<{
+    title: string;
+    detail: string;
+    priority: WorkflowRequirementPriority;
+    status: "accepted";
+  }>;
+  planItems: Array<{ title: string; description: string; status: "todo" }>;
+}
+
+export interface WorkflowDraftResult {
+  draft: WorkflowDraft;
+  applied: boolean;
+  brief?: WorkflowBrief;
+  requirements?: WorkflowRequirement[];
+  planItems?: WorkflowPlanItem[];
+}
 
 export interface DashboardFilterMetadata {
   stages?: Array<{ value: string; label: string; count: number }>;

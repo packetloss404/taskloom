@@ -6,25 +6,40 @@ import { deriveActivationStatus } from "./activation/service";
 import { buildActivationSummaryCard } from "./activation/view-model";
 import {
   defaultWorkspaceIdForUser,
+  deleteWorkspaceEnvVar,
   findAgent,
   findProvider,
+  findWorkspaceEnvVar,
   listAgentRunsForAgent,
   listAgentRunsForWorkspace,
   listAgentsForWorkspace,
   listProvidersForWorkspace,
+  listReleaseConfirmationsForWorkspace,
+  listWorkspaceEnvVars,
   loadStore,
   mutateStore,
   nextIncompleteStep,
   type ActivityRecord,
+  type AgentInputField,
+  type AgentInputFieldType,
+  type AgentPlaybookStep,
   type AgentRecord,
+  type AgentRunLogEntry,
+  type AgentRunRecord,
+  type AgentRunStep,
   type AgentStatus,
+  type AgentTriggerKind,
   type ProviderKind,
+  type WorkspaceEnvVarRecord,
+  type WorkspaceEnvVarScope,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
   upsertAgent,
   upsertAgentRun,
   upsertProvider,
+  upsertWorkspaceEnvVar,
 } from "./taskloom-store";
+import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
 import {
   buildSessionCookieValue,
   generateId,
@@ -401,7 +416,11 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
       model: normalized.model,
       tools: normalized.tools,
       schedule: normalized.schedule,
+      triggerKind: normalized.triggerKind,
+      playbook: normalized.playbook,
       status: normalized.status,
+      templateId: normalized.templateId,
+      inputSchema: normalized.inputSchema,
       createdByUserId: context.user.id,
     }, timestamp);
 
@@ -436,7 +455,11 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
       model: normalized.model,
       tools: normalized.tools,
       schedule: normalized.schedule,
+      triggerKind: normalized.triggerKind,
+      playbook: normalized.playbook,
       status: normalized.status,
+      templateId: normalized.templateId ?? existing.templateId,
+      inputSchema: normalized.inputSchema,
     }, timestamp);
 
     data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.updated", {
@@ -474,8 +497,17 @@ export function archiveAgent(context: AuthenticatedContext, agentId: string) {
   });
 }
 
-export function runAgent(context: AuthenticatedContext, agentId: string) {
+export function runAgent(
+  context: AuthenticatedContext,
+  agentId: string,
+  input: { triggerKind?: string; inputs?: Record<string, unknown> } = {},
+) {
   const timestamp = now();
+  const requestedTriggerRaw = stringOrUndefined(input?.triggerKind);
+  const triggerKind: AgentTriggerKind = requestedTriggerRaw && (TRIGGER_KINDS as string[]).includes(requestedTriggerRaw)
+    ? (requestedTriggerRaw as AgentTriggerKind)
+    : "manual";
+  const rawInputs: Record<string, unknown> = input?.inputs ?? {};
 
   return mutateStore((data) => {
     const agent = findAgent(data, agentId);
@@ -483,26 +515,115 @@ export function runAgent(context: AuthenticatedContext, agentId: string) {
       throw httpError(404, "agent not found");
     }
 
+    const inputs = validateAgentInputs(agent.inputSchema ?? [], rawInputs);
     const provider = agent.providerId ? findProvider(data, agent.providerId) : null;
     const providerReady = !provider || provider.status === "connected";
+    const transcript = buildRunTranscript(agent.playbook ?? [], providerReady, timestamp);
+
+    const logs: AgentRunLogEntry[] = [
+      { at: timestamp, level: "info", message: `Run started for ${agent.name}.` },
+    ];
+    if (provider) {
+      logs.push({
+        at: timestamp,
+        level: providerReady ? "info" : "warn",
+        message: `Provider ${provider.name} status: ${provider.status}.`,
+      });
+    }
+    for (const field of agent.inputSchema ?? []) {
+      if (field.key in inputs) {
+        logs.push({ at: timestamp, level: "info", message: `Input ${field.key} = ${formatInputValue(inputs[field.key])}` });
+      }
+    }
+    if (providerReady) {
+      logs.push({ at: timestamp, level: "info", message: "Run recorded locally. Attach an execution adapter to perform real work." });
+    } else {
+      logs.push({ at: timestamp, level: "error", message: "Provider API key is not configured." });
+    }
+
+    const output = providerReady ? buildRunOutput(agent.name, inputs) : undefined;
+
     const run = upsertAgentRun(data, {
       workspaceId: context.workspace.id,
       agentId: agent.id,
       title: providerReady ? `${agent.name} run completed` : `${agent.name} run failed`,
       status: providerReady ? "success" : "failed",
+      triggerKind,
+      transcript,
       startedAt: timestamp,
       completedAt: timestamp,
-      output: providerReady ? "Run recorded locally. SDK execution adapter can be attached here." : undefined,
+      inputs: Object.keys(inputs).length ? inputs : undefined,
+      output,
       error: providerReady ? undefined : "Provider API key is not configured.",
+      logs,
     }, timestamp);
 
     data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
-    }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status }, timestamp));
+    }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status, triggerKind }, timestamp));
 
     return { run };
+  });
+}
+
+function buildRunTranscript(playbook: AgentPlaybookStep[], providerReady: boolean, timestamp: string): AgentRunStep[] {
+  if (playbook.length === 0) {
+    return [
+      {
+        id: generateId(),
+        title: "Execute instructions",
+        status: providerReady ? "success" : "failed",
+        output: providerReady
+          ? "Instructions executed against the configured provider."
+          : "Provider API key is not configured.",
+        durationMs: providerReady ? 420 : 60,
+        startedAt: timestamp,
+      },
+    ];
+  }
+
+  if (!providerReady) {
+    return playbook.map((step, index) => ({
+      id: generateId(),
+      title: step.title,
+      status: index === 0 ? "failed" : "skipped",
+      output: index === 0 ? "Provider API key is not configured." : "Skipped because the previous step failed.",
+      durationMs: index === 0 ? 60 : 0,
+      startedAt: timestamp,
+    }));
+  }
+
+  return playbook.map((step) => ({
+    id: generateId(),
+    title: step.title,
+    status: "success",
+    output: step.instruction ? `Completed: ${step.instruction.slice(0, 160)}` : "Step completed.",
+    durationMs: 200 + Math.floor(Math.random() * 600),
+    startedAt: timestamp,
+  }));
+}
+
+export function listAgentTemplates() {
+  return { templates: AGENT_TEMPLATES };
+}
+
+export function createAgentFromTemplate(context: AuthenticatedContext, templateId: string, overrides: { name?: string; providerId?: string; model?: string } = {}) {
+  const template = findAgentTemplate(templateId);
+  if (!template) throw httpError(404, "agent template not found");
+
+  return createAgent(context, {
+    name: overrides.name?.trim() || template.name,
+    description: template.description,
+    instructions: template.instructions,
+    providerId: overrides.providerId,
+    model: overrides.model,
+    tools: template.tools,
+    schedule: template.schedule,
+    status: "active",
+    templateId: template.id,
+    inputSchema: template.inputSchema,
   });
 }
 
@@ -558,7 +679,232 @@ export function updateProvider(context: AuthenticatedContext, providerId: string
 
 export function listAgentRuns(context: AuthenticatedContext) {
   const data = loadStore();
-  return { runs: listAgentRunsForWorkspace(data, context.workspace.id).slice(0, 50) };
+  return { runs: listAgentRunsForWorkspace(data, context.workspace.id).slice(0, 50).map(decorateRun) };
+}
+
+export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
+  const timestamp = now();
+  return mutateStore((data) => {
+    const run = data.agentRuns.find((entry) => entry.id === runId);
+    if (!run || run.workspaceId !== context.workspace.id) {
+      throw httpError(404, "agent run not found");
+    }
+    if (run.status !== "queued" && run.status !== "running") {
+      throw httpError(409, "only queued or running runs can be canceled");
+    }
+
+    const updated = upsertAgentRun(data, {
+      ...run,
+      status: "canceled",
+      completedAt: timestamp,
+      error: run.error ?? "Canceled by operator.",
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run_canceled", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Run canceled: ${updated.title}`, agentId: updated.agentId, runId: updated.id }, timestamp));
+
+    return { run: decorateRun(updated) };
+  });
+}
+
+export function retryAgentRun(context: AuthenticatedContext, runId: string) {
+  const data = loadStore();
+  const previous = data.agentRuns.find((entry) => entry.id === runId);
+  if (!previous || previous.workspaceId !== context.workspace.id) {
+    throw httpError(404, "agent run not found");
+  }
+  if (!previous.agentId) {
+    throw httpError(400, "this run is not linked to an agent and cannot be retried");
+  }
+  return runAgent(context, previous.agentId);
+}
+
+export function listWorkspaceEnvVarsForUser(context: AuthenticatedContext) {
+  const data = loadStore();
+  return { envVars: listWorkspaceEnvVars(data, context.workspace.id).map(maskEnvVar) };
+}
+
+export function createWorkspaceEnvVar(context: AuthenticatedContext, input: WorkspaceEnvVarInput) {
+  const normalized = normalizeEnvVarInput(input);
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const conflict = listWorkspaceEnvVars(data, context.workspace.id)
+      .find((entry) => entry.key === normalized.key);
+    if (conflict) throw httpError(409, `env var ${normalized.key} already exists`);
+
+    const created = upsertWorkspaceEnvVar(data, {
+      workspaceId: context.workspace.id,
+      key: normalized.key,
+      value: normalized.value,
+      scope: normalized.scope,
+      secret: normalized.secret,
+      description: normalized.description,
+      createdByUserId: context.user.id,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var added: ${created.key}`, envVarId: created.id, scope: created.scope, secret: created.secret }, timestamp));
+
+    return { envVar: maskEnvVar(created) };
+  });
+}
+
+export function updateWorkspaceEnvVar(
+  context: AuthenticatedContext,
+  envVarId: string,
+  input: Partial<WorkspaceEnvVarInput>,
+) {
+  const timestamp = now();
+
+  return mutateStore((data) => {
+    const existing = findWorkspaceEnvVar(data, envVarId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "env var not found");
+    }
+
+    const merged = normalizeEnvVarInput({
+      key: input.key ?? existing.key,
+      value: input.value ?? existing.value,
+      scope: input.scope ?? existing.scope,
+      secret: input.secret ?? existing.secret,
+      description: input.description ?? existing.description,
+    });
+
+    if (merged.key !== existing.key) {
+      const conflict = listWorkspaceEnvVars(data, context.workspace.id)
+        .find((entry) => entry.key === merged.key && entry.id !== existing.id);
+      if (conflict) throw httpError(409, `env var ${merged.key} already exists`);
+    }
+
+    const updated = upsertWorkspaceEnvVar(data, {
+      ...existing,
+      key: merged.key,
+      value: merged.value,
+      scope: merged.scope,
+      secret: merged.secret,
+      description: merged.description,
+    }, timestamp);
+
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var updated: ${updated.key}`, envVarId: updated.id }, timestamp));
+
+    return { envVar: maskEnvVar(updated) };
+  });
+}
+
+export function deleteWorkspaceEnvVarById(context: AuthenticatedContext, envVarId: string) {
+  const timestamp = now();
+  return mutateStore((data) => {
+    const existing = findWorkspaceEnvVar(data, envVarId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "env var not found");
+    }
+    deleteWorkspaceEnvVar(data, envVarId);
+    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.deleted", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var removed: ${existing.key}`, envVarId: existing.id }, timestamp));
+    return { ok: true };
+  });
+}
+
+export function listReleaseHistory(context: AuthenticatedContext) {
+  const data = loadStore();
+  const releases = listReleaseConfirmationsForWorkspace(data, context.workspace.id)
+    .sort((left, right) => (right.confirmedAt ?? right.updatedAt).localeCompare(left.confirmedAt ?? left.updatedAt));
+
+  const evidence = data.validationEvidence.filter((entry) => entry.workspaceId === context.workspace.id);
+  const concerns = data.workflowConcerns.filter((entry) => entry.workspaceId === context.workspace.id);
+
+  const passedEvidence = evidence.filter((entry) => entry.status === "passed").length;
+  const failedEvidence = evidence.filter((entry) => entry.status === "failed").length;
+  const pendingEvidence = evidence.filter((entry) => !entry.status || entry.status === "pending").length;
+  const openBlockers = concerns.filter((entry) => entry.kind === "blocker" && entry.status === "open").length;
+  const openQuestions = concerns.filter((entry) => entry.kind === "open_question" && entry.status === "open").length;
+
+  return {
+    releases: releases.map((entry) => ({
+      id: entry.id ?? entry.workspaceId,
+      workspaceId: entry.workspaceId,
+      versionLabel: entry.versionLabel ?? "release",
+      status: entry.status ?? (entry.confirmed ? "confirmed" : "pending"),
+      confirmed: Boolean(entry.confirmed || entry.status === "confirmed"),
+      summary: entry.summary ?? entry.releaseNotes ?? "",
+      confirmedBy: entry.confirmedBy ?? "",
+      confirmedAt: entry.confirmedAt ?? null,
+      validationEvidenceIds: entry.validationEvidenceIds ?? [],
+      updatedAt: entry.updatedAt,
+    })),
+    preflight: {
+      passedEvidence,
+      failedEvidence,
+      pendingEvidence,
+      openBlockers,
+      openQuestions,
+      ready: failedEvidence === 0 && openBlockers === 0 && passedEvidence > 0,
+    },
+  };
+}
+
+type WorkspaceEnvVarInput = {
+  key?: string;
+  value?: string;
+  scope?: WorkspaceEnvVarScope;
+  secret?: boolean;
+  description?: string;
+};
+
+const ENV_VAR_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,254}$/;
+
+function normalizeEnvVarInput(input: WorkspaceEnvVarInput) {
+  const key = String(input.key ?? "").trim().toUpperCase();
+  if (!ENV_VAR_KEY_PATTERN.test(key)) {
+    throw httpError(400, "key must start with a letter and contain only A-Z, 0-9, and underscores");
+  }
+  const value = String(input.value ?? "");
+  if (value.length > 5000) throw httpError(400, "value must be 5000 characters or fewer");
+  const scope: WorkspaceEnvVarScope = input.scope === "build" || input.scope === "runtime" ? input.scope : "all";
+  const secret = Boolean(input.secret);
+  const description = stringOrUndefined(input.description);
+  return { key, value, scope, secret, description };
+}
+
+function maskEnvVar(record: WorkspaceEnvVarRecord) {
+  return {
+    ...record,
+    value: record.secret ? maskSecret(record.value) : record.value,
+    valuePreview: record.secret ? maskSecret(record.value) : null,
+    valueLength: record.value.length,
+  };
+}
+
+function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 4) return "•".repeat(value.length);
+  return `${"•".repeat(Math.max(value.length - 4, 4))}${value.slice(-4)}`;
+}
+
+function decorateRun(run: AgentRunRecord) {
+  const start = run.startedAt ? Date.parse(run.startedAt) : NaN;
+  const end = run.completedAt ? Date.parse(run.completedAt) : NaN;
+  const durationMs = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null;
+  return {
+    ...run,
+    durationMs,
+    canCancel: run.status === "queued" || run.status === "running",
+    canRetry: Boolean(run.agentId) && (run.status === "failed" || run.status === "canceled" || run.status === "success"),
+  };
 }
 
 type AgentInput = {
@@ -569,8 +915,14 @@ type AgentInput = {
   model?: string | null;
   tools?: string[] | string;
   schedule?: string | null;
+  triggerKind?: AgentTriggerKind | string | null;
+  playbook?: Array<Partial<AgentPlaybookStep>> | null;
   status?: AgentStatus;
+  templateId?: string | null;
+  inputSchema?: AgentInputField[];
 };
+
+const TRIGGER_KINDS: AgentTriggerKind[] = ["manual", "schedule", "webhook", "email"];
 
 type ProviderInput = {
   name?: string;
@@ -598,8 +950,8 @@ function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord) {
   };
 }
 
-function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status">> &
-  Pick<AgentRecord, "providerId" | "model" | "schedule"> {
+function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "name" | "description" | "instructions" | "tools" | "status" | "inputSchema">> &
+  Pick<AgentRecord, "providerId" | "model" | "schedule" | "triggerKind" | "playbook" | "templateId"> {
   const name = String(input.name ?? "").trim();
   if (name.length < 2) throw httpError(400, "agent name must be at least 2 characters");
   if (name.length > 80) throw httpError(400, "agent name must be 80 characters or fewer");
@@ -615,6 +967,14 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
         .map((entry) => entry.trim())
         .filter(Boolean);
   const status = input.status && ["active", "paused", "archived"].includes(input.status) ? input.status : "active";
+  const inputSchema = normalizeInputSchema(input.inputSchema);
+
+  const triggerKindRaw = stringOrUndefined(input.triggerKind);
+  const triggerKind: AgentTriggerKind | undefined = triggerKindRaw && (TRIGGER_KINDS as string[]).includes(triggerKindRaw)
+    ? (triggerKindRaw as AgentTriggerKind)
+    : undefined;
+
+  const playbook = normalizePlaybook(input.playbook ?? undefined);
 
   return {
     name,
@@ -624,8 +984,135 @@ function normalizeAgentInput(input: AgentInput): Required<Pick<AgentRecord, "nam
     model: stringOrUndefined(input.model),
     tools: tools.slice(0, 12),
     schedule: stringOrUndefined(input.schedule),
+    triggerKind,
+    playbook,
     status,
+    templateId: stringOrUndefined(input.templateId),
+    inputSchema,
   };
+}
+
+function normalizePlaybook(input: Array<Partial<AgentPlaybookStep>> | undefined): AgentPlaybookStep[] | undefined {
+  if (!input) return undefined;
+  if (!Array.isArray(input)) return [];
+  const cleaned: AgentPlaybookStep[] = [];
+  for (const entry of input.slice(0, 20)) {
+    const title = String(entry?.title ?? "").trim();
+    if (!title) continue;
+    const instruction = String(entry?.instruction ?? "").trim();
+    cleaned.push({
+      id: stringOrUndefined(entry?.id) ?? generateId(),
+      title: title.slice(0, 120),
+      instruction: instruction.slice(0, 600),
+    });
+  }
+  return cleaned;
+}
+
+const FIELD_TYPES: AgentInputFieldType[] = ["string", "number", "boolean", "url", "enum"];
+
+function normalizeInputSchema(raw: unknown): AgentInputField[] {
+  if (!Array.isArray(raw)) return [];
+  const seenKeys = new Set<string>();
+  const fields: AgentInputField[] = [];
+
+  for (const candidate of raw.slice(0, 12)) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const item = candidate as Record<string, unknown>;
+    const key = String(item.key ?? "").trim();
+    if (!/^[a-z0-9_]{1,40}$/i.test(key)) {
+      throw httpError(400, "input field keys must be 1-40 chars of letters, numbers, or underscores");
+    }
+    if (seenKeys.has(key)) throw httpError(400, `duplicate input field key: ${key}`);
+    seenKeys.add(key);
+
+    const type = FIELD_TYPES.includes(item.type as AgentInputFieldType) ? (item.type as AgentInputFieldType) : "string";
+    const label = String(item.label ?? "").trim() || key;
+    const description = stringOrUndefined(item.description);
+    const required = Boolean(item.required);
+    const defaultValue = stringOrUndefined(item.defaultValue);
+    let options: string[] | undefined;
+    if (type === "enum") {
+      options = Array.isArray(item.options)
+        ? item.options.map((entry) => String(entry).trim()).filter(Boolean).slice(0, 16)
+        : [];
+      if (!options.length) throw httpError(400, `enum field "${key}" requires at least one option`);
+    }
+
+    fields.push({ key, label, type, required, description, options, defaultValue });
+  }
+
+  return fields;
+}
+
+function validateAgentInputs(schema: AgentInputField[], raw: Record<string, unknown>): Record<string, string | number | boolean> {
+  const inputs: Record<string, string | number | boolean> = {};
+
+  for (const field of schema) {
+    const provided = raw[field.key];
+    const hasValue = provided !== undefined && provided !== null && String(provided).length > 0;
+
+    if (!hasValue) {
+      if (field.defaultValue !== undefined && field.defaultValue !== "") {
+        inputs[field.key] = coerceInputValue(field, field.defaultValue);
+        continue;
+      }
+      if (field.required) throw httpError(400, `input ${field.key} is required`);
+      continue;
+    }
+
+    inputs[field.key] = coerceInputValue(field, provided);
+  }
+
+  return inputs;
+}
+
+function coerceInputValue(field: AgentInputField, value: unknown): string | number | boolean {
+  switch (field.type) {
+    case "number": {
+      const next = Number(value);
+      if (!Number.isFinite(next)) throw httpError(400, `input ${field.key} must be a number`);
+      return next;
+    }
+    case "boolean": {
+      if (typeof value === "boolean") return value;
+      const text = String(value).trim().toLowerCase();
+      if (["true", "1", "yes", "on"].includes(text)) return true;
+      if (["false", "0", "no", "off", ""].includes(text)) return false;
+      throw httpError(400, `input ${field.key} must be a boolean`);
+    }
+    case "url": {
+      const text = String(value).trim();
+      try {
+        const url = new URL(text);
+        if (!["http:", "https:"].includes(url.protocol)) throw new Error("scheme");
+      } catch {
+        throw httpError(400, `input ${field.key} must be a valid http(s) URL`);
+      }
+      return text;
+    }
+    case "enum": {
+      const text = String(value).trim();
+      if (!field.options?.includes(text)) {
+        throw httpError(400, `input ${field.key} must be one of: ${(field.options ?? []).join(", ")}`);
+      }
+      return text;
+    }
+    default:
+      return String(value);
+  }
+}
+
+function formatInputValue(value: string | number | boolean): string {
+  if (typeof value === "string" && value.length > 80) return `${value.slice(0, 77)}...`;
+  return String(value);
+}
+
+function buildRunOutput(agentName: string, inputs: Record<string, string | number | boolean>): string {
+  const inputSummary = Object.keys(inputs).length === 0
+    ? "no inputs"
+    : Object.entries(inputs).map(([key, value]) => `${key}=${formatInputValue(value)}`).join(", ");
+  return `${agentName} simulated run completed with ${inputSummary}.`;
 }
 
 function validateProvider(data: ReturnType<typeof loadStore>, workspaceId: string, providerId?: string) {

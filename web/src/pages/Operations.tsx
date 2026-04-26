@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, HelpCircle, Loader2, RefreshCw, Rocket, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, HelpCircle, History, Loader2, RefreshCw, Rocket, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import type {
   ConfirmWorkflowReleaseInput,
+  ReleaseHistoryPayload,
   SaveWorkflowBlockerInput,
   SaveWorkflowQuestionInput,
   SaveWorkflowValidationEvidenceInput,
@@ -52,14 +53,20 @@ interface OperationsState {
   questions: WorkflowQuestion[];
   validationEvidence: WorkflowValidationEvidence[];
   releaseConfirmation: WorkflowReleaseConfirmation | null;
+  releaseHistory: ReleaseHistoryPayload;
 }
 
 const workflowApi = api as WorkflowApi;
+const EMPTY_HISTORY: ReleaseHistoryPayload = {
+  releases: [],
+  preflight: { passedEvidence: 0, failedEvidence: 0, pendingEvidence: 0, openBlockers: 0, openQuestions: 0, ready: false },
+};
 const EMPTY_STATE: OperationsState = {
   blockers: [],
   questions: [],
   validationEvidence: [],
   releaseConfirmation: null,
+  releaseHistory: EMPTY_HISTORY,
 };
 
 export default function OperationsPage() {
@@ -411,6 +418,7 @@ export default function OperationsPage() {
             title="Release Confirmation"
             action={
               <form className="space-y-4" onSubmit={confirmRelease}>
+                <ReleasePreflightPanel preflight={state.releaseHistory.preflight} />
                 <Field label="Summary">
                   <textarea
                     name="summary"
@@ -441,26 +449,29 @@ export default function OperationsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <ReleaseStatus release={state.releaseConfirmation} />
                   <button className="btn-primary" type="submit" disabled={saving === "release"}>
-                    Save release
+                    Promote release
                   </button>
                 </div>
               </form>
             }
           >
-            <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
-              <div className="flex items-center gap-3">
-                <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/12 text-accent-300">
-                  {state.releaseConfirmation?.confirmed ? <CheckCircle2 className="h-5 w-5" /> : <Rocket className="h-5 w-5" />}
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-ink-100">
-                    {state.releaseConfirmation?.confirmed ? "Release confirmed" : "Release pending"}
+            <div className="space-y-3">
+              <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/12 text-accent-300">
+                    {state.releaseConfirmation?.confirmed ? <CheckCircle2 className="h-5 w-5" /> : <Rocket className="h-5 w-5" />}
                   </div>
-                  <div className="mt-1 text-xs text-ink-500">
-                    Updated {relative(state.releaseConfirmation?.updatedAt)}
+                  <div>
+                    <div className="text-sm font-medium text-ink-100">
+                      {state.releaseConfirmation?.confirmed ? "Release confirmed" : "Release pending"}
+                    </div>
+                    <div className="mt-1 text-xs text-ink-500">
+                      Updated {relative(state.releaseConfirmation?.updatedAt)}
+                    </div>
                   </div>
                 </div>
               </div>
+              <ReleaseHistoryList history={state.releaseHistory} />
             </div>
           </WorkflowSection>
         </div>
@@ -598,15 +609,109 @@ function validationTone(status: WorkflowValidationStatus) {
   return "warn";
 }
 
+function ReleasePreflightPanel({ preflight }: { preflight: ReleaseHistoryPayload["preflight"] }) {
+  const checks = [
+    {
+      label: "Validation evidence passed",
+      ok: preflight.passedEvidence > 0,
+      detail: `${preflight.passedEvidence} passed${preflight.pendingEvidence ? ` · ${preflight.pendingEvidence} pending` : ""}`,
+    },
+    {
+      label: "No failed validation",
+      ok: preflight.failedEvidence === 0,
+      detail: preflight.failedEvidence === 0 ? "All checks clear" : `${preflight.failedEvidence} failed check${preflight.failedEvidence === 1 ? "" : "s"}`,
+    },
+    {
+      label: "No open blockers",
+      ok: preflight.openBlockers === 0,
+      detail: preflight.openBlockers === 0 ? "No blockers" : `${preflight.openBlockers} open blocker${preflight.openBlockers === 1 ? "" : "s"}`,
+    },
+  ];
+
+  const banner = preflight.ready
+    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
+    : "border-amber-400/30 bg-amber-500/10 text-amber-200";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${banner}`}>
+      <div className="flex items-center gap-2 text-sm font-medium">
+        {preflight.ready ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+        {preflight.ready ? "Release preflight passed" : "Release preflight has warnings"}
+        {preflight.openQuestions > 0 && (
+          <span className="ml-auto text-xs opacity-80">
+            {preflight.openQuestions} open question{preflight.openQuestions === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      <ul className="mt-3 space-y-1.5 text-xs">
+        {checks.map((check) => (
+          <li key={check.label} className="flex items-center gap-2">
+            <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full ${
+              check.ok ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
+            }`}>
+              {check.ok ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+            </span>
+            <span className="text-ink-200">{check.label}</span>
+            <span className="ml-auto text-ink-500">{check.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReleaseHistoryList({ history }: { history: ReleaseHistoryPayload }) {
+  if (history.releases.length === 0) {
+    return <EmptyState>No releases recorded yet.</EmptyState>;
+  }
+  return (
+    <div className="rounded-2xl border border-ink-800/80 bg-ink-950/35 p-4">
+      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
+        <History className="h-3.5 w-3.5" /> Release history
+      </div>
+      <ol className="space-y-3">
+        {history.releases.map((release) => (
+          <li key={release.id} className="flex items-start gap-3 border-l-2 border-ink-800 pl-3">
+            <div className={`mt-1 grid h-2 w-2 shrink-0 place-items-center rounded-full ${
+              release.confirmed ? "bg-emerald-400" : release.status === "rolled_back" ? "bg-rose-400" : "bg-amber-400"
+            }`} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="font-mono text-sm text-ink-100">{release.versionLabel}</span>
+                <StatusBadge value={release.status} tone={release.confirmed ? "good" : release.status === "rolled_back" ? "danger" : "warn"} />
+              </div>
+              {release.summary && <p className="mt-1 text-xs text-ink-400">{release.summary}</p>}
+              <p className="mt-1 text-[11px] text-ink-500">
+                {release.confirmedBy ? `${release.confirmedBy} · ` : ""}
+                {relative(release.confirmedAt ?? release.updatedAt)}
+                {release.validationEvidenceIds.length > 0 && ` · ${release.validationEvidenceIds.length} evidence link${release.validationEvidenceIds.length === 1 ? "" : "s"}`}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 async function fetchOperations(): Promise<OperationsState> {
-  const [blockers, questions, validationEvidence, releaseConfirmation] = await Promise.all([
+  const [blockers, questions, validationEvidence, releaseConfirmation, releaseHistory] = await Promise.all([
     listBlockers(),
     listQuestions(),
     listValidationEvidence(),
     getReleaseConfirmation(),
+    getReleaseHistory(),
   ]);
 
-  return { blockers, questions, validationEvidence, releaseConfirmation };
+  return { blockers, questions, validationEvidence, releaseConfirmation, releaseHistory };
+}
+
+async function getReleaseHistory(): Promise<ReleaseHistoryPayload> {
+  try {
+    return await api.getReleaseHistory();
+  } catch {
+    return EMPTY_HISTORY;
+  }
 }
 
 async function listBlockers() {
