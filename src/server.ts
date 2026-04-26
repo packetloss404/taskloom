@@ -12,6 +12,8 @@ import {
   deleteWorkspaceEnvVarById,
   getAgent,
   getPublicActivationSummary,
+  handleInvitationEmailJob,
+  INVITATION_EMAIL_JOB_TYPE,
   listPublicActivationSummaries,
   listAgentRuns,
   listAgentTemplates,
@@ -302,6 +304,12 @@ scheduler.register({
       inputs: payload.inputs,
     });
     return { runId: result.run.id, status: result.run.status };
+  },
+});
+scheduler.register({
+  type: INVITATION_EMAIL_JOB_TYPE,
+  async handle(job) {
+    return handleInvitationEmailJob(job);
   },
 });
 scheduler.start();

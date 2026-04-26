@@ -1,12 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resetStoreForTests } from "../../taskloom-store.js";
-import { createAgent, login, updateAgent } from "../../taskloom-services.js";
+import { listInvitationEmailDeliveriesIndexed, resetStoreForTests } from "../../taskloom-store.js";
+import { createAgent, createWorkspaceInvitation, handleInvitationEmailJob, INVITATION_EMAIL_JOB_TYPE, login, resendWorkspaceInvitation, updateAgent } from "../../taskloom-services.js";
+import { TASKLOOM_INVITATION_EMAIL_MODE_ENV, TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV, TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV } from "../../invitation-email.js";
+import { resetInvitationEmailDeliveryForTests, setInvitationEmailFetchForTests } from "../../invitation-email-delivery.js";
 import { enqueueJob, enqueueRecurringJob, findJob, listJobs, maintainScheduledAgentJobs, updateJob } from "../store.js";
 import { JobScheduler } from "../scheduler.js";
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
 }
 
 test("scheduler runs a queued job and marks success", async () => {
@@ -54,6 +61,89 @@ test("scheduler retries failing job up to maxAttempts then marks failed", async 
   const fresh = findJob(job.id);
   assert.equal(fresh?.status, "failed");
   assert.equal(calls, 2);
+});
+
+test("scheduler dead-letters invitation email retry jobs after webhook failures", async () => {
+  const previousMode = process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+  const previousUrl = process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV];
+  const previousMaxAttempts = process.env[TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV];
+  try {
+    process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "webhook";
+    process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV] = "https://email.example/invitations";
+    process.env[TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV] = "2";
+    resetStoreForTests();
+    resetInvitationEmailDeliveryForTests();
+    setInvitationEmailFetchForTests(async () => {
+      throw new Error("provider unavailable");
+    });
+    const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const created = await createWorkspaceInvitation(auth.context, { email: "deadletter@test.example", role: "member" });
+    const retryJobId = created.emailDelivery.retryJobId;
+    assert.ok(retryJobId, "expected retry job id");
+
+    const scheduler = new JobScheduler({ pollIntervalMs: 30 });
+    scheduler.register({ type: INVITATION_EMAIL_JOB_TYPE, handle: handleInvitationEmailJob });
+    scheduler.start();
+    for (let i = 0; i < 80; i++) {
+      const fresh = findJob(retryJobId);
+      if (fresh?.status === "failed") break;
+      if (fresh?.status === "queued") updateJob(fresh.id, { scheduledAt: new Date().toISOString() });
+      await wait(40);
+    }
+    await scheduler.stop();
+
+    const fresh = findJob(retryJobId);
+    assert.equal(fresh?.status, "failed");
+    assert.equal(fresh?.attempts, 2);
+    assert.match(fresh?.error ?? "", /provider unavailable/);
+    const deliveries = listInvitationEmailDeliveriesIndexed("alpha", created.invitation.id);
+    assert.equal(deliveries.length, 3);
+    assert.deepEqual(deliveries.map((delivery) => delivery.status), ["failed", "failed", "failed"]);
+  } finally {
+    resetInvitationEmailDeliveryForTests();
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_MODE_ENV, previousMode);
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV, previousUrl);
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV, previousMaxAttempts);
+  }
+});
+
+test("invitation email retry jobs resolve the current invitation token", async () => {
+  const previousMode = process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+  const previousUrl = process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV];
+  try {
+    process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "webhook";
+    process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV] = "https://email.example/invitations";
+    resetStoreForTests();
+    resetInvitationEmailDeliveryForTests();
+    const webhookBodies: Array<{ token?: string; action?: string }> = [];
+    setInvitationEmailFetchForTests(async (_url, init) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as { token?: string; action?: string } : {};
+      webhookBodies.push(body);
+      if (webhookBodies.length === 1) throw new Error("first send failed");
+      return new Response(null, { status: 204 });
+    });
+    const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const created = await createWorkspaceInvitation(auth.context, { email: "current-token@test.example", role: "member" });
+    const retryJobId = created.emailDelivery.retryJobId;
+    assert.ok(retryJobId, "expected retry job id");
+    const originalToken = created.invitation.token;
+
+    const resent = await resendWorkspaceInvitation(auth.context, created.invitation.id);
+    assert.notEqual(resent.invitation.token, originalToken);
+    const retryJob = findJob(retryJobId);
+    assert.ok(retryJob, "expected retry job");
+
+    await handleInvitationEmailJob(retryJob);
+
+    assert.equal(webhookBodies.length, 3);
+    assert.equal(webhookBodies[2]?.action, "create");
+    assert.equal(webhookBodies[2]?.token, resent.invitation.token);
+    assert.notEqual(webhookBodies[2]?.token, originalToken);
+  } finally {
+    resetInvitationEmailDeliveryForTests();
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_MODE_ENV, previousMode);
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV, previousUrl);
+  }
 });
 
 test("scheduler marks no-handler job as failed", async () => {

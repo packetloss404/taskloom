@@ -8,13 +8,14 @@ import { Hono } from "hono";
 import { appRoutes, resetAppRouteSecurityForTests } from "./app-routes.js";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
 import { enforcePrivateAppMutationSecurity } from "./route-security.js";
-import { TASKLOOM_INVITATION_EMAIL_MODE_ENV } from "./invitation-email.js";
+import { TASKLOOM_INVITATION_EMAIL_MODE_ENV, TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV, TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV } from "./invitation-email.js";
 import {
   listInvitationEmailDeliveryRecordsForTests,
   resetInvitationEmailDeliveryForTests,
   setInvitationEmailDeliveryAdapterForTests,
+  setInvitationEmailFetchForTests,
 } from "./invitation-email-delivery.js";
-import { login } from "./taskloom-services.js";
+import { INVITATION_EMAIL_JOB_TYPE, login } from "./taskloom-services.js";
 import { clearStoreCacheForTests, listInvitationEmailDeliveriesIndexed, loadStore, mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
 
 function createTestApp() {
@@ -1148,6 +1149,55 @@ test("invitation delivery failures are recorded without rolling back invitation 
   assert.equal(listInvitationEmailDeliveryRecordsForTests()[0]?.status, "failed");
   assert.equal(listInvitationEmailDeliveriesIndexed("alpha", createdBody.invitation.id)[0]?.status, "failed");
   assert.ok(loadStore().activities.some((entry) => entry.event === "workspace.invitation_email_delivery" && entry.data.status === "failed"));
+});
+
+test("webhook invitation delivery failures enqueue retry jobs without tokens", async () => {
+  const previousMode = process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV];
+  const previousUrl = process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV];
+  const previousMaxAttempts = process.env[TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV];
+  try {
+    process.env[TASKLOOM_INVITATION_EMAIL_MODE_ENV] = "webhook";
+    process.env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV] = "https://email.example/invitations";
+    process.env[TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV] = "2";
+    resetStoreForTests();
+    resetAppRouteSecurityForTests();
+    resetInvitationEmailDeliveryForTests();
+    setInvitationEmailFetchForTests(async () => {
+      throw new Error("provider unavailable");
+    });
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    setAlphaRole("admin");
+
+    const created = await app.request("/api/app/invitations", {
+      method: "POST",
+      headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+      body: JSON.stringify({ email: "retry@test.example", role: "member" }),
+    });
+    const createdBody = await created.json() as { invitation: { id: string }; emailDelivery: { status: string; retryJobId: string | null } };
+
+    assert.equal(created.status, 201);
+    assert.equal(createdBody.emailDelivery.status, "failed");
+    assert.ok(createdBody.emailDelivery.retryJobId, "expected retry job id");
+    const job = loadStore().jobs.find((entry) => entry.id === createdBody.emailDelivery.retryJobId);
+    assert.ok(job, "expected retry job");
+    assert.equal(job.type, INVITATION_EMAIL_JOB_TYPE);
+    assert.equal(job.status, "queued");
+    assert.equal(job.maxAttempts, 2);
+    assert.deepEqual(job.payload, {
+      invitationId: createdBody.invitation.id,
+      action: "create",
+      requestedByUserId: "user_alpha",
+    });
+    assert.equal(JSON.stringify(job.payload).includes("token"), false);
+    assert.equal(JSON.stringify(job.payload).includes("retry@test.example"), false);
+    assert.ok(loadStore().activities.some((entry) => entry.data.retryJobId === job.id));
+  } finally {
+    resetInvitationEmailDeliveryForTests();
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_MODE_ENV, previousMode);
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV, previousUrl);
+    restoreEnv(TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV, previousMaxAttempts);
+  }
 });
 
 test("revoked and accepted invitations do not send email on resend failures", async () => {

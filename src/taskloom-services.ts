@@ -21,6 +21,7 @@ import {
   findWorkspaceInvitationByToken,
   findWorkspaceMembership,
   findWorkspaceEnvVar,
+  createInvitationEmailDelivery,
   listAgentRunsForAgentIndexed,
   listAgentRunsForWorkspaceIndexed,
   listAgentsForWorkspaceIndexed,
@@ -57,7 +58,9 @@ import {
   type WorkspaceEnvVarScope,
   type WorkspaceInvitationRecord,
   type WorkspaceMemberRecord,
+  type WorkspaceRecord,
   type WorkspaceRole,
+  type JobRecord,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
   upsertActivationSignal,
@@ -69,9 +72,9 @@ import {
   upsertWorkspaceEnvVar,
 } from "./taskloom-store";
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
-import { invitationEmailSubject } from "./invitation-email.js";
+import { LOCAL_INVITATION_EMAIL_PROVIDER, invitationEmailSubject, resolveInvitationEmailMode, resolveInvitationEmailRetryMaxAttempts, resolveInvitationEmailWebhookConfig } from "./invitation-email.js";
 import { deliverInvitationEmail, type InvitationEmailDeliveryAction } from "./invitation-email-delivery.js";
-import { maintainScheduledAgentJobs } from "./jobs/store.js";
+import { enqueueJob, maintainScheduledAgentJobs } from "./jobs/store.js";
 import {
   buildSessionCookieValue,
   generateId,
@@ -92,6 +95,8 @@ type AuthenticatedContext = {
   workspace: import("./taskloom-store").WorkspaceRecord;
   role: import("./taskloom-store").WorkspaceRole;
 };
+
+export const INVITATION_EMAIL_JOB_TYPE = "invitation.email";
 
 export async function listPublicActivationSummaries() {
   const data = loadStore();
@@ -1919,42 +1924,150 @@ async function recordWorkspaceInvitationEmailDelivery(
   context: AuthenticatedContext,
   invitation: WorkspaceInvitationRecord,
   action: InvitationEmailDeliveryAction,
+  options: { enqueueRetry?: boolean } = {},
 ) {
+  return recordInvitationEmailDeliveryForWorkspace({
+    workspace: context.workspace,
+    actor: { type: "user", id: context.user.id, displayName: context.user.displayName },
+    requestedByUserId: context.user.id,
+    invitation,
+    action,
+    enqueueRetry: options.enqueueRetry ?? true,
+  });
+}
+
+async function recordInvitationEmailDeliveryForWorkspace(input: {
+  workspace: WorkspaceRecord;
+  actor: ActivityRecord["actor"];
+  requestedByUserId?: string;
+  invitation: WorkspaceInvitationRecord;
+  action: InvitationEmailDeliveryAction;
+  enqueueRetry: boolean;
+}) {
   const data = loadStore();
   const delivery = await deliverInvitationEmail(data, {
-    action,
-    workspaceId: invitation.workspaceId,
-    workspaceName: context.workspace.name,
-    invitationId: invitation.id,
-    email: invitation.email,
-    token: invitation.token,
-    subject: invitationEmailSubject(context.workspace.name),
+    action: input.action,
+    workspaceId: input.invitation.workspaceId,
+    workspaceName: input.workspace.name,
+    invitationId: input.invitation.id,
+    email: input.invitation.email,
+    token: input.invitation.token,
+    subject: invitationEmailSubject(input.workspace.name),
   });
   persistStore(data);
 
+  const retryJob = input.enqueueRetry && delivery.status === "failed" && resolveInvitationEmailMode() === "webhook"
+    ? enqueueJob({
+      workspaceId: input.invitation.workspaceId,
+      type: INVITATION_EMAIL_JOB_TYPE,
+      payload: {
+        invitationId: input.invitation.id,
+        action: input.action,
+        ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
+      },
+      maxAttempts: resolveInvitationEmailRetryMaxAttempts(),
+    })
+    : null;
+
   mutateStore((data) => {
-    data.activities.unshift(makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", {
-      type: "user",
-      id: context.user.id,
-      displayName: context.user.displayName,
-    }, {
-      title: delivery.status === "sent" ? `Invitation email sent to ${invitation.email}` : `Invitation email ${delivery.status} for ${invitation.email}`,
-      invitationId: invitation.id,
-      email: invitation.email,
-      role: invitation.role,
-      action,
+    data.activities.unshift(makeActivity(input.invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", input.actor, {
+      title: delivery.status === "sent" ? `Invitation email sent to ${input.invitation.email}` : `Invitation email ${delivery.status} for ${input.invitation.email}`,
+      invitationId: input.invitation.id,
+      email: input.invitation.email,
+      role: input.invitation.role,
+      action: input.action,
       deliveryId: delivery.id,
       status: delivery.status,
       ...(delivery.error ? { error: delivery.error } : {}),
+      ...(retryJob ? { retryJobId: retryJob.id } : {}),
     }, new Date().toISOString()));
   });
 
   return {
     id: delivery.id,
     status: delivery.status,
-    action,
+    action: input.action,
     error: delivery.error ?? null,
+    retryJobId: retryJob?.id ?? null,
   };
+}
+
+export async function handleInvitationEmailJob(job: JobRecord) {
+  if (job.type !== INVITATION_EMAIL_JOB_TYPE) throw new Error(`unsupported invitation email job type "${job.type}"`);
+  const payload = job.payload as { invitationId?: unknown; action?: unknown; requestedByUserId?: unknown };
+  if (typeof payload.invitationId !== "string" || !payload.invitationId.trim()) throw new Error("invitation.email job missing invitationId");
+  if (payload.action !== "create" && payload.action !== "resend") throw new Error("invitation.email job missing action");
+
+  const data = loadStore();
+  const invitation = data.workspaceInvitations.find((entry) => entry.id === payload.invitationId && entry.workspaceId === job.workspaceId);
+  if (!invitation) throw new Error(`invitation ${payload.invitationId} not found`);
+  const workspace = data.workspaces.find((entry) => entry.id === job.workspaceId);
+  if (!workspace) throw new Error(`workspace ${job.workspaceId} not found`);
+
+  const actorUser = typeof payload.requestedByUserId === "string"
+    ? data.users.find((entry) => entry.id === payload.requestedByUserId)
+    : undefined;
+  const actor = actorUser
+    ? { type: "user" as const, id: actorUser.id, displayName: actorUser.displayName }
+    : { type: "system" as const, id: "invitation-email-retry", displayName: "Invitation email retry" };
+
+  const inactiveReason = inactiveInvitationRetryReason(invitation);
+  if (inactiveReason) return recordSkippedInvitationEmailRetry(workspace, actor, invitation, payload.action, inactiveReason);
+
+  const delivery = await recordInvitationEmailDeliveryForWorkspace({
+    workspace,
+    actor,
+    requestedByUserId: actorUser?.id,
+    invitation: { ...invitation },
+    action: payload.action,
+    enqueueRetry: false,
+  });
+  if (delivery.status === "failed") throw new Error(delivery.error ?? "invitation email delivery failed");
+  return delivery;
+}
+
+function inactiveInvitationRetryReason(invitation: WorkspaceInvitationRecord): string | null {
+  if (invitation.revokedAt) return "invitation was revoked before email retry";
+  if (invitation.acceptedAt) return "invitation was accepted before email retry";
+  if (new Date(invitation.expiresAt).getTime() <= Date.now()) return "invitation expired before email retry";
+  return null;
+}
+
+function recordSkippedInvitationEmailRetry(
+  workspace: WorkspaceRecord,
+  actor: ActivityRecord["actor"],
+  invitation: WorkspaceInvitationRecord,
+  action: InvitationEmailDeliveryAction,
+  reason: string,
+) {
+  const timestamp = now();
+  const mode = resolveInvitationEmailMode();
+  const provider = mode === "webhook" ? resolveInvitationEmailWebhookConfig().provider : LOCAL_INVITATION_EMAIL_PROVIDER;
+  const delivery = mutateStore((data) => {
+    const record = createInvitationEmailDelivery(data, {
+      workspaceId: invitation.workspaceId,
+      invitationId: invitation.id,
+      recipientEmail: invitation.email,
+      subject: invitationEmailSubject(workspace.name),
+      status: "skipped",
+      provider,
+      mode,
+      error: reason,
+    }, timestamp);
+    data.activities.unshift(makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", actor, {
+      title: `Invitation email skipped for ${invitation.email}`,
+      invitationId: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      action,
+      deliveryId: record.id,
+      status: record.status,
+      error: reason,
+    }, timestamp));
+    return record;
+  });
+
+  return { id: delivery.id, status: delivery.status, action, error: delivery.error ?? null, retryJobId: null };
 }
 
 export function requireAuthenticatedContext(c: Context): AuthenticatedContext {

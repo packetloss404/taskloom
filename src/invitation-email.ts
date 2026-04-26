@@ -11,8 +11,10 @@ export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV = "TASKLOOM_INVITATION_EM
 export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET";
 export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER";
 export const TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV = "TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS";
+export const TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV = "TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS";
 export const DEFAULT_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER = "x-taskloom-webhook-secret";
 export const DEFAULT_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS = 10_000;
+export const DEFAULT_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS = 3;
 
 export interface RecordInvitationEmailDeliveryInput {
   invitation: WorkspaceInvitationRecord;
@@ -50,6 +52,11 @@ export function resolveInvitationEmailWebhookConfig(env = process.env): Invitati
     secretHeader: env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER_ENV]?.trim() || DEFAULT_INVITATION_EMAIL_WEBHOOK_SECRET_HEADER,
     timeoutMs: resolveInvitationEmailWebhookTimeoutMs(env[TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS_ENV]),
   };
+}
+
+export function resolveInvitationEmailRetryMaxAttempts(env = process.env): number {
+  const maxAttempts = Number.parseInt(env[TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV] ?? "", 10);
+  return Number.isInteger(maxAttempts) && maxAttempts > 0 ? maxAttempts : DEFAULT_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS;
 }
 
 function resolveInvitationEmailWebhookTimeoutMs(value?: string): number {

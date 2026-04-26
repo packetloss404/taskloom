@@ -6,21 +6,32 @@ This guidance covers production invitation email delivery when `TASKLOOM_INVITAT
 
 Taskloom posts invitation delivery requests to `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL`. The request body includes `workspaceId`, optional `workspaceName`, `invitationId`, recipient `email`, invitation `token`, `subject`, and delivery `action` (`create` or `resend`).
 
-Taskloom records one `invitationEmailDeliveries` row for each create/resend attempt. Webhook configuration errors, request timeouts from `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS`, rejected fetches, and non-2xx provider responses are recorded as `failed` deliveries. These failures do not roll back invitation creation or token rotation.
+Taskloom records an `invitationEmailDeliveries` row for each create/resend attempt. Webhook configuration errors, request timeouts from `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS`, rejected fetches, and non-2xx provider responses are recorded as `failed` deliveries. These failures do not roll back invitation creation or token rotation.
 
-Taskloom does not currently retry failed webhook deliveries and does not own a dead-letter queue for invitation email. The local `dev` and `skip` modes are local recording adapters only; they are not production delivery systems.
+When `TASKLOOM_INVITATION_EMAIL_MODE=webhook`, a failed create/resend handoff enqueues an `invitation.email` job for built-in retry. The queued job payload stores the `invitationId`, action, and requesting user id only; it does not store the invitation token or recipient email. The retry handler resolves the current invitation token at send time so stale resend tokens are not replayed.
+
+The local `dev` and `skip` modes are local recording adapters only; they are not production delivery systems and do not enqueue webhook retry jobs.
 
 ## Provider Retries And Dead Letters
 
-Production retry and dead-letter behavior must live in the configured provider or webhook worker outside Taskloom's current local adapter. Operators should configure that provider layer to:
+Taskloom's built-in retry behavior reuses the persisted job scheduler:
+
+- Retry jobs use type `invitation.email` and are visible through the workspace jobs APIs and Operations UI.
+- `TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS` controls queued retry attempts, defaulting to `3`.
+- Scheduler retry backoff starts at 30 seconds, doubles after each failed job attempt, and caps at 1 hour.
+- Each failed retry writes a new `failed` delivery row and activity entry for auditability.
+- When retry attempts are exhausted, the job remains `failed`; that failed job is the Taskloom dead-letter record for the delivery retry.
+- If the invitation is accepted, revoked, or expired before a retry runs, the retry is marked successful with a `skipped` delivery row instead of sending an email.
+
+Operators should still configure the external provider or webhook worker to:
 
 - Treat the webhook request as the durable handoff boundary from Taskloom.
 - Retry transient provider errors using provider-specific retry controls.
-- Dead-letter exhausted delivery attempts with enough metadata to reconcile the Taskloom delivery row, especially `workspaceId`, `invitationId`, recipient `email`, and `action`.
+- Dead-letter provider-side failures with enough metadata to reconcile the Taskloom delivery row or failed retry job, especially `workspaceId`, `invitationId`, recipient `email`, and `action`.
 - Avoid replaying stale invitation tokens after a resend. A resend rotates the invitation token, so provider retries should prefer the newest successful handoff for the invitation when the provider supports de-duplication or replacement.
 - Keep provider error messages free of invitation tokens before returning them to Taskloom, because Taskloom records webhook failure messages in delivery activity and delivery rows.
 
-Taskloom's current delivery row is an audit record, not a retry queue. Use provider dashboards, webhook-worker queues, or provider dead-letter tooling for actual reprocessing.
+Use Taskloom failed `invitation.email` jobs to identify exhausted app-side retries. Use provider dashboards, webhook-worker queues, or provider dead-letter tooling for failures after the provider accepts a Taskloom webhook handoff.
 
 ## Token Redaction
 
@@ -38,9 +49,10 @@ Required redaction areas:
 - HTTP access logs and reverse-proxy logs for `POST /api/app/invitations/:token/accept`; redact the token path segment.
 - Webhook request logging at the configured provider or webhook worker; redact the JSON `token` field.
 - Provider error strings returned to Taskloom; do not include request bodies or token-bearing URLs in non-2xx status text or thrown errors.
+- Built-in `invitation.email` job payloads, failed-job errors, retry logs, and any future replay tooling; never add invitation tokens to retry payloads or dead-letter metadata.
 - Local store exports, database exports, backups shared outside the trusted operator boundary, and future admin exports; redact `workspaceInvitations.token` and any indexed token metadata unless the export is explicitly a privileged recovery artifact.
 - Browser/client telemetry from Settings or invitation flows; do not capture invitation tokens rendered for admins/owners.
 
-Current production records for invitation delivery and activity store invitation id, email, status, provider/mode, subject, action, delivery id, and error details, but not the invitation token. Test-only delivery records may include tokens to assert webhook payload behavior and should not be treated as production telemetry.
+Current production records for invitation delivery and activity store invitation id, email, status, provider/mode, subject, action, delivery id, retry job id when applicable, and error details, but not the invitation token. Test-only delivery records may include tokens to assert webhook payload behavior and should not be treated as production telemetry.
 
 See `README.md` for the webhook environment variables, `docs/deployment-auth-hardening.md` for invitation create/accept/resend abuse controls, and `docs/roadmap.md` for remaining production hardening context.
