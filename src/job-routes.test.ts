@@ -5,7 +5,7 @@ import { SESSION_COOKIE_NAME } from "./auth-utils";
 import { jobRoutes } from "./job-routes";
 import { enqueueJob, findJob } from "./jobs/store";
 import { login } from "./taskloom-services";
-import { resetStoreForTests } from "./taskloom-store";
+import { mutateStore, resetStoreForTests } from "./taskloom-store";
 
 function createTestApp() {
   const app = new Hono();
@@ -91,6 +91,41 @@ test("job list filters to the authenticated workspace with status and limit", as
   assert.deepEqual(body.jobs.map((job) => job.id), [newestAlpha.id]);
   assert.equal(body.jobs[0]?.workspaceId, "alpha");
   assert.equal(body.jobs[0]?.status, "queued");
+});
+
+test("job management requires an admin role but job reads allow viewers", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const alphaJob = enqueueJob({ workspaceId: "alpha", type: "test.viewer" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "viewer";
+  });
+
+  const listResponse = await app.request("/api/app/jobs", {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const detailResponse = await app.request(`/api/app/jobs/${alphaJob.id}`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const createResponse = await app.request("/api/app/jobs", {
+    method: "POST",
+    headers: { ...authHeaders(alpha.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ type: "test.denied" }),
+  });
+  const cancelResponse = await app.request(`/api/app/jobs/${alphaJob.id}/cancel`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+
+  assert.equal(listResponse.status, 200);
+  assert.equal(detailResponse.status, 200);
+  assert.equal(createResponse.status, 403);
+  assert.deepEqual(await createResponse.json(), { error: "workspace role admin is required" });
+  assert.equal(cancelResponse.status, 403);
+  assert.deepEqual(await cancelResponse.json(), { error: "workspace role admin is required" });
 });
 
 test("job creation stores optional scheduling fields in the authenticated workspace", async () => {

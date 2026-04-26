@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
-import { requireAuthenticatedContext } from "./taskloom-services.js";
-import { listApiKeysForWorkspace, removeApiKey, upsertApiKey } from "./security/api-key-store.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
+import { listApiKeysForWorkspace, removeApiKeyForWorkspace, upsertApiKey } from "./security/api-key-store.js";
 import type { ApiKeyProvider } from "./taskloom-store.js";
 
 const VALID_PROVIDERS: ApiKeyProvider[] = ["anthropic", "openai", "minimax", "ollama"];
@@ -18,7 +18,7 @@ export const apiKeyRoutes = new Hono();
 
 apiKeyRoutes.get("/", (c) => {
   try {
-    const { workspace } = requireAuthenticatedContext(c);
+    const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
     return c.json({ apiKeys: listApiKeysForWorkspace(workspace.id) });
   } catch (error) {
     return errorResponse(c, error);
@@ -27,7 +27,7 @@ apiKeyRoutes.get("/", (c) => {
 
 apiKeyRoutes.post("/", async (c) => {
   try {
-    const { workspace } = requireAuthenticatedContext(c);
+    const { workspace } = requirePrivateWorkspaceRole(c, "admin");
     const body = (await c.req.json().catch(() => ({}))) as Partial<{ provider: string; label: string; value: string }>;
     if (!body.provider || !VALID_PROVIDERS.includes(body.provider as ApiKeyProvider)) {
       throw httpError(400, "provider must be one of anthropic, openai, minimax, ollama");
@@ -48,8 +48,9 @@ apiKeyRoutes.post("/", async (c) => {
 
 apiKeyRoutes.delete("/:id", (c) => {
   try {
-    requireAuthenticatedContext(c);
-    removeApiKey(c.req.param("id"));
+    const { workspace } = requirePrivateWorkspaceRole(c, "admin");
+    const removed = removeApiKeyForWorkspace(c.req.param("id"), workspace.id);
+    if (!removed) return errorResponse(c, httpError(404, "api key not found"));
     return c.json({ ok: true });
   } catch (error) {
     return errorResponse(c, error);

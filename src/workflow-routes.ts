@@ -1,5 +1,7 @@
 import { Hono, type Context } from "hono";
+import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import { requireAuthenticatedContext } from "./taskloom-services.js";
+import { findWorkspaceMembership, loadStore } from "./taskloom-store.js";
 import {
   applyWorkflowDraft,
   applyWorkflowTemplate,
@@ -49,51 +51,68 @@ export const workflowRoutes = new Hono();
 workflowRoutes.get("/", (c) => runWorkflowOperation(c, "getOverview"));
 
 workflowRoutes.get("/brief", (c) => runWorkflowOperation(c, "getBrief"));
-workflowRoutes.put("/brief", (c) => runWorkflowOperation(c, "saveBrief", readJsonBody));
+workflowRoutes.put("/brief", (c) => runWorkflowOperation(c, "saveBrief", readJsonBody, [], "editWorkflow"));
 
 workflowRoutes.get("/brief/templates", (c) => runWorkflowOperation(c, "listBriefTemplates"));
 workflowRoutes.post("/brief/templates/:templateId/apply", (c) =>
-  runWorkflowOperation(c, "applyBriefTemplate", readJsonBody, ["templateId"]),
+  runWorkflowOperation(c, "applyBriefTemplate", readJsonBody, ["templateId"], "editWorkflow"),
 );
 
 workflowRoutes.get("/brief/versions", (c) => runWorkflowOperation(c, "listBriefVersions"));
 workflowRoutes.post("/brief/versions/:versionId/restore", (c) =>
-  runWorkflowOperation(c, "restoreBriefVersion", readJsonBody, ["versionId"]),
+  runWorkflowOperation(c, "restoreBriefVersion", readJsonBody, ["versionId"], "editWorkflow"),
 );
 
 workflowRoutes.get("/requirements", (c) => runWorkflowOperation(c, "getRequirements"));
-workflowRoutes.put("/requirements", (c) => runWorkflowOperation(c, "saveRequirements", readJsonBody));
+workflowRoutes.put("/requirements", (c) => runWorkflowOperation(c, "saveRequirements", readJsonBody, [], "editWorkflow"));
 
 workflowRoutes.get("/plan-items", (c) => runWorkflowOperation(c, "listPlanItems"));
-workflowRoutes.put("/plan-items", (c) => runWorkflowOperation(c, "savePlanItems", readJsonBody));
-workflowRoutes.post("/plan-items", (c) => runWorkflowOperation(c, "createPlanItem", readJsonBody));
-workflowRoutes.patch("/plan-items/:itemId", (c) => runWorkflowOperation(c, "updatePlanItem", readJsonBody, ["itemId"]));
+workflowRoutes.put("/plan-items", (c) => runWorkflowOperation(c, "savePlanItems", readJsonBody, [], "editWorkflow"));
+workflowRoutes.post("/plan-items", (c) => runWorkflowOperation(c, "createPlanItem", readJsonBody, [], "editWorkflow"));
+workflowRoutes.patch("/plan-items/:itemId", (c) =>
+  runWorkflowOperation(c, "updatePlanItem", readJsonBody, ["itemId"], "editWorkflow"),
+);
 
 workflowRoutes.get("/blockers-questions", (c) => runWorkflowOperation(c, "getBlockersAndQuestions"));
-workflowRoutes.put("/blockers-questions", (c) => runWorkflowOperation(c, "saveBlockersAndQuestions", readJsonBody));
+workflowRoutes.put("/blockers-questions", (c) =>
+  runWorkflowOperation(c, "saveBlockersAndQuestions", readJsonBody, [], "editWorkflow"),
+);
 
 workflowRoutes.get("/blockers", (c) => runWorkflowOperation(c, "listBlockers"));
-workflowRoutes.post("/blockers", (c) => runWorkflowOperation(c, "createBlocker", readJsonBody));
-workflowRoutes.patch("/blockers/:blockerId", (c) => runWorkflowOperation(c, "updateBlocker", readJsonBody, ["blockerId"]));
+workflowRoutes.post("/blockers", (c) => runWorkflowOperation(c, "createBlocker", readJsonBody, [], "editWorkflow"));
+workflowRoutes.patch("/blockers/:blockerId", (c) =>
+  runWorkflowOperation(c, "updateBlocker", readJsonBody, ["blockerId"], "editWorkflow"),
+);
 
 workflowRoutes.get("/questions", (c) => runWorkflowOperation(c, "listQuestions"));
-workflowRoutes.post("/questions", (c) => runWorkflowOperation(c, "createQuestion", readJsonBody));
-workflowRoutes.patch("/questions/:questionId", (c) => runWorkflowOperation(c, "updateQuestion", readJsonBody, ["questionId"]));
+workflowRoutes.post("/questions", (c) => runWorkflowOperation(c, "createQuestion", readJsonBody, [], "editWorkflow"));
+workflowRoutes.patch("/questions/:questionId", (c) =>
+  runWorkflowOperation(c, "updateQuestion", readJsonBody, ["questionId"], "editWorkflow"),
+);
 
 workflowRoutes.get("/validation-evidence", (c) => runWorkflowOperation(c, "listValidationEvidence"));
-workflowRoutes.put("/validation-evidence", (c) => runWorkflowOperation(c, "saveValidationEvidence", readJsonBody));
-workflowRoutes.post("/validation-evidence", (c) => runWorkflowOperation(c, "createValidationEvidence", readJsonBody));
+workflowRoutes.put("/validation-evidence", (c) =>
+  runWorkflowOperation(c, "saveValidationEvidence", readJsonBody, [], "editWorkflow"),
+);
+workflowRoutes.post("/validation-evidence", (c) =>
+  runWorkflowOperation(c, "createValidationEvidence", readJsonBody, [], "editWorkflow"),
+);
 workflowRoutes.patch("/validation-evidence/:evidenceId", (c) =>
-  runWorkflowOperation(c, "updateValidationEvidence", readJsonBody, ["evidenceId"]),
+  runWorkflowOperation(c, "updateValidationEvidence", readJsonBody, ["evidenceId"], "editWorkflow"),
 );
 
 workflowRoutes.get("/release-confirmation", (c) => runWorkflowOperation(c, "getReleaseConfirmation"));
-workflowRoutes.put("/release-confirmation", (c) => runWorkflowOperation(c, "confirmRelease", readJsonBody));
-workflowRoutes.post("/release-confirmation", (c) => runWorkflowOperation(c, "confirmRelease", readJsonBody));
+workflowRoutes.put("/release-confirmation", (c) =>
+  runWorkflowOperation(c, "confirmRelease", readJsonBody, [], "editWorkflow"),
+);
+workflowRoutes.post("/release-confirmation", (c) =>
+  runWorkflowOperation(c, "confirmRelease", readJsonBody, [], "editWorkflow"),
+);
 
 workflowRoutes.get("/templates", (c) => {
   try {
-    requireAuthenticatedContext(c);
+    const context = requireAuthenticatedContext(c);
+    requireWorkflowPermission(context, "viewWorkspace");
     return c.json({ templates: listWorkflowTemplates() });
   } catch (error) {
     return errorResponse(c, error);
@@ -103,6 +122,7 @@ workflowRoutes.get("/templates", (c) => {
 workflowRoutes.post("/templates/:templateId/apply", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
+    requireWorkflowPermission(context, "editWorkflow");
     const result = await applyWorkflowTemplate(context, c.req.param("templateId"));
     return c.json(result);
   } catch (error) {
@@ -113,6 +133,7 @@ workflowRoutes.post("/templates/:templateId/apply", async (c) => {
 workflowRoutes.post("/generate-from-prompt", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
+    requireWorkflowPermission(context, "editWorkflow");
     const body = (await readJsonBody(c)) as { prompt?: string; apply?: boolean } | undefined;
     const prompt = body?.prompt ?? "";
     const apply = Boolean(body?.apply);
@@ -129,6 +150,7 @@ workflowRoutes.post("/generate-from-prompt", async (c) => {
 workflowRoutes.post("/plan-mode", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
+    requireWorkflowPermission(context, "editWorkflow");
     const result = await llmPlanMode(context);
     return c.json(result);
   } catch (error) {
@@ -139,6 +161,7 @@ workflowRoutes.post("/plan-mode", async (c) => {
 workflowRoutes.post("/plan-mode/apply", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
+    requireWorkflowPermission(context, "editWorkflow");
     const body = (await readJsonBody(c)) as { planItems?: { summary: string; status?: string }[] } | undefined;
     const items = (body?.planItems ?? []).map((p) => {
       const raw = String(p.status ?? "todo");
@@ -160,9 +183,11 @@ async function runWorkflowOperation(
   operation: WorkflowOperation,
   readBody?: (c: Context) => Promise<unknown>,
   paramNames: string[] = [],
+  permission: WorkspacePermission = "viewWorkspace",
 ) {
   try {
     const context = requireAuthenticatedContext(c);
+    requireWorkflowPermission(context, permission);
     const service = await loadWorkflowService();
     if (!service) {
       throw httpError(501, "workflow service module is not available");
@@ -182,6 +207,11 @@ async function runWorkflowOperation(
   } catch (error) {
     return errorResponse(c, error);
   }
+}
+
+function requireWorkflowPermission(context: AuthenticatedContext, permission: WorkspacePermission) {
+  const membership = findWorkspaceMembership(loadStore(), context.workspace.id, context.user.id);
+  assertPermission(membership, permission);
 }
 
 let workflowServicePromise: Promise<WorkflowServiceModule | null> | null = null;

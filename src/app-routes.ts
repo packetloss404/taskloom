@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import {
   applySessionCookie,
   completeOnboardingStep,
@@ -16,16 +17,22 @@ import {
   updateProfile,
   updateWorkspace,
 } from "./taskloom-services.js";
+import { findWorkspaceMembership, loadStore } from "./taskloom-store.js";
 
 export const appRoutes = new Hono();
 
 appRoutes.get("/auth/session", (c) => {
-  const context = restoreSession(c);
-  if (!context) {
-    return c.json({ authenticated: false, user: null, workspace: null, onboarding: null });
-  }
+  try {
+    const context = restoreSession(c);
+    if (!context) {
+      return c.json({ authenticated: false, user: null, workspace: null, onboarding: null });
+    }
 
-  return c.json(getSessionPayload(context));
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json(getSessionPayload(context));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
 });
 
 appRoutes.post("/auth/register", async (c) => {
@@ -65,7 +72,9 @@ appRoutes.post("/auth/logout", (c) => {
 
 appRoutes.get("/app/bootstrap", async (c) => {
   try {
-    return c.json(await getPrivateBootstrap(requireAuthenticatedContext(c)));
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json(await getPrivateBootstrap(context));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -73,7 +82,9 @@ appRoutes.get("/app/bootstrap", async (c) => {
 
 appRoutes.get("/app/activation", async (c) => {
   try {
-    return c.json(await getActivationDetail(requireAuthenticatedContext(c)));
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json(await getActivationDetail(context));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -81,7 +92,9 @@ appRoutes.get("/app/activation", async (c) => {
 
 appRoutes.get("/app/activity", (c) => {
   try {
-    return c.json({ activities: listWorkspaceActivities(requireAuthenticatedContext(c)) });
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json({ activities: listWorkspaceActivities(context) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -89,7 +102,9 @@ appRoutes.get("/app/activity", (c) => {
 
 appRoutes.get("/app/activity/:id", (c) => {
   try {
-    return c.json(getWorkspaceActivityDetail(requireAuthenticatedContext(c), c.req.param("id")));
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json(getWorkspaceActivityDetail(context, c.req.param("id")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -97,7 +112,9 @@ appRoutes.get("/app/activity/:id", (c) => {
 
 appRoutes.get("/app/onboarding", (c) => {
   try {
-    return c.json({ onboarding: getOnboarding(requireAuthenticatedContext(c)) });
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "viewWorkspace");
+    return c.json({ onboarding: getOnboarding(context) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -105,7 +122,9 @@ appRoutes.get("/app/onboarding", (c) => {
 
 appRoutes.post("/app/onboarding/steps/:stepKey/complete", async (c) => {
   try {
-    return c.json({ onboarding: await completeOnboardingStep(requireAuthenticatedContext(c), c.req.param("stepKey")) });
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "editWorkflow");
+    return c.json({ onboarding: await completeOnboardingStep(context, c.req.param("stepKey")) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -113,8 +132,9 @@ appRoutes.post("/app/onboarding/steps/:stepKey/complete", async (c) => {
 
 appRoutes.patch("/app/profile", async (c) => {
   try {
+    const context = requireAuthenticatedContext(c);
     const body = (await c.req.json()) as { displayName?: string; timezone?: string };
-    const user = await updateProfile(requireAuthenticatedContext(c), {
+    const user = await updateProfile(context, {
       displayName: body.displayName ?? "",
       timezone: body.timezone ?? "",
     });
@@ -133,8 +153,10 @@ appRoutes.patch("/app/profile", async (c) => {
 
 appRoutes.patch("/app/workspace", async (c) => {
   try {
+    const context = requireAuthenticatedContext(c);
+    requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json()) as { name?: string; website?: string; automationGoal?: string };
-    const workspace = await updateWorkspace(requireAuthenticatedContext(c), {
+    const workspace = await updateWorkspace(context, {
       name: body.name ?? "",
       website: body.website ?? "",
       automationGoal: body.automationGoal ?? "",
@@ -144,6 +166,13 @@ appRoutes.patch("/app/workspace", async (c) => {
     return errorResponse(c, error);
   }
 });
+
+type AuthenticatedRouteContext = ReturnType<typeof requireAuthenticatedContext>;
+
+function requireWorkspacePermission(context: AuthenticatedRouteContext, permission: WorkspacePermission) {
+  const membership = findWorkspaceMembership(loadStore(), context.workspace.id, context.user.id);
+  assertPermission(membership, permission);
+}
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);

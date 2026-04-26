@@ -10,7 +10,7 @@ Taskloom currently has a local activation domain, file-backed app services, auth
 - Workspace records now include membership rows, workflow briefs, requirements, implementation plan items, blockers/open questions, validation evidence, and release confirmations.
 - Public activation endpoints and private app endpoints are available for activation, onboarding, workspace settings, and activity.
 - The workflow route module defines the expected private `/api/app/workflow` endpoint shape.
-- RBAC helpers define owner, admin, member, and viewer roles with view, edit workflow, and manage workspace permissions.
+- RBAC helpers define owner, admin, member, and viewer roles with view workspace data, edit workflow, and manage workspace/operations permissions.
 - Jobs scripts can recompute activation read models and clean up expired sessions against the local store.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
 - Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
@@ -61,8 +61,21 @@ RBAC currently lives as reusable helpers rather than a full route policy layer:
 
 - `viewer`: can view workspace data.
 - `member`: can view workspace data and edit workflow records.
-- `admin`: can view, edit workflow records, and manage workspace settings.
-- `owner`: has the same permissions as admin and remains the seeded default membership role.
+- `admin`: can view, edit workflow records, and manage workspace settings/operations.
+- `owner`: has the same workspace/operations management permissions as admin and remains the seeded default membership role.
+
+### Phase 7: Route-Level RBAC And Membership Enforcement
+
+Phase 7 is the next documentation target because the recommended next implementation item is to apply the existing RBAC helpers to private route policies. The phase moves private app APIs from authentication-only checks to workspace membership and permission-aware checks.
+
+Intended route semantics:
+
+- Authenticated sessions are still required for private `/api/app/*` routes.
+- Private workspace routes must also verify that the signed-in user has membership in the current workspace.
+- Read routes require `viewer`-level access or higher.
+- Workflow write routes require `member`-level access or higher.
+- Workspace settings, operational controls, jobs, agents, webhook management, and other administrative operations require `admin` or `owner` access.
+- `owner` remains the seeded default workspace role and carries the same operational management authority as `admin` unless future ownership-transfer rules require a distinction.
 
 ### Jobs
 
@@ -123,8 +136,8 @@ Replace the JSON store with a real database-backed persistence layer while keepi
 
 Expand local auth from a single-owner workspace flow into a workspace membership model.
 
-- Apply the existing owner/admin/member/viewer helper layer to private app routes.
-- Enforce workspace membership on private API routes.
+- Apply the existing owner/admin/member/viewer helper layer to private app routes as Phase 7 route-level RBAC and membership enforcement.
+- Enforce workspace membership on private API routes before allowing workspace reads, workflow edits, or operational mutations.
 - Add invitation and member management flows.
 - Add session cleanup for expired sessions.
 - Review production cookie and password handling before external deployment.
@@ -168,12 +181,11 @@ Strengthen the project rails before larger product work accumulates.
 
 ## Recommended Order
 
-1. Verify workflow route mounting and frontend workflow pages.
-2. Apply RBAC helpers to private route policies.
-3. Persistence foundation.
-4. Real activation signal mapping.
-5. Jobs scheduling, backfills, and stale read-model repair.
-6. Broader test and release hardening.
+1. Phase 7: apply RBAC helpers to private route policies.
+2. Persistence foundation.
+3. Real activation signal mapping.
+4. Jobs scheduling, backfills, and stale read-model repair.
+5. Broader test and release hardening.
 
 ## Near-Term Definition Of Done
 

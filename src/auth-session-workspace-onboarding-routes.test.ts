@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { appRoutes } from "./app-routes.js";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
 import { login } from "./taskloom-services.js";
-import { resetStoreForTests } from "./taskloom-store.js";
+import { mutateStore, resetStoreForTests, type WorkspaceRole } from "./taskloom-store.js";
 
 function createTestApp() {
   const app = new Hono();
@@ -21,6 +21,14 @@ function cookieValue(response: Response) {
   const match = cookie.match(new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`));
   assert.ok(match?.[1], "expected response to set a session cookie");
   return match[1];
+}
+
+function setAlphaRole(role: WorkspaceRole) {
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership, "expected alpha membership");
+    membership.role = role;
+  });
 }
 
 test("session route reports unauthenticated without a valid session cookie", async () => {
@@ -118,6 +126,82 @@ test("workspace route requires auth, validates website, and returns the updated 
   assert.equal(body.workspace.slug, "alpha-ops");
   assert.equal(body.workspace.website, "https://alpha.example");
   assert.equal(body.workspace.automationGoal, "Automate triage");
+});
+
+test("workspace settings require admin or owner membership", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  for (const role of ["viewer", "member"] as const) {
+    setAlphaRole(role);
+    const denied = await app.request("/api/app/workspace", {
+      method: "PATCH",
+      headers: { ...authHeaders(auth.cookieValue), "content-type": "application/json" },
+      body: JSON.stringify({ name: "Alpha Ops", website: "https://alpha.example", automationGoal: "Automate triage" }),
+    });
+
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { error: "workspace role admin is required" });
+  }
+
+  setAlphaRole("admin");
+  const allowed = await app.request("/api/app/workspace", {
+    method: "PATCH",
+    headers: { ...authHeaders(auth.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ name: "Alpha Admin Ops", website: "https://alpha.example", automationGoal: "Automate triage" }),
+  });
+  const body = await allowed.json() as { workspace: { name: string } };
+
+  assert.equal(allowed.status, 200);
+  assert.equal(body.workspace.name, "Alpha Admin Ops");
+});
+
+test("viewer memberships can read shared app state and update their own profile", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  setAlphaRole("viewer");
+
+  for (const path of ["/api/auth/session", "/api/app/bootstrap", "/api/app/activation", "/api/app/activity", "/api/app/onboarding"] as const) {
+    const response = await app.request(path, { headers: authHeaders(auth.cookieValue) });
+    assert.equal(response.status, 200, `${path} should allow viewer reads`);
+  }
+
+  const profile = await app.request("/api/app/profile", {
+    method: "PATCH",
+    headers: { ...authHeaders(auth.cookieValue), "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Alpha Viewer", timezone: "America/New_York" }),
+  });
+  const body = await profile.json() as { profile: { displayName: string; timezone: string } };
+
+  assert.equal(profile.status, 200);
+  assert.equal(body.profile.displayName, "Alpha Viewer");
+  assert.equal(body.profile.timezone, "America/New_York");
+});
+
+test("onboarding completion requires member or above membership", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  setAlphaRole("viewer");
+  const denied = await app.request("/api/app/onboarding/steps/create_workspace_profile/complete", {
+    method: "POST",
+    headers: authHeaders(auth.cookieValue),
+  });
+  assert.equal(denied.status, 403);
+  assert.deepEqual(await denied.json(), { error: "workspace role member is required" });
+
+  setAlphaRole("member");
+  const allowed = await app.request("/api/app/onboarding/steps/create_workspace_profile/complete", {
+    method: "POST",
+    headers: authHeaders(auth.cookieValue),
+  });
+  const body = await allowed.json() as { onboarding: { completedSteps: string[] } };
+
+  assert.equal(allowed.status, 200);
+  assert.ok(body.onboarding.completedSteps.includes("create_workspace_profile"));
 });
 
 test("onboarding routes expose current state and reject unknown completion steps", async () => {

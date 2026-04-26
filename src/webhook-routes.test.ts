@@ -53,6 +53,26 @@ test("webhook token rotation and deletion are workspace-scoped", async () => {
   assert.equal(loadStore().agents.find((agent) => agent.id === "agent_alpha_support")?.webhookToken, undefined);
 });
 
+test("webhook token management requires an admin role", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "viewer";
+  });
+
+  const response = await app.request("/api/app/webhooks/agents/agent_alpha_support/rotate", {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(body, { error: "workspace role admin is required" });
+});
+
 test("public webhook enqueues an agent run job with request inputs", async () => {
   resetStoreForTests();
   const app = createTestApp();

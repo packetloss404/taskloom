@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono";
-import { requireAuthenticatedContext } from "./taskloom-services.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { cancelJob, enqueueJob, findJob, listJobs } from "./jobs/store.js";
 import { parseCron } from "./jobs/cron.js";
 import { findAgent, loadStore } from "./taskloom-store.js";
@@ -48,7 +48,7 @@ export const jobRoutes = new Hono();
 
 jobRoutes.get("/", (c) => {
   try {
-    const { workspace } = requireAuthenticatedContext(c);
+    const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
     const status = c.req.query("status") as JobStatus | undefined;
     const limit = Number(c.req.query("limit") ?? 50);
     return c.json({ jobs: listJobs(workspace.id, { status, limit }) });
@@ -59,7 +59,7 @@ jobRoutes.get("/", (c) => {
 
 jobRoutes.post("/", async (c) => {
   try {
-    const { workspace } = requireAuthenticatedContext(c);
+    const { workspace } = requirePrivateWorkspaceRole(c, "admin");
     const body = (await c.req.json().catch(() => ({}))) as Partial<{
       type: string;
       payload: Record<string, unknown>;
@@ -85,7 +85,7 @@ jobRoutes.post("/", async (c) => {
 
 jobRoutes.get("/:id", (c) => {
   try {
-    const { workspace } = requireAuthenticatedContext(c);
+    const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
     const job = findJob(c.req.param("id"));
     if (!job || job.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     return c.json({ job });
@@ -96,7 +96,7 @@ jobRoutes.get("/:id", (c) => {
 
 jobRoutes.post("/:id/cancel", (c) => {
   try {
-    const { workspace } = requireAuthenticatedContext(c);
+    const { workspace } = requirePrivateWorkspaceRole(c, "admin");
     const existing = findJob(c.req.param("id"));
     if (!existing || existing.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     const job = cancelJob(existing.id);

@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { relative } from "@/lib/format";
 import LineageGraphView from "@/components/LineageGraph";
 import { buildLineageGraph, lineageNeighbors, type LineageNode } from "@/lib/lineage";
@@ -62,6 +63,8 @@ const EMPTY_STATE: WorkflowState = {
 type CompareSelection = { left: string | null; right: string | null };
 
 export default function WorkflowPage() {
+  const { session } = useAuth();
+  const isViewer = session?.workspace.role === "viewer";
   const [state, setState] = useState<WorkflowState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -450,6 +453,12 @@ export default function WorkflowPage() {
               <span className={`pill pill--${releaseStatus.tone}`}>RELEASE · {releaseStatus.label}</span>
               <span className="text-ink-700">|</span>
               <span>UPDATED {(relative(state.brief?.updatedAt) || "—").toUpperCase()}</span>
+              {session?.workspace.role && (
+                <>
+                  <span className="text-ink-700">|</span>
+                  <span>ROLE · {session.workspace.role.toUpperCase()}{isViewer ? " · VIEW ONLY" : ""}</span>
+                </>
+              )}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -461,14 +470,16 @@ export default function WorkflowPage() {
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
             </button>
-            <button
-              className="btn-ghost"
-              type="button"
-              onClick={() => setShowBriefTemplates((open) => !open)}
-              disabled={loading || Boolean(saving)}
-            >
-              <Sparkles className="h-3.5 w-3.5" /> Plan mode
-            </button>
+            {!isViewer && (
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={() => setShowBriefTemplates((open) => !open)}
+                disabled={loading || Boolean(saving)}
+              >
+                <Sparkles className="h-3.5 w-3.5" /> Plan mode
+              </button>
+            )}
             <button
               className="btn-ghost"
               type="button"
@@ -508,7 +519,7 @@ export default function WorkflowPage() {
       ) : (
         <>
           {/* ======================= STARTER TEMPLATES ======================= */}
-          {templates.length > 0 && (
+          {!isViewer && templates.length > 0 && (
             <section className="section-band mt-2">
               <SectionHeader
                 kicker="LIBRARY · STARTER TEMPLATES"
@@ -603,6 +614,7 @@ export default function WorkflowPage() {
                 />
               </aside>
               <form key={briefFormKey} className="space-y-5" onSubmit={saveBrief}>
+                <fieldset className="space-y-5" disabled={isViewer}>
                 <Field label="SUMMARY">
                   <textarea
                     name="summary"
@@ -672,6 +684,7 @@ export default function WorkflowPage() {
                     <Save className="h-3.5 w-3.5" /> Save brief
                   </button>
                 </div>
+                </fieldset>
               </form>
             </div>
           </section>
@@ -700,6 +713,7 @@ export default function WorkflowPage() {
                   className="grid gap-3 border border-ink-700 bg-ink-875 p-4 lg:grid-cols-[1fr_140px_140px_auto] lg:items-end"
                   onSubmit={addRequirement}
                 >
+                  <fieldset className="contents" disabled={isViewer}>
                   <Field label="TITLE">
                     <input name="title" className="workflow-input" required />
                   </Field>
@@ -729,6 +743,7 @@ export default function WorkflowPage() {
                       <input name="detail" className="workflow-input" />
                     </Field>
                   </div>
+                  </fieldset>
                 </form>
 
                 <div className="mt-5 border border-ink-700">
@@ -771,6 +786,7 @@ export default function WorkflowPage() {
                             <select
                               className="workflow-input min-w-32"
                               value={requirement.status}
+                              disabled={isViewer}
                               onChange={(event) =>
                                 updateRequirementStatus(
                                   requirement,
@@ -821,6 +837,7 @@ export default function WorkflowPage() {
                   className="grid gap-3 border border-ink-700 bg-ink-875 p-4 lg:grid-cols-[1fr_160px_auto] lg:items-end"
                   onSubmit={addPlanItem}
                 >
+                  <fieldset className="contents" disabled={isViewer}>
                   <Field label="TITLE">
                     <input name="title" className="workflow-input" required />
                   </Field>
@@ -840,6 +857,7 @@ export default function WorkflowPage() {
                       <input name="description" className="workflow-input" />
                     </Field>
                   </div>
+                  </fieldset>
                 </form>
 
                 <div className="mt-5 border border-ink-700">
@@ -878,6 +896,7 @@ export default function WorkflowPage() {
                             <select
                               className="workflow-input min-w-36"
                               value={item.status}
+                              disabled={isViewer}
                               onChange={(event) =>
                                 updatePlanStatus(item, event.target.value as WorkflowPlanItemStatus)
                               }
@@ -910,6 +929,7 @@ export default function WorkflowPage() {
                 <div>
                   <div className="kicker mb-3">EVIDENCE LOG</div>
                   <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_130px_auto] sm:items-end" onSubmit={addEvidence}>
+                    <fieldset className="contents" disabled={isViewer}>
                     <Field label="TITLE">
                       <input name="title" className="workflow-input" required />
                     </Field>
@@ -931,6 +951,7 @@ export default function WorkflowPage() {
                         <input name="detail" className="workflow-input" />
                       </Field>
                     </div>
+                    </fieldset>
                   </form>
                 </div>
                 {state.validationEvidence.length === 0 ? (
@@ -957,7 +978,7 @@ export default function WorkflowPage() {
                           className="workflow-input min-w-32"
                           value={evidence.status}
                           onChange={(event) => updateEvidenceStatus(evidence, event.target.value as WorkflowValidationStatus)}
-                          disabled={saving === `evidence-${evidence.id}`}
+                          disabled={isViewer || saving === `evidence-${evidence.id}`}
                         >
                           <option value="pending">Pending</option>
                           <option value="passed">Passed</option>
@@ -971,6 +992,7 @@ export default function WorkflowPage() {
               <div className="bg-ink-950 p-6">
                 <div className="kicker mb-3">RELEASE CONFIRMATION</div>
                 <form key={state.release?.updatedAt ?? "release-new"} className="space-y-4" onSubmit={saveRelease}>
+                  <fieldset className="space-y-4" disabled={isViewer}>
                   <div className="flex items-center gap-3">
                     <span className={`pill pill--${releaseStatus.tone}`}>{releaseStatus.label}</span>
                     {state.release?.confirmedAt && (
@@ -999,6 +1021,7 @@ export default function WorkflowPage() {
                       <Save className="h-3.5 w-3.5" /> Save release
                     </button>
                   </div>
+                  </fieldset>
                 </form>
               </div>
             </div>
@@ -1008,6 +1031,7 @@ export default function WorkflowPage() {
                 <div>
                   <div className="kicker mb-3">BLOCKERS</div>
                   <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_140px_auto] sm:items-end" onSubmit={addBlocker}>
+                    <fieldset className="contents" disabled={isViewer}>
                     <Field label="TITLE">
                       <input name="title" className="workflow-input" required />
                     </Field>
@@ -1031,6 +1055,7 @@ export default function WorkflowPage() {
                       <input name="dependency" type="checkbox" className="h-4 w-4 rounded border-ink-600 bg-ink-950 text-signal-amber" />
                       Dependency
                     </label>
+                    </fieldset>
                   </form>
                 </div>
                 {state.blockers.length === 0 ? (
@@ -1051,9 +1076,9 @@ export default function WorkflowPage() {
                             UPDATED {(relative(blocker.updatedAt) || "—").toUpperCase()}
                           </div>
                         </div>
-                        <button type="button" className="btn-ghost justify-center" onClick={() => updateBlockerStatus(blocker, blocker.status === "open" ? "resolved" : "open")} disabled={saving === `blocker-${blocker.id}`}>
+                        {!isViewer && <button type="button" className="btn-ghost justify-center" onClick={() => updateBlockerStatus(blocker, blocker.status === "open" ? "resolved" : "open")} disabled={saving === `blocker-${blocker.id}`}>
                           {blocker.status === "open" ? "Resolve" : "Reopen"}
-                        </button>
+                        </button>}
                       </li>
                     ))}
                   </ul>
@@ -1063,12 +1088,14 @@ export default function WorkflowPage() {
                 <div>
                   <div className="kicker mb-3">OPEN QUESTIONS</div>
                   <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={addQuestion}>
+                    <fieldset className="contents" disabled={isViewer}>
                     <Field label="QUESTION">
                       <input name="prompt" className="workflow-input" required />
                     </Field>
                     <button className="btn-primary justify-center" type="submit" disabled={saving === "question"}>
                       <Plus className="h-3.5 w-3.5" /> Add
                     </button>
+                    </fieldset>
                   </form>
                 </div>
                 {state.questions.length === 0 ? (
@@ -1089,19 +1116,21 @@ export default function WorkflowPage() {
                               UPDATED {(relative(question.updatedAt) || "—").toUpperCase()}
                             </div>
                           </div>
-                          {question.status === "answered" && (
+                          {!isViewer && question.status === "answered" && (
                             <button type="button" className="btn-ghost justify-center" onClick={() => updateQuestionStatus(question, "open")} disabled={saving === `question-${question.id}`}>
                               Reopen
                             </button>
                           )}
                         </div>
                         <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={(event) => saveQuestionAnswer(question, event)}>
+                          <fieldset className="contents" disabled={isViewer}>
                           <Field label="ANSWER">
                             <input name="answer" defaultValue={question.answer} className="workflow-input" />
                           </Field>
                           <button className="btn-primary justify-center" type="submit" disabled={saving === `question-${question.id}`}>
                             Save answer
                           </button>
+                          </fieldset>
                         </form>
                       </li>
                     ))}
@@ -1132,7 +1161,7 @@ export default function WorkflowPage() {
       )}
 
       {/* ======================= BRIEF TEMPLATES OVERLAY ======================= */}
-      {showBriefTemplates && state.briefTemplates.length > 0 && (
+      {!isViewer && showBriefTemplates && state.briefTemplates.length > 0 && (
         <Overlay title="BRIEF TEMPLATES" onClose={() => setShowBriefTemplates(false)}>
           <div className="grid h-full grid-cols-1 gap-px bg-ink-700 lg:grid-cols-3">
             {state.briefTemplates.map((template) => (
@@ -1232,22 +1261,24 @@ export default function WorkflowPage() {
                             >
                               {selectedSlot ? `[${selectedSlot}]` : "Select"}
                             </button>
-                            <button
-                              type="button"
-                              className="btn-ghost text-[10px]"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                restoreVersion(version);
-                              }}
-                              disabled={saving === `restore-${version.id}`}
-                            >
-                              {saving === `restore-${version.id}` ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <RotateCcw className="h-3 w-3" />
-                              )}
-                              Restore
-                            </button>
+                            {!isViewer && (
+                              <button
+                                type="button"
+                                className="btn-ghost text-[10px]"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  restoreVersion(version);
+                                }}
+                                disabled={saving === `restore-${version.id}`}
+                              >
+                                {saving === `restore-${version.id}` ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RotateCcw className="h-3 w-3" />
+                                )}
+                                Restore
+                              </button>
+                            )}
                           </span>
                         </div>
                       </li>

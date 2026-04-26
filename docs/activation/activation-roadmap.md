@@ -26,5 +26,15 @@ Activation has moved beyond the initial scaffold. The current implementation inc
 1. Replace JSON persistence with database-backed activation repositories behind the existing contracts.
 2. Map durable workflow, onboarding, activity, validation, and release records through `buildSignalSnapshotFromProductRecords(...)` instead of relying on manually maintained activation facts.
 3. Add database backfills and stale read-model repair checks.
-4. Enforce workspace access on private activation and workflow routes through route-level RBAC.
+4. Phase 7: enforce workspace membership and route-level RBAC on private activation and workflow routes, moving them from authentication-only checks to permission-aware access.
 5. Broaden API and frontend smoke coverage for activation-critical flows.
+
+## Phase 7 Access Semantics
+
+Phase 7 should apply the existing RBAC helper roles to private activation-adjacent routes without changing the pure activation engine:
+
+- `viewer`: can read workspace activation and workflow data.
+- `member`: can read workspace data and edit workflow records that feed activation.
+- `admin` and `owner`: can manage workspace settings, jobs, agents, webhook operations, and other workspace operations.
+
+The activation domain remains storage- and auth-agnostic. Membership lookup and permission enforcement belong at the private route/service boundary before activation data is read or workflow records are mutated.

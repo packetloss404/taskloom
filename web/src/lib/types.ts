@@ -12,6 +12,7 @@ export interface Session {
     name: string;
     website: string;
     automationGoal: string;
+    role?: "owner" | "admin" | "member" | "viewer";
   };
   onboarding: {
     status: string;

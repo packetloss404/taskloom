@@ -14,6 +14,7 @@ Taskloom is an open source workspace portal for activation tracking, onboarding 
 - UI-neutral activation summary view model
 - workspace auth, onboarding, activity, and workflow flows
 - workspace membership records and RBAC helper utilities
+- planned route-level RBAC for private workspace APIs
 - command-driven maintenance jobs
 - queue-driven agent runs, recurring job scheduling, and public webhook triggers
 - Product Workflow Expansion surfaces for briefs, requirements, plans, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, and Plan Mode
@@ -179,7 +180,14 @@ Workflow route module endpoint shape under `/api/app/workflow`:
 - `POST /api/app/workflow/plan-mode`
 - `POST /api/app/workflow/plan-mode/apply`
 
-Workflow endpoints are private app endpoints and require an authenticated session. They operate on the signed-in user's current workspace. Workflow writes update the local workflow records, emit workflow activity, and refresh activation facts used by dashboard and activation views.
+Workflow endpoints are private app endpoints and require an authenticated session. Today they operate on the signed-in user's current workspace; Phase 7 moves private route handling from authentication-only checks to membership- and permission-aware route policies. Intended role semantics are:
+
+- `viewer`: can read workspace data.
+- `member`: can read workspace data and edit workflow records.
+- `admin`: can read, edit workflow records, and manage workspace settings/operations.
+- `owner`: has admin-level workspace and operations management permissions and remains the default seeded workspace role.
+
+Workflow writes update the local workflow records, emit workflow activity, and refresh activation facts used by dashboard and activation views.
 
 Product Workflow Expansion currently includes:
 

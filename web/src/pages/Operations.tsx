@@ -79,6 +79,7 @@ const EMPTY_STATE: OperationsState = {
 
 export default function OperationsPage() {
   const { session } = useAuth();
+  const isViewer = session?.workspace.role === "viewer";
   const [state, setState] = useState<OperationsState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -237,6 +238,11 @@ export default function OperationsPage() {
           <p className="mt-4 max-w-xl font-mono text-xs text-ink-400">
             <span className="text-ink-500">blockers · questions · validation evidence · release confirmation · job queue</span>
           </p>
+          {session?.workspace.role && (
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+              Workspace role · {session.workspace.role}{isViewer ? " · view-only operations" : ""}
+            </p>
+          )}
         </div>
         <button className="btn-ghost" type="button" onClick={loadOperations} disabled={loading || Boolean(saving)}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
@@ -297,7 +303,7 @@ export default function OperationsPage() {
                     meta={jobMeta(job)}
                     badge={<StatusBadge value={job.status} tone={jobTone(job.status)} />}
                     action={
-                      canCancelJob(job) ? (
+                      !isViewer && canCancelJob(job) ? (
                         <button className="btn-ghost" type="button" onClick={() => cancelJob(job)} disabled={saving === `job-${job.id}`}>
                           {saving === `job-${job.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
                           Cancel
@@ -314,7 +320,7 @@ export default function OperationsPage() {
             icon={<AlertTriangle className="h-4 w-4" />}
             title="Blockers"
             action={
-              <form className="grid gap-3 lg:grid-cols-[1fr_150px_auto] lg:items-end" onSubmit={addBlocker}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="grid gap-3 lg:grid-cols-[1fr_150px_auto] lg:items-end" onSubmit={addBlocker}>
                 <Field label="Title">
                   <input name="title" className="workflow-input" required placeholder="Dependency, access, or scope blocker" />
                 </Field>
@@ -353,9 +359,11 @@ export default function OperationsPage() {
                     meta={`${blocker.severity} severity${blocker.dependency ? " · dependency" : ""} · updated ${relative(blocker.updatedAt)}`}
                     badge={<StatusBadge value={blocker.status} tone={blocker.status === "open" ? "danger" : "good"} />}
                     action={
+                      isViewer ? null : (
                       <button className="btn-ghost" type="button" onClick={() => updateBlockerStatus(blocker)} disabled={saving === `blocker-${blocker.id}`}>
                         {blocker.status === "open" ? "Resolve" : "Reopen"}
                       </button>
+                      )
                     }
                   />
                 ))}
@@ -367,7 +375,7 @@ export default function OperationsPage() {
             icon={<HelpCircle className="h-4 w-4" />}
             title="Open Questions"
             action={
-              <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={addQuestion}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={addQuestion}>
                 <div className="flex-1">
                   <Field label="Question">
                     <input name="prompt" className="workflow-input" required placeholder="Decision or clarification needed" />
@@ -402,12 +410,15 @@ export default function OperationsPage() {
                       rows={3}
                       className="workflow-input mt-4 resize-none"
                       placeholder="Answer or decision"
+                      disabled={isViewer}
                     />
-                    <div className="mt-3 flex justify-end">
-                      <button className="btn-ghost" type="submit" disabled={saving === `question-${question.id}`}>
-                        Save answer
-                      </button>
-                    </div>
+                    {!isViewer && (
+                      <div className="mt-3 flex justify-end">
+                        <button className="btn-ghost" type="submit" disabled={saving === `question-${question.id}`}>
+                          Save answer
+                        </button>
+                      </div>
+                    )}
                   </form>
                 ))}
               </div>
@@ -418,7 +429,7 @@ export default function OperationsPage() {
             icon={<ShieldCheck className="h-4 w-4" />}
             title="Validation Evidence"
             action={
-              <form className="grid gap-3 lg:grid-cols-[1fr_140px_auto] lg:items-end" onSubmit={addEvidence}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="grid gap-3 lg:grid-cols-[1fr_140px_auto] lg:items-end" onSubmit={addEvidence}>
                 <Field label="Title">
                   <input name="title" className="workflow-input" required placeholder="Test run, demo, metric, or review" />
                 </Field>
@@ -455,6 +466,7 @@ export default function OperationsPage() {
                     meta={`${evidence.source || "No source"} · updated ${relative(evidence.updatedAt)}`}
                     badge={<StatusBadge value={evidence.status} tone={validationTone(evidence.status)} />}
                     action={
+                      isViewer ? null : (
                       <select
                         className="workflow-input min-w-32"
                         value={evidence.status}
@@ -465,6 +477,7 @@ export default function OperationsPage() {
                         <option value="passed">Passed</option>
                         <option value="failed">Failed</option>
                       </select>
+                      )
                     }
                   />
                 ))}
@@ -476,7 +489,7 @@ export default function OperationsPage() {
             icon={<Rocket className="h-4 w-4" />}
             title="Release Confirmation"
             action={
-              <form className="space-y-4" onSubmit={confirmRelease}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="space-y-4" onSubmit={confirmRelease}>
                 <ReleasePreflightPanel preflight={state.releaseHistory.preflight} />
                 <Field label="Summary">
                   <textarea
@@ -651,6 +664,10 @@ function validationTone(status: WorkflowValidationStatus) {
   if (status === "passed") return "good";
   if (status === "failed") return "danger";
   return "warn";
+}
+
+function ReadOnlyRoleNotice() {
+  return <div className="border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-500">Viewer role · manage controls hidden</div>;
 }
 
 function jobTone(status: JobStatus) {

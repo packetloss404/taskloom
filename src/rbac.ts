@@ -1,3 +1,7 @@
+import type { Context } from "hono";
+import { requireAuthenticatedContext } from "./taskloom-services.js";
+import { findWorkspaceMembership, loadStore } from "./taskloom-store.js";
+
 export const WORKSPACE_ROLES = ["viewer", "member", "admin", "owner"] as const;
 
 export type WorkspaceRole = (typeof WORKSPACE_ROLES)[number];
@@ -7,6 +11,8 @@ export type WorkspacePermission = "viewWorkspace" | "editWorkflow" | "manageWork
 export interface WorkspaceMembershipLike {
   role?: string | null;
 }
+
+export type AuthenticatedWorkspaceContext = ReturnType<typeof requireAuthenticatedContext>;
 
 export interface WorkspaceRoleDefinition {
   rank: number;
@@ -111,4 +117,33 @@ export function assertPermission(
   permission: WorkspacePermission,
 ): WorkspaceRole {
   return requireWorkspaceRole(membership, permissionMinimumRoles[permission]);
+}
+
+export function requirePrivateWorkspace(c: Context): AuthenticatedWorkspaceContext {
+  const context = requireAuthenticatedContext(c);
+  requireWorkspaceMembership(context);
+  return context;
+}
+
+export function requirePrivateWorkspaceRole(c: Context, minimumRole: WorkspaceRole): AuthenticatedWorkspaceContext {
+  const context = requireAuthenticatedContext(c);
+  requireWorkspaceRole(requireWorkspaceMembership(context), minimumRole);
+  return context;
+}
+
+export function requirePrivateWorkspacePermission(
+  c: Context,
+  permission: WorkspacePermission,
+): AuthenticatedWorkspaceContext {
+  const context = requireAuthenticatedContext(c);
+  assertPermission(requireWorkspaceMembership(context), permission);
+  return context;
+}
+
+function requireWorkspaceMembership(context: AuthenticatedWorkspaceContext): WorkspaceMembershipLike {
+  const membership = findWorkspaceMembership(loadStore(), context.workspace.id, context.user.id);
+  if (!membership || getWorkspaceRole(membership) === null) {
+    throw new WorkspaceAccessError("workspace membership is required");
+  }
+  return membership;
 }

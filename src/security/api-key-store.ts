@@ -84,6 +84,15 @@ export function removeApiKey(id: string): void {
   });
 }
 
+export function removeApiKeyForWorkspace(id: string, workspaceId: string): boolean {
+  return mutateStore((data) => {
+    const idx = data.apiKeys.findIndex((k) => k.id === id && k.workspaceId === workspaceId);
+    if (idx < 0) return false;
+    data.apiKeys.splice(idx, 1);
+    return true;
+  });
+}
+
 export function resolveApiKey(workspaceId: string, provider: ApiKeyProvider): string | null {
   const masterKey = loadMasterKey();
   const ts = nowIso();

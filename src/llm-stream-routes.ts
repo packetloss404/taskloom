@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
-import { requireAuthenticatedContext } from "./taskloom-services.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { getDefaultRouter } from "./providers/router.js";
 import { recordedStream } from "./providers/ledger.js";
 import type { ProviderMessage, ProviderToolDef } from "./providers/types.js";
@@ -28,7 +28,7 @@ export const llmStreamRoutes = new Hono();
 llmStreamRoutes.post("/stream", async (c) => {
   let workspaceId: string;
   try {
-    workspaceId = requireAuthenticatedContext(c).workspace.id;
+    workspaceId = requirePrivateWorkspaceRole(c, "member").workspace.id;
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -95,7 +95,7 @@ llmStreamRoutes.post("/stream", async (c) => {
 
 llmStreamRoutes.post("/cancel/:streamId", (c) => {
   try {
-    requireAuthenticatedContext(c);
+    requirePrivateWorkspaceRole(c, "member");
     const streamId = c.req.param("streamId");
     const ctrl = inflight.get(streamId);
     if (ctrl) {

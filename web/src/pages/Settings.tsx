@@ -22,6 +22,9 @@ export default function SettingsPage() {
     );
   }
 
+  const workspaceRole = bootstrap.workspace.role ?? session.workspace.role;
+  const isViewer = workspaceRole === "viewer";
+
   const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -73,6 +76,13 @@ export default function SettingsPage() {
         <Stat label="PROGRESS" value={bootstrap.activation.summary.progressLabel} />
       </section>
 
+      {workspaceRole && (
+        <div className="mt-6 border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-300">
+          WORKSPACE ROLE · {workspaceRole}
+          {isViewer ? " · VIEW-ONLY WORKSPACE CONTROLS" : ""}
+        </div>
+      )}
+
       <section className="section-band">
         <div className="mb-5 flex items-end justify-between">
           <div>
@@ -107,20 +117,22 @@ export default function SettingsPage() {
           <span className="section-marker">§ 02 / 03</span>
         </div>
         <form className="grid gap-4 md:grid-cols-2 md:max-w-3xl" onSubmit={saveWorkspace}>
-          <Field label="WORKSPACE NAME">
-            <input name="name" defaultValue={bootstrap.workspace.name} className="workflow-input" required />
-          </Field>
-          <Field label="WEBSITE">
-            <input name="website" defaultValue={bootstrap.workspace.website} className="workflow-input" placeholder="https://example.com" />
-          </Field>
-          <div className="md:col-span-2">
-            <Field label="AUTOMATION GOAL">
-              <textarea name="automationGoal" defaultValue={bootstrap.workspace.automationGoal} rows={4} className="workflow-input resize-none" />
+          <fieldset className="contents" disabled={isViewer}>
+            <Field label="WORKSPACE NAME">
+              <input name="name" defaultValue={bootstrap.workspace.name} className="workflow-input" required />
             </Field>
-          </div>
-          <div className="md:col-span-2 flex justify-end">
-            <button className="btn-primary" type="submit">Save workspace</button>
-          </div>
+            <Field label="WEBSITE">
+              <input name="website" defaultValue={bootstrap.workspace.website} className="workflow-input" placeholder="https://example.com" />
+            </Field>
+            <div className="md:col-span-2">
+              <Field label="AUTOMATION GOAL">
+                <textarea name="automationGoal" defaultValue={bootstrap.workspace.automationGoal} rows={4} className="workflow-input resize-none" />
+              </Field>
+            </div>
+            <div className="md:col-span-2 flex justify-end">
+              {isViewer ? <ReadOnlyRoleNotice /> : <button className="btn-primary" type="submit">Save workspace</button>}
+            </div>
+          </fieldset>
         </form>
         <StatusMessage message={workspaceMessage} />
       </section>
@@ -158,6 +170,10 @@ export default function SettingsPage() {
       </section>
     </div>
   );
+}
+
+function ReadOnlyRoleNotice() {
+  return <span className="font-mono text-xs uppercase tracking-[0.18em] text-ink-500">Viewer role · workspace edits hidden</span>;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {

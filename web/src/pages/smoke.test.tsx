@@ -71,3 +71,20 @@ test("Onboarding route and page keep setup behind session-aware completion", () 
   assert.match(page, /Complete the remaining Taskloom setup steps/);
   assert.match(page, /Current step/);
 });
+
+test("Role-aware workspace controls are surfaced and gated for viewers", () => {
+  const settings = pageSource("Settings.tsx");
+  const workflow = pageSource("Workflow.tsx");
+  const operations = pageSource("Operations.tsx");
+  const types = readFileSync(fileURLToPath(new URL("../lib/types.ts", import.meta.url)), "utf8");
+
+  assert.match(types, /role\?: "owner" \| "admin" \| "member" \| "viewer"/);
+  assert.match(settings, /WORKSPACE ROLE/);
+  assert.match(settings, /const isViewer = workspaceRole === "viewer"/);
+  assert.match(settings, /disabled=\{isViewer\}/);
+  assert.match(workflow, /ROLE · \{session\.workspace\.role\.toUpperCase\(\)\}/);
+  assert.match(workflow, /!isViewer && templates\.length > 0/);
+  assert.match(workflow, /disabled=\{isViewer\}/);
+  assert.match(operations, /Workspace role · \{session\.workspace\.role\}/);
+  assert.match(operations, /isViewer \? <ReadOnlyRoleNotice \/> : <form/);
+});

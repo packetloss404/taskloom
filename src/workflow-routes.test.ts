@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Hono } from "hono";
 import { login } from "./taskloom-services";
-import { resetStoreForTests } from "./taskloom-store";
+import { resetStoreForTests, type WorkspaceRole } from "./taskloom-store";
 import { workflowRoutes } from "./workflow-routes";
 import { ProviderRouter, resetDefaultRouterForTests, setDefaultRouter } from "./providers/router";
 import type { LLMProvider, ProviderCallOptions, ProviderCallResult } from "./providers/types";
@@ -11,6 +11,14 @@ function createTestApp() {
   const app = new Hono();
   app.route("/api/app/workflow", workflowRoutes);
   return app;
+}
+
+function loginAlphaAs(role: WorkspaceRole) {
+  const store = resetStoreForTests();
+  const membership = store.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+  assert.ok(membership);
+  membership.role = role;
+  return login({ email: "alpha@taskloom.local", password: "demo12345" });
 }
 
 test("workflow routes require authentication", async () => {
@@ -41,6 +49,90 @@ test("workflow route reports invalid JSON bodies as bad requests", async () => {
 
   assert.equal(response.status, 400);
   assert.deepEqual(body, { error: "request body must be valid JSON" });
+});
+
+test("viewer can read workflow routes", async () => {
+  const auth = loginAlphaAs("viewer");
+  const app = createTestApp();
+
+  const briefResponse = await app.request("/api/app/workflow/brief", {
+    headers: { cookie: `taskloom_session=${auth.cookieValue}` },
+  });
+  const templatesResponse = await app.request("/api/app/workflow/templates", {
+    headers: { cookie: `taskloom_session=${auth.cookieValue}` },
+  });
+
+  assert.equal(briefResponse.status, 200);
+  assert.equal(templatesResponse.status, 200);
+});
+
+test("viewer cannot write workflow routes", async () => {
+  const auth = loginAlphaAs("viewer");
+  const app = createTestApp();
+  const headers = {
+    "content-type": "application/json",
+    cookie: `taskloom_session=${auth.cookieValue}`,
+  };
+
+  const responses = await Promise.all([
+    app.request("/api/app/workflow/brief", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ summary: "Viewer edit" }),
+    }),
+    app.request("/api/app/workflow/templates/customer_onboarding_portal/apply", {
+      method: "POST",
+      headers,
+    }),
+    app.request("/api/app/workflow/generate-from-prompt", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Draft a workflow" }),
+    }),
+    app.request("/api/app/workflow/plan-mode", {
+      method: "POST",
+      headers,
+    }),
+    app.request("/api/app/workflow/plan-mode/apply", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ planItems: [{ summary: "Viewer plan" }] }),
+    }),
+  ]);
+
+  for (const response of responses) {
+    const body = await response.json();
+    assert.equal(response.status, 403);
+    assert.deepEqual(body, { error: "workspace role member is required" });
+  }
+});
+
+test("member can write workflow routes", async () => {
+  const auth = loginAlphaAs("member");
+  const app = createTestApp();
+  const headers = {
+    "content-type": "application/json",
+    cookie: `taskloom_session=${auth.cookieValue}`,
+  };
+
+  const briefResponse = await app.request("/api/app/workflow/brief", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ summary: "Member edit" }),
+  });
+  const applyResponse = await app.request("/api/app/workflow/templates/customer_onboarding_portal/apply", {
+    method: "POST",
+    headers,
+  });
+  const planApplyResponse = await app.request("/api/app/workflow/plan-mode/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ planItems: [{ summary: "Member plan", status: "doing" }] }),
+  });
+
+  assert.equal(briefResponse.status, 200);
+  assert.equal(applyResponse.status, 200);
+  assert.equal(planApplyResponse.status, 200);
 });
 
 test("brief template apply uses the route template id", async () => {

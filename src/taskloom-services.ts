@@ -64,6 +64,7 @@ import {
 type AuthenticatedContext = {
   user: import("./taskloom-store").UserRecord;
   workspace: import("./taskloom-store").WorkspaceRecord;
+  role: import("./taskloom-store").WorkspaceRole;
 };
 
 export async function listPublicActivationSummaries() {
@@ -218,6 +219,7 @@ export async function getPrivateBootstrap(context: AuthenticatedContext) {
       name: context.workspace.name,
       website: context.workspace.website,
       automationGoal: context.workspace.automationGoal,
+      role: context.role,
     },
     onboarding,
     activation: {
@@ -256,6 +258,7 @@ export function getSessionPayload(context: AuthenticatedContext) {
       name: context.workspace.name,
       website: context.workspace.website,
       automationGoal: context.workspace.automationGoal,
+      role: context.role,
     },
     onboarding: onboarding
       ? {
@@ -1504,7 +1507,8 @@ function buildAuthenticatedContext(data: ReturnType<typeof loadStore>, userId: s
   const workspaceId = defaultWorkspaceIdForUser(data, userId);
   const workspace = data.workspaces.find((entry) => entry.id === workspaceId);
   if (!workspace) throw httpError(404, "workspace not found");
-  return { user, workspace };
+  const membership = data.memberships.find((entry) => entry.workspaceId === workspace.id && entry.userId === user.id);
+  return { user, workspace, role: membership?.role ?? "viewer" };
 }
 
 async function syncWorkspaceActivation(

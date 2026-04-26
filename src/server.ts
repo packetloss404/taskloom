@@ -19,7 +19,6 @@ import {
   listProviders,
   listReleaseHistory,
   listWorkspaceEnvVarsForUser,
-  requireAuthenticatedContext,
   retryAgentRun,
   recordRunAsPlaybook,
   runAgent,
@@ -27,6 +26,7 @@ import {
   updateProvider,
   updateWorkspaceEnvVar,
 } from "./taskloom-services.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { appRoutes } from "./app-routes.js";
 import { workflowRoutes } from "./workflow-routes.js";
 import { apiKeyRoutes } from "./api-key-routes.js";
@@ -64,7 +64,7 @@ app.route("/api", appRoutes);
 
 app.get("/api/app/agents", (c) => {
   try {
-    return c.json(listAgents(requireAuthenticatedContext(c)));
+    return c.json(listAgents(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -72,7 +72,7 @@ app.get("/api/app/agents", (c) => {
 
 app.post("/api/app/agents", async (c) => {
   try {
-    return c.json(createAgent(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+    return c.json(createAgent(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -80,7 +80,7 @@ app.post("/api/app/agents", async (c) => {
 
 app.get("/api/app/agents/:agentId", (c) => {
   try {
-    return c.json(getAgent(requireAuthenticatedContext(c), c.req.param("agentId")));
+    return c.json(getAgent(requirePrivateWorkspaceRole(c, "viewer"), c.req.param("agentId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -88,7 +88,7 @@ app.get("/api/app/agents/:agentId", (c) => {
 
 app.patch("/api/app/agents/:agentId", async (c) => {
   try {
-    return c.json(updateAgent(requireAuthenticatedContext(c), c.req.param("agentId"), await readJsonBody(c)));
+    return c.json(updateAgent(requirePrivateWorkspaceRole(c, "admin"), c.req.param("agentId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -96,7 +96,7 @@ app.patch("/api/app/agents/:agentId", async (c) => {
 
 app.delete("/api/app/agents/:agentId", (c) => {
   try {
-    return c.json(archiveAgent(requireAuthenticatedContext(c), c.req.param("agentId")));
+    return c.json(archiveAgent(requirePrivateWorkspaceRole(c, "admin"), c.req.param("agentId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -106,7 +106,7 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
     const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
     const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
-    return c.json(await runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), {
+    return c.json(await runAgent(requirePrivateWorkspaceRole(c, "member"), c.req.param("agentId"), {
       triggerKind: body?.triggerKind,
       inputs,
     }), 201);
@@ -117,7 +117,7 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
 
 app.get("/api/app/agent-templates", (c) => {
   try {
-    requireAuthenticatedContext(c);
+    requirePrivateWorkspaceRole(c, "viewer");
     return c.json(listAgentTemplates());
   } catch (error) {
     return errorResponse(c, error);
@@ -127,7 +127,7 @@ app.get("/api/app/agent-templates", (c) => {
 app.post("/api/app/agents/from-template/:templateId", async (c) => {
   try {
     const body = await readJsonBody(c);
-    return c.json(createAgentFromTemplate(requireAuthenticatedContext(c), c.req.param("templateId"), {
+    return c.json(createAgentFromTemplate(requirePrivateWorkspaceRole(c, "admin"), c.req.param("templateId"), {
       name: typeof body.name === "string" ? body.name : undefined,
       providerId: typeof body.providerId === "string" ? body.providerId : undefined,
       model: typeof body.model === "string" ? body.model : undefined,
@@ -139,7 +139,7 @@ app.post("/api/app/agents/from-template/:templateId", async (c) => {
 
 app.get("/api/app/providers", (c) => {
   try {
-    return c.json(listProviders(requireAuthenticatedContext(c)));
+    return c.json(listProviders(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -147,7 +147,7 @@ app.get("/api/app/providers", (c) => {
 
 app.post("/api/app/providers", async (c) => {
   try {
-    return c.json(createProvider(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+    return c.json(createProvider(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -155,7 +155,7 @@ app.post("/api/app/providers", async (c) => {
 
 app.patch("/api/app/providers/:providerId", async (c) => {
   try {
-    return c.json(updateProvider(requireAuthenticatedContext(c), c.req.param("providerId"), await readJsonBody(c)));
+    return c.json(updateProvider(requirePrivateWorkspaceRole(c, "admin"), c.req.param("providerId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -163,7 +163,7 @@ app.patch("/api/app/providers/:providerId", async (c) => {
 
 app.get("/api/app/agent-runs", (c) => {
   try {
-    return c.json(listAgentRuns(requireAuthenticatedContext(c)));
+    return c.json(listAgentRuns(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -171,7 +171,7 @@ app.get("/api/app/agent-runs", (c) => {
 
 app.post("/api/app/agent-runs/:runId/cancel", (c) => {
   try {
-    return c.json(cancelAgentRun(requireAuthenticatedContext(c), c.req.param("runId")));
+    return c.json(cancelAgentRun(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -179,7 +179,7 @@ app.post("/api/app/agent-runs/:runId/cancel", (c) => {
 
 app.post("/api/app/agent-runs/:runId/retry", async (c) => {
   try {
-    return c.json(await retryAgentRun(requireAuthenticatedContext(c), c.req.param("runId")), 201);
+    return c.json(await retryAgentRun(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -187,7 +187,7 @@ app.post("/api/app/agent-runs/:runId/retry", async (c) => {
 
 app.post("/api/app/agent-runs/:runId/record-as-playbook", (c) => {
   try {
-    return c.json(recordRunAsPlaybook(requireAuthenticatedContext(c), c.req.param("runId")));
+    return c.json(recordRunAsPlaybook(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -195,7 +195,7 @@ app.post("/api/app/agent-runs/:runId/record-as-playbook", (c) => {
 
 app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "member");
     const { loadStore } = await import("./taskloom-store.js");
     const data = loadStore();
     const run = data.agentRuns.find((r) => r.id === c.req.param("runId") && r.workspaceId === ctx.workspace.id);
@@ -210,7 +210,7 @@ app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
 
 app.get("/api/app/tools", (c) => {
   try {
-    requireAuthenticatedContext(c);
+    requirePrivateWorkspaceRole(c, "viewer");
     const registry = getDefaultToolRegistry();
     return c.json({
       tools: registry.list().map((t: { name: string; description: string; side: string }) => ({
@@ -226,7 +226,7 @@ app.get("/api/app/tools", (c) => {
 
 app.get("/api/app/env-vars", (c) => {
   try {
-    return c.json(listWorkspaceEnvVarsForUser(requireAuthenticatedContext(c)));
+    return c.json(listWorkspaceEnvVarsForUser(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -234,7 +234,7 @@ app.get("/api/app/env-vars", (c) => {
 
 app.post("/api/app/env-vars", async (c) => {
   try {
-    return c.json(createWorkspaceEnvVar(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+    return c.json(createWorkspaceEnvVar(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -242,7 +242,7 @@ app.post("/api/app/env-vars", async (c) => {
 
 app.patch("/api/app/env-vars/:envVarId", async (c) => {
   try {
-    return c.json(updateWorkspaceEnvVar(requireAuthenticatedContext(c), c.req.param("envVarId"), await readJsonBody(c)));
+    return c.json(updateWorkspaceEnvVar(requirePrivateWorkspaceRole(c, "admin"), c.req.param("envVarId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -250,7 +250,7 @@ app.patch("/api/app/env-vars/:envVarId", async (c) => {
 
 app.delete("/api/app/env-vars/:envVarId", (c) => {
   try {
-    return c.json(deleteWorkspaceEnvVarById(requireAuthenticatedContext(c), c.req.param("envVarId")));
+    return c.json(deleteWorkspaceEnvVarById(requirePrivateWorkspaceRole(c, "admin"), c.req.param("envVarId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -258,7 +258,7 @@ app.delete("/api/app/env-vars/:envVarId", (c) => {
 
 app.get("/api/app/release-history", (c) => {
   try {
-    return c.json(listReleaseHistory(requireAuthenticatedContext(c)));
+    return c.json(listReleaseHistory(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }

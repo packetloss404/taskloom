@@ -1,6 +1,6 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
-import { requireAuthenticatedContext } from "./taskloom-services.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
 import {
   loadStore,
   mutateStore,
@@ -30,7 +30,7 @@ export const shareRoutes = new Hono();
 
 shareRoutes.get("/", (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "viewer");
     const data = loadStore();
     const tokens = data.shareTokens
       .filter((t) => t.workspaceId === ctx.workspace.id)
@@ -52,7 +52,7 @@ shareRoutes.get("/", (c) => {
 
 shareRoutes.post("/", async (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "admin");
     const body = (await c.req.json().catch(() => ({}))) as { scope?: string; expiresAt?: string };
     const scope = (body.scope ?? "overview") as ShareTokenScope;
     if (!VALID_SCOPES.includes(scope)) {
@@ -77,7 +77,7 @@ shareRoutes.post("/", async (c) => {
 
 shareRoutes.delete("/:id", (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "admin");
     const id = c.req.param("id");
     const ok = mutateStore((data) => {
       const t = data.shareTokens.find((entry) => entry.id === id && entry.workspaceId === ctx.workspace.id);
