@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
+import { tmpdir } from "node:os";
 import {
+  clearStoreCacheForTests,
   findWorkspaceBrief,
+  loadStore,
   findWorkspaceMembership,
   listAgentRunsForWorkspace,
   listAgentsForWorkspace,
@@ -10,6 +15,7 @@ import {
   listRequirementsForWorkspace,
   listValidationEvidenceForWorkspace,
   listWorkflowConcernsForWorkspace,
+  mutateStore,
   resetStoreForTests,
   upsertRequirement,
   upsertWorkspaceBrief,
@@ -85,4 +91,43 @@ test("workspace memberships support expanded roles", () => {
   });
 
   assert.equal(findWorkspaceMembership(store, "alpha", "user_beta")?.role, "viewer");
+});
+
+test("sqlite store persists mutations across cache reloads", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-"));
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = join(tempDir, "taskloom.sqlite");
+
+    resetStoreForTests();
+    mutateStore((data) => {
+      upsertRequirement(data, {
+        id: "req_sqlite_reload",
+        workspaceId: "alpha",
+        title: "SQLite reload requirement",
+        detail: "Persists through the database-backed store adapter.",
+        priority: "must",
+        status: "approved",
+        acceptanceCriteria: ["Requirement survives cache clear"],
+        source: "test",
+        createdByUserId: "user_alpha",
+      }, "2026-02-03T04:05:06.000Z");
+    });
+
+    clearStoreCacheForTests();
+    const reloaded = loadStore();
+
+    assert.equal(reloaded.requirements.some((entry) => entry.id === "req_sqlite_reload"), true);
+    assert.equal(findWorkspaceBrief(reloaded, "alpha")?.workspaceId, "alpha");
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });

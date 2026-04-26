@@ -1,5 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { DurableActivationProductRecord, WorkspaceActivationFacts } from "./activation/adapters";
 import type { ActivationMilestoneRecord, ActivationStatusDto } from "./activation/domain";
 import { buildSignalSnapshotFromFacts, buildSignalSnapshotFromProductRecords } from "./activation/adapters";
@@ -443,20 +445,19 @@ export interface TaskloomData {
 }
 
 const DATA_FILE = resolve(process.cwd(), "data", "taskloom.json");
+const DEFAULT_DB_FILE = resolve(process.cwd(), "data", "taskloom.sqlite");
+const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "db", "migrations");
 
 let cache: TaskloomData | null = null;
+let cacheBackendKey: string | null = null;
 
 export function loadStore(): TaskloomData {
-  if (cache) return cache;
+  const backend = currentStoreBackend();
+  if (cache && cacheBackendKey === backend.key) return cache;
 
-  try {
-    cache = normalizeStore(JSON.parse(readFileSync(DATA_FILE, "utf8")) as Partial<TaskloomData>);
-    return cache;
-  } catch {
-    cache = seedStore();
-    persistStore(cache);
-    return cache;
-  }
+  cacheBackendKey = backend.key;
+  cache = backend.load();
+  return cache;
 }
 
 export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
@@ -467,11 +468,239 @@ export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
 }
 
 export function persistStore(data: TaskloomData): void {
+  currentStoreBackend().persist(data);
+}
+
+function persistJsonStore(data: TaskloomData): void {
   mkdirSync(dirname(DATA_FILE), { recursive: true });
   writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
+function currentStoreBackend(): StoreBackend {
+  if (process.env.TASKLOOM_STORE === "sqlite") return sqliteStoreBackend(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  return jsonStoreBackend();
+}
+
+interface StoreBackend {
+  key: string;
+  load(): TaskloomData;
+  persist(data: TaskloomData): void;
+  reset(): TaskloomData;
+}
+
+function jsonStoreBackend(): StoreBackend {
+  return {
+    key: `json:${DATA_FILE}`,
+    load() {
+      try {
+        return normalizeStore(JSON.parse(readFileSync(DATA_FILE, "utf8")) as Partial<TaskloomData>);
+      } catch {
+        const seeded = seedStore();
+        persistJsonStore(seeded);
+        return seeded;
+      }
+    },
+    persist: persistJsonStore,
+    reset() {
+      const seeded = seedStore();
+      persistJsonStore(seeded);
+      return seeded;
+    },
+  };
+}
+
+function sqliteStoreBackend(dbPath: string): StoreBackend {
+  return {
+    key: `sqlite:${dbPath}`,
+    load() {
+      const db = openStoreDatabase(dbPath);
+      try {
+        const data = loadSqliteStore(db);
+        if (data) return data;
+        const seeded = seedStore();
+        persistSqliteStore(db, seeded);
+        return seeded;
+      } finally {
+        db.close();
+      }
+    },
+    persist(data) {
+      const db = openStoreDatabase(dbPath);
+      try {
+        persistSqliteStore(db, data);
+      } finally {
+        db.close();
+      }
+    },
+    reset() {
+      const db = openStoreDatabase(dbPath);
+      try {
+        const seeded = seedStore();
+        persistSqliteStore(db, seeded);
+        return seeded;
+      } finally {
+        db.close();
+      }
+    },
+  };
+}
+
+export function loadSqliteAppData(dbPath: string): TaskloomData | null {
+  const db = openStoreDatabase(dbPath);
+  try {
+    return loadSqliteStore(db);
+  } finally {
+    db.close();
+  }
+}
+
+export function persistSqliteAppData(dbPath: string, data: TaskloomData): void {
+  const db = openStoreDatabase(dbPath);
+  try {
+    persistSqliteStore(db, normalizeStore(data));
+  } finally {
+    db.close();
+  }
+}
+
+function openStoreDatabase(dbPath: string): DatabaseSync {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  db.exec("pragma foreign_keys = on");
+  applyStoreMigrations(db);
+  return db;
+}
+
+function applyStoreMigrations(db: DatabaseSync): void {
+  db.exec("create table if not exists schema_migrations (name text primary key, applied_at text not null default (datetime('now')))");
+  const appliedRows = db.prepare("select name from schema_migrations order by name").all() as Array<{ name: string }>;
+  const alreadyApplied = new Set(appliedRows.map((row) => row.name));
+  const migrations = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql")).sort();
+
+  for (const name of migrations) {
+    if (alreadyApplied.has(name)) continue;
+    const sql = readFileSync(resolve(MIGRATIONS_DIR, name), "utf8");
+    db.exec("begin");
+    try {
+      db.exec(sql);
+      db.prepare("insert into schema_migrations (name) values (?)").run(name);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  }
+}
+
+type StoreCollectionKey = keyof TaskloomData;
+
+const RECORD_COLLECTIONS = [
+  "users",
+  "sessions",
+  "workspaces",
+  "memberships",
+  "workspaceInvitations",
+  "workspaceBriefs",
+  "workspaceBriefVersions",
+  "requirements",
+  "implementationPlanItems",
+  "workflowConcerns",
+  "validationEvidence",
+  "releaseConfirmations",
+  "onboardingStates",
+  "activities",
+  "agents",
+  "providers",
+  "agentRuns",
+  "workspaceEnvVars",
+  "apiKeys",
+  "providerCalls",
+  "jobs",
+  "shareTokens",
+] as const satisfies readonly StoreCollectionKey[];
+
+const MAP_COLLECTIONS = ["activationFacts", "activationMilestones", "activationReadModels"] as const satisfies readonly StoreCollectionKey[];
+
+interface SqliteStoreRow {
+  collection: StoreCollectionKey;
+  payload: string;
+}
+
+function loadSqliteStore(db: DatabaseSync): TaskloomData | null {
+  const rows = db.prepare("select collection, payload from app_records order by collection, id").all() as unknown as SqliteStoreRow[];
+  if (rows.length === 0) return null;
+
+  const partial: Partial<TaskloomData> = {};
+  for (const row of rows) {
+    const payload = JSON.parse(row.payload) as unknown;
+    if (MAP_COLLECTIONS.includes(row.collection as (typeof MAP_COLLECTIONS)[number])) {
+      const existing = partial[row.collection] as Record<string, unknown> | undefined;
+      partial[row.collection] = { ...existing, ...(payload as Record<string, unknown>) } as never;
+      continue;
+    }
+    const existing = partial[row.collection] as unknown[] | undefined;
+    partial[row.collection] = [...(existing ?? []), payload] as never;
+  }
+
+  return normalizeStore(partial);
+}
+
+function persistSqliteStore(db: DatabaseSync, data: TaskloomData): void {
+  db.exec("begin");
+  try {
+    db.exec("delete from app_records");
+    const insert = db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values (?, ?, ?, json(?), ?)
+    `);
+
+    for (const collection of RECORD_COLLECTIONS) {
+      for (const payload of recordsForCollection(data, collection)) {
+        insert.run(collection, recordId(collection, payload), workspaceIdForRecord(payload), JSON.stringify(payload), updatedAtForRecord(payload));
+      }
+    }
+
+    for (const collection of MAP_COLLECTIONS) {
+      const map = data[collection] as Record<string, unknown>;
+      for (const [workspaceId, payload] of Object.entries(map)) {
+        insert.run(collection, workspaceId, workspaceId, JSON.stringify({ [workspaceId]: payload }), null);
+      }
+    }
+
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
+}
+
+function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {
+  if (collection === "workspaceBriefs") return workspaceBriefEntries(data.workspaceBriefs);
+  if (collection === "releaseConfirmations") return releaseConfirmationEntries(data.releaseConfirmations);
+  return data[collection] as unknown[];
+}
+
+function recordId(collection: StoreCollectionKey, payload: unknown): string {
+  const record = payload as Record<string, unknown>;
+  if (typeof record.id === "string") return record.id;
+  if (collection === "memberships") return `${record.workspaceId}:${record.userId}`;
+  if (collection === "workspaceBriefs" || collection === "onboardingStates" || collection === "releaseConfirmations") {
+    return String(record.workspaceId);
+  }
+  return JSON.stringify(record);
+}
+
+function workspaceIdForRecord(payload: unknown): SQLInputValue {
+  const workspaceId = (payload as Record<string, unknown>).workspaceId;
+  return typeof workspaceId === "string" ? workspaceId : null;
+}
+
+function updatedAtForRecord(payload: unknown): SQLInputValue {
+  const record = payload as Record<string, unknown>;
+  return typeof record.updatedAt === "string" ? record.updatedAt : typeof record.createdAt === "string" ? record.createdAt : null;
+}
+
+export function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
   return {
     users: data.users ?? [],
     sessions: data.sessions ?? [],
@@ -1207,13 +1436,19 @@ export function createSeedStore(): TaskloomData {
 }
 
 export function resetLocalStore(): TaskloomData {
-  cache = seedStore();
-  persistStore(cache);
+  const backend = currentStoreBackend();
+  cache = backend.reset();
+  cacheBackendKey = backend.key;
   return cache;
 }
 
 export function resetStoreForTests(): TaskloomData {
   return resetLocalStore();
+}
+
+export function clearStoreCacheForTests(): void {
+  cache = null;
+  cacheBackendKey = null;
 }
 
 function createSeedUser(id: string, email: string, displayName: string, timestamp: string): UserRecord {

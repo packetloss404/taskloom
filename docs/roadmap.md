@@ -1,11 +1,11 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, file-backed app services, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about moving the local JSON-backed product into full database-backed storage without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, and a React/Vite interface. The remaining roadmap is mainly about hardening the SQLite runtime into query-optimized repositories and production-ready auth/member workflows without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
 - Activation engine, checklist derivation, stage logic, risk calculation, and summary view model are implemented.
-- Local file-backed storage lives in `data/taskloom.json`.
+- Local file-backed storage lives in `data/taskloom.json` by default; `TASKLOOM_STORE=sqlite` runs the same store API against `data/taskloom.sqlite` or `TASKLOOM_DB_PATH`.
 - App services connect auth, workspaces, onboarding, activation, activity, and workflow records.
 - Workspace records now include membership rows, workflow briefs, requirements, implementation plan items, blockers/open questions, validation evidence, and release confirmations.
 - Public activation endpoints and private app endpoints are available for activation, onboarding, workspace settings, activity, workflows, agents, runs, jobs, providers, API keys, webhooks, usage, LLM calls, and share tokens.
@@ -13,13 +13,13 @@ Taskloom currently has a local activation domain, file-backed app services, auth
 - RBAC defines owner, admin, member, and viewer roles with view workspace data, edit workflow, and manage workspace/operations permissions.
 - Private app, workflow, job, agent, provider, env-var, webhook, API-key, usage, LLM, and share routes enforce workspace membership and role-aware permissions.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
-- Local persistence commands can seed/reset the JSON store and migrate/seed/reset the SQLite activation database foundation.
+- Local persistence commands can seed/reset the JSON store, migrate/seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
 - Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
 - React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, workflow, activity/detail, agents, runs, operations, integrations, and public share views.
 - The frontend API layer has typed workflow calls for brief, requirements, plan items, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, Plan Mode, share tokens, and public share reads.
 - Build, typecheck, and test scripts are available through `npm run build`.
-- Local development uses an ignored `data/taskloom.json` file that is recreated from built-in seed data when missing, plus an ignored `data/taskloom.sqlite` file for activation migration work.
+- Local development uses ignored `data/taskloom.json` and `data/taskloom.sqlite` files that are recreated or migrated from built-in seed data and CLI commands.
 - README and activation docs cover local development, seed/reset, build, and release hygiene flows.
 
 ## Landed In This Branch
@@ -132,12 +132,14 @@ Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing 
 
 ### 1. Persistence Foundation
 
-Replace the JSON store with a real database-backed persistence layer while keeping activation logic storage-agnostic.
+Replace the JSON-only runtime with a database-backed persistence layer while keeping activation logic storage-agnostic.
 
 - [x] Add migration tooling around the existing activation schema.
-- [ ] Extend the existing JSON-backed model into migrations for users, sessions, memberships, invitations, workspaces, workflow records, onboarding state, activities, activation facts, milestones, activation read models, agents, jobs, provider calls, and share tokens.
-- [ ] Introduce database-backed repository implementations behind the existing services; the app runtime still uses `data/taskloom.json`.
+- [x] Extend the existing JSON-backed model into SQLite migrations for users, sessions, memberships, invitations, workspaces, workflow records, onboarding state, activities, activation facts, milestones, activation read models, agents, jobs, provider calls, and share tokens.
+- [x] Add an opt-in SQLite-backed runtime behind the existing `loadStore()` / `mutateStore()` surface.
+- [ ] Replace JSON-payload `app_records` persistence with query-optimized repositories for high-value routes where needed.
 - [x] Add formal seed and reset commands for local development.
+- [x] Add JSON-to-SQLite app backfill commands.
 - [x] Preserve deterministic activation recalculation for the local JSON runtime and SQLite activation seed path.
 
 ### 2. Auth And RBAC
@@ -169,7 +171,8 @@ Make activation updates reliable outside request-time reads.
 
 - [x] Run the local JSON-backed queue scheduler for `agent.run` jobs with cron re-enqueue, retries/backoff, cancellation, and stale-running-job sweep.
 - [x] Expose private job queue routes for list, enqueue, read, and cancel.
-- [ ] Add a database backfill command for existing workspaces after persistence moves out of JSON.
+- [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
+- [ ] Add relational database backfills if app records are later split into query-optimized repository tables.
 - [ ] Ensure activity emission is idempotent.
 - [x] Add stale JSON read-model repair checks and a `jobs:repair-activation` command.
 
@@ -189,17 +192,18 @@ Strengthen the project rails before larger product work accumulates.
 - [x] Keep roadmap, README, and activation docs current as milestones land.
 - [ ] Continue broadening API route coverage as new route policies and product surfaces land.
 - [x] Maintain frontend smoke/static contract tests for auth, onboarding, dashboard, activation, role-aware controls, workflow wiring, integrations, agents, runs, and share routes.
+- [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, workflow activation, jobs, agents, and share links.
 - [ ] Maintain local development, reset, seed, build, and release flow documentation as scripts change.
 - [x] Keep generated `web/dist` assets ignored unless release packaging requirements change.
 
 ## Recommended Order
 
-1. Full app persistence: database migrations and repositories for the non-activation app model.
-2. Database backfills after repositories replace JSON runtime storage.
-3. Remaining activation signals: durable retry and scope-change records plus a normalized `ActivationSignalRepository`.
-4. Member-management UI, invitation revoke/resend, email delivery, rate limiting, and CSRF review.
+1. Query-optimized repository hardening for high-value SQLite routes, replacing broad JSON-payload reads where needed.
+2. Remaining activation signals: durable retry and scope-change records plus a normalized `ActivationSignalRepository`.
+3. Member-management UI, invitation revoke/resend, email delivery, rate limiting, and CSRF review.
+4. Production storage hardening: concurrency, backup/restore, and migration rollback strategy.
 5. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The next phase is complete when Taskloom can run the full app from database-backed repositories, migrate/seed/reset all app data formally, run database backfills after JSON migration, preserve the existing route-level RBAC/workflow/job/agent/share behavior on the new persistence layer, and keep activation derivation driven by durable product records rather than maintained facts wherever records exist.
+The next phase is complete when SQLite mode is production-hardened for concurrent local use, high-value routes can query dedicated repository tables where broad `app_records` scans are not enough, JSON-to-SQLite backfills remain repeatable, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.

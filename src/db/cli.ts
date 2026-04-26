@@ -4,10 +4,19 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { deriveActivationStatus } from "../activation/service";
 import { activationSubjectForWorkspace } from "../jobs";
-import { createSeedStore, resetLocalStore, snapshotForWorkspace, type TaskloomData } from "../taskloom-store";
+import {
+  createSeedStore,
+  loadSqliteAppData,
+  normalizeStore,
+  persistSqliteAppData,
+  resetLocalStore,
+  snapshotForWorkspace,
+  type TaskloomData,
+} from "../taskloom-store";
 
 export interface DbCliOptions {
   dbPath?: string;
+  jsonPath?: string;
   migrationsDir?: string;
 }
 
@@ -27,12 +36,23 @@ export interface DbSeedResult {
   checklistItems: number;
 }
 
+export interface AppDataResult {
+  command: "seed-app" | "backfill" | "reset-app";
+  dbPath: string;
+  source: "seed" | "backfill";
+  workspaces: number;
+  users: number;
+  agents: number;
+  jobs: number;
+}
+
 export interface ResetResult {
   command: "reset-db" | "reset-store" | "seed-store";
   path: string;
 }
 
 const DEFAULT_DB_PATH = resolve(process.cwd(), "data", "taskloom.sqlite");
+const DEFAULT_JSON_PATH = resolve(process.cwd(), "data", "taskloom.json");
 const DEFAULT_MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "migrations");
 
 export function migrateDatabase(options: DbCliOptions = {}): MigrationResult {
@@ -171,6 +191,48 @@ export function seedDatabase(options: DbCliOptions = {}, seedData: TaskloomData 
   }
 }
 
+export function seedAppDatabase(options: DbCliOptions = {}, seedData: TaskloomData = createSeedStore()): AppDataResult {
+  return writeAppData(options, normalizeStore(seedData), "seed", "seed-app");
+}
+
+export function backfillAppDatabase(options: DbCliOptions = {}): AppDataResult {
+  const jsonPath = options.jsonPath ?? DEFAULT_JSON_PATH;
+  const data = normalizeStore(JSON.parse(readFileSync(jsonPath, "utf8")) as Partial<TaskloomData>);
+  return writeAppData(options, data, "backfill", "backfill");
+}
+
+export function resetAppDatabase(options: DbCliOptions = {}, seedData: TaskloomData = createSeedStore()): AppDataResult {
+  const dbPath = options.dbPath ?? DEFAULT_DB_PATH;
+  if (existsSync(dbPath)) rmSync(dbPath);
+  return writeAppData(options, normalizeStore(seedData), "seed", "reset-app");
+}
+
+export function readAppData(options: DbCliOptions = {}): TaskloomData | null {
+  const migrated = migrateDatabase(options);
+  return loadSqliteAppData(migrated.dbPath);
+}
+
+function writeAppData(
+  options: DbCliOptions,
+  data: TaskloomData,
+  source: AppDataResult["source"],
+  command: AppDataResult["command"],
+): AppDataResult {
+  const migrated = migrateDatabase(options);
+  seedDatabase(options, data);
+  persistSqliteAppData(migrated.dbPath, data);
+
+  return {
+    command,
+    dbPath: migrated.dbPath,
+    source,
+    workspaces: data.workspaces.length,
+    users: data.users.length,
+    agents: data.agents.length,
+    jobs: data.jobs.length,
+  };
+}
+
 export function resetDatabase(options: DbCliOptions = {}): ResetResult {
   const dbPath = options.dbPath ?? DEFAULT_DB_PATH;
   if (existsSync(dbPath)) rmSync(dbPath);
@@ -201,8 +263,20 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(seedDatabase(options), null, 2));
       return 0;
     }
+    if (command === "seed-app") {
+      console.log(JSON.stringify(seedAppDatabase(options), null, 2));
+      return 0;
+    }
+    if (command === "backfill") {
+      console.log(JSON.stringify(backfillAppDatabase(options), null, 2));
+      return 0;
+    }
     if (command === "reset-db") {
       console.log(JSON.stringify(resetDatabase(options), null, 2));
+      return 0;
+    }
+    if (command === "reset-app") {
+      console.log(JSON.stringify(resetAppDatabase(options), null, 2));
       return 0;
     }
     if (command === "seed-store") {
@@ -223,7 +297,11 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
 
 function parseOptions(args: string[]): DbCliOptions {
   const dbPath = readOption(args, "--db-path=");
-  return dbPath ? { dbPath: resolve(dbPath) } : {};
+  const jsonPath = readOption(args, "--json-path=");
+  return {
+    ...(dbPath ? { dbPath: resolve(dbPath) } : {}),
+    ...(jsonPath ? { jsonPath: resolve(jsonPath) } : {}),
+  };
 }
 
 function readOption(args: string[], prefix: string): string | undefined {
@@ -233,7 +311,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|seed-db|reset-db|seed-store|reset-store> [--db-path=data/taskloom.sqlite]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json]");
 }
 
 function isExecutedDirectly(): boolean {

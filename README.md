@@ -7,7 +7,7 @@ Taskloom is an open source workspace portal for activation tracking, onboarding 
 - checklist derivation
 - stage + risk logic
 - repository/service contracts
-- SQL schema and SQLite activation migration foundation
+- SQL schema and SQLite app-runtime migration foundation
 - signal adapters for legacy facts and durable workflow records
 - in-memory repositories and local JSON store services
 - read-only activation API wrapper
@@ -44,7 +44,7 @@ npm run dev
 http://localhost:7341
 ```
 
-The local app uses `data/taskloom.json` for file-backed persistence. If the file is missing, the server recreates it from the built-in seed data on first store load. SQLite migration tooling is also available for the activation persistence foundation, but the app runtime still uses the JSON store by default.
+The local app uses `data/taskloom.json` for file-backed persistence by default. If the file is missing, the server recreates it from the built-in seed data on first store load. To run the same store API against SQLite, start the app with `TASKLOOM_STORE=sqlite`; it targets `data/taskloom.sqlite` unless `TASKLOOM_DB_PATH=path/to/taskloom.sqlite` is set. SQLite mode persists the full app runtime through migrated `app_records` rows, with relational app tables available for future query-optimized repository work.
 
 ## Local Data
 
@@ -62,17 +62,20 @@ To reset local data back to the seed state, stop the dev server, then run:
 npm run store:reset
 ```
 
-`npm run store:seed` also writes the built-in seed data to `data/taskloom.json`.
+`npm run store:seed` also writes the built-in seed data to the active local store. By default that is `data/taskloom.json`; with `TASKLOOM_STORE=sqlite`, it writes to SQLite instead.
 
-To create or reset the local SQLite activation database:
+To create or reset the local SQLite database:
 
 ```bash
 npm run db:migrate
 npm run db:seed
 npm run db:reset
+npm run db:seed-app
+npm run db:reset-app
+npm run db:backfill -- --json-path=data/taskloom.json
 ```
 
-These commands target `data/taskloom.sqlite` by default. Pass `-- --db-path=path/to/taskloom.sqlite` to use a different database file.
+These commands target `data/taskloom.sqlite` by default. Pass `-- --db-path=path/to/taskloom.sqlite` to use a different database file. `db:seed-app` writes the built-in app seed data to SQLite, `db:backfill` imports an existing JSON store into SQLite, and `db:reset-app` recreates the SQLite app seed state without modifying `data/taskloom.json`.
 
 To refresh or repair activation read models after editing local data manually:
 
