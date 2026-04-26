@@ -222,6 +222,48 @@ test("viewer memberships can read shared app state and update their own profile"
   assert.equal(body.profile.timezone, "America/New_York");
 });
 
+test("activation route reflects normalized durable activation signals", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const registration = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "signals@example.com", password: "demo12345", displayName: "Signals User" }),
+  });
+  const authCookie = cookieValue(registration);
+  const registered = await registration.json() as { workspace: { id: string } };
+
+  mutateStore((data) => {
+    data.activationSignals.push(
+      {
+        id: "signal_registered_retry",
+        workspaceId: registered.workspace.id,
+        kind: "retry",
+        source: "agent_run",
+        sourceId: "run_registered_failed",
+        createdAt: "2026-04-22T10:00:00.000Z",
+        updatedAt: "2026-04-22T10:00:00.000Z",
+      },
+      {
+        id: "signal_registered_scope",
+        workspaceId: registered.workspace.id,
+        kind: "scope_change",
+        source: "workflow",
+        sourceId: "brief_registered_v2",
+        createdAt: "2026-04-22T11:00:00.000Z",
+        updatedAt: "2026-04-22T11:00:00.000Z",
+      },
+    );
+  });
+
+  const response = await app.request("/api/app/activation", { headers: authHeaders(authCookie) });
+  const body = await response.json() as { activation: { status: { risk: { reasons: string[] } } } };
+
+  assert.equal(response.status, 200);
+  assert.ok(body.activation.status.risk.reasons.includes("Work required retries."));
+  assert.ok(body.activation.status.risk.reasons.includes("Scope changed during execution."));
+});
+
 test("onboarding completion requires member or above membership", async () => {
   resetStoreForTests();
   const app = createTestApp();

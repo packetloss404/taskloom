@@ -27,6 +27,7 @@ import {
   mutateStore,
   nextIncompleteStep,
   type ActivityRecord,
+  type ActivationSignalRecord,
   type AgentInputField,
   type AgentInputFieldType,
   type AgentPlaybookStep,
@@ -1246,23 +1247,39 @@ export async function retryAgentRun(context: AuthenticatedContext, runId: string
   }
   const timestamp = now();
   mutateStore((store) => {
-    upsertActivationSignal(store, {
+    const existingSignal = store.activationSignals.find((entry) =>
+      entry.workspaceId === context.workspace.id && entry.kind === "retry" && entry.sourceId === previous.id
+    );
+    const stableKey = existingSignal?.stableKey ?? activationSignalStableKey(context.workspace.id, "retry", "agent_run", previous.id);
+    const signal = upsertActivationSignal(store, {
+      id: existingSignal?.id,
       workspaceId: context.workspace.id,
       kind: "retry",
       source: "agent_run",
+      origin: "user_entered",
       sourceId: previous.id,
-      data: { previousRunId: previous.id, agentId: previous.agentId },
+      stableKey,
+      data: {
+        origin: "user_action",
+        observedBy: "service",
+        previousRunId: previous.id,
+        agentId: previous.agentId,
+      },
     }, timestamp);
-    store.activities.unshift(makeActivity(context.workspace.id, "activation", "agent.run.retry", {
+    upsertActivationActivity(store.activities, makeActivity(context.workspace.id, "activation", "agent.run.retry", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
     }, {
       title: `Run retried: ${previous.title}`,
       activationSignalKind: "retry",
+      activationSignalId: signal.id,
+      sourceId: previous.id,
       previousRunId: previous.id,
       agentId: previous.agentId,
-    }, timestamp));
+      origin: "user_action",
+      observedBy: "service",
+    }, timestamp, activationActivityId(context.workspace.id, "agent.run.retry", signal.id)));
   });
   return runAgent(context, previous.agentId);
 }
@@ -1908,6 +1925,30 @@ export function toSubject(workspaceId: string): ActivationSubjectRef {
   return { workspaceId, subjectType: "workspace", subjectId: workspaceId };
 }
 
+function activationSignalStableKey(
+  workspaceId: string,
+  kind: ActivationSignalRecord["kind"],
+  source: ActivationSignalRecord["source"],
+  sourceId: string,
+): string {
+  return `${workspaceId}:${kind}:${source}:${sourceId}`;
+}
+
+function activationActivityId(workspaceId: string, event: string, signalId: string): string {
+  return `activity_${stableIdPart(workspaceId)}_${stableIdPart(event)}_${stableIdPart(signalId)}`;
+}
+
+function stableIdPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+function upsertActivationActivity(activities: ActivityRecord[], activity: ActivityRecord): ActivityRecord {
+  const existing = activities.find((entry) => entry.id === activity.id);
+  if (existing) return existing;
+  activities.unshift(activity);
+  return activity;
+}
+
 function makeActivity(
   workspaceId: string,
   scope: ActivityRecord["scope"],
@@ -1915,9 +1956,10 @@ function makeActivity(
   actor: ActivityRecord["actor"],
   data: ActivityRecord["data"],
   timestamp: string,
+  id = generateId(),
 ): ActivityRecord {
   return {
-    id: generateId(),
+    id,
     workspaceId,
     scope,
     event,

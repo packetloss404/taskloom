@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { login } from "./taskloom-services";
-import { loadStore, resetStoreForTests } from "./taskloom-store";
+import { loadStore, resetStoreForTests, snapshotForWorkspace } from "./taskloom-store";
 import {
   applyWorkspaceBriefTemplate,
   getWorkflowOverview,
@@ -98,6 +98,31 @@ test("brief saves snapshot a version with manual source", () => {
   assert.equal(versions[0].source, "manual");
   assert.equal(versions[1].versionNumber, 1);
   assert.equal(versions[1].summary, "First brief draft.");
+});
+
+test("brief scope changes emit durable activation signals idempotently by version", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  updateWorkspaceBrief(auth.context, {
+    summary: "Ship the roadmap workflow service with a revised scope.",
+    goals: ["capture revised scope"],
+  });
+
+  const store = loadStore();
+  const signals = store.activationSignals.filter((entry) =>
+    entry.workspaceId === "alpha" && entry.kind === "scope_change" && entry.source === "workflow"
+  );
+  const activities = store.activities.filter((entry) =>
+    entry.workspaceId === "alpha" && entry.event === "workflow.scope_changed" && entry.data.activationSignalId === signals[0]?.id
+  );
+
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].origin, "user_entered");
+  assert.ok(signals[0].stableKey);
+  assert.equal(activities.length, 1);
+  assert.equal(activities[0].data.origin, "user_entered");
+  assert.equal(snapshotForWorkspace(store, "alpha").scopeChangeCount, store.activationSignals.filter((entry) => entry.workspaceId === "alpha" && entry.kind === "scope_change").length);
 });
 
 test("brief templates populate the brief and snapshot a template version", () => {

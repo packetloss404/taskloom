@@ -13,6 +13,7 @@ import {
   mutateStore as mutateDefaultStore,
   snapshotForWorkspace,
   type TaskloomData,
+  upsertActivationSignal,
 } from "./taskloom-store";
 
 export interface StoreJobDeps {
@@ -75,6 +76,7 @@ export async function recomputeActivationReadModels(
 
   for (const workspaceId of workspaceIds) {
     const subject = activationSubjectForWorkspace(workspaceId);
+    normalizeLegacyActivationSignals(deps, workspaceId);
     const result = await readActivationStatus(
       {
         signals: {
@@ -111,6 +113,42 @@ export async function recomputeActivationReadModels(
     workspaceIds,
     statuses,
   };
+}
+
+function normalizeLegacyActivationSignals(deps: StoreJobDeps, workspaceId: string): void {
+  deps.mutateStore((data) => {
+    const facts = data.activationFacts[workspaceId];
+    if (!facts) return;
+    const timestamp = facts.now;
+    if (!timestamp) return;
+    recordLegacySignalCount(data, workspaceId, "retry", "retryCount", facts.retryCount ?? 0, timestamp);
+    recordLegacySignalCount(data, workspaceId, "scope_change", "scopeChangeCount", facts.scopeChangeCount ?? 0, timestamp);
+  });
+}
+
+function recordLegacySignalCount(
+  data: TaskloomData,
+  workspaceId: string,
+  kind: "retry" | "scope_change",
+  factName: "retryCount" | "scopeChangeCount",
+  count: number,
+  timestamp: string,
+): void {
+  if (data.activationSignals.some((entry) => entry.workspaceId === workspaceId && entry.kind === kind)) return;
+  for (let index = 0; index < count; index += 1) {
+    upsertActivationSignal(data, {
+      workspaceId,
+      kind,
+      source: "user_fact",
+      origin: "user_entered",
+      stableKey: `${workspaceId}:${kind}:legacy_fact:${index}`,
+      data: {
+        origin: "legacy_fact",
+        factName,
+        factIndex: index,
+      },
+    }, timestamp);
+  }
 }
 
 export async function repairActivationReadModels(

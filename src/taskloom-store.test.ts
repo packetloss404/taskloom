@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import {
+  activationSignalRepository,
   clearStoreCacheForTests,
   findSessionByIdIndexed,
   findShareTokenByTokenIndexed,
@@ -16,6 +17,7 @@ import {
   loadStore,
   listSessionsForUserIndexed,
   listShareTokensForWorkspaceIndexed,
+  listActivationSignalsForWorkspace,
   listWorkspaceInvitationsIndexed,
   listWorkspaceMembershipsIndexed,
   findWorkspaceMembership,
@@ -28,6 +30,7 @@ import {
   listWorkflowConcernsForWorkspace,
   mutateStore,
   resetStoreForTests,
+  upsertActivationSignal,
   upsertRequirement,
   upsertWorkspaceBrief,
   upsertWorkspaceMembership,
@@ -104,6 +107,57 @@ test("workspace memberships support expanded roles", () => {
   assert.equal(findWorkspaceMembership(store, "alpha", "user_beta")?.role, "viewer");
 });
 
+test("activation signal repository deduplicates JSON records by stable key", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+
+  try {
+    delete process.env.TASKLOOM_STORE;
+    delete process.env.TASKLOOM_DB_PATH;
+    const store = resetStoreForTests();
+
+    const direct = upsertActivationSignal(store, {
+      workspaceId: "alpha",
+      kind: "retry",
+      source: "user_fact",
+      stableKey: "alpha:retry:user-entered",
+      data: { reason: "Initial user-entered retry" },
+    }, "2026-04-01T00:00:00.000Z");
+    assert.equal(direct.source, "user_fact");
+    assert.equal(direct.origin, "user_entered");
+
+    const repository = activationSignalRepository();
+    const first = repository.upsert({
+      workspaceId: "alpha",
+      kind: "retry",
+      source: "user_fact",
+      stableKey: "alpha:retry:repository",
+      data: { reason: "Entered by a user" },
+    }, "2026-04-02T00:00:00.000Z");
+    const second = repository.upsert({
+      workspaceId: "alpha",
+      kind: "retry",
+      source: "system_fact",
+      stableKey: "alpha:retry:repository",
+      data: { reason: "Observed by the system" },
+    }, "2026-04-03T00:00:00.000Z");
+
+    assert.equal(second.id, first.id);
+    assert.equal(second.createdAt, first.createdAt);
+    assert.equal(second.updatedAt, "2026-04-03T00:00:00.000Z");
+    assert.equal(second.source, "system_fact");
+    assert.equal(second.origin, "system_observed");
+    assert.equal(repository.listForWorkspace("alpha").filter((entry) => entry.stableKey === "alpha:retry:repository").length, 1);
+    assert.equal(listActivationSignalsForWorkspace(loadStore(), "alpha").some((entry) => entry.id === first.id), true);
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+  }
+});
+
 test("sqlite store persists mutations across cache reloads", () => {
   const previousStore = process.env.TASKLOOM_STORE;
   const previousDbPath = process.env.TASKLOOM_DB_PATH;
@@ -133,6 +187,56 @@ test("sqlite store persists mutations across cache reloads", () => {
 
     assert.equal(reloaded.requirements.some((entry) => entry.id === "req_sqlite_reload"), true);
     assert.equal(findWorkspaceBrief(reloaded, "alpha")?.workspaceId, "alpha");
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("activation signal repository persists and lists SQLite records by workspace", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-signals-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+
+    resetStoreForTests();
+    const repository = activationSignalRepository();
+    const first = repository.upsert({
+      workspaceId: "workspace_sqlite_signals",
+      kind: "scope_change",
+      source: "system_fact",
+      stableKey: "workspace_sqlite_signals:scope:billing",
+      sourceId: "activity_scope_billing",
+      data: { area: "billing" },
+    }, "2026-04-04T00:00:00.000Z");
+    const second = repository.upsert({
+      workspaceId: "workspace_sqlite_signals",
+      kind: "scope_change",
+      source: "user_fact",
+      stableKey: "workspace_sqlite_signals:scope:billing",
+      sourceId: "manual_scope_billing",
+      data: { area: "billing", confirmed: true },
+    }, "2026-04-05T00:00:00.000Z");
+
+    assert.equal(second.id, first.id);
+    assert.equal(repository.listForWorkspace("workspace_sqlite_signals").length, 1);
+    assert.equal(repository.listForWorkspace("workspace_sqlite_signals")[0]?.source, "user_fact");
+    assert.equal(repository.listForWorkspace("workspace_sqlite_signals")[0]?.origin, "user_entered");
+    assert.equal(activationSignalRowCount(dbPath, "workspace_sqlite_signals"), 1);
+
+    clearStoreCacheForTests();
+    const reloaded = loadStore();
+    const signals = listActivationSignalsForWorkspace(reloaded, "workspace_sqlite_signals");
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]?.stableKey, "workspace_sqlite_signals:scope:billing");
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
@@ -253,6 +357,16 @@ function indexRowCount(dbPath: string): number {
   const db = new DatabaseSync(dbPath);
   try {
     const row = db.prepare("select count(*) as count from app_record_search").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+function activationSignalRowCount(dbPath: string, workspaceId: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from app_records where collection = 'activationSignals' and workspace_id = ?").get(workspaceId) as { count: number };
     return row.count;
   } finally {
     db.close();

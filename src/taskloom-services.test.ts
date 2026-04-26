@@ -21,7 +21,7 @@ import {
   updateWorkspace,
   updateWorkspaceEnvVar,
 } from "./taskloom-services";
-import { loadStore, resetStoreForTests } from "./taskloom-store";
+import { loadStore, resetStoreForTests, snapshotForWorkspace } from "./taskloom-store";
 
 test("register creates a new user and workspace", async () => {
   resetStoreForTests();
@@ -280,7 +280,16 @@ test("agent runs: list adds duration and capability flags; cancel and retry beha
 
   const retried = await retryAgentRun(auth.context, failed.id);
   assert.ok(retried.run.id !== failed.id);
-  assert.equal(loadStore().activationSignals.some((entry) => entry.workspaceId === "beta" && entry.kind === "retry" && entry.sourceId === failed.id), true);
+  await retryAgentRun(auth.context, failed.id);
+
+  const store = loadStore();
+  const retrySignals = store.activationSignals.filter((entry) => entry.workspaceId === "beta" && entry.kind === "retry" && entry.sourceId === failed.id);
+  const retryActivities = store.activities.filter((entry) => entry.workspaceId === "beta" && entry.event === "agent.run.retry" && entry.data.previousRunId === failed.id);
+  assert.equal(retrySignals.length, 1);
+  assert.equal(retryActivities.length, 1);
+  assert.equal(snapshotForWorkspace(store, "beta").retryCount, store.activationSignals.filter((entry) => entry.workspaceId === "beta" && entry.kind === "retry").length);
+  assert.equal(retrySignals[0].origin, "user_entered");
+  assert.equal(retrySignals[0].data?.origin, "user_action");
 });
 
 test("release history exposes preflight and prior confirmations", async () => {

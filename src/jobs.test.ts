@@ -166,6 +166,22 @@ test("snapshotForWorkspace maps activation retry and scope-change activities as 
   assert.equal(snapshot.scopeChangeCount, 1);
 });
 
+test("recomputeActivationReadModels normalizes legacy retry and scope-change counters idempotently", async () => {
+  const data = makeStore();
+  data.activationFacts.alpha.retryCount = 2;
+  data.activationFacts.alpha.scopeChangeCount = 1;
+
+  await recomputeActivationReadModels(makeDeps(data), { workspaceIds: ["alpha"] });
+  await recomputeActivationReadModels(makeDeps(data), { workspaceIds: ["alpha"] });
+
+  const signals = data.activationSignals.filter((entry) => entry.workspaceId === "alpha");
+  assert.equal(signals.filter((entry) => entry.kind === "retry").length, 2);
+  assert.equal(signals.filter((entry) => entry.kind === "scope_change").length, 1);
+  assert.equal(signals.every((entry) => entry.source === "user_fact" && entry.origin === "user_entered" && entry.data?.origin === "legacy_fact"), true);
+  assert.equal(snapshotForWorkspace(data, "alpha").retryCount, 2);
+  assert.equal(snapshotForWorkspace(data, "alpha").scopeChangeCount, 1);
+});
+
 test("repairActivationReadModels repairs stale activation read models", async () => {
   const data = makeStore();
   data.activationReadModels.alpha = {

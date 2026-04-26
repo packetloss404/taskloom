@@ -211,12 +211,18 @@ export interface ActivityRecord {
   data: Record<string, string | number | boolean | null | undefined>;
 }
 
+export type ActivationSignalKind = "retry" | "scope_change";
+export type ActivationSignalSource = "activity" | "agent_run" | "workflow" | "seed" | "user_fact" | "system_fact";
+export type ActivationSignalOrigin = "user_entered" | "system_observed";
+
 export interface ActivationSignalRecord {
   id: string;
   workspaceId: string;
-  kind: "retry" | "scope_change";
-  source: "activity" | "agent_run" | "workflow" | "seed";
+  kind: ActivationSignalKind;
+  source: ActivationSignalSource;
+  origin?: ActivationSignalOrigin;
   sourceId?: string;
+  stableKey?: string;
   createdAt: string;
   updatedAt: string;
   data?: Record<string, string | number | boolean | null | undefined>;
@@ -706,7 +712,7 @@ interface AppRecordSearchValues {
 
 function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown): AppRecordSearchValues | null {
   const record = payload as Record<string, unknown>;
-  if (!["users", "sessions", "memberships", "workspaceInvitations", "shareTokens"].includes(collection)) return null;
+  if (!["users", "sessions", "memberships", "workspaceInvitations", "shareTokens", "activationSignals"].includes(collection)) return null;
   const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : null;
   const userId = typeof record.userId === "string" ? record.userId : null;
   const email = typeof record.email === "string" ? normalizeEmail(record.email) : null;
@@ -853,7 +859,7 @@ export function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     releaseConfirmations: normalizeReleaseConfirmationCollection(data.releaseConfirmations),
     onboardingStates: data.onboardingStates ?? [],
     activities: data.activities ?? [],
-    activationSignals: data.activationSignals ?? [],
+    activationSignals: (data.activationSignals ?? []).map(normalizeActivationSignalRecord),
     agents: (data.agents ?? []).map((entry) => ({
       ...entry,
       inputSchema: Array.isArray(entry.inputSchema) ? entry.inputSchema : [],
@@ -1595,6 +1601,10 @@ export function resetStoreForTests(): TaskloomData {
 }
 
 export function clearStoreCacheForTests(): void {
+  clearStoreCache();
+}
+
+function clearStoreCache(): void {
   cache = null;
   cacheBackendKey = null;
 }
@@ -1791,6 +1801,7 @@ function createActivationSignal(
     workspaceId,
     kind,
     source: "seed",
+    origin: "system_observed",
     sourceId,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -2069,8 +2080,140 @@ export function upsertAgentRun(data: TaskloomData, input: AgentRunUpsertInput, t
 export type ActivationSignalUpsertInput = Omit<ActivationSignalRecord, "id" | "createdAt" | "updatedAt"> &
   Partial<Pick<ActivationSignalRecord, "id" | "createdAt" | "updatedAt">>;
 
+export interface ActivationSignalRepository {
+  listForWorkspace(workspaceId: string): ActivationSignalRecord[];
+  upsert(input: ActivationSignalUpsertInput, timestamp?: string): ActivationSignalRecord;
+}
+
+export function activationSignalRepository(): ActivationSignalRepository {
+  if (process.env.TASKLOOM_STORE === "sqlite") return sqliteActivationSignalRepository(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  return jsonActivationSignalRepository();
+}
+
+function jsonActivationSignalRepository(): ActivationSignalRepository {
+  return {
+    listForWorkspace(workspaceId) {
+      return listActivationSignalsForWorkspace(loadStore(), workspaceId);
+    },
+    upsert(input, timestamp = now()) {
+      return mutateStore((data) => upsertActivationSignal(data, input, timestamp));
+    },
+  };
+}
+
+function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepository {
+  return {
+    listForWorkspace(workspaceId) {
+      const db = openStoreDatabase(dbPath);
+      try {
+        const rows = db.prepare(`
+          select payload
+          from app_records
+          where collection = 'activationSignals' and workspace_id = ?
+          order by json_extract(payload, '$.createdAt'), id
+        `).all(workspaceId) as Array<{ payload: string }>;
+        return rows.map((row) => normalizeActivationSignalRecord(JSON.parse(row.payload) as ActivationSignalRecord));
+      } finally {
+        db.close();
+      }
+    },
+    upsert(input, timestamp = now()) {
+      const db = openStoreDatabase(dbPath);
+      try {
+        const existing = findSqliteActivationSignalForUpsert(db, input);
+        const id = existing?.id ?? input.id ?? generateId();
+        const record: ActivationSignalRecord = {
+          ...existing,
+          ...input,
+          id,
+          origin: input.origin ?? inferActivationSignalOrigin(input.source) ?? existing?.origin,
+          createdAt: input.createdAt ?? existing?.createdAt ?? timestamp,
+          updatedAt: input.updatedAt ?? timestamp,
+        };
+        db.exec("begin");
+        try {
+          db.prepare(`
+            insert into app_records (collection, id, workspace_id, payload, updated_at)
+            values ('activationSignals', ?, ?, json(?), ?)
+            on conflict(collection, id) do update set
+              workspace_id = excluded.workspace_id,
+              payload = excluded.payload,
+              updated_at = excluded.updated_at
+          `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
+          db.prepare(`
+            insert into app_record_search (collection, id, workspace_id, user_id, email, token)
+            values ('activationSignals', ?, ?, null, null, null)
+            on conflict(collection, id) do update set workspace_id = excluded.workspace_id
+          `).run(record.id, record.workspaceId);
+          db.exec("commit");
+        } catch (error) {
+          db.exec("rollback");
+          throw error;
+        }
+        clearStoreCache();
+        return record;
+      } finally {
+        db.close();
+      }
+    },
+  };
+}
+
+function findSqliteActivationSignalForUpsert(db: DatabaseSync, input: ActivationSignalUpsertInput): ActivationSignalRecord | null {
+  const stableKeyRow = input.stableKey
+    ? db.prepare(`
+      select payload
+      from app_records
+      where collection = 'activationSignals'
+        and workspace_id = ?
+        and json_extract(payload, '$.stableKey') = ?
+      limit 1
+    `).get(input.workspaceId, input.stableKey) as { payload: string } | undefined
+    : undefined;
+  if (stableKeyRow) return normalizeActivationSignalRecord(JSON.parse(stableKeyRow.payload) as ActivationSignalRecord);
+
+  if (!input.id) return null;
+  const idRow = db.prepare(`
+    select payload
+    from app_records
+    where collection = 'activationSignals' and id = ?
+    limit 1
+  `).get(input.id) as { payload: string } | undefined;
+  return idRow ? normalizeActivationSignalRecord(JSON.parse(idRow.payload) as ActivationSignalRecord) : null;
+}
+
+export function listActivationSignalsForWorkspace(data: TaskloomData, workspaceId: string): ActivationSignalRecord[] {
+  return data.activationSignals
+    .filter((entry) => entry.workspaceId === workspaceId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+}
+
 export function upsertActivationSignal(data: TaskloomData, input: ActivationSignalUpsertInput, timestamp = now()): ActivationSignalRecord {
-  return upsertRecord(data.activationSignals, input, timestamp);
+  const existing = input.stableKey
+    ? data.activationSignals.find((entry) => entry.workspaceId === input.workspaceId && entry.stableKey === input.stableKey)
+    : null;
+  const normalizedInput = {
+    ...input,
+    origin: input.origin ?? inferActivationSignalOrigin(input.source) ?? existing?.origin,
+  };
+  if (existing) {
+    Object.assign(existing, normalizedInput, { id: existing.id, createdAt: input.createdAt ?? existing.createdAt, updatedAt: input.updatedAt ?? timestamp });
+    return existing;
+  }
+  return upsertRecord(data.activationSignals, normalizedInput, timestamp);
+}
+
+function inferActivationSignalOrigin(source: ActivationSignalSource): ActivationSignalOrigin | undefined {
+  if (source === "seed" || source === "system_fact" || source === "activity") return "system_observed";
+  if (source === "user_fact" || source === "workflow" || source === "agent_run") return "user_entered";
+  return undefined;
+}
+
+function normalizeActivationSignalRecord(record: ActivationSignalRecord): ActivationSignalRecord {
+  return {
+    ...record,
+    origin: record.origin ?? inferActivationSignalOrigin(record.source),
+  };
 }
 
 export const ONBOARDING_STEPS: OnboardingStepKey[] = [
@@ -2109,7 +2252,7 @@ function activationProductRecordsForWorkspace(data: TaskloomData, workspaceId: s
   const planItems = listImplementationPlanItemsForWorkspace(data, workspaceId);
   const concerns = listWorkflowConcernsForWorkspace(data, workspaceId);
   const validationEvidence = listValidationEvidenceForWorkspace(data, workspaceId);
-  const activationSignals = data.activationSignals.filter((entry) => entry.workspaceId === workspaceId);
+  const activationSignals = listActivationSignalsForWorkspace(data, workspaceId);
   const retryActivities = activationSignalActivities(data.activities, workspaceId, "retry");
   const scopeChangeActivities = activationSignalActivities(data.activities, workspaceId, "scope_change");
   const releaseConfirmation = listReleaseConfirmationsForWorkspace(data, workspaceId)
@@ -2192,9 +2335,13 @@ function durableSignalRecords(
   const records = signals
     .filter((entry) => entry.kind === kind)
     .map((entry) => ({ id: entry.id, kind: entry.kind, createdAt: entry.createdAt }));
+  const seenSignalIds = new Set(signals.filter((entry) => entry.kind === kind).map((entry) => entry.id));
   const seenSourceIds = new Set(signals.filter((entry) => entry.kind === kind && entry.sourceId).map((entry) => entry.sourceId));
 
   for (const activity of activities) {
+    if (typeof activity.data.activationSignalId === "string" && seenSignalIds.has(activity.data.activationSignalId)) continue;
+    if (typeof activity.data.sourceId === "string" && seenSourceIds.has(activity.data.sourceId)) continue;
+    if (typeof activity.data.previousRunId === "string" && seenSourceIds.has(activity.data.previousRunId)) continue;
     if (seenSourceIds.has(activity.id)) continue;
     records.push({ id: `${activityPrefix}_${activity.id}`, kind, createdAt: activity.occurredAt });
   }

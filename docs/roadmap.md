@@ -21,6 +21,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - Build, typecheck, and test scripts are available through `npm run build`.
 - Local development uses ignored `data/taskloom.json` and `data/taskloom.sqlite` files that are recreated or migrated from built-in seed data and CLI commands.
 - README and activation docs cover local development, seed/reset, build, and release hygiene flows.
+- Durable activation signal records exist in the local app model for retry and scope-change signals. Runtime snapshots prefer those records and activation-scoped activity events before falling back to legacy activation fact counters, and an app-store activation signal repository now provides JSON and opt-in SQLite list/upsert access with stable-key dedupe and first-class origin metadata.
 
 ## Landed In This Branch
 
@@ -126,6 +127,17 @@ Phase 6 dev and release hygiene is now in place:
 - Generated local artifacts remain ignored: `data/taskloom.json`, `data/artifacts/`, `web/dist/`, logs, and environment files.
 - Vite outputs to `web/dist/` with `emptyOutDir: true`; generated web assets stay out of source control unless packaging policy changes.
 
+### Phase 10 Activation Signal Repository And Idempotency
+
+Phase 10 is implemented for the current app-store runtime:
+
+- `activationSignals` is part of the JSON app model and is persisted through the opt-in SQLite app runtime because SQLite currently stores full app data in `app_records`.
+- `activationSignalRepository()` provides normalized list/upsert access for JSON and SQLite modes; the SQLite implementation uses `app_records` plus activation-signal indexes/search metadata rather than a dedicated relational signal table.
+- `source` identifies the producer category, such as `seed`, `workflow`, `agent_run`, `activity`, `user_fact`, or `system_fact`; `origin` separately identifies user-entered versus system-observed records.
+- Retry actions write durable `retry` records with `source: "agent_run"`, `origin: "user_entered"`, the failed run as `sourceId`, stable-key dedupe, and stable activation activity ids.
+- Brief scope changes write durable `scope_change` records with `source: "workflow"`, `origin: "user_entered"`, the brief version as `sourceId`, stable-key dedupe, and stable activation activity ids.
+- Recompute jobs normalize legacy retry/scope-change counters into durable `user_fact` signals idempotently when no durable signal records exist for that kind.
+
 ## Roadmap
 
 Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
@@ -159,11 +171,14 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 
 Move activation snapshots from onboarding-derived facts toward product-observed signals.
 
-- [ ] Implement a real normalized `ActivationSignalRepository`.
+- [x] Implement an app-store `ActivationSignalRepository` for JSON and opt-in SQLite activation signal list/upsert access.
 - [x] Wire runtime activation snapshots to durable workflow, validation, and release records through `buildSignalSnapshotFromProductRecords(...)`, with legacy facts used as fallback.
-- [ ] Distinguish user-entered facts from system-observed facts.
+- [x] Distinguish user-entered origin from system-observed origin as first-class activation signal metadata.
 - [x] Track durable workflow blockers, dependency blockers, open questions, and validation failures in runtime snapshots.
-- [x] Move retry and scope-change signals toward durable records through `activationSignals` and activation-scoped activity mapping, while retaining legacy fact fallback.
+- [x] Move retry signals and runtime scope-change writes toward durable records through `activationSignals` and activation-scoped activity mapping, while retaining legacy fact fallback.
+- [x] Complete and verify runtime scope-change signal writes beyond seed data and activity fallback.
+- [x] Add durable signal upsert idempotency by stable key for repository callers.
+- [x] Ensure retry/scope-change service callers consistently provide stable keys or stable ids.
 - [x] Keep signal mapping outside the pure activation engine.
 
 ### 4. Jobs And Backfills
@@ -174,7 +189,7 @@ Make activation updates reliable outside request-time reads.
 - [x] Expose private job queue routes for list, enqueue, read, and cancel.
 - [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
 - [ ] Add relational database backfills if app records are later split into query-optimized repository tables.
-- [ ] Ensure activity emission is idempotent.
+- [x] Ensure activation-scoped retry and scope-change activity emission is idempotent enough to avoid double-counting repeated signal writes.
 - [x] Add stale JSON read-model repair checks and a `jobs:repair-activation` command.
 
 ### 5. Product Workflow Expansion
@@ -199,11 +214,10 @@ Strengthen the project rails before larger product work accumulates.
 
 ## Recommended Order
 
-1. Query-optimized repository hardening for high-value SQLite routes, replacing broad JSON-payload reads where needed.
-2. Remaining activation signals: durable retry and scope-change records plus a normalized `ActivationSignalRepository`.
-3. Member-management UI, invitation revoke/resend, email delivery, rate limiting, and CSRF review.
-4. Production storage hardening: concurrency and query-optimized storage beyond the local backup/restore rollback strategy.
-5. Continued workflow/UI, test, and release hardening.
+1. Query-optimized repository hardening for high-value SQLite routes, replacing broad JSON-payload reads where needed while keeping local JSON as the default runtime and SQLite opt-in.
+2. Member-management UI, invitation revoke/resend, email delivery, rate limiting, and CSRF review.
+3. Production storage hardening: concurrency and query-optimized storage beyond the local backup/restore rollback strategy.
+4. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
