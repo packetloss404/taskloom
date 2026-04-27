@@ -36,6 +36,7 @@ import { usageRoutes } from "./usage-routes.js";
 import { llmStreamRoutes } from "./llm-stream-routes.js";
 import { jobRoutes } from "./job-routes.js";
 import { JobScheduler } from "./jobs/scheduler.js";
+import { selectSchedulerLeaderLock } from "./jobs/scheduler-leader-selection.js";
 import { registerDefaultProviders } from "./providers/bootstrap.js";
 import { registerDefaultTools } from "./tools/bootstrap.js";
 import { getDefaultToolRegistry } from "./tools/registry.js";
@@ -283,7 +284,7 @@ app.route("/api/public/share", publicShareRoutes);
 app.route("/api/app/webhooks", agentWebhookRoutes);
 app.route("/api/public/webhooks", publicWebhookRoutes);
 
-const scheduler = new JobScheduler();
+const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({
   type: "agent.run",
   async handle(job) {

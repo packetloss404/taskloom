@@ -142,14 +142,14 @@ Recommended production posture:
 - Put `data/taskloom.sqlite`, `data/artifacts/`, and any deployment logs on backed-up persistent storage when they are needed across restarts.
 - Run `npm run db:backup` before migrations or release handoff, and validate restore with `npm run db:restore` in a non-production environment.
 - Run `npm run jobs:cleanup-sessions` on a schedule to prune expired sessions.
-- Run only one scheduler-active Node process against the current local store. Multi-process or multi-region deployments need external job coordination before enabling duplicate app runtimes.
+- Run only one scheduler-active Node process against the current local store unless the Phase 21 leader-election gate is enabled. To run multiple Node processes safely, set `TASKLOOM_SCHEDULER_LEADER_MODE=file` (with `TASKLOOM_SCHEDULER_LEADER_FILE_PATH`, default `data/scheduler-leader.json`) for processes on the same host, or `TASKLOOM_SCHEDULER_LEADER_MODE=http` (with `TASKLOOM_SCHEDULER_LEADER_HTTP_URL`, optional `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET`, `TASKLOOM_SCHEDULER_LEADER_HTTP_TIMEOUT_MS` defaulting to 5000, and `TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN`) for cross-host coordination through a deployment-owned coordinator service. `TASKLOOM_SCHEDULER_LEADER_TTL_MS` (default 30000) and `TASKLOOM_SCHEDULER_LEADER_PROCESS_ID` tune lock takeover latency and identify each process. See `docs/deployment-scheduler-coordination.md` for the wire protocol, file-mode caveats, and validation checklist.
 - Enable `TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL` or add equivalent edge/shared distributed rate limiting for auth and invitation routes before relying on local buckets across multiple processes or regions.
 - For invitation email webhook retry/dead-letter operations, see `docs/invitation-email-operations.md`.
 - Built-in API responses redact sensitive payload fields, route-token URLs, bearer values, job payload/result/error bodies, activity/run DTOs, and list/detail token surfaces. Keep any deployment access logs, reverse-proxy logs, exports, and telemetry aligned with the same redaction posture.
 - Enable the in-app access log middleware with `TASKLOOM_ACCESS_LOG_MODE=stdout` or `TASKLOOM_ACCESS_LOG_MODE=file` (defaults to `off`), and set `TASKLOOM_ACCESS_LOG_PATH` to a managed log directory when mode is `file`. The middleware writes one JSON line per request with method, status, duration, userId, workspaceId, requestId, and a path/query that is passed through the same redaction helper used for DTO surfaces. Pair it with reverse-proxy access-log rewriting templates under `docs/deployment/proxy-access-log-redaction/` for traffic the app never sees, and validate proxy logs with `node --import tsx src/security/proxy-access-log-validator.ts <path-to-log>` after every config change.
 - Use `npm run jobs:export-workspace -- --workspace-id=<id> > export.json` to produce a redacted per-workspace JSON snapshot for audit handoff, support escalation, or data-subject requests. See `docs/deployment-export-redaction.md` for redaction guarantees and the validation checklist.
 
-Current production guidance still does not add distributed locking or managed database repositories by itself. The app includes an optional HTTP distributed rate-limit adapter and built-in invitation webhook retry jobs, but the shared limiter service, edge provider, and external email provider remain deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, and `docs/deployment-export-redaction.md` for focused deployment checks.
+Current production guidance still does not add managed database repositories by itself. The app includes an optional HTTP distributed rate-limit adapter, built-in invitation webhook retry jobs, and an optional scheduler leader-election gate, but the shared limiter service, scheduler coordinator service, edge provider, and external email provider remain deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, and `docs/deployment-scheduler-coordination.md` for focused deployment checks.
 
 ## API Endpoints
 
@@ -356,8 +356,9 @@ Key docs:
 - `docs/deployment-sqlite-topology.md`
 - `docs/invitation-email-operations.md`
 - `docs/deployment-export-redaction.md`
+- `docs/deployment-scheduler-coordination.md`
 - `docs/activation/activation-domain.md`
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
 
-Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, and `docs/deployment-export-redaction.md`, and is tracked across Phases 16 through 20 in `docs/roadmap.md`.
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, and `docs/deployment-scheduler-coordination.md`, and is tracked across Phases 16 through 21 in `docs/roadmap.md`.

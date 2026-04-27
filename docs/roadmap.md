@@ -1,6 +1,6 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, local SQLite write/concurrency hardening, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam and webhook retry/dead-letter jobs, proxy-aware same-origin plus CSRF-token mutation checks, deployment-configurable store-backed auth/invitation rate limits with optional HTTP distributed limiter integration, command-driven maintenance jobs, queue-driven agent runs, public webhook/share links, route/DTO token-redaction enforcement for sensitive list/detail/job/activity/run surfaces, production deployment guidance in `README.md`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, and `docs/invitation-email-operations.md`, and a React/Vite interface. The remaining roadmap is mainly about production/deployment implementation hardening and continued workflow polish without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, local SQLite write/concurrency hardening, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam and webhook retry/dead-letter jobs, proxy-aware same-origin plus CSRF-token mutation checks, deployment-configurable store-backed auth/invitation rate limits with optional HTTP distributed limiter integration, command-driven maintenance jobs, queue-driven agent runs with an opt-in scheduler leader-election gate for multi-process runtimes, public webhook/share links, route/DTO token-redaction enforcement for sensitive list/detail/job/activity/run surfaces, production deployment guidance in `README.md`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, and `docs/deployment-scheduler-coordination.md`, and a React/Vite interface. The remaining roadmap is mainly about production/deployment implementation hardening and continued workflow polish without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
@@ -18,6 +18,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - Invitation webhook email delivery supports `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` for provider request timeout control and `TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS` for queued retry attempts. Failed webhook create/resend attempts enqueue token-free `invitation.email` jobs that retry through the scheduler and dead-letter as failed jobs after exhaustion; see `docs/invitation-email-operations.md` for production email operations guidance.
 - Token-redaction helpers now mask known invitation/share/webhook tokens, bearer values, token-bearing routes, sensitive assignments, and sensitive object keys across job responses, agent runs, activities, provider errors, invitation delivery errors, share-token lists, invitation lists, webhook token previews, and frontend display paths. Full bearer tokens remain one-time surfaces on invitation create/resend, share-token create, and webhook rotate responses.
 - An opt-in Hono access-log middleware writes redacted JSON access lines to stdout or a file based on `TASKLOOM_ACCESS_LOG_MODE`/`TASKLOOM_ACCESS_LOG_PATH`. A `jobs:export-workspace` CLI produces redacted per-workspace JSON snapshots, and `docs/deployment-export-redaction.md` plus `docs/deployment/proxy-access-log-redaction/` cover the proxy-level rewriting story with a validator at `src/security/proxy-access-log-validator.ts`.
+- An optional scheduler leader-election gate is configurable through `TASKLOOM_SCHEDULER_LEADER_MODE` (`off|file|http`, default `off`), with `TASKLOOM_SCHEDULER_LEADER_TTL_MS`, `TASKLOOM_SCHEDULER_LEADER_PROCESS_ID`, file-mode `TASKLOOM_SCHEDULER_LEADER_FILE_PATH`, and http-mode `TASKLOOM_SCHEDULER_LEADER_HTTP_URL`/`SECRET`/`TIMEOUT_MS`/`FAIL_OPEN` knobs. `docs/deployment-scheduler-coordination.md` documents the wire protocol, file-mode caveats, and validation checklist.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
 - Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
 - `docs/deployment-sqlite-topology.md` defines the supported local SQLite posture, WAL/`busy_timeout`/`BEGIN IMMEDIATE` guarantees, backup/restore policy, network filesystem caveats, multi-process/multi-region limits, and thresholds for dedicated relational repositories/backfills beyond indexed `app_records`.
@@ -251,6 +252,19 @@ Phase 20 implements the next broad redaction pass beyond app-level DTOs by addin
 
 This phase does not add a request-body access log, managed log shipping/retention, automated scheduled exports, managed database topology, external scheduler coordination, or managed external provider operations.
 
+### Phase 21 External Scheduler Coordination
+
+Phase 21 implements the next production hardening item by adding opt-in leader election to the local job scheduler so multi-process and multi-host deployments stop double-executing jobs:
+
+- A `SchedulerLeaderLock` interface with `acquire()`, `release()`, and `isHeld()` methods gates the scheduler poll loop. The default `noopLeaderLock` keeps single-process behavior identical to today.
+- `TASKLOOM_SCHEDULER_LEADER_MODE=file` selects an atomic file-based lock at `TASKLOOM_SCHEDULER_LEADER_FILE_PATH` (default `data/scheduler-leader.json`) for multi-process runtimes on a single host with a local filesystem.
+- `TASKLOOM_SCHEDULER_LEADER_MODE=http` selects an HTTP coordinator client. The client POSTs `{processId, ttlMs, timestamp}` to `<TASKLOOM_SCHEDULER_LEADER_HTTP_URL>/acquire` and `<url>/release`, accepts `200 {leader: bool}` or `{acquired: bool}` responses, treats 401/403 as a config error, and fails closed on network/timeout errors. `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` adds an optional bearer header; `TASKLOOM_SCHEDULER_LEADER_HTTP_TIMEOUT_MS` (default 5000) caps each request; `TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN=true` opts into preserving the prior leader belief on coordinator outages.
+- `TASKLOOM_SCHEDULER_LEADER_TTL_MS` (default 30000) and `TASKLOOM_SCHEDULER_LEADER_PROCESS_ID` (default `${hostname}-${pid}-${randomShortHex}`) tune lock takeover latency and identify each process.
+- The scheduler skips dequeues on a tick where `acquire()` returns false, never interrupts in-flight jobs, and calls `release()` on graceful stop so the next poller takes over without waiting for TTL expiry.
+- `docs/deployment-scheduler-coordination.md` documents the wire protocol, file-mode caveats, multi-process operating guidance, and the post-deploy validation checklist.
+
+This phase does not ship a hosted coordinator service, leader-aware in-flight job migration, managed database topology, dedicated relational repositories, managed external email provider operations, managed log shipping, or scheduled-export automation.
+
 ## Roadmap
 
 Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
@@ -289,7 +303,8 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 - [x] Add optional HTTP distributed rate-limit integration for auth and invitation routes before the local process/store-scoped bucket backstop.
 - [x] Add route/DTO token-redaction enforcement for invitation/share/webhook tokens, API-key-like fields, environment variable display paths, jobs, activities, agent runs, provider errors, and invitation delivery errors.
 - [x] Add export and access-log redaction controls beyond app-level DTO redaction through Phase 20: an opt-in Hono access-log middleware with built-in path/query redaction, a `jobs:export-workspace` CLI with masked tokens/credentials/env-var values and `redactSensitiveValue` for nested payloads, reverse-proxy access-log rewriting templates under `docs/deployment/proxy-access-log-redaction/`, and a `src/security/proxy-access-log-validator.ts` scanner for rotated proxy logs.
-- [ ] Continue production hardening implementation beyond process/store-scoped rate limiting, webhook email delivery, CSRF checks, app-level redaction, and Phase 20 export/access-log controls, such as managed production topology support, scheduler coordination, and managed external provider operations. SQLite/database topology guidance now lives in `docs/deployment-sqlite-topology.md`.
+- [x] Add an opt-in scheduler leader-election gate so multi-process or multi-host deployments stop double-executing jobs, with `off`/`file`/`http` modes selectable via `TASKLOOM_SCHEDULER_LEADER_MODE` and the wire protocol, file-mode caveats, and validation checklist documented in `docs/deployment-scheduler-coordination.md`.
+- [ ] Continue production hardening implementation beyond process/store-scoped rate limiting, webhook email delivery, CSRF checks, app-level redaction, Phase 20 export/access-log controls, and Phase 21 scheduler leader election, such as managed production topology support and managed external provider operations. SQLite/database topology guidance lives in `docs/deployment-sqlite-topology.md`.
 
 ### 3. Real Activation Signals
 
@@ -310,6 +325,7 @@ Move activation snapshots from onboarding-derived facts toward product-observed 
 Make activation updates reliable outside request-time reads.
 
 - [x] Run the local JSON-backed queue scheduler for `agent.run` jobs with cron re-enqueue, retries/backoff, cancellation, and stale-running-job sweep.
+- [x] Add an optional scheduler leader-election gate so multi-process or multi-host deployments stop double-executing jobs, with `off`/`file`/`http` modes selectable via `TASKLOOM_SCHEDULER_LEADER_MODE`. See `docs/deployment-scheduler-coordination.md`.
 - [x] Expose private job queue routes for list, enqueue, read, and cancel.
 - [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
 - [ ] Add relational database backfills if app records are later split from indexed `app_records` metadata into dedicated repository tables, using `docs/deployment-sqlite-topology.md` thresholds to decide when that split is justified.
@@ -339,11 +355,11 @@ Strengthen the project rails before larger product work accumulates.
 
 ## Recommended Order
 
-1. Production storage implementation hardening: managed database topology, external scheduler/job coordination for multi-process runtimes, and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
+1. Production storage implementation hardening: managed database topology and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
 2. Managed external email provider operational hardening beyond Taskloom's built-in retry jobs, including provider-side dead letters and replay/reconciliation processes.
 3. Managed log shipping, retention, and SIEM integration around the Phase 20 access-log middleware, workspace export pipeline, and proxy access-log redaction templates.
 4. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The near-term production hardening track is complete when app-level token-redaction enforcement and the Phase 20 export/access-log redaction controls (in-app middleware, workspace export pipeline, proxy templates, and validator) are paired with deployment-owned managed log shipping/retention, managed database or external scheduler topology is implemented where needed, managed external provider operations are defined where built-in retry jobs are not enough, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.
+The near-term production hardening track is complete when app-level token-redaction enforcement, the Phase 20 export/access-log redaction controls (in-app middleware, workspace export pipeline, proxy templates, and validator), and the Phase 21 scheduler leader-election gate (`off`/`file`/`http` modes with documented wire protocol and validation checklist) are paired with deployment-owned managed log shipping/retention, managed database topology is implemented where needed, managed external provider operations are defined where built-in retry jobs are not enough, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.

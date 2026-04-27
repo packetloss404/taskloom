@@ -2,6 +2,8 @@ import type { JobRecord } from "../taskloom-store.js";
 import { claimNextJob, enqueueRecurringJob, findJob, maintainScheduledAgentJobs, sweepStaleRunningJobs, updateJob } from "./store.js";
 import { nextAfter } from "./cron.js";
 import { redactedErrorMessage } from "../security/redaction.js";
+import type { SchedulerLeaderLock } from "./scheduler-lock.js";
+import { noopLeaderLock } from "./scheduler-lock.js";
 
 export interface JobHandlerContext {
   signal: AbortSignal;
@@ -26,10 +28,12 @@ export class JobScheduler {
   private inFlight = new Map<string, AbortController>();
   private pollIntervalMs: number;
   private cancelWatchMs: number;
+  private leaderLock: SchedulerLeaderLock;
 
-  constructor(opts: { pollIntervalMs?: number; cancelWatchMs?: number } = {}) {
+  constructor(opts: { pollIntervalMs?: number; cancelWatchMs?: number; leaderLock?: SchedulerLeaderLock } = {}) {
     this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
     this.cancelWatchMs = opts.cancelWatchMs ?? 500;
+    this.leaderLock = opts.leaderLock ?? noopLeaderLock();
   }
 
   register(handler: JobHandler): void {
@@ -48,6 +52,9 @@ export class JobScheduler {
     this.polling = false;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     for (const ctrl of this.inFlight.values()) ctrl.abort();
+    if (this.leaderLock.isHeld()) {
+      try { await this.leaderLock.release(); } catch { /* ignore */ }
+    }
     const cutoff = Date.now() + 30_000;
     while (this.inFlight.size > 0 && Date.now() < cutoff) {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -62,6 +69,11 @@ export class JobScheduler {
   private async tick(): Promise<void> {
     if (!this.polling) return;
     try {
+      const isLeader = await this.leaderLock.acquire();
+      if (!isLeader) {
+        this.scheduleNext(this.pollIntervalMs);
+        return;
+      }
       const job = await claimNextJob(new Date());
       if (job) {
         void this.runJob(job);
