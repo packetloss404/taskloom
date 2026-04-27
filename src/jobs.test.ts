@@ -265,6 +265,7 @@ function makeStore(): TaskloomData {
     providerCalls: [],
     jobs: [],
     jobMetricSnapshots: [],
+    alertEvents: [],
     shareTokens: [],
     workspaceInvitations: [],
     invitationEmailDeliveries: [],

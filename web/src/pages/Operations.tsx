@@ -622,10 +622,23 @@ interface JobMetricSnapshot {
   p95DurationMs: number | null;
 }
 
+interface AlertEvent {
+  id: string;
+  ruleId: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  observedAt: string;
+  context: Record<string, unknown>;
+  delivered: boolean;
+  deliveryError?: string;
+}
+
 function ProductionStatusPanel() {
   const [status, setStatus] = useState<ProductionStatus | null>(null);
   const [health, setHealth] = useState<OperationsHealth | null>(null);
   const [history, setHistory] = useState<JobMetricSnapshot[] | null>(null);
+  const [alerts, setAlerts] = useState<AlertEvent[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
@@ -634,10 +647,11 @@ function ProductionStatusPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [statusResult, healthResult, historyResult] = await Promise.allSettled([
+      const [statusResult, healthResult, historyResult, alertsResult] = await Promise.allSettled([
         fetchProductionStatus(),
         fetchOperationsHealth(),
         fetchJobMetricsHistory(),
+        fetchRecentAlerts(),
       ]);
 
       if (statusResult.status === "fulfilled") {
@@ -669,6 +683,16 @@ function ProductionStatusPanel() {
           setHistory(null);
         }
         // Silently ignore other history errors; the table still renders without a trend.
+      }
+
+      if (alertsResult.status === "fulfilled") {
+        setAlerts(alertsResult.value);
+      } else {
+        const err = alertsResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setAlerts(null);
+        }
+        // Silently ignore other alert errors; the panel will show no rows.
       }
     } finally {
       setLoading(false);
@@ -854,6 +878,10 @@ function ProductionStatusPanel() {
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
             <SubsystemHealthSection health={health} />
           </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <RecentAlertsSection alerts={alerts} />
+          </div>
         </div>
       )}
 
@@ -868,6 +896,9 @@ function ProductionStatusPanel() {
           </div>
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
             <SubsystemHealthSection health={health} />
+          </div>
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <RecentAlertsSection alerts={alerts} />
           </div>
         </div>
       )}
@@ -965,6 +996,23 @@ async function fetchJobMetricsHistory(limit = 50): Promise<JobMetricSnapshot[]> 
   return Array.isArray(snapshots) ? snapshots : [];
 }
 
+async function fetchRecentAlerts(limit = 25): Promise<AlertEvent[]> {
+  const response = await fetch(`/api/app/operations/alerts?limit=${limit}`, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(
+      typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  const alerts = (payload as { alerts?: AlertEvent[] }).alerts;
+  return Array.isArray(alerts) ? alerts : [];
+}
+
 function subsystemStatusClasses(status: SubsystemStatus) {
   switch (status) {
     case "ok":
@@ -1040,6 +1088,93 @@ function SubsystemHealthSection({ health }: { health: OperationsHealth | null })
                 </div>
                 {subsystem.detail && (
                   <p className="mt-1 font-mono text-[11px] text-ink-500">{subsystem.detail}</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function alertSeverityClasses(severity: AlertEvent["severity"]) {
+  switch (severity) {
+    case "critical":
+      return "text-rose-500";
+    case "warning":
+      return "text-amber-500";
+    case "info":
+    default:
+      return "text-slate-400";
+  }
+}
+
+function AlertSeverityIcon({ severity, className }: { severity: AlertEvent["severity"]; className?: string }) {
+  const cls = `h-3.5 w-3.5 ${className ?? ""}`.trim();
+  if (severity === "critical") return <XCircle className={cls} />;
+  if (severity === "warning") return <AlertTriangle className={cls} />;
+  return <HelpCircle className={cls} />;
+}
+
+function truncate(text: string, max = 120) {
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+function RecentAlertsSection({ alerts }: { alerts: AlertEvent[] | null }) {
+  const rows = (alerts ?? []).slice(0, 25);
+  const count = rows.length;
+
+  return (
+    <div>
+      <div className="kicker mb-1">RECENT ALERTS</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Recent alerts</h3>
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          {count} in last 25
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          — No alerts in the recent window. —
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-800">
+          {rows.map((alert) => {
+            const severityColor = alertSeverityClasses(alert.severity);
+            const severityLabel = alert.severity.toUpperCase();
+            const truncated = truncate(alert.detail, 120);
+            return (
+              <li key={alert.id} className="py-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={`inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider ${severityColor}`}>
+                      <AlertSeverityIcon severity={alert.severity} />
+                      {severityLabel}
+                    </span>
+                    <span className="font-mono text-sm font-semibold text-ink-100">{alert.title}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                      {relative(alert.observedAt)}
+                    </span>
+                    {alert.delivered ? (
+                      <span aria-label="delivered" title="Delivered">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                      </span>
+                    ) : (
+                      <span aria-label="not delivered" title={alert.deliveryError || "Delivery failed"}>
+                        <XCircle className="h-3.5 w-3.5 text-rose-500" />
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {truncated && (
+                  <p className="mt-1 font-mono text-[11px] text-ink-500" title={alert.detail}>
+                    {truncated}
+                  </p>
                 )}
               </li>
             );

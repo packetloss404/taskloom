@@ -102,6 +102,18 @@ export interface JobMetricSnapshotRecord {
   p95DurationMs: number | null;
 }
 
+export interface AlertEventRecord {
+  id: string;
+  ruleId: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  observedAt: string;
+  context: Record<string, unknown>;
+  delivered: boolean;
+  deliveryError?: string;
+}
+
 export interface WorkspaceBriefRecord {
   workspaceId: string;
   summary: string;
@@ -502,6 +514,7 @@ export interface TaskloomData {
   providerCalls: ProviderCallRecord[];
   jobs: JobRecord[];
   jobMetricSnapshots: JobMetricSnapshotRecord[];
+  alertEvents: AlertEventRecord[];
   shareTokens: ShareTokenRecord[];
   activationFacts: Record<string, WorkspaceActivationFacts>;
   activationMilestones: Record<string, ActivationMilestoneRecord[]>;
@@ -750,6 +763,7 @@ const RECORD_COLLECTIONS = [
   "providerCalls",
   "jobs",
   "jobMetricSnapshots",
+  "alertEvents",
   "shareTokens",
 ] as const satisfies readonly StoreCollectionKey[];
 
@@ -1334,6 +1348,7 @@ export function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
     providerCalls: data.providerCalls ?? [],
     jobs: data.jobs ?? [],
     jobMetricSnapshots: data.jobMetricSnapshots ?? [],
+    alertEvents: data.alertEvents ?? [],
     shareTokens: data.shareTokens ?? [],
     activationFacts: data.activationFacts ?? {},
     activationMilestones: data.activationMilestones ?? {},
@@ -2042,6 +2057,7 @@ function seedStore(): TaskloomData {
     providerCalls: [],
     jobs,
     jobMetricSnapshots: [],
+    alertEvents: [],
     shareTokens: [],
     activationFacts,
     activationMilestones: {},

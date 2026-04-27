@@ -56,6 +56,13 @@ import { healthRoutes } from "./health-routes.js";
 import { operationsStatusRoutes } from "./operations-status-routes.js";
 import { operationsHealthRoutes } from "./operations-health-routes.js";
 import { operationsJobMetricsRoutes } from "./operations-job-metrics-routes.js";
+import { operationsAlertsRoutes } from "./operations-alerts-routes.js";
+import {
+  ALERTS_EVALUATE_JOB_TYPE,
+  ensureAlertsCronJob,
+  handleAlertsEvaluateJob,
+  type AlertsEvaluateJobPayload,
+} from "./alerts/alerts-evaluate-handler.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -299,6 +306,7 @@ app.route("/api/public/webhooks/invitation-email", invitationEmailWebhookRoutes)
 app.route("/api/app/operations/status", operationsStatusRoutes);
 app.route("/api/app/operations/health", operationsHealthRoutes);
 app.route("/api/app/operations/job-metrics", operationsJobMetricsRoutes);
+app.route("/api/app/operations/alerts", operationsAlertsRoutes);
 
 const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({
@@ -339,8 +347,15 @@ scheduler.register({
     return handleMetricsSnapshotJob(job.payload as MetricsSnapshotJobPayload);
   },
 });
+scheduler.register({
+  type: ALERTS_EVALUATE_JOB_TYPE,
+  async handle(job) {
+    return handleAlertsEvaluateJob(job.payload as AlertsEvaluateJobPayload);
+  },
+});
 scheduler.start();
 ensureMetricsSnapshotCronJob();
+ensureAlertsCronJob();
 const shutdown = async () => {
   await scheduler.stop();
   try {

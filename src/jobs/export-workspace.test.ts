@@ -367,6 +367,7 @@ function makeStore(): TaskloomData {
       },
     ],
     jobMetricSnapshots: [],
+    alertEvents: [],
     shareTokens: [
       {
         id: "share_alpha",
