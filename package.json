@@ -29,6 +29,7 @@
     "jobs:cleanup-sessions": "node --import tsx src/jobs.ts cleanup-sessions",
     "jobs:export-workspace": "node --import tsx src/jobs.ts export-workspace",
     "jobs:reconcile-invitation-emails": "node --import tsx src/jobs.ts reconcile-invitation-emails",
+    "jobs:snapshot-metrics": "node --import tsx src/jobs.ts snapshot-job-metrics",
     "access-log:rotate": "node --import tsx src/security/access-log-rotate-cli.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "test": "npm run test:api && npm run test:web",

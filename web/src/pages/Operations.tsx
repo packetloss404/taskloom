@@ -603,9 +603,25 @@ interface ProductionStatus {
   runtime: { nodeVersion: string };
 }
 
+interface JobMetricSnapshot {
+  id: string;
+  capturedAt: string;
+  type: string;
+  totalRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  canceledRuns: number;
+  lastRunStartedAt: string | null;
+  lastRunFinishedAt: string | null;
+  lastDurationMs: number | null;
+  averageDurationMs: number | null;
+  p95DurationMs: number | null;
+}
+
 function ProductionStatusPanel() {
   const [status, setStatus] = useState<ProductionStatus | null>(null);
   const [health, setHealth] = useState<OperationsHealth | null>(null);
+  const [history, setHistory] = useState<JobMetricSnapshot[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
@@ -614,9 +630,10 @@ function ProductionStatusPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [statusResult, healthResult] = await Promise.allSettled([
+      const [statusResult, healthResult, historyResult] = await Promise.allSettled([
         fetchProductionStatus(),
         fetchOperationsHealth(),
+        fetchJobMetricsHistory(),
       ]);
 
       if (statusResult.status === "fulfilled") {
@@ -638,6 +655,16 @@ function ProductionStatusPanel() {
           setHealth(null);
         }
         // Silently ignore other health errors so the rest of the panel still renders.
+      }
+
+      if (historyResult.status === "fulfilled") {
+        setHistory(historyResult.value);
+      } else {
+        const err = historyResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setHistory(null);
+        }
+        // Silently ignore other history errors; the table still renders without a trend.
       }
     } finally {
       setLoading(false);
@@ -775,26 +802,37 @@ function ProductionStatusPanel() {
                       <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Last duration</th>
                       <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Avg (rolling)</th>
                       <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">p95</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Trend</th>
                       <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Last finished</th>
                       <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Total runs</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {status.jobMetrics.map((entry) => (
-                      <tr key={entry.type} className="border-t border-ink-800 text-ink-200">
-                        <td className="py-1.5 pr-4">{entry.type}</td>
-                        <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.lastDurationMs)}</td>
-                        <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.averageDurationMs)}</td>
-                        <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.p95DurationMs)}</td>
-                        <td className="py-1.5 pr-4">{entry.lastRunFinishedAt ? relative(entry.lastRunFinishedAt) : "—"}</td>
-                        <td className="py-1.5 pr-4 tabular-nums">
-                          {entry.totalRuns}
-                          <span className="ml-1 text-ink-500">({entry.succeededRuns} / {entry.failedRuns})</span>
-                        </td>
-                      </tr>
-                    ))}
+                    {status.jobMetrics.map((entry) => {
+                      const trendValues = (history ?? [])
+                        .filter((snapshot) => snapshot.type === entry.type)
+                        .map((snapshot) => snapshot.averageDurationMs)
+                        .filter((value): value is number => typeof value === "number");
+                      return (
+                        <tr key={entry.type} className="border-t border-ink-800 text-ink-200">
+                          <td className="py-1.5 pr-4">{entry.type}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.lastDurationMs)}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.averageDurationMs)}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.p95DurationMs)}</td>
+                          <td className="py-1.5 pr-4"><Sparkline values={trendValues} /></td>
+                          <td className="py-1.5 pr-4">{entry.lastRunFinishedAt ? relative(entry.lastRunFinishedAt) : "—"}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">
+                            {entry.totalRuns}
+                            <span className="ml-1 text-ink-500">({entry.succeededRuns} / {entry.failedRuns})</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+                <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                  Trend = average duration across recent snapshots (run <span className="text-ink-300">npm run jobs:snapshot-metrics</span> to capture)
+                </p>
               </div>
             )}
           </div>
@@ -851,6 +889,27 @@ function formatDurationMs(ms: number | null): string {
   return `${Math.round(ms)} ms`;
 }
 
+function Sparkline({ values, width = 80, height = 20 }: { values: number[]; width?: number; height?: number }) {
+  if (values.length === 0) return <span className="text-slate-500">—</span>;
+  if (values.length === 1) return <span className="text-slate-400">—</span>;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stride = width / Math.max(1, values.length - 1);
+  const points = values
+    .map((v, i) => {
+      const x = i * stride;
+      const y = height - ((v - min) / range) * height;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-emerald-400" />
+    </svg>
+  );
+}
+
 async function fetchProductionStatus(): Promise<ProductionStatus> {
   const response = await fetch("/api/app/operations/status", {
     credentials: "include",
@@ -873,6 +932,23 @@ async function fetchOperationsHealth(): Promise<OperationsHealth> {
     throw error;
   }
   return response.json() as Promise<OperationsHealth>;
+}
+
+async function fetchJobMetricsHistory(limit = 50): Promise<JobMetricSnapshot[]> {
+  const response = await fetch(`/api/app/operations/job-metrics/history?limit=${limit}`, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(
+      typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  const snapshots = (payload as { snapshots?: JobMetricSnapshot[] }).snapshots;
+  return Array.isArray(snapshots) ? snapshots : [];
 }
 
 function subsystemStatusClasses(status: SubsystemStatus) {

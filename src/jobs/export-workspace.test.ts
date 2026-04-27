@@ -366,6 +366,7 @@ function makeStore(): TaskloomData {
         updatedAt: "2026-04-20T10:00:00.000Z",
       },
     ],
+    jobMetricSnapshots: [],
     shareTokens: [
       {
         id: "share_alpha",

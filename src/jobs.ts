@@ -17,6 +17,7 @@ import {
 } from "./taskloom-store";
 import { exportWorkspaceData } from "./jobs/export-workspace.js";
 import { reconcileInvitationEmails } from "./jobs/reconcile-invitation-emails.js";
+import { snapshotJobMetrics } from "./jobs/job-metrics-snapshot.js";
 
 export interface StoreJobDeps {
   loadStore: () => TaskloomData;
@@ -254,6 +255,19 @@ export async function runJobsCli(argv = process.argv.slice(2)): Promise<number> 
     return 0;
   }
 
+  if (command === "snapshot-job-metrics") {
+    const retentionRaw = parseStringFlag(args, "--retention-days=");
+    const retentionDays = retentionRaw !== undefined ? Number.parseInt(retentionRaw, 10) : undefined;
+    if (retentionDays !== undefined && (!Number.isInteger(retentionDays) || retentionDays < 0)) {
+      console.error("--retention-days must be a non-negative integer");
+      writeUsage();
+      return 1;
+    }
+    const result = snapshotJobMetrics({ retentionDays });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
+
   console.error(`Unknown jobs command: ${command}`);
   writeUsage();
   return 1;
@@ -291,12 +305,13 @@ function activationStatusEquals(left: ActivationStatusDto | null, right: Activat
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions|export-workspace|reconcile-invitation-emails>");
+  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions|export-workspace|reconcile-invitation-emails|snapshot-job-metrics>");
   console.error("Options:");
   console.error("  recompute-activation --workspace-ids=alpha,beta");
   console.error("  repair-activation-read-models --workspace-ids=alpha,beta");
   console.error("  export-workspace --workspace-id=alpha");
   console.error("  reconcile-invitation-emails [--workspace-id=alpha] [--invitation-id=inv] [--delivery-id=del] [--mark-resolved] [--requeue]");
+  console.error("  snapshot-job-metrics [--retention-days=30]");
 }
 
 function isExecutedDirectly(): boolean {

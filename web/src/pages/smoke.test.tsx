@@ -143,6 +143,13 @@ test("Operations surface renders the Production Status tile for admin sessions",
   assert.match(html, /Job metrics/);
   assert.match(html, /Subsystem health/);
   assert.match(html, /SUBSYSTEM HEALTH/);
+
+  const operations = pageSource("Operations.tsx");
+  assert.match(operations, /fetchJobMetricsHistory/);
+  assert.match(operations, /\/api\/app\/operations\/job-metrics\/history/);
+  assert.match(operations, />Trend</);
+  assert.match(operations, /<Sparkline values=\{trendValues\} \/>/);
+  assert.match(operations, /npm run jobs:snapshot-metrics/);
 });
 
 test("Operations surface hides the Production Status tile for viewer sessions", () => {

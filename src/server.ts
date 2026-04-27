@@ -49,6 +49,7 @@ import { accessLogMiddleware } from "./security/access-log.js";
 import { healthRoutes } from "./health-routes.js";
 import { operationsStatusRoutes } from "./operations-status-routes.js";
 import { operationsHealthRoutes } from "./operations-health-routes.js";
+import { operationsJobMetricsRoutes } from "./operations-job-metrics-routes.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -291,6 +292,7 @@ app.route("/api/public/webhooks", publicWebhookRoutes);
 app.route("/api/public/webhooks/invitation-email", invitationEmailWebhookRoutes);
 app.route("/api/app/operations/status", operationsStatusRoutes);
 app.route("/api/app/operations/health", operationsHealthRoutes);
+app.route("/api/app/operations/job-metrics", operationsJobMetricsRoutes);
 
 const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({

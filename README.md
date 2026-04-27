@@ -163,6 +163,7 @@ Available endpoints include:
 - `GET /api/health/ready`
 - `GET /api/app/operations/status`
 - `GET /api/app/operations/health`
+- `GET /api/app/operations/job-metrics/history`
 - `GET /api/activation`
 - `GET /api/activation/:workspaceId`
 - `GET /api/auth/session`
@@ -329,6 +330,14 @@ npm run access-log:rotate -- --path=data/access.log --max-files=10
 
 Falls back to `TASKLOOM_ACCESS_LOG_PATH` and `TASKLOOM_ACCESS_LOG_MAX_FILES` when the flags are omitted. See `docs/deployment-access-log-shipping.md` for built-in size-based rotation, stdout-mode shipping, and the Vector/Fluent Bit/Promtail recipes under `docs/deployment/access-log-shipping/`.
 
+To capture a persisted snapshot of the in-memory job metrics so admins can see trends across process restarts:
+
+```bash
+npm run jobs:snapshot-metrics -- --retention-days=30
+```
+
+Default retention is 30 days; pass `--retention-days=0` to skip pruning, or any positive integer to override the window. Snapshots feed the admin `GET /api/app/operations/job-metrics/history` endpoint and the Operations page sparkline. See `docs/deployment-health-endpoints.md` for cadence guidance and the validation checklist.
+
 To recompute or repair a subset of workspaces:
 
 ```bash
@@ -390,4 +399,4 @@ Key docs:
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
 
-Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, and `docs/deployment-health-endpoints.md`, and is tracked across Phases 16 through 26 in `docs/roadmap.md`.
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, and `docs/deployment-health-endpoints.md`, and is tracked across Phases 16 through 27 in `docs/roadmap.md`.

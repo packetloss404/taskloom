@@ -190,6 +190,67 @@ Subsystem classification:
 curl -H "Cookie: taskloom_session=$SESSION" http://localhost:8484/api/app/operations/health | jq
 ```
 
+## Job Metrics History (/api/app/operations/job-metrics/history)
+
+`GET /api/app/operations/job-metrics/history` is admin-scoped and returns persisted job-metrics snapshots so admins can see trends across process restarts. Pair with `npm run jobs:snapshot-metrics` to capture snapshots on a schedule.
+
+Auth: standard Taskloom session + RBAC `admin`/`owner`. Returns 401 to unauthenticated requests, 403 to authenticated non-admins.
+
+Query parameters:
+
+- `type` — filter to a single job type (e.g., `agent.run`).
+- `since` — ISO timestamp; only snapshots at or after this time.
+- `until` — ISO timestamp; only snapshots at or before this time.
+- `limit` — integer, default `100`, capped at `500`. Values outside that range are clamped.
+
+Response body:
+
+```json
+{
+  "snapshots": [
+    {
+      "id": "<uuid>",
+      "capturedAt": "2026-04-26T12:00:00.000Z",
+      "type": "agent.run",
+      "totalRuns": 42,
+      "succeededRuns": 40,
+      "failedRuns": 1,
+      "canceledRuns": 1,
+      "lastRunStartedAt": "2026-04-26T11:59:00.000Z",
+      "lastRunFinishedAt": "2026-04-26T11:59:01.234Z",
+      "lastDurationMs": 1234,
+      "averageDurationMs": 1100,
+      "p95DurationMs": 1800
+    }
+  ]
+}
+```
+
+Snapshots are returned ascending by `capturedAt` so consumers (the Operations page sparkline, downstream chart tools) can render left-to-right without sorting.
+
+Invalid `since` or `until` query values return `400 { "error": "invalid since" }` (or `until`).
+
+## Capturing Job Metrics History
+
+The Phase 25 in-memory `JobTypeMetrics` reset when the Node process restarts by design. Phase 27 adds explicit durable snapshots via CLI so admins can see trends across restarts:
+
+```bash
+# Capture a snapshot now with the default 30-day retention.
+npm run jobs:snapshot-metrics
+
+# Override the retention window. Older rows are pruned in the same call.
+npm run jobs:snapshot-metrics -- --retention-days=90
+
+# Capture a snapshot without pruning.
+npm run jobs:snapshot-metrics -- --retention-days=0
+```
+
+The CLI writes one row per `getJobTypeMetrics()` entry to `data.jobMetricSnapshots`. The in-memory metrics are NOT cleared by snapshotting — they continue to accumulate until process restart.
+
+Recommended cadence: run on a 5-minute or 15-minute cron interval. Smaller intervals give finer-grained trend lines at the cost of more rows; larger intervals cap row growth but reduce resolution. Tune retention to match the disk budget — at 5-minute snapshots and 30-day retention, expect ~8640 rows per job type.
+
+Snapshots live in `data.jobMetricSnapshots` and survive store restarts. They are not deleted automatically except by the retention pruner inside `snapshotJobMetrics`. To prune without snapshotting, you can call `pruneJobMetricSnapshots({ retentionDays })` programmatically, but no separate CLI is currently exposed — file an issue if one would be useful.
+
 ## Suggested Probe Wiring
 
 | Consumer | Endpoint | Notes |
@@ -225,4 +286,8 @@ After deploying Phase 24, walk through:
 - `curl http://localhost:8484/api/app/operations/health` without a session returns `401`.
 - With an admin session cookie, `GET /api/app/operations/health` returns the expected `OperationsHealthReport` shape with at least the `store`, `scheduler`, and `accessLog` subsystems.
 - After the scheduler has run for >60s without completing a tick (e.g., simulated by suspending the process), the `scheduler` subsystem reports `degraded`.
+- After running `npm run jobs:snapshot-metrics`, `GET /api/app/operations/job-metrics/history?limit=5` returns a non-empty `snapshots` array.
+- Snapshots are sorted ascending by `capturedAt`.
+- `?since=<future-iso>` returns an empty array.
+- `?since=not-a-date` returns 400.
 - Cross-link the rest of the production posture: `docs/deployment-scheduler-coordination.md` for the leader-election context behind `scheduler.leaderHeldLocally` and `scheduler.lockSummary`, `docs/deployment-access-log-shipping.md` for the access-log envelope mirrored in `accessLog`, `docs/deployment-auth-hardening.md` for auth/invitation rate limits and CSRF behavior, and `docs/deployment-sqlite-topology.md` for storage topology.
