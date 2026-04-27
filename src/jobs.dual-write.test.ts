@@ -114,7 +114,7 @@ function makeAgent(overrides: Partial<AgentRecord> & { id: string }): AgentRecor
   };
 }
 
-test("enqueueJob dual-writes JSON-side and dedicated jobs table in SQLite mode", () => {
+test("enqueueJob writes the dedicated jobs table in SQLite mode", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -126,9 +126,7 @@ test("enqueueJob dual-writes JSON-side and dedicated jobs table in SQLite mode",
     assert.equal(job.type, "agent.run");
 
     const appRecord = findAppRecordJob(dbPath, job.id);
-    assert.ok(appRecord, "app_records row should exist");
-    assert.equal(appRecord.id, job.id);
-    assert.equal(appRecord.status, "queued");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicatedJob(dbPath, job.id);
     assert.ok(dedicated, "dedicated row should exist");
@@ -142,7 +140,7 @@ test("enqueueJob dual-writes JSON-side and dedicated jobs table in SQLite mode",
   }
 });
 
-test("updateJob dual-writes the updated record on both sides", () => {
+test("updateJob writes the updated record to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -155,8 +153,7 @@ test("updateJob dual-writes the updated record on both sides", () => {
     assert.equal(updated.status, "success");
 
     const appRecord = findAppRecordJob(dbPath, job.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "success");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicatedJob(dbPath, job.id);
     assert.ok(dedicated);
@@ -168,7 +165,7 @@ test("updateJob dual-writes the updated record on both sides", () => {
   }
 });
 
-test("cancelJob dual-writes the canceled record on both sides", () => {
+test("cancelJob writes the canceled record to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -182,9 +179,7 @@ test("cancelJob dual-writes the canceled record on both sides", () => {
     assert.equal(canceled.cancelRequested, true);
 
     const appRecord = findAppRecordJob(dbPath, job.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "canceled");
-    assert.equal(appRecord.cancelRequested, true);
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicatedJob(dbPath, job.id);
     assert.ok(dedicated);
@@ -196,7 +191,7 @@ test("cancelJob dual-writes the canceled record on both sides", () => {
   }
 });
 
-test("claimNextJob dual-writes the queued -> running transition on both sides", async () => {
+test("claimNextJob writes the queued -> running transition to the dedicated table", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -215,9 +210,7 @@ test("claimNextJob dual-writes the queued -> running transition on both sides", 
     assert.equal(claimed.attempts, 1);
 
     const appRecord = findAppRecordJob(dbPath, queued.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "running");
-    assert.equal(appRecord.attempts, 1);
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicatedJob(dbPath, queued.id);
     assert.ok(dedicated);
@@ -230,7 +223,7 @@ test("claimNextJob dual-writes the queued -> running transition on both sides", 
   }
 });
 
-test("sweepStaleRunningJobs dual-writes the running -> queued transition on both sides", async () => {
+test("sweepStaleRunningJobs writes the running -> queued transition to the dedicated table", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -249,9 +242,7 @@ test("sweepStaleRunningJobs dual-writes the running -> queued transition on both
     assert.equal(swept, 1);
 
     const appRecord = findAppRecordJob(dbPath, queued.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "queued");
-    assert.equal(appRecord.startedAt, undefined);
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicatedJob(dbPath, queued.id);
     assert.ok(dedicated);
@@ -263,7 +254,7 @@ test("sweepStaleRunningJobs dual-writes the running -> queued transition on both
   }
 });
 
-test("enqueueRecurringJob dual-writes a non-scheduled-agent job on both sides", () => {
+test("enqueueRecurringJob writes a non-scheduled-agent job to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -282,8 +273,7 @@ test("enqueueRecurringJob dual-writes a non-scheduled-agent job on both sides", 
     assert.equal(recurring.scheduledAt, "2026-04-27T00:00:00.000Z");
 
     const appRecord = findAppRecordJob(dbPath, recurring.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.scheduledAt, "2026-04-27T00:00:00.000Z");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicatedJob(dbPath, recurring.id);
     assert.ok(dedicated);
@@ -295,7 +285,7 @@ test("enqueueRecurringJob dual-writes a non-scheduled-agent job on both sides", 
   }
 });
 
-test("enqueueRecurringJob dual-writes a scheduled agent job and any cancelled stale entries", () => {
+test("enqueueRecurringJob writes a scheduled agent job and any cancelled stale entries", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -328,15 +318,14 @@ test("enqueueRecurringJob dual-writes a scheduled agent job and any cancelled st
     assert.equal(dedicated.scheduled_at, "2026-04-26T12:05:00.000Z");
 
     const appRecord = findAppRecordJob(dbPath, result.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "queued");
+    assert.equal(appRecord, null);
   } finally {
     restore();
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("maintainScheduledAgentJobs dual-writes maintained records on both sides", () => {
+test("maintainScheduledAgentJobs writes maintained records to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -356,8 +345,7 @@ test("maintainScheduledAgentJobs dual-writes maintained records on both sides", 
     assert.equal(dedicated.cron, "*/5 * * * *");
 
     const appRecord = findAppRecordJob(dbPath, record.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "queued");
+    assert.equal(appRecord, null);
   } finally {
     restore();
     rmSync(tempDir, { recursive: true, force: true });

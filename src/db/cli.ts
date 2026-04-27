@@ -4,12 +4,13 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { deriveActivationStatus } from "../activation/service";
 import { activationSubjectForWorkspace } from "../jobs";
+import { sqliteActivitiesRepository } from "../repositories/activities-repo";
 import { sqliteAgentRunsRepository } from "../repositories/agent-runs-repo";
 import { sqliteAlertEventsRepository } from "../repositories/alert-events-repo";
 import { sqliteInvitationEmailDeliveriesRepository } from "../repositories/invitation-email-deliveries-repo";
 import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
 import { sqliteJobsRepository } from "../repositories/jobs-repo";
-import type { AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, InvitationEmailDeliveryMode, InvitationEmailDeliveryRecord, InvitationEmailDeliveryStatus, JobMetricSnapshotRecord, JobRecord, JobStatus } from "../taskloom-store";
+import type { ActivityRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, InvitationEmailDeliveryMode, InvitationEmailDeliveryRecord, InvitationEmailDeliveryStatus, JobMetricSnapshotRecord, JobRecord, JobStatus } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -203,6 +204,30 @@ export interface VerifyInvitationEmailDeliveriesResult {
 }
 
 export interface BackfillInvitationEmailDeliveriesOptions extends DbCliOptions {
+  dryRun?: boolean;
+}
+
+export interface BackfillActivitiesResult {
+  command: "backfill-activities";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyActivitiesResult {
+  command: "verify-activities";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillActivitiesOptions extends DbCliOptions {
   dryRun?: boolean;
 }
 
@@ -1381,6 +1406,130 @@ function canonicalizeInvitationEmailDelivery(record: InvitationEmailDeliveryReco
   });
 }
 
+export function backfillActivities(options: BackfillActivitiesOptions = {}): BackfillActivitiesResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readActivityJsonRows(dbPath);
+  const dedicatedRows = readActivityDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: ActivityRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeActivity(existing) === canonicalizeActivity(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    const repo = sqliteActivitiesRepository({ dbPath });
+    for (const record of toInsert) {
+      repo.upsert(record);
+    }
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-activities",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyActivities(options: DbCliOptions = {}): VerifyActivitiesResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readActivityJsonRows(dbPath);
+  const dedicatedRows = readActivityDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeActivity(jsonRecord) === canonicalizeActivity(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-activities",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function readActivityJsonRows(dbPath: string): ActivityRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'activities'").all() as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as ActivityRecord);
+  } finally {
+    db.close();
+  }
+}
+
+function readActivityDedicatedRows(dbPath: string): ActivityRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select payload
+      from activities
+    `).all() as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as ActivityRecord);
+  } finally {
+    db.close();
+  }
+}
+
+function canonicalizeActivity(record: ActivityRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    workspaceId: record.workspaceId,
+    scope: record.scope,
+    event: record.event,
+    occurredAt: record.occurredAt,
+    actor: record.actor,
+    data: record.data ?? {},
+  });
+}
+
 function canonicalizeAlert(record: AlertEventRecord): string {
   return JSON.stringify({
     id: record.id,
@@ -1494,6 +1643,15 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(verifyInvitationEmailDeliveries(options), null, 2));
       return 0;
     }
+    if (command === "backfill-activities") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillActivities({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-activities") {
+      console.log(JSON.stringify(verifyActivities(options), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -1520,7 +1678,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries|backfill-activities|verify-activities> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
 }
 
 function isExecutedDirectly(): boolean {

@@ -37,9 +37,9 @@ These guarantees are local SQLite guarantees. They do not provide distributed co
 
 ## Current Schema Shape
 
-The current SQLite runtime persists most app collections through `app_records` rows with JSON payloads. Query-critical routes use sidecar metadata and indexes, including `app_record_search`, workspace indexes, and helper functions for session/user lookup, memberships, invitations, share tokens, workflow records, activities, agents/runs, jobs, providers, and usage reads.
+The current SQLite runtime persists most app collections through `app_records` rows with JSON payloads. Query-critical routes use sidecar metadata and indexes, including `app_record_search`, workspace indexes, and helper functions for session/user lookup, memberships, invitations, share tokens, workflow records, providers, and usage reads.
 
-Dedicated relational storage exists where it is already needed by the local runtime, including activation migration tables and SQLite `rate_limit_buckets`. Most app records are not yet split into fully relational repositories.
+Dedicated relational storage exists where it is already needed by the local runtime, including activation migration tables, SQLite `rate_limit_buckets`, and the Phase 32-37 relational repositories for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities`. After Phase 38, those six collections are no longer mirrored into `app_records` in SQLite mode; `loadStore()` still returns a fully hydrated `TaskloomData` by reading them from their dedicated tables.
 
 This means SQLite mode improves local persistence and route-read behavior, but it should still be treated as an app-record compatibility layer rather than the final production data model.
 
@@ -117,7 +117,7 @@ Phase 32 begins the migration of hot collections from the JSON-payload `app_reco
 - A new SQLite migration creating the dedicated table (`src/db/migrations/<NNNN>_<collection>.sql`).
 - A repository module under `src/repositories/<collection>-repo.ts` with a factory that switches on `process.env.TASKLOOM_STORE` so JSON mode keeps using the inline collection.
 - Read-path delegation through the repository while preserving existing function signatures.
-- Dual-write in SQLite mode: writes go to BOTH `app_records` (legacy JSON-side) and the dedicated table during the cutover window.
+- Dual-write in SQLite mode during the cutover window: writes go to BOTH `app_records` (legacy JSON-side) and the dedicated table until the JSON-side mirror is retired.
 - Operator CLI commands for backfill and drift detection.
 
 ### Operator workflow during a cutover window
@@ -126,6 +126,7 @@ Phase 32 begins the migration of hot collections from the JSON-payload `app_reco
 2. Backfill existing rows: `npm run db:backfill-<collection> -- --dry-run` first to inspect counts, then without `--dry-run` to insert. The backfill is idempotent via `INSERT OR REPLACE` keyed on the row id; safe to re-run.
 3. Verify drift periodically during the dual-write window: `npm run db:verify-<collection>`. Output reports `{ jsonOnly, sqliteOnly, contentDrift, matched }`. Zero `jsonOnly`/`sqliteOnly`/`contentDrift` is the steady-state goal.
 4. After at least one stable phase has elapsed AND the most recent verify run reports zero drift, a follow-up phase retires the JSON-side mirror write. Operators do not need to take action for the retire — it ships as a code change.
+5. After Phase 38, fresh SQLite writes for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities` no longer create `app_records` mirror rows. The backfill commands remain available for restore-from-old-backup workflows.
 
 ### Phase 32 commands
 
@@ -158,8 +159,17 @@ Phase 35 ships the dedicated `jobs` table, repository, and dual-write conservati
 
 After Phase 36, any future field added to `InvitationEmailDeliveryRecord` requires an explicit `ALTER TABLE invitation_email_deliveries ADD COLUMN ...` migration. The Phase 22 schema-additive trick (where `providerStatus` and friends were added without a migration because the data lived in the `app_records` JSON payload) no longer applies once a collection has its own dedicated table.
 
+### Phase 37 commands
+
+- `npm run db:backfill-activities [-- --dry-run]`
+- `npm run db:verify-activities`
+
+### Phase 38 mirror retirement
+
+Phase 38 retires the legacy `app_records` mirror for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities`. Fresh SQLite schemas hydrate those collections from their dedicated tables, and whole-store seed/reset/import paths write them directly to those tables. The collection fields remain on `TaskloomData` and JSON-default mode is unchanged.
+
 The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
 
-### Restore semantics during dual-write
+### Restore semantics during and after mirror retirement
 
-A `db:restore` to a backup taken inside the dual-write window restores both `app_records` and the dedicated table consistently. A `db:restore` to a backup from before the migration of a given collection requires a one-time `db:backfill-<collection>` re-run after the restore to repopulate the dedicated table. Document this in your operator runbook before the first migrated collection ships to production.
+A `db:restore` to a backup taken inside the dual-write window restores both `app_records` and the dedicated table consistently. A `db:restore` to a backup from before the migration of a given collection requires a one-time `db:backfill-<collection>` re-run after the restore to repopulate the dedicated table. After Phase 38, restored fresh-schema databases no longer need JSON-side mirror rows for the six retired collections; the backfill commands remain the recovery path for old backups whose dedicated tables are empty.

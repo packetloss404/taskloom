@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   mutateStore,
+  recordActivity,
   upsertImplementationPlanItem,
   upsertWorkflowConcern,
   type ActivityRecord,
@@ -11,7 +12,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function recordActivity(workspaceId: string, userId: string, event: string, data: Record<string, string | number | boolean | null | undefined>): void {
+function recordToolActivity(workspaceId: string, userId: string, event: string, data: Record<string, string | number | boolean | null | undefined>): void {
   mutateStore((store) => {
     const entry: ActivityRecord = {
       id: randomUUID(),
@@ -22,7 +23,7 @@ function recordActivity(workspaceId: string, userId: string, event: string, data
       actor: { type: "user", id: userId },
       occurredAt: nowIso(),
     };
-    store.activities.push(entry);
+    recordActivity(store, entry, { position: "end" });
   });
 }
 
@@ -58,7 +59,7 @@ export const createPlanItemTool: ToolDefinition = {
         order: existingMax + 1,
       });
     });
-    recordActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.created", { id: created.id, title: created.title });
+    recordToolActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.created", { id: created.id, title: created.title });
     return { ok: true, output: { planItem: created } };
   },
 };
@@ -86,7 +87,7 @@ export const updatePlanItemStatusTool: ToolDefinition = {
       return entry;
     });
     if (!updated) return { ok: false, error: `plan item ${planItemId} not found in workspace` };
-    recordActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.status_updated", { id: planItemId, status });
+    recordToolActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.status_updated", { id: planItemId, status });
     return { ok: true, output: { planItem: updated } };
   },
 };
@@ -120,7 +121,7 @@ export const createBlockerTool: ToolDefinition = {
         status: "open",
       }),
     );
-    recordActivity(ctx.workspaceId, ctx.userId, `tool.${kind}.opened`, { id: created.id, title: created.title });
+    recordToolActivity(ctx.workspaceId, ctx.userId, `tool.${kind}.opened`, { id: created.id, title: created.title });
     return { ok: true, output: { concern: created } };
   },
 };
@@ -140,7 +141,7 @@ export const logNoteTool: ToolDefinition = {
   side: "write",
   async handle(input, ctx) {
     const { title, body = "" } = input as { title: string; body?: string };
-    recordActivity(ctx.workspaceId, ctx.userId, "tool.note", { title: title.trim(), body });
+    recordToolActivity(ctx.workspaceId, ctx.userId, "tool.note", { title: title.trim(), body });
     return { ok: true, output: { note: { title: title.trim(), body } } };
   },
 };

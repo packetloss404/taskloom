@@ -17,7 +17,7 @@ Out of scope:
 - Managed Postgres support, multi-region replication, or a cross-database query planner.
 - Schemaless JSONB-style columns. SQLite tables get explicit columns plus a single `payload TEXT` mirror only where the record carries an open-ended sub-shape (for example `JobRecord.payload` and `AlertEventRecord.context`).
 - Online schema migrations or zero-downtime DDL. Down migrations remain unsupported; rollback is `db:restore` from a pre-migration backup, matching the posture in `docs/deployment-sqlite-topology.md`.
-- Changing `loadStore()` semantics to lazy-load specific collections. `loadStore()` keeps returning a fully-hydrated `TaskloomData` so existing call sites continue working. The relational tables are read by repository helpers, not by `loadStore()`.
+- Changing `loadStore()` semantics to lazy-load specific collections. `loadStore()` keeps returning a fully-hydrated `TaskloomData` so existing call sites continue working. After Phase 38, SQLite hydration reads the migrated collections from their dedicated tables while JSON-default mode keeps the inline arrays.
 
 ## 2. Current topology audit
 
@@ -233,6 +233,8 @@ Indexes: `idx_activities_workspace_occurred` on `(workspace_id, occurred_at desc
 
 Repository: `src/repositories/activities-repo.ts`. The activity service in `src/taskloom-services.ts` is the heaviest churn surface for this step (32 occurrences of `data.<collection>` patterns); fixture-update risk is highest here (section 9, risk register).
 
+**Phase 37 actual rollout:** Phase 37 shipped per the standard A/B/C/D split: migration `0015_activities.sql` plus `src/repositories/activities-repo.ts`; read-redirect of `listActivitiesForWorkspaceIndexed(workspaceId, limit?)` through the repository while preserving the existing helper signature; SQLite dual-write of activity writes to both `app_records` and the dedicated `activities` table during the cutover window; CLIs `db:backfill-activities` and `db:verify-activities`. Documentation updated in `docs/roadmap.md`, `docs/deployment-sqlite-topology.md`, `README.md`, and this file. Phase 37 does not retire the JSON-side mirror, change `loadStore()` semantics, normalize activity payload/data/actor into separate tables, or start Phase 38.
+
 ## 4. Schema and migration mechanics
 
 Current max migration prefix is `0009` (verified: `ls src/db/migrations/` returns `0001`, `0003`-`0009`; `0002` is intentionally absent and remains so). The next available number is `0010`.
@@ -363,14 +365,14 @@ Each phase migrates exactly one collection. Each phase consumes one migration nu
 - **Phase 35: `jobs`.** Migration `0013`. ~70-80 new test cases. Heaviest mutation profile; `claimNextJob` + `sweepStaleRunningJobs` get SQLite-native single-statement implementations. Highest-risk single phase.
 - **Phase 36: `invitationEmailDeliveries`.** Migration `0014`. ~30-40 new test cases. Phase 22's additive-schema trick stops working past this point; the deployment doc gets an explicit warning.
 - **Phase 37: `activities`.** Migration `0015`. ~40-50 new test cases. Highest fixture-update churn (32 `data.activities` occurrences in `src/taskloom-services.ts`). Slice C size grows accordingly.
-- **Phase 38: drop legacy JSON-side mirrors.** No new migration; the migration removes the collection name from `RECORD_COLLECTIONS` in `src/taskloom-store.ts` and from the `app_record_search` insert for the six collections that have completed at least one full stable phase (so `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, possibly `activities` depending on cycle timing). `db:backfill-<collection>` commands stay shipped as restore-from-old-backup tools but become no-ops under fresh schemas.
+- **Phase 38: drop legacy JSON-side mirrors.** No new migration; the code removes the collection name from `RECORD_COLLECTIONS` in `src/taskloom-store.ts` and from the `app_record_search` insert for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities`. SQLite `loadStore()` keeps returning a fully hydrated `TaskloomData` by reading those six collections from their dedicated tables. `db:backfill-<collection>` commands stay shipped as restore-from-old-backup tools and become no-ops when there are no legacy `app_records` rows to recover.
 - **Phase 39+: `providerCalls` and any future MIGRATE-LATER collections** as their thresholds in `docs/deployment-sqlite-topology.md` get crossed.
 
 Test deltas are rough order-of-magnitude. Actual counts depend on how aggressively each phase exercises edge cases. The 543 API + 15 web suite is the floor; new tests are additive.
 
 ## 11. Open questions for the human
 
-- **Permanent JSON-side fallback or full retire?** After Phase 38 drops the JSON-side mirror, do we keep `data.jobMetricSnapshots`/`data.alertEvents`/etc. as fields on `TaskloomData` for the JSON-default runtime, or only when SQLite mode is opt-in? Current recommendation: keep them on `TaskloomData` for the JSON-default mode forever. That preserves contributor ergonomics; the dedicated table only exists in SQLite mode.
+- **Permanent JSON-side fallback or full retire?** Phase 38 keeps `data.jobMetricSnapshots`/`data.alertEvents`/etc. as fields on `TaskloomData` for both JSON-default runtime and SQLite hydration. That preserves contributor ergonomics; the dedicated tables are the SQLite persistence source for the migrated collections.
 - **Feature flag?** Should `TASKLOOM_RELATIONAL_REPOSITORIES=on|off` exist as a kill-switch so an operator can revert reads to `app_records` without rolling back the migration? This is friendly to long-running deployments but doubles the test matrix. Recommendation: do not add the flag. The dual-write window already provides the safety net; flag complexity is not warranted for a local-SQLite topology.
 - **Dual-write window length policy?** Section 3 mentions "after one stable phase" before retiring the JSON-side write. Is the policy "one phase later" (mechanical), "two stable releases" (calendar), or "until `db:verify-<collection>` reports zero drift across an environment for N consecutive runs" (operational)? Recommendation: "one phase later" plus "zero drift in the most recent verify run" combined.
 - **Should `agentRuns` sub-arrays normalize?** Step 3 keeps `logs`/`toolCalls`/`transcript` as JSON columns inside the row. If observability needs grow (per-tool-call latency aggregation across runs, for example) those become first-class tables in a future phase. For now, keep them inlined. Confirm.

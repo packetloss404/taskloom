@@ -36,6 +36,7 @@ import {
   mutateStore,
   persistStore,
   nextIncompleteStep,
+  recordActivity,
   type ActivityRecord,
   type ActivationSignalRecord,
   type AgentInputField,
@@ -62,6 +63,7 @@ import {
   type WorkspaceRecord,
   type WorkspaceRole,
   type JobRecord,
+  type TaskloomData,
   ONBOARDING_STEPS,
   snapshotForWorkspace,
   upsertActivationSignal,
@@ -179,8 +181,8 @@ export function register(input: { email: string; password: string; displayName: 
     });
 
     data.activationFacts[workspaceId] = { now: timestamp };
-    data.activities.unshift(makeActivity(workspaceId, "account", "account.created", { type: "user", id: userId, displayName }, { title: `Account created for ${displayName}` }, timestamp));
-    data.activities.unshift(makeActivity(workspaceId, "workspace", "workspace.created", { type: "user", id: userId, displayName }, { title: `Workspace ${workspaceName} created` }, timestamp));
+    recordActivity(data, makeActivity(workspaceId, "account", "account.created", { type: "user", id: userId, displayName }, { title: `Account created for ${displayName}` }, timestamp));
+    recordActivity(data, makeActivity(workspaceId, "workspace", "workspace.created", { type: "user", id: userId, displayName }, { title: `Workspace ${workspaceName} created` }, timestamp));
 
     const session = createSessionRecord(userId, timestamp);
     data.sessions.push(session.record);
@@ -325,7 +327,7 @@ export async function updateProfile(
     user.displayName = input.displayName.trim();
     user.timezone = input.timezone.trim();
     user.updatedAt = now();
-    data.activities.unshift(makeActivity(context.workspace.id, "account", "account.profile_updated", { type: "user", id: user.id, displayName: user.displayName }, { title: "Profile updated" }, user.updatedAt));
+    recordActivity(data, makeActivity(context.workspace.id, "account", "account.profile_updated", { type: "user", id: user.id, displayName: user.displayName }, { title: "Profile updated" }, user.updatedAt));
     return user;
   });
 }
@@ -361,7 +363,7 @@ export async function updateWorkspace(
     }
     data.activationFacts[workspace.id] = facts;
 
-    data.activities.unshift(makeActivity(workspace.id, "workspace", "workspace.updated", { type: "user", id: context.user.id, displayName: context.user.displayName }, { title: "Workspace settings updated" }, workspace.updatedAt));
+    recordActivity(data, makeActivity(workspace.id, "workspace", "workspace.updated", { type: "user", id: context.user.id, displayName: context.user.displayName }, { title: "Workspace settings updated" }, workspace.updatedAt));
     return workspace;
   });
 
@@ -413,7 +415,7 @@ export async function createWorkspaceInvitation(context: AuthenticatedContext, i
       createdAt: timestamp,
     });
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.invitation_created", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "workspace.invitation_created", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -449,7 +451,7 @@ export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: 
     invitation.acceptedAt = timestamp;
     invitation.acceptedByUserId = context.user.id;
 
-    data.activities.unshift(makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_accepted", {
+    recordActivity(data, makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_accepted", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -479,7 +481,7 @@ export async function resendWorkspaceInvitation(context: AuthenticatedContext, i
     invitation.expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
     invitation.invitedByUserId = context.user.id;
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.invitation_resent", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "workspace.invitation_resent", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -507,7 +509,7 @@ export function revokeWorkspaceInvitation(context: AuthenticatedContext, invitat
     const timestamp = now();
     invitation.revokedAt = timestamp;
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.invitation_revoked", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "workspace.invitation_revoked", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -529,7 +531,7 @@ export function updateWorkspaceMemberRole(context: AuthenticatedContext, userId:
 
     membership.role = role;
     const timestamp = now();
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.member_role_updated", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "workspace.member_role_updated", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -550,7 +552,7 @@ export function removeWorkspaceMember(context: AuthenticatedContext, userId: str
       return !(entry.workspaceId === context.workspace.id && entry.userId === userId);
     });
     const timestamp = now();
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "workspace.member_removed", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "workspace.member_removed", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -589,7 +591,7 @@ export async function completeOnboardingStep(context: AuthenticatedContext, step
     applyOnboardingStepToFacts(facts, stepKey as any, timestamp);
     data.activationFacts[context.workspace.id] = facts;
 
-    data.activities.unshift(makeActivity(context.workspace.id, "activation", "onboarding.step_completed", { type: "user", id: context.user.id, displayName: context.user.displayName }, { title: `Completed step: ${stepKey}`, stepKey }, timestamp));
+    recordActivity(data, makeActivity(context.workspace.id, "activation", "onboarding.step_completed", { type: "user", id: context.user.id, displayName: context.user.displayName }, { title: `Completed step: ${stepKey}`, stepKey }, timestamp));
     return record;
   });
 
@@ -825,7 +827,7 @@ export function createAgent(context: AuthenticatedContext, input: AgentInput) {
       createdByUserId: context.user.id,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.created", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.created", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -867,7 +869,7 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
       inputSchema: normalized.inputSchema,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.updated", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.updated", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -894,7 +896,7 @@ export function archiveAgent(context: AuthenticatedContext, agentId: string) {
       archivedAt: timestamp,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.archived", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.archived", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -983,7 +985,7 @@ export async function runAgent(
       logs,
     }, timestamp);
 
-    store.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
+    recordActivity(store, makeActivity(context.workspace.id, "workspace", "agent.run", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1085,7 +1087,7 @@ async function runAgentWithToolLoop(args: {
       costUsd: loopResult?.costUsd,
     }, timestamp);
 
-    store.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run", {
+    recordActivity(store, makeActivity(context.workspace.id, "workspace", "agent.run", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1168,7 +1170,7 @@ export function createProvider(context: AuthenticatedContext, input: ProviderInp
       ...normalized,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "provider.created", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "provider.created", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1193,7 +1195,7 @@ export function updateProvider(context: AuthenticatedContext, providerId: string
       ...normalized,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "provider.updated", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "provider.updated", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1224,7 +1226,7 @@ export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
       error: run.error ?? "Canceled by operator.",
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "agent.run_canceled", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.run_canceled", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1282,7 +1284,7 @@ export async function retryAgentRun(context: AuthenticatedContext, runId: string
         agentId: previous.agentId,
       },
     }, timestamp);
-    upsertActivationActivity(store.activities, makeActivity(context.workspace.id, "activation", "agent.run.retry", {
+    upsertActivationActivity(store, makeActivity(context.workspace.id, "activation", "agent.run.retry", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1324,7 +1326,7 @@ export function createWorkspaceEnvVar(context: AuthenticatedContext, input: Work
       createdByUserId: context.user.id,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.created", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "env_var.created", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1370,7 +1372,7 @@ export function updateWorkspaceEnvVar(
       description: merged.description,
     }, timestamp);
 
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.updated", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "env_var.updated", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1388,7 +1390,7 @@ export function deleteWorkspaceEnvVarById(context: AuthenticatedContext, envVarI
       throw httpError(404, "env var not found");
     }
     deleteWorkspaceEnvVar(data, envVarId);
-    data.activities.unshift(makeActivity(context.workspace.id, "workspace", "env_var.deleted", {
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "env_var.deleted", {
       type: "user",
       id: context.user.id,
       displayName: context.user.displayName,
@@ -1827,7 +1829,7 @@ function emitActivationActivities(
   const timestamp = now();
 
   if (!previous || previous.stage !== nextStatus.stage) {
-    data.activities.unshift(makeActivity(workspaceId, "activation", "activation.stage_changed", actor, {
+    recordActivity(data, makeActivity(workspaceId, "activation", "activation.stage_changed", actor, {
       title: `Activation stage is now ${nextStatus.stage}`,
       previousStage: previous?.stage,
       stage: nextStatus.stage,
@@ -1836,7 +1838,7 @@ function emitActivationActivities(
 
   const previousMilestones = new Set((previous?.milestones ?? []).filter((entry) => entry.reached).map((entry) => entry.key));
   for (const milestone of nextStatus.milestones.filter((entry) => entry.reached && !previousMilestones.has(entry.key))) {
-    data.activities.unshift(makeActivity(workspaceId, "activation", "activation.milestone_reached", actor, {
+    recordActivity(data, makeActivity(workspaceId, "activation", "activation.milestone_reached", actor, {
       title: `Reached milestone: ${milestone.key}`,
       milestoneKey: milestone.key,
       stage: nextStatus.stage,
@@ -1845,7 +1847,7 @@ function emitActivationActivities(
 
   const previousChecklist = new Set((previous?.checklist ?? []).filter((entry) => entry.completed).map((entry) => entry.key));
   for (const item of nextStatus.checklist.filter((entry) => entry.completed && !previousChecklist.has(entry.key))) {
-    data.activities.unshift(makeActivity(workspaceId, "activation", "activation.checklist_completed", actor, {
+    recordActivity(data, makeActivity(workspaceId, "activation", "activation.checklist_completed", actor, {
       title: `Checklist completed: ${item.key}`,
       checklistItemKey: item.key,
     }, item.completedAt ?? timestamp));
@@ -1993,7 +1995,7 @@ async function recordInvitationEmailDeliveryForWorkspace(input: {
     : null;
 
   mutateStore((data) => {
-    data.activities.unshift(makeActivity(input.invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", input.actor, {
+    recordActivity(data, makeActivity(input.invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", input.actor, {
       title: delivery.status === "sent" ? `Invitation email sent to ${input.invitation.email}` : `Invitation email ${delivery.status} for ${input.invitation.email}`,
       invitationId: input.invitation.id,
       email: input.invitation.email,
@@ -2077,7 +2079,7 @@ function recordSkippedInvitationEmailRetry(
       mode,
       error: reason,
     }, timestamp);
-    data.activities.unshift(makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", actor, {
+    recordActivity(data, makeActivity(invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", actor, {
       title: `Invitation email skipped for ${invitation.email}`,
       invitationId: invitation.id,
       email: invitation.email,
@@ -2134,11 +2136,8 @@ function stableIdPart(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
 }
 
-function upsertActivationActivity(activities: ActivityRecord[], activity: ActivityRecord): ActivityRecord {
-  const existing = activities.find((entry) => entry.id === activity.id);
-  if (existing) return existing;
-  activities.unshift(activity);
-  return activity;
+function upsertActivationActivity(data: TaskloomData, activity: ActivityRecord): ActivityRecord {
+  return recordActivity(data, activity, { dedupe: true });
 }
 
 function makeActivity(
