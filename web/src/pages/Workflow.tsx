@@ -11,24 +11,30 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { relative } from "@/lib/format";
 import LineageGraphView from "@/components/LineageGraph";
 import { buildLineageGraph, lineageNeighbors, type LineageNode } from "@/lib/lineage";
 import type {
   SaveWorkflowRequirementInput,
   WorkflowBlocker,
+  WorkflowBlockerSeverity,
+  WorkflowBlockerStatus,
+  PlanModeResult,
   WorkflowBrief,
   WorkflowBriefTemplate,
   WorkflowBriefVersion,
   WorkflowPlanItem,
   WorkflowPlanItemStatus,
   WorkflowQuestion,
+  WorkflowQuestionStatus,
   WorkflowReleaseConfirmation,
   WorkflowRequirement,
   WorkflowRequirementPriority,
   WorkflowRequirementStatus,
   WorkflowTemplate,
   WorkflowValidationEvidence,
+  WorkflowValidationStatus,
 } from "@/lib/types";
 
 interface WorkflowState {
@@ -58,6 +64,8 @@ const EMPTY_STATE: WorkflowState = {
 type CompareSelection = { left: string | null; right: string | null };
 
 export default function WorkflowPage() {
+  const { session } = useAuth();
+  const isViewer = session?.workspace.role === "viewer";
   const [state, setState] = useState<WorkflowState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -72,6 +80,7 @@ export default function WorkflowPage() {
   const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
   const [compareSelection, setCompareSelection] = useState<CompareSelection>({ left: null, right: null });
   const [compareOpen, setCompareOpen] = useState(false);
+  const [planMode, setPlanMode] = useState<PlanModeResult | null>(null);
 
   const loadWorkflow = async () => {
     setLoading(true);
@@ -142,6 +151,38 @@ export default function WorkflowPage() {
       setError((templateError as Error).message);
     } finally {
       setApplyingTemplateId(null);
+    }
+  };
+
+  const requestPlanMode = async () => {
+    setSaving("plan-mode");
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await api.requestPlanMode();
+      setPlanMode(result);
+      setMessage(`Plan Mode proposed ${result.planItems.length} item${result.planItems.length === 1 ? "" : "s"}.`);
+    } catch (planError) {
+      setError((planError as Error).message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const applyPlanModeSuggestion = async () => {
+    if (!planMode) return;
+    setSaving("plan-mode-apply");
+    setError(null);
+    setMessage(null);
+    try {
+      const planItems = await api.applyPlanMode(planMode.planItems);
+      setState((current) => ({ ...current, planItems }));
+      setPlanMode(null);
+      setMessage("Plan Mode items applied to the implementation plan.");
+    } catch (planError) {
+      setError((planError as Error).message);
+    } finally {
+      setSaving(null);
     }
   };
 
@@ -323,6 +364,112 @@ export default function WorkflowPage() {
       });
     });
 
+  const addEvidence = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const title = fieldValue(form, "title");
+    if (!title) return;
+    const formEl = event.currentTarget;
+    await runUpdate("evidence", async () => {
+      await api.createWorkflowValidationEvidence({
+        title,
+        detail: fieldValue(form, "detail"),
+        source: fieldValue(form, "source"),
+        status: fieldValue(form, "status") as WorkflowValidationStatus,
+      });
+      formEl.reset();
+    });
+  };
+
+  const updateEvidenceStatus = (evidence: WorkflowValidationEvidence, status: WorkflowValidationStatus) =>
+    runUpdate(`evidence-${evidence.id}`, async () => {
+      await api.updateWorkflowValidationEvidence(evidence.id, {
+        title: evidence.title,
+        detail: evidence.detail,
+        source: evidence.source,
+        status,
+      });
+    });
+
+  const saveRelease = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await runUpdate("release", async () => {
+      await api.confirmWorkflowRelease({
+        confirmed: form.get("confirmed") === "on",
+        summary: fieldValue(form, "summary"),
+        confirmedBy: fieldValue(form, "confirmedBy"),
+      });
+    });
+  };
+
+  const addBlocker = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const title = fieldValue(form, "title");
+    if (!title) return;
+    const formEl = event.currentTarget;
+    await runUpdate("blocker", async () => {
+      await api.createWorkflowBlocker({
+        title,
+        detail: fieldValue(form, "detail"),
+        severity: fieldValue(form, "severity") as WorkflowBlockerSeverity,
+        dependency: form.get("dependency") === "on",
+        status: "open",
+      });
+      formEl.reset();
+    });
+  };
+
+  const updateBlockerStatus = (blocker: WorkflowBlocker, status: WorkflowBlockerStatus) =>
+    runUpdate(`blocker-${blocker.id}`, async () => {
+      await api.updateWorkflowBlocker(blocker.id, {
+        title: blocker.title,
+        detail: blocker.detail,
+        severity: blocker.severity,
+        dependency: blocker.dependency,
+        status,
+      });
+    });
+
+  const addQuestion = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const prompt = fieldValue(form, "prompt");
+    if (!prompt) return;
+    const formEl = event.currentTarget;
+    await runUpdate("question", async () => {
+      await api.createWorkflowQuestion({
+        prompt,
+        answer: "",
+        status: "open",
+      });
+      formEl.reset();
+    });
+  };
+
+  const saveQuestionAnswer = (question: WorkflowQuestion, event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const answer = fieldValue(form, "answer");
+    return runUpdate(`question-${question.id}`, async () => {
+      await api.updateWorkflowQuestion(question.id, {
+        prompt: question.prompt,
+        answer,
+        status: answer ? "answered" : "open",
+      });
+    });
+  };
+
+  const updateQuestionStatus = (question: WorkflowQuestion, status: WorkflowQuestionStatus) =>
+    runUpdate(`question-${question.id}`, async () => {
+      await api.updateWorkflowQuestion(question.id, {
+        prompt: question.prompt,
+        answer: question.answer,
+        status,
+      });
+    });
+
   return (
     <div className="page-frame">
       {/* ======================= HEADER ======================= */}
@@ -340,6 +487,12 @@ export default function WorkflowPage() {
               <span className={`pill pill--${releaseStatus.tone}`}>RELEASE · {releaseStatus.label}</span>
               <span className="text-ink-700">|</span>
               <span>UPDATED {(relative(state.brief?.updatedAt) || "—").toUpperCase()}</span>
+              {session?.workspace.role && (
+                <>
+                  <span className="text-ink-700">|</span>
+                  <span>ROLE · {session.workspace.role.toUpperCase()}{isViewer ? " · VIEW ONLY" : ""}</span>
+                </>
+              )}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -351,14 +504,26 @@ export default function WorkflowPage() {
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
             </button>
-            <button
-              className="btn-ghost"
-              type="button"
-              onClick={() => setShowBriefTemplates((open) => !open)}
-              disabled={loading || Boolean(saving)}
-            >
-              <Sparkles className="h-3.5 w-3.5" /> Plan mode
-            </button>
+            {!isViewer && (
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={requestPlanMode}
+                disabled={loading || Boolean(saving)}
+              >
+                {saving === "plan-mode" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Plan mode
+              </button>
+            )}
+            {!isViewer && state.briefTemplates.length > 0 && (
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={() => setShowBriefTemplates((open) => !open)}
+                disabled={loading || Boolean(saving)}
+              >
+                <Sparkles className="h-3.5 w-3.5" /> Brief templates
+              </button>
+            )}
             <button
               className="btn-ghost"
               type="button"
@@ -397,8 +562,41 @@ export default function WorkflowPage() {
         </div>
       ) : (
         <>
+          {!isViewer && planMode && (
+            <section className="spec-frame mt-8">
+              <div className="spec-label spec-label--amber">PLAN MODE</div>
+              <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+                <div>
+                  <h2 className="display text-2xl">Suggested implementation plan</h2>
+                  <p className="mt-3 text-sm leading-6 text-ink-300">{planMode.rationale}</p>
+                  <div className="mt-4 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">
+                    <span>{planMode.modelUsed}</span>
+                    <span>·</span>
+                    <span>${planMode.costUsd.toFixed(4)}</span>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {planMode.planItems.map((item, index) => (
+                    <div key={`${item.summary}-${index}`} className="border border-ink-700 bg-ink-950/50 px-3 py-2">
+                      <div className="font-medium text-ink-100">{item.summary}</div>
+                      <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{item.status}</div>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button className="btn-primary" type="button" onClick={applyPlanModeSuggestion} disabled={saving === "plan-mode-apply"}>
+                      {saving === "plan-mode-apply" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Apply plan
+                    </button>
+                    <button className="btn-ghost" type="button" onClick={() => setPlanMode(null)} disabled={saving === "plan-mode-apply"}>
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
           {/* ======================= STARTER TEMPLATES ======================= */}
-          {templates.length > 0 && (
+          {!isViewer && templates.length > 0 && (
             <section className="section-band mt-2">
               <SectionHeader
                 kicker="LIBRARY · STARTER TEMPLATES"
@@ -472,6 +670,13 @@ export default function WorkflowPage() {
               marker="§ 03 / 06"
               meta="Single source of intent for the workspace. Saving creates a new immutable version."
             />
+            {state.versions && state.versions.length > 0 && (
+              <div className="mt-4 flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-2 py-0.5 text-xs text-slate-400">
+                  <History className="h-3 w-3" /> {state.versions.length} version{state.versions.length === 1 ? "" : "s"}
+                </span>
+              </div>
+            )}
             <div className="mt-8 grid gap-12 lg:grid-cols-[260px_1fr]">
               <aside className="space-y-6">
                 <MetaRow label="WORKSPACE" value={state.brief?.workspaceId ?? "—"} mono />
@@ -493,6 +698,7 @@ export default function WorkflowPage() {
                 />
               </aside>
               <form key={briefFormKey} className="space-y-5" onSubmit={saveBrief}>
+                <fieldset className="space-y-5" disabled={isViewer}>
                 <Field label="SUMMARY">
                   <textarea
                     name="summary"
@@ -562,6 +768,7 @@ export default function WorkflowPage() {
                     <Save className="h-3.5 w-3.5" /> Save brief
                   </button>
                 </div>
+                </fieldset>
               </form>
             </div>
           </section>
@@ -587,9 +794,11 @@ export default function WorkflowPage() {
               </aside>
               <div>
                 <form
+                  data-workflow-form="requirements"
                   className="grid gap-3 border border-ink-700 bg-ink-875 p-4 lg:grid-cols-[1fr_140px_140px_auto] lg:items-end"
                   onSubmit={addRequirement}
                 >
+                  <fieldset className="contents" disabled={isViewer}>
                   <Field label="TITLE">
                     <input name="title" className="workflow-input" required />
                   </Field>
@@ -619,7 +828,26 @@ export default function WorkflowPage() {
                       <input name="detail" className="workflow-input" />
                     </Field>
                   </div>
+                  </fieldset>
                 </form>
+
+                {state.requirements.length === 0 && !isViewer && (
+                  <div className="mt-5 rounded-md border border-dashed border-ink-700 bg-ink-875 p-4 text-sm text-slate-400">
+                    <p className="text-slate-300">No requirements captured yet.</p>
+                    <p className="mt-1 text-xs">Add the first requirement to start the implementation plan.</p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .querySelector<HTMLInputElement>('form[data-workflow-form="requirements"] input[name="title"]')
+                          ?.focus()
+                      }
+                      className="mt-3 inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-ink-700"
+                    >
+                      <Plus className="h-3 w-3" /> Add first requirement
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-5 border border-ink-700">
                   <table className="data-table">
@@ -661,6 +889,7 @@ export default function WorkflowPage() {
                             <select
                               className="workflow-input min-w-32"
                               value={requirement.status}
+                              disabled={isViewer}
                               onChange={(event) =>
                                 updateRequirementStatus(
                                   requirement,
@@ -708,9 +937,11 @@ export default function WorkflowPage() {
               </aside>
               <div>
                 <form
+                  data-workflow-form="plan-items"
                   className="grid gap-3 border border-ink-700 bg-ink-875 p-4 lg:grid-cols-[1fr_160px_auto] lg:items-end"
                   onSubmit={addPlanItem}
                 >
+                  <fieldset className="contents" disabled={isViewer}>
                   <Field label="TITLE">
                     <input name="title" className="workflow-input" required />
                   </Field>
@@ -730,7 +961,26 @@ export default function WorkflowPage() {
                       <input name="description" className="workflow-input" />
                     </Field>
                   </div>
+                  </fieldset>
                 </form>
+
+                {state.planItems.length === 0 && !isViewer && (
+                  <div className="mt-5 rounded-md border border-dashed border-ink-700 bg-ink-875 p-4 text-sm text-slate-400">
+                    <p className="text-slate-300">No plan items yet.</p>
+                    <p className="mt-1 text-xs">Break the brief into discrete tasks to track delivery.</p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .querySelector<HTMLInputElement>('form[data-workflow-form="plan-items"] input[name="title"]')
+                          ?.focus()
+                      }
+                      className="mt-3 inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-ink-700"
+                    >
+                      <Plus className="h-3 w-3" /> Add first plan item
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-5 border border-ink-700">
                   <table className="data-table">
@@ -768,6 +1018,7 @@ export default function WorkflowPage() {
                             <select
                               className="workflow-input min-w-36"
                               value={item.status}
+                              disabled={isViewer}
                               onChange={(event) =>
                                 updatePlanStatus(item, event.target.value as WorkflowPlanItemStatus)
                               }
@@ -796,41 +1047,65 @@ export default function WorkflowPage() {
               meta="Evidence chain feeding the release confirmation gate."
             />
             <div className="mt-8 grid gap-px bg-ink-700 lg:grid-cols-2">
-              <div className="bg-ink-950 p-6">
-                <div className="kicker mb-3">EVIDENCE LOG</div>
+              <div className="space-y-5 bg-ink-950 p-6">
+                <div>
+                  <div className="kicker mb-3">EVIDENCE LOG</div>
+                  <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_130px_auto] sm:items-end" onSubmit={addEvidence}>
+                    <fieldset className="contents" disabled={isViewer}>
+                    <Field label="TITLE">
+                      <input name="title" className="workflow-input" required />
+                    </Field>
+                    <Field label="STATUS">
+                      <select name="status" className="workflow-input" defaultValue="pending">
+                        <option value="pending">Pending</option>
+                        <option value="passed">Passed</option>
+                        <option value="failed">Failed</option>
+                      </select>
+                    </Field>
+                    <button className="btn-primary justify-center" type="submit" disabled={saving === "evidence"}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </button>
+                    <Field label="SOURCE">
+                      <input name="source" className="workflow-input" />
+                    </Field>
+                    <div className="sm:col-span-2">
+                      <Field label="DETAIL">
+                        <input name="detail" className="workflow-input" />
+                      </Field>
+                    </div>
+                    </fieldset>
+                  </form>
+                </div>
                 {state.validationEvidence.length === 0 ? (
                   <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
-                    NO EVIDENCE RECORDED
+                    NO EVIDENCE RECORDED — ADD ONE ABOVE
                   </div>
                 ) : (
                   <ul className="divide-y divide-ink-800">
                     {state.validationEvidence.map((evidence, index) => (
-                      <li key={evidence.id} className="grid gap-2 py-3 sm:grid-cols-[60px_1fr_auto] sm:items-baseline">
+                      <li key={evidence.id} className="grid gap-2 py-3 sm:grid-cols-[60px_1fr_140px] sm:items-baseline">
                         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                           EV-{String(index + 1).padStart(3, "0")}
                         </span>
                         <div>
                           <div className="text-sm text-ink-100">{evidence.title}</div>
-                          {evidence.detail && (
-                            <div className="mt-0.5 text-xs text-ink-400">{evidence.detail}</div>
-                          )}
+                          {evidence.detail && <div className="mt-0.5 text-xs text-ink-400">{evidence.detail}</div>}
                           {evidence.source && (
                             <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                               SOURCE · {evidence.source}
                             </div>
                           )}
                         </div>
-                        <span
-                          className={`pill ${
-                            evidence.status === "passed"
-                              ? "pill--good"
-                              : evidence.status === "failed"
-                              ? "pill--danger"
-                              : "pill--muted"
-                          }`}
+                        <select
+                          className="workflow-input min-w-32"
+                          value={evidence.status}
+                          onChange={(event) => updateEvidenceStatus(evidence, event.target.value as WorkflowValidationStatus)}
+                          disabled={isViewer || saving === `evidence-${evidence.id}`}
                         >
-                          {evidence.status.toUpperCase()}
-                        </span>
+                          <option value="pending">Pending</option>
+                          <option value="passed">Passed</option>
+                          <option value="failed">Failed</option>
+                        </select>
                       </li>
                     ))}
                   </ul>
@@ -838,67 +1113,193 @@ export default function WorkflowPage() {
               </div>
               <div className="bg-ink-950 p-6">
                 <div className="kicker mb-3">RELEASE CONFIRMATION</div>
-                <div className="space-y-4">
+                <form key={state.release?.updatedAt ?? "release-new"} className="space-y-4" onSubmit={saveRelease}>
+                  <fieldset className="space-y-4" disabled={isViewer}>
                   <div className="flex items-center gap-3">
-                    <span className={`pill pill--${releaseStatus.tone}`}>
-                      {releaseStatus.label}
-                    </span>
+                    <span className={`pill pill--${releaseStatus.tone}`}>{releaseStatus.label}</span>
                     {state.release?.confirmedAt && (
                       <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                         CONFIRMED {(relative(state.release.confirmedAt) || "—").toUpperCase()}
                       </span>
                     )}
                   </div>
-                  {state.release?.summary ? (
-                    <p className="text-sm leading-6 text-ink-200">{state.release.summary}</p>
-                  ) : (
-                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">
-                      NO RELEASE SUMMARY ON FILE
-                    </p>
-                  )}
-                  {state.release?.confirmedBy && (
-                    <MetaRow label="CONFIRMED BY" value={state.release.confirmedBy} mono />
-                  )}
-                  {(state.blockers.length > 0 || state.questions.length > 0) && (
-                    <div className="mt-4 space-y-2 border-t border-ink-800 pt-4">
-                      <div className="kicker">OPEN CONCERNS</div>
-                      {state.blockers
-                        .filter((b) => b.status === "open")
-                        .map((blocker) => (
-                          <div
-                            key={blocker.id}
-                            className="flex items-start gap-3 border-l border-signal-red bg-ink-900 px-3 py-2 text-xs text-ink-200"
-                          >
-                            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-red">
-                              BLOCKER
-                            </span>
-                            <span>{blocker.title}</span>
-                          </div>
-                        ))}
-                      {state.questions
-                        .filter((q) => q.status === "open")
-                        .map((question) => (
-                          <div
-                            key={question.id}
-                            className="flex items-start gap-3 border-l border-signal-amber bg-ink-900 px-3 py-2 text-xs text-ink-200"
-                          >
-                            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-amber">
-                              QUESTION
-                            </span>
-                            <span>{question.prompt}</span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
+                  <Field label="SUMMARY">
+                    <textarea name="summary" defaultValue={state.release?.summary ?? ""} rows={5} className="workflow-input resize-none" />
+                  </Field>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                    <Field label="CONFIRMED BY">
+                      <input name="confirmedBy" defaultValue={state.release?.confirmedBy ?? ""} className="workflow-input" />
+                    </Field>
+                    <label className="flex h-10 items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-300">
+                      <input name="confirmed" type="checkbox" defaultChecked={state.release?.confirmed ?? false} className="h-4 w-4 rounded border-ink-600 bg-ink-950 text-signal-amber" />
+                      Confirmed
+                    </label>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-ink-800 pt-4">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                      UPDATED {(relative(state.release?.updatedAt) || "—").toUpperCase()}
+                    </span>
+                    <button className="btn-primary" type="submit" disabled={saving === "release"}>
+                      <Save className="h-3.5 w-3.5" /> Save release
+                    </button>
+                  </div>
+                  </fieldset>
+                </form>
               </div>
             </div>
+
+            <div className="mt-px grid gap-px bg-ink-700 lg:grid-cols-2">
+              <div className="space-y-5 bg-ink-950 p-6">
+                <div>
+                  <div className="kicker mb-3">BLOCKERS</div>
+                  <form data-workflow-form="blockers" className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_140px_auto] sm:items-end" onSubmit={addBlocker}>
+                    <fieldset className="contents" disabled={isViewer}>
+                    <Field label="TITLE">
+                      <input name="title" className="workflow-input" required />
+                    </Field>
+                    <Field label="SEVERITY">
+                      <select name="severity" className="workflow-input" defaultValue="medium">
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                      </select>
+                    </Field>
+                    <button className="btn-primary justify-center" type="submit" disabled={saving === "blocker"}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </button>
+                    <div className="sm:col-span-2">
+                      <Field label="DETAIL">
+                        <input name="detail" className="workflow-input" />
+                      </Field>
+                    </div>
+                    <label className="flex h-10 items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-300">
+                      <input name="dependency" type="checkbox" className="h-4 w-4 rounded border-ink-600 bg-ink-950 text-signal-amber" />
+                      Dependency
+                    </label>
+                    </fieldset>
+                  </form>
+                </div>
+                {state.blockers.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-ink-700 bg-ink-875 p-4 text-sm text-slate-400">
+                    <p className="text-slate-300">No blockers reported.</p>
+                    <p className="mt-1 text-xs">Track new dependencies, risks, or open questions as they come up.</p>
+                    {!isViewer && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          document
+                            .querySelector<HTMLInputElement>('form[data-workflow-form="blockers"] input[name="title"]')
+                            ?.focus()
+                        }
+                        className="mt-3 inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-ink-800 hover:text-slate-300"
+                      >
+                        <Plus className="h-3 w-3" /> Add first blocker
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-ink-800">
+                    {state.blockers.map((blocker, index) => (
+                      <li key={blocker.id} className="grid gap-3 py-3 sm:grid-cols-[60px_1fr_auto] sm:items-start">
+                        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">BL-{String(index + 1).padStart(3, "0")}</span>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm text-ink-100">{blocker.title}</span>
+                            <span className={`pill ${blocker.status === "open" ? "pill--danger" : "pill--good"}`}>{blocker.status.toUpperCase()}</span>
+                            <span className="pill pill--muted">{blocker.severity.toUpperCase()}</span>
+                          </div>
+                          {blocker.detail && <div className="mt-1 text-xs text-ink-400">{blocker.detail}</div>}
+                          <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                            UPDATED {(relative(blocker.updatedAt) || "—").toUpperCase()}
+                          </div>
+                        </div>
+                        {!isViewer && <button type="button" className="btn-ghost justify-center" onClick={() => updateBlockerStatus(blocker, blocker.status === "open" ? "resolved" : "open")} disabled={saving === `blocker-${blocker.id}`}>
+                          {blocker.status === "open" ? "Resolve" : "Reopen"}
+                        </button>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="space-y-5 bg-ink-950 p-6">
+                <div>
+                  <div className="kicker mb-3">OPEN QUESTIONS</div>
+                  <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={addQuestion}>
+                    <fieldset className="contents" disabled={isViewer}>
+                    <Field label="QUESTION">
+                      <input name="prompt" className="workflow-input" required />
+                    </Field>
+                    <button className="btn-primary justify-center" type="submit" disabled={saving === "question"}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </button>
+                    </fieldset>
+                  </form>
+                </div>
+                {state.questions.length === 0 ? (
+                  <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">NO QUESTIONS RECORDED — ADD ONE ABOVE</div>
+                ) : (
+                  <ul className="divide-y divide-ink-800">
+                    {state.questions.map((question, index) => (
+                      <li key={question.id} className="py-3">
+                        <div className="grid gap-3 sm:grid-cols-[60px_1fr_auto] sm:items-start">
+                          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">Q-{String(index + 1).padStart(3, "0")}</span>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm text-ink-100">{question.prompt}</span>
+                              <span className={`pill ${question.status === "answered" ? "pill--good" : "pill--warn"}`}>{question.status.toUpperCase()}</span>
+                            </div>
+                            {question.answer && <div className="mt-1 text-xs text-ink-400">{question.answer}</div>}
+                            <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                              UPDATED {(relative(question.updatedAt) || "—").toUpperCase()}
+                            </div>
+                          </div>
+                          {!isViewer && question.status === "answered" && (
+                            <button type="button" className="btn-ghost justify-center" onClick={() => updateQuestionStatus(question, "open")} disabled={saving === `question-${question.id}`}>
+                              Reopen
+                            </button>
+                          )}
+                        </div>
+                        <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={(event) => saveQuestionAnswer(question, event)}>
+                          <fieldset className="contents" disabled={isViewer}>
+                          <Field label="ANSWER">
+                            <input name="answer" defaultValue={question.answer} className="workflow-input" />
+                          </Field>
+                          <button className="btn-primary justify-center" type="submit" disabled={saving === `question-${question.id}`}>
+                            Save answer
+                          </button>
+                          </fieldset>
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            {(state.blockers.some((b) => b.status === "open") || state.questions.some((q) => q.status === "open")) && (
+              <div className="mt-px space-y-2 border border-ink-700 bg-ink-950 p-6">
+                <div className="kicker">OPEN CONCERNS</div>
+                {state.blockers.filter((b) => b.status === "open").map((blocker) => (
+                  <div key={blocker.id} className="flex items-start gap-3 border-l border-signal-red bg-ink-900 px-3 py-2 text-xs text-ink-200">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-red">BLOCKER</span>
+                    <span>{blocker.title}</span>
+                  </div>
+                ))}
+                {state.questions.filter((q) => q.status === "open").map((question) => (
+                  <div key={question.id} className="flex items-start gap-3 border-l border-signal-amber bg-ink-900 px-3 py-2 text-xs text-ink-200">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-signal-amber">QUESTION</span>
+                    <span>{question.prompt}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         </>
       )}
 
       {/* ======================= BRIEF TEMPLATES OVERLAY ======================= */}
-      {showBriefTemplates && state.briefTemplates.length > 0 && (
+      {!isViewer && showBriefTemplates && state.briefTemplates.length > 0 && (
         <Overlay title="BRIEF TEMPLATES" onClose={() => setShowBriefTemplates(false)}>
           <div className="grid h-full grid-cols-1 gap-px bg-ink-700 lg:grid-cols-3">
             {state.briefTemplates.map((template) => (
@@ -998,22 +1399,24 @@ export default function WorkflowPage() {
                             >
                               {selectedSlot ? `[${selectedSlot}]` : "Select"}
                             </button>
-                            <button
-                              type="button"
-                              className="btn-ghost text-[10px]"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                restoreVersion(version);
-                              }}
-                              disabled={saving === `restore-${version.id}`}
-                            >
-                              {saving === `restore-${version.id}` ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <RotateCcw className="h-3 w-3" />
-                              )}
-                              Restore
-                            </button>
+                            {!isViewer && (
+                              <button
+                                type="button"
+                                className="btn-ghost text-[10px]"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  restoreVersion(version);
+                                }}
+                                disabled={saving === `restore-${version.id}`}
+                              >
+                                {saving === `restore-${version.id}` ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RotateCcw className="h-3 w-3" />
+                                )}
+                                Restore
+                              </button>
+                            )}
                           </span>
                         </div>
                       </li>

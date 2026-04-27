@@ -1,10 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { mutateStore, type JobRecord, type JobStatus } from "../taskloom-store.js";
+import { createJobsRepository } from "../repositories/jobs-repo.js";
+import { findJobIndexed, listJobsForWorkspaceIndexed, mutateStore, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
+import { nextAfter } from "./cron.js";
 
 const STALE_RUNNING_MS = 5 * 60 * 1000;
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isSqliteMode(): boolean {
+  return process.env.TASKLOOM_STORE === "sqlite";
+}
+
+function dualWriteJobs(records: JobRecord[]): void {
+  if (records.length === 0) return;
+  if (!isSqliteMode()) return;
+  const repo = createJobsRepository({});
+  for (const record of records) {
+    repo.upsert(record);
+  }
 }
 
 export interface EnqueueJobInput {
@@ -31,9 +46,141 @@ export function enqueueJob(input: EnqueueJobInput): JobRecord {
     createdAt: ts,
     updatedAt: ts,
   };
-  return mutateStore((data) => {
+  const inserted = mutateStore((data) => {
     data.jobs.push(record);
     return record;
+  });
+  dualWriteJobs([inserted]);
+  return inserted;
+}
+
+function isScheduledAgentRunJob(job: JobRecord, agentId: string): boolean {
+  return job.type === "agent.run" && job.payload?.agentId === agentId && job.payload?.triggerKind === "schedule";
+}
+
+function activeSchedule(agent: AgentRecord): string | null {
+  const schedule = agent.schedule?.trim();
+  if (agent.status !== "active" || agent.triggerKind !== "schedule" || !schedule) return null;
+  nextAfter(schedule, new Date());
+  return schedule;
+}
+
+function cancelQueued(job: JobRecord, timestamp: string): void {
+  job.status = "canceled";
+  job.cancelRequested = true;
+  job.completedAt = timestamp;
+  job.updatedAt = timestamp;
+}
+
+function scheduledAgentPayload(agentId: string, payload?: Record<string, unknown>): Record<string, unknown> {
+  return { ...(payload ?? {}), agentId, triggerKind: "schedule" };
+}
+
+interface ScheduledAgentResult {
+  maintained: JobRecord | null;
+  touched: JobRecord[];
+}
+
+function ensureScheduledAgentJob(
+  data: TaskloomData,
+  agent: AgentRecord,
+  timestamp: string,
+  scheduledAt?: string,
+  payload?: Record<string, unknown>,
+): ScheduledAgentResult {
+  let schedule: string | null = null;
+  try { schedule = activeSchedule(agent); }
+  catch { schedule = null; }
+
+  const queued = data.jobs
+    .filter((job) => job.status === "queued" && isScheduledAgentRunJob(job, agent.id))
+    .sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt));
+
+  const touched: JobRecord[] = [];
+
+  if (!schedule) {
+    for (const job of queued) {
+      cancelQueued(job, timestamp);
+      touched.push(job);
+    }
+    return { maintained: null, touched };
+  }
+
+  const current = queued.filter((job) => job.cron === schedule);
+  const stale = queued.filter((job) => job.cron !== schedule);
+  for (const job of stale) {
+    cancelQueued(job, timestamp);
+    touched.push(job);
+  }
+  for (const job of current.slice(1)) {
+    cancelQueued(job, timestamp);
+    touched.push(job);
+  }
+  if (current[0]) return { maintained: current[0], touched };
+
+  const record: JobRecord = {
+    id: randomUUID(),
+    workspaceId: agent.workspaceId,
+    type: "agent.run",
+    payload: scheduledAgentPayload(agent.id, payload),
+    status: "queued",
+    attempts: 0,
+    maxAttempts: 3,
+    cron: schedule,
+    scheduledAt: scheduledAt ?? nextAfter(schedule, new Date()).toISOString(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  data.jobs.push(record);
+  touched.push(record);
+  return { maintained: record, touched };
+}
+
+export function maintainScheduledAgentJobs(agentId?: string): JobRecord[] {
+  const timestamp = nowIso();
+  const { maintained, touched } = mutateStore((data) => {
+    const agents = agentId ? data.agents.filter((agent) => agent.id === agentId) : data.agents;
+    const maintained: JobRecord[] = [];
+    const touched: JobRecord[] = [];
+    for (const agent of agents) {
+      const result = ensureScheduledAgentJob(data, agent, timestamp);
+      if (result.maintained) maintained.push(result.maintained);
+      for (const job of result.touched) touched.push(job);
+    }
+    return { maintained, touched };
+  });
+  // Dual-write every record that ensureScheduledAgentJob touched (created, cancelled, or already-current that
+  // we still treat as the maintained record). The "maintained" list may include current[0] entries that were
+  // not mutated; including them in the dual-write is a harmless idempotent upsert.
+  const dedup = new Map<string, JobRecord>();
+  for (const job of touched) dedup.set(job.id, job);
+  for (const job of maintained) dedup.set(job.id, job);
+  dualWriteJobs([...dedup.values()]);
+  return maintained;
+}
+
+export function enqueueRecurringJob(job: JobRecord, scheduledAt: string): JobRecord | null {
+  if (job.type === "agent.run" && job.payload?.triggerKind === "schedule" && typeof job.payload.agentId === "string") {
+    const { maintained, touched } = mutateStore((data) => {
+      const agent = data.agents.find((entry) => entry.id === job.payload.agentId);
+      if (!agent) return { maintained: null as JobRecord | null, touched: [] as JobRecord[] };
+      const result = ensureScheduledAgentJob(data, agent, nowIso(), scheduledAt, job.payload);
+      return { maintained: result.maintained, touched: result.touched };
+    });
+    const dedup = new Map<string, JobRecord>();
+    for (const entry of touched) dedup.set(entry.id, entry);
+    if (maintained) dedup.set(maintained.id, maintained);
+    dualWriteJobs([...dedup.values()]);
+    return maintained;
+  }
+
+  return enqueueJob({
+    workspaceId: job.workspaceId,
+    type: job.type,
+    payload: job.payload,
+    cron: job.cron,
+    scheduledAt,
+    maxAttempts: job.maxAttempts,
   });
 }
 
@@ -41,30 +188,26 @@ export function listJobs(
   workspaceId: string,
   opts: { status?: JobStatus; limit?: number } = {},
 ): JobRecord[] {
-  return mutateStore((data) => {
-    let entries = data.jobs.filter((j) => j.workspaceId === workspaceId);
-    if (opts.status) entries = entries.filter((j) => j.status === opts.status);
-    entries = entries.slice().reverse();
-    if (opts.limit) entries = entries.slice(0, opts.limit);
-    return entries;
-  });
+  return listJobsForWorkspaceIndexed(workspaceId, opts);
 }
 
 export function findJob(id: string): JobRecord | null {
-  return mutateStore((data) => data.jobs.find((j) => j.id === id) ?? null);
+  return findJobIndexed(id);
 }
 
 export function updateJob(id: string, patch: Partial<JobRecord>): JobRecord | null {
-  return mutateStore((data) => {
+  const updated = mutateStore((data) => {
     const job = data.jobs.find((j) => j.id === id);
     if (!job) return null;
     Object.assign(job, patch, { updatedAt: nowIso() });
     return job;
   });
+  if (updated) dualWriteJobs([updated]);
+  return updated;
 }
 
 export function cancelJob(id: string): JobRecord | null {
-  return mutateStore((data) => {
+  const updated = mutateStore((data) => {
     const job = data.jobs.find((j) => j.id === id);
     if (!job) return null;
     job.cancelRequested = true;
@@ -75,6 +218,8 @@ export function cancelJob(id: string): JobRecord | null {
     }
     return job;
   });
+  if (updated) dualWriteJobs([updated]);
+  return updated;
 }
 
 let claimMutex: Promise<unknown> = Promise.resolve();
@@ -85,7 +230,7 @@ export async function claimNextJob(now: Date): Promise<JobRecord | null> {
   claimMutex = new Promise<void>((resolve) => { release = resolve; });
   await previous;
   try {
-    return mutateStore((data) => {
+    const claimed = mutateStore((data) => {
       const candidate = data.jobs
         .filter((j) => j.status === "queued" && Date.parse(j.scheduledAt) <= now.getTime())
         .sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt))[0];
@@ -96,13 +241,16 @@ export async function claimNextJob(now: Date): Promise<JobRecord | null> {
       candidate.updatedAt = candidate.startedAt;
       return candidate;
     });
+    if (claimed) dualWriteJobs([claimed]);
+    return claimed;
   } finally {
     release();
   }
 }
 
 export function sweepStaleRunningJobs(): number {
-  return mutateStore((data) => {
+  const swept: JobRecord[] = [];
+  const count = mutateStore((data) => {
     const cutoff = Date.now() - STALE_RUNNING_MS;
     let count = 0;
     for (const job of data.jobs) {
@@ -110,9 +258,12 @@ export function sweepStaleRunningJobs(): number {
         job.status = "queued";
         job.updatedAt = nowIso();
         delete job.startedAt;
+        swept.push(job);
         count++;
       }
     }
     return count;
   });
+  dualWriteJobs(swept);
+  return count;
 }

@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, HelpCircle, History, Loader2, RefreshCw, Rocket, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, HelpCircle, History, Loader2, RefreshCw, Rocket, ShieldCheck, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import StreamingTextDemo from "@/components/StreamingTextDemo";
 import UsageSummaryCard from "@/components/UsageSummaryCard";
 import { relative } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
+import { canManageWorkspaceRole } from "@/lib/roles";
 import type {
   ConfirmWorkflowReleaseInput,
+  JobRecord,
+  JobStatus,
   ReleaseHistoryPayload,
   SaveWorkflowBlockerInput,
   SaveWorkflowQuestionInput,
@@ -48,6 +51,8 @@ type WorkflowApi = typeof api &
     confirmWorkflowRelease: (
       body: ConfirmWorkflowReleaseInput,
     ) => Promise<SinglePayload<WorkflowReleaseConfirmation, "releaseConfirmation">>;
+    listJobs: (limit?: number) => Promise<JobRecord[]>;
+    cancelJob: (id: string) => Promise<JobRecord>;
   }>;
 
 interface OperationsState {
@@ -56,6 +61,7 @@ interface OperationsState {
   validationEvidence: WorkflowValidationEvidence[];
   releaseConfirmation: WorkflowReleaseConfirmation | null;
   releaseHistory: ReleaseHistoryPayload;
+  jobs: JobRecord[];
 }
 
 const workflowApi = api as WorkflowApi;
@@ -69,10 +75,13 @@ const EMPTY_STATE: OperationsState = {
   validationEvidence: [],
   releaseConfirmation: null,
   releaseHistory: EMPTY_HISTORY,
+  jobs: [],
 };
 
 export default function OperationsPage() {
   const { session } = useAuth();
+  const isViewer = session?.workspace.role === "viewer";
+  const canManageOperations = canManageWorkspaceRole(session?.workspace.role);
   const [state, setState] = useState<OperationsState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +110,9 @@ export default function OperationsPage() {
     const openQuestions = state.questions.filter((question) => question.status === "open").length;
     const failedValidation = state.validationEvidence.filter((evidence) => evidence.status === "failed").length;
     const passedValidation = state.validationEvidence.filter((evidence) => evidence.status === "passed").length;
-    return { openBlockers, openQuestions, failedValidation, passedValidation };
+    const activeJobs = state.jobs.filter((job) => job.status === "queued" || job.status === "running").length;
+    const failedJobs = state.jobs.filter((job) => job.status === "failed").length;
+    return { openBlockers, openQuestions, failedValidation, passedValidation, activeJobs, failedJobs };
   }, [state]);
 
   const runUpdate = async (label: string, action: () => Promise<OperationsState | void>) => {
@@ -215,6 +226,11 @@ export default function OperationsPage() {
     });
   };
 
+  const cancelJob = (job: JobRecord) =>
+    runUpdate(`job-${job.id}`, async () => {
+      await workflowApi.cancelJob?.(job.id);
+    });
+
   return (
     <div className="page-frame">
       <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
@@ -222,19 +238,25 @@ export default function OperationsPage() {
           <div className="kicker mb-3">OPERATIONS · LIVE WORKSPACE STATUS</div>
           <h1 className="display-xl">Operations.</h1>
           <p className="mt-4 max-w-xl font-mono text-xs text-ink-400">
-            <span className="text-ink-500">blockers · questions · validation evidence · release confirmation</span>
+            <span className="text-ink-500">blockers · questions · validation evidence · release confirmation · job queue</span>
           </p>
+          {session?.workspace.role && (
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+              Workspace role · {session.workspace.role}{isViewer ? " · view-only operations" : ""}
+            </p>
+          )}
         </div>
         <button className="btn-ghost" type="button" onClick={loadOperations} disabled={loading || Boolean(saving)}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
         </button>
       </header>
 
-      <section className="grid grid-cols-2 divide-x divide-ink-700 border-y border-ink-700 lg:grid-cols-4">
+      <section className="grid grid-cols-2 divide-x divide-ink-700 border-y border-ink-700 lg:grid-cols-5">
         <Stat label="OPEN BLOCKERS" value={counts.openBlockers} tone={counts.openBlockers > 0 ? "danger" : "good"} />
         <Stat label="OPEN QUESTIONS" value={counts.openQuestions} tone={counts.openQuestions > 0 ? "warn" : "good"} />
         <Stat label="PASSED EVIDENCE" value={counts.passedValidation} tone="good" />
         <Stat label="FAILED CHECKS" value={counts.failedValidation} tone={counts.failedValidation > 0 ? "danger" : "muted"} />
+        <Stat label="ACTIVE JOBS" value={counts.activeJobs} tone={counts.failedJobs > 0 ? "warn" : counts.activeJobs > 0 ? "good" : "muted"} />
       </section>
 
       {error && (
@@ -255,10 +277,52 @@ export default function OperationsPage() {
       ) : (
         <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
           <WorkflowSection
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            title="Job Queue"
+            action={
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="kicker mb-1">QUEUE HEALTH</div>
+                  <p className="font-mono text-xs text-ink-500">
+                    {state.jobs.length} recent jobs · {counts.activeJobs} active · {counts.failedJobs} failed
+                  </p>
+                </div>
+                <button className="btn-ghost" type="button" onClick={loadOperations} disabled={loading || Boolean(saving)}>
+                  <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh queue
+                </button>
+              </div>
+            }
+          >
+            {state.jobs.length === 0 ? (
+              <EmptyState>No queued jobs.</EmptyState>
+            ) : (
+              <div className="space-y-3">
+                {state.jobs.map((job) => (
+                  <RecordRow
+                    key={job.id}
+                    title={job.type}
+                    detail={job.error || summarizeJobPayload(job.payload)}
+                    meta={jobMeta(job)}
+                    badge={<StatusBadge value={job.status} tone={jobTone(job.status)} />}
+                    action={
+                      canManageOperations && canCancelJob(job) ? (
+                        <button className="btn-ghost" type="button" onClick={() => cancelJob(job)} disabled={saving === `job-${job.id}`}>
+                          {saving === `job-${job.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+                          Cancel
+                        </button>
+                      ) : null
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </WorkflowSection>
+
+          <WorkflowSection
             icon={<AlertTriangle className="h-4 w-4" />}
             title="Blockers"
             action={
-              <form className="grid gap-3 lg:grid-cols-[1fr_150px_auto] lg:items-end" onSubmit={addBlocker}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="grid gap-3 lg:grid-cols-[1fr_150px_auto] lg:items-end" onSubmit={addBlocker}>
                 <Field label="Title">
                   <input name="title" className="workflow-input" required placeholder="Dependency, access, or scope blocker" />
                 </Field>
@@ -297,9 +361,11 @@ export default function OperationsPage() {
                     meta={`${blocker.severity} severity${blocker.dependency ? " · dependency" : ""} · updated ${relative(blocker.updatedAt)}`}
                     badge={<StatusBadge value={blocker.status} tone={blocker.status === "open" ? "danger" : "good"} />}
                     action={
+                      isViewer ? null : (
                       <button className="btn-ghost" type="button" onClick={() => updateBlockerStatus(blocker)} disabled={saving === `blocker-${blocker.id}`}>
                         {blocker.status === "open" ? "Resolve" : "Reopen"}
                       </button>
+                      )
                     }
                   />
                 ))}
@@ -311,7 +377,7 @@ export default function OperationsPage() {
             icon={<HelpCircle className="h-4 w-4" />}
             title="Open Questions"
             action={
-              <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={addQuestion}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={addQuestion}>
                 <div className="flex-1">
                   <Field label="Question">
                     <input name="prompt" className="workflow-input" required placeholder="Decision or clarification needed" />
@@ -346,12 +412,15 @@ export default function OperationsPage() {
                       rows={3}
                       className="workflow-input mt-4 resize-none"
                       placeholder="Answer or decision"
+                      disabled={isViewer}
                     />
-                    <div className="mt-3 flex justify-end">
-                      <button className="btn-ghost" type="submit" disabled={saving === `question-${question.id}`}>
-                        Save answer
-                      </button>
-                    </div>
+                    {!isViewer && (
+                      <div className="mt-3 flex justify-end">
+                        <button className="btn-ghost" type="submit" disabled={saving === `question-${question.id}`}>
+                          Save answer
+                        </button>
+                      </div>
+                    )}
                   </form>
                 ))}
               </div>
@@ -362,7 +431,7 @@ export default function OperationsPage() {
             icon={<ShieldCheck className="h-4 w-4" />}
             title="Validation Evidence"
             action={
-              <form className="grid gap-3 lg:grid-cols-[1fr_140px_auto] lg:items-end" onSubmit={addEvidence}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="grid gap-3 lg:grid-cols-[1fr_140px_auto] lg:items-end" onSubmit={addEvidence}>
                 <Field label="Title">
                   <input name="title" className="workflow-input" required placeholder="Test run, demo, metric, or review" />
                 </Field>
@@ -399,6 +468,7 @@ export default function OperationsPage() {
                     meta={`${evidence.source || "No source"} · updated ${relative(evidence.updatedAt)}`}
                     badge={<StatusBadge value={evidence.status} tone={validationTone(evidence.status)} />}
                     action={
+                      isViewer ? null : (
                       <select
                         className="workflow-input min-w-32"
                         value={evidence.status}
@@ -409,6 +479,7 @@ export default function OperationsPage() {
                         <option value="passed">Passed</option>
                         <option value="failed">Failed</option>
                       </select>
+                      )
                     }
                   />
                 ))}
@@ -420,7 +491,7 @@ export default function OperationsPage() {
             icon={<Rocket className="h-4 w-4" />}
             title="Release Confirmation"
             action={
-              <form className="space-y-4" onSubmit={confirmRelease}>
+              isViewer ? <ReadOnlyRoleNotice /> : <form className="space-y-4" onSubmit={confirmRelease}>
                 <ReleasePreflightPanel preflight={state.releaseHistory.preflight} />
                 <Field label="Summary">
                   <textarea
@@ -471,6 +542,8 @@ export default function OperationsPage() {
         </div>
       )}
 
+      {canManageOperations && <ProductionStatusPanel />}
+
       <section className="section-band">
         <div className="mb-5 flex items-end justify-between">
           <div>
@@ -484,6 +557,670 @@ export default function OperationsPage() {
           <StreamingTextDemo />
         </div>
       </section>
+    </div>
+  );
+}
+
+type SubsystemStatus = "ok" | "degraded" | "down" | "disabled";
+
+interface SubsystemHealthEntry {
+  name: string;
+  status: SubsystemStatus;
+  detail: string;
+  checkedAt: string;
+  observedAt?: string;
+}
+
+interface OperationsHealth {
+  generatedAt: string;
+  overall: SubsystemStatus;
+  subsystems: SubsystemHealthEntry[];
+}
+
+interface ProductionStatus {
+  generatedAt: string;
+  store: { mode: "json" | "sqlite" };
+  scheduler: {
+    leaderMode: "off" | "file" | "http";
+    leaderTtlMs: number;
+    leaderHeldLocally: boolean;
+    lockSummary: string;
+  };
+  jobs: { type: string; queued: number; running: number; succeeded: number; failed: number; canceled: number }[];
+  jobMetrics: {
+    type: string;
+    totalRuns: number;
+    succeededRuns: number;
+    failedRuns: number;
+    canceledRuns: number;
+    lastRunStartedAt: string | null;
+    lastRunFinishedAt: string | null;
+    lastDurationMs: number | null;
+    averageDurationMs: number | null;
+    p95DurationMs: number | null;
+  }[];
+  jobMetricsSnapshots: {
+    total: number;
+    lastCapturedAt: string | null;
+  };
+  accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
+  runtime: { nodeVersion: string };
+}
+
+interface JobMetricSnapshot {
+  id: string;
+  capturedAt: string;
+  type: string;
+  totalRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  canceledRuns: number;
+  lastRunStartedAt: string | null;
+  lastRunFinishedAt: string | null;
+  lastDurationMs: number | null;
+  averageDurationMs: number | null;
+  p95DurationMs: number | null;
+}
+
+interface AlertEvent {
+  id: string;
+  ruleId: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  observedAt: string;
+  context: Record<string, unknown>;
+  delivered: boolean;
+  deliveryError?: string;
+  deliveryAttempts?: number;
+  lastDeliveryAttemptAt?: string;
+  deadLettered?: boolean;
+}
+
+function ProductionStatusPanel() {
+  const [status, setStatus] = useState<ProductionStatus | null>(null);
+  const [health, setHealth] = useState<OperationsHealth | null>(null);
+  const [history, setHistory] = useState<JobMetricSnapshot[] | null>(null);
+  const [alerts, setAlerts] = useState<AlertEvent[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [hidden, setHidden] = useState(false);
+
+  const loadStatus = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [statusResult, healthResult, historyResult, alertsResult] = await Promise.allSettled([
+        fetchProductionStatus(),
+        fetchOperationsHealth(),
+        fetchJobMetricsHistory(),
+        fetchRecentAlerts(),
+      ]);
+
+      if (statusResult.status === "fulfilled") {
+        setStatus(statusResult.value);
+      } else {
+        const err = statusResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setHidden(true);
+          return;
+        }
+        setError(err?.message ?? "Failed to load status");
+      }
+
+      if (healthResult.status === "fulfilled") {
+        setHealth(healthResult.value);
+      } else {
+        const err = healthResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setHealth(null);
+        }
+        // Silently ignore other health errors so the rest of the panel still renders.
+      }
+
+      if (historyResult.status === "fulfilled") {
+        setHistory(historyResult.value);
+      } else {
+        const err = historyResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setHistory(null);
+        }
+        // Silently ignore other history errors; the table still renders without a trend.
+      }
+
+      if (alertsResult.status === "fulfilled") {
+        setAlerts(alertsResult.value);
+      } else {
+        const err = alertsResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setAlerts(null);
+        }
+        // Silently ignore other alert errors; the panel will show no rows.
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadStatus();
+  }, []);
+
+  if (hidden) return null;
+
+  return (
+    <section className="section-band">
+      <div className="mb-5 flex items-end justify-between">
+        <div>
+          <div className="kicker mb-2">PRODUCTION STATUS</div>
+          <h2 className="display text-2xl">Production Status</h2>
+          <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+            {status ? `Generated ${relative(status.generatedAt)}` : "Operator snapshot"}
+          </p>
+        </div>
+        <button className="btn-ghost" type="button" onClick={loadStatus} disabled={loading}>
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh status
+        </button>
+      </div>
+
+      {loading && !status && (
+        <div className="flex items-center gap-3 text-sm text-ink-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING STATUS</span>
+        </div>
+      )}
+
+      {error && !loading && (
+        <div className="border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
+          STATUS UNAVAILABLE · {error}
+        </div>
+      )}
+
+      {status && (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3">
+            <div className="kicker mb-2">STORE</div>
+            <div className="font-mono text-sm text-ink-200">Store: {status.store.mode}</div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3">
+            <div className="kicker mb-2">RUNTIME</div>
+            <div className="font-mono text-sm text-ink-200">Node {status.runtime.nodeVersion}</div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-3">SCHEDULER</div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KeyValue label="Leader mode" value={status.scheduler.leaderMode} />
+              <KeyValue
+                label="Leader held locally"
+                value={
+                  status.scheduler.leaderHeldLocally ? (
+                    <span className="inline-flex items-center gap-1.5 text-signal-green">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> yes
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-ink-500">
+                      <XCircle className="h-3.5 w-3.5" /> no
+                    </span>
+                  )
+                }
+              />
+              <KeyValue label="Leader TTL" value={`${(status.scheduler.leaderTtlMs / 1000).toFixed(1)}s`} />
+              <KeyValue label="Lock summary" value={status.scheduler.lockSummary || "—"} />
+            </div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-3">ACCESS LOG</div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KeyValue label="Mode" value={status.accessLog.mode} />
+              <KeyValue label="Path" value={status.accessLog.path || "—"} />
+              <KeyValue
+                label="Max bytes"
+                value={status.accessLog.maxBytes > 0 ? formatBytes(status.accessLog.maxBytes) : "disabled"}
+              />
+              <KeyValue label="Max files" value={String(status.accessLog.maxFiles)} />
+            </div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-3">JOBS</div>
+            {status.jobs.length === 0 ? (
+              <EmptyState>No queued jobs.</EmptyState>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full font-mono text-xs">
+                  <thead>
+                    <tr className="text-left text-ink-500">
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Type</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Queued</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Running</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Succeeded</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Failed</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Canceled</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.jobs.map((entry) => (
+                      <tr key={entry.type} className="border-t border-ink-800 text-ink-200">
+                        <td className="py-1.5 pr-4">{entry.type}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.queued}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.running}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.succeeded}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.failed}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.canceled}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-1">JOB METRICS</div>
+            <h3 className="mb-3 font-serif text-base text-ink-100">Job metrics</h3>
+            {status.jobMetrics.length === 0 ? (
+              <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+                No completed runs yet (since process restart)
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full font-mono text-xs">
+                  <thead>
+                    <tr className="text-left text-ink-500">
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Type</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Last duration</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Avg (rolling)</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">p95</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Trend</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Last finished</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Total runs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.jobMetrics.map((entry) => {
+                      const trendValues = (history ?? [])
+                        .filter((snapshot) => snapshot.type === entry.type)
+                        .map((snapshot) => snapshot.averageDurationMs)
+                        .filter((value): value is number => typeof value === "number");
+                      return (
+                        <tr key={entry.type} className="border-t border-ink-800 text-ink-200">
+                          <td className="py-1.5 pr-4">{entry.type}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.lastDurationMs)}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.averageDurationMs)}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.p95DurationMs)}</td>
+                          <td className="py-1.5 pr-4"><Sparkline values={trendValues} /></td>
+                          <td className="py-1.5 pr-4">{entry.lastRunFinishedAt ? relative(entry.lastRunFinishedAt) : "—"}</td>
+                          <td className="py-1.5 pr-4 tabular-nums">
+                            {entry.totalRuns}
+                            <span className="ml-1 text-ink-500">({entry.succeededRuns} / {entry.failedRuns})</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+                  Trend = average duration across recent snapshots (run <span className="text-ink-300">npm run jobs:snapshot-metrics</span> to capture)
+                  {status?.jobMetricsSnapshots ? (
+                    <>
+                      {" "}
+                      <span className="ml-1">
+                        {status.jobMetricsSnapshots.lastCapturedAt
+                          ? `Last snapshot ${relative(status.jobMetricsSnapshots.lastCapturedAt)} (${status.jobMetricsSnapshots.total} total).`
+                          : "No snapshots captured yet."}
+                      </span>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <SubsystemHealthSection health={health} />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <RecentAlertsSection alerts={alerts} />
+          </div>
+        </div>
+      )}
+
+      {!status && !error && (
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-1">JOB METRICS</div>
+            <h3 className="font-serif text-base text-ink-100">Job metrics</h3>
+            <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+              Awaiting status snapshot
+            </p>
+          </div>
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <SubsystemHealthSection health={health} />
+          </div>
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <RecentAlertsSection alerts={alerts} />
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function KeyValue({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div>
+      <div className="kicker mb-1">{label.toUpperCase()}</div>
+      <div className="font-mono text-sm text-ink-200">{value}</div>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "disabled";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const formatted = unitIndex === 0 ? value.toString() : value.toFixed(1);
+  return `${formatted} ${units[unitIndex]}`;
+}
+
+function formatDurationMs(ms: number | null): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+  return `${Math.round(ms)} ms`;
+}
+
+function Sparkline({ values, width = 80, height = 20 }: { values: number[]; width?: number; height?: number }) {
+  if (values.length === 0) return <span className="text-slate-500">—</span>;
+  if (values.length === 1) return <span className="text-slate-400">—</span>;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stride = width / Math.max(1, values.length - 1);
+  const points = values
+    .map((v, i) => {
+      const x = i * stride;
+      const y = height - ((v - min) / range) * height;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-emerald-400" />
+    </svg>
+  );
+}
+
+async function fetchProductionStatus(): Promise<ProductionStatus> {
+  const response = await fetch("/api/app/operations/status", {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  return payload as ProductionStatus;
+}
+
+async function fetchOperationsHealth(): Promise<OperationsHealth> {
+  const response = await fetch("/api/app/operations/health", { credentials: "include" });
+  if (!response.ok) {
+    const error = new Error(`status ${response.status}`) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+  return response.json() as Promise<OperationsHealth>;
+}
+
+async function fetchJobMetricsHistory(limit = 50): Promise<JobMetricSnapshot[]> {
+  const response = await fetch(`/api/app/operations/job-metrics/history?limit=${limit}`, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(
+      typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  const snapshots = (payload as { snapshots?: JobMetricSnapshot[] }).snapshots;
+  return Array.isArray(snapshots) ? snapshots : [];
+}
+
+async function fetchRecentAlerts(limit = 25): Promise<AlertEvent[]> {
+  const response = await fetch(`/api/app/operations/alerts?limit=${limit}`, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(
+      typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  const alerts = (payload as { alerts?: AlertEvent[] }).alerts;
+  return Array.isArray(alerts) ? alerts : [];
+}
+
+function subsystemStatusClasses(status: SubsystemStatus) {
+  switch (status) {
+    case "ok":
+      return "text-emerald-500";
+    case "degraded":
+      return "text-amber-500";
+    case "down":
+      return "text-rose-500";
+    case "disabled":
+    default:
+      return "text-slate-500";
+  }
+}
+
+function SubsystemStatusIcon({ status, className }: { status: SubsystemStatus; className?: string }) {
+  const cls = `h-3.5 w-3.5 ${className ?? ""}`.trim();
+  if (status === "ok") return <CheckCircle2 className={cls} />;
+  if (status === "degraded") return <AlertTriangle className={cls} />;
+  if (status === "down") return <XCircle className={cls} />;
+  return <HelpCircle className={cls} />;
+}
+
+function SubsystemHealthSection({ health }: { health: OperationsHealth | null }) {
+  if (!health) {
+    return (
+      <div>
+        <div className="kicker mb-1">SUBSYSTEM HEALTH</div>
+        <h3 className="font-serif text-base text-ink-100">Subsystem health</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting health snapshot
+        </p>
+      </div>
+    );
+  }
+
+  const overallColor = subsystemStatusClasses(health.overall);
+  const overallLabel = health.overall.toUpperCase();
+
+  return (
+    <div>
+      <div className="kicker mb-1">SUBSYSTEM HEALTH</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Subsystem health</h3>
+        <span className={`inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider ${overallColor}`}>
+          <SubsystemStatusIcon status={health.overall} />
+          OVERALL: {overallLabel}
+        </span>
+      </div>
+      {health.subsystems.length === 0 ? (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          No subsystem checks reported.
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-800">
+          {health.subsystems.map((subsystem) => {
+            const color = subsystemStatusClasses(subsystem.status);
+            const label = subsystem.status.toUpperCase();
+            return (
+              <li key={subsystem.name} className="py-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider ${color}`}>
+                      <SubsystemStatusIcon status={subsystem.status} />
+                      {label}
+                    </span>
+                    <span className="font-mono text-sm text-ink-200">{subsystem.name}</span>
+                  </div>
+                  {subsystem.observedAt && (
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                      observed {relative(subsystem.observedAt)}
+                    </span>
+                  )}
+                </div>
+                {subsystem.detail && (
+                  <p className="mt-1 font-mono text-[11px] text-ink-500">{subsystem.detail}</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function alertSeverityClasses(severity: AlertEvent["severity"]) {
+  switch (severity) {
+    case "critical":
+      return "text-rose-500";
+    case "warning":
+      return "text-amber-500";
+    case "info":
+    default:
+      return "text-slate-400";
+  }
+}
+
+function AlertSeverityIcon({ severity, className }: { severity: AlertEvent["severity"]; className?: string }) {
+  const cls = `h-3.5 w-3.5 ${className ?? ""}`.trim();
+  if (severity === "critical") return <XCircle className={cls} />;
+  if (severity === "warning") return <AlertTriangle className={cls} />;
+  return <HelpCircle className={cls} />;
+}
+
+function truncate(text: string, max = 120) {
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+function DeliveryStatusIndicator({ alert }: { alert: AlertEvent }) {
+  const attempts = alert.deliveryAttempts ?? 0;
+
+  if (alert.deadLettered) {
+    const attemptLabel = alert.deliveryAttempts ?? "?";
+    const title = `Dead-lettered after ${attemptLabel} attempt${attemptLabel === 1 ? "" : "s"}${alert.deliveryError ? ` · ${alert.deliveryError}` : ""}`;
+    return (
+      <span className="inline-flex items-center gap-1.5 text-rose-500" aria-label="dead-lettered" title={title}>
+        <XCircle className="h-3.5 w-3.5" />
+        <span className="font-mono text-[10px] uppercase tracking-wider">DEAD-LETTERED</span>
+      </span>
+    );
+  }
+
+  if (alert.delivered === false) {
+    const title = alert.deliveryError || "Delivery failed, retrying";
+    return (
+      <span className="inline-flex items-center gap-1.5 text-amber-500" aria-label="retrying delivery" title={title}>
+        <AlertTriangle className="h-3.5 w-3.5" />
+        <span className="font-mono text-[10px] uppercase tracking-wider">RETRYING (attempt {attempts})</span>
+      </span>
+    );
+  }
+
+  if (alert.delivered === true && attempts > 1) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-emerald-500" aria-label="delivered" title={`Delivered after ${attempts} attempts`}>
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">(after {attempts} attempts)</span>
+      </span>
+    );
+  }
+
+  return (
+    <span aria-label="delivered" title="Delivered">
+      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+    </span>
+  );
+}
+
+function RecentAlertsSection({ alerts }: { alerts: AlertEvent[] | null }) {
+  const rows = (alerts ?? []).slice(0, 25);
+  const count = rows.length;
+
+  return (
+    <div>
+      <div className="kicker mb-1">RECENT ALERTS</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Recent alerts</h3>
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          {count} in last 25
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          — No alerts in the recent window. —
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-800">
+          {rows.map((alert) => {
+            const severityColor = alertSeverityClasses(alert.severity);
+            const severityLabel = alert.severity.toUpperCase();
+            const truncated = truncate(alert.detail, 120);
+            return (
+              <li key={alert.id} className="py-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={`inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider ${severityColor}`}>
+                      <AlertSeverityIcon severity={alert.severity} />
+                      {severityLabel}
+                    </span>
+                    <span className="font-mono text-sm font-semibold text-ink-100">{alert.title}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                      {relative(alert.observedAt)}
+                    </span>
+                    {alert.lastDeliveryAttemptAt && (
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500" title={`Last attempt ${alert.lastDeliveryAttemptAt}`}>
+                        last attempt {relative(alert.lastDeliveryAttemptAt)}
+                      </span>
+                    )}
+                    <DeliveryStatusIndicator alert={alert} />
+                  </div>
+                </div>
+                {truncated && (
+                  <p className="mt-1 font-mono text-[11px] text-ink-500" title={alert.detail}>
+                    {truncated}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -597,6 +1334,38 @@ function validationTone(status: WorkflowValidationStatus) {
   return "warn";
 }
 
+function ReadOnlyRoleNotice() {
+  return <div className="border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-500">Viewer role · manage controls hidden</div>;
+}
+
+function jobTone(status: JobStatus) {
+  if (status === "success") return "good";
+  if (status === "failed") return "danger";
+  if (status === "queued" || status === "running") return "warn";
+  return "muted";
+}
+
+function canCancelJob(job: JobRecord) {
+  return job.status === "queued" || job.status === "running";
+}
+
+function jobMeta(job: JobRecord) {
+  const timestamps = [
+    `created ${relative(job.createdAt)}`,
+    `scheduled ${relative(job.scheduledAt)}`,
+    job.startedAt ? `started ${relative(job.startedAt)}` : null,
+    job.completedAt ? `completed ${relative(job.completedAt)}` : null,
+  ].filter(Boolean);
+
+  return `#${job.id} · attempts ${job.attempts}/${job.maxAttempts}${job.cancelRequested ? " · cancel requested" : ""} · ${timestamps.join(" · ")}`;
+}
+
+function summarizeJobPayload(payload: JobRecord["payload"]) {
+  const keys = Object.keys(payload);
+  if (keys.length === 0) return "No payload";
+  return keys.slice(0, 4).join(" · ");
+}
+
 function ReleasePreflightPanel({ preflight }: { preflight: ReleaseHistoryPayload["preflight"] }) {
   const checks = [
     {
@@ -678,15 +1447,20 @@ function ReleaseHistoryList({ history }: { history: ReleaseHistoryPayload }) {
 }
 
 async function fetchOperations(): Promise<OperationsState> {
-  const [blockers, questions, validationEvidence, releaseConfirmation, releaseHistory] = await Promise.all([
+  const [blockers, questions, validationEvidence, releaseConfirmation, releaseHistory, jobs] = await Promise.all([
     listBlockers(),
     listQuestions(),
     listValidationEvidence(),
     getReleaseConfirmation(),
     getReleaseHistory(),
+    listJobs(),
   ]);
 
-  return { blockers, questions, validationEvidence, releaseConfirmation, releaseHistory };
+  return { blockers, questions, validationEvidence, releaseConfirmation, releaseHistory, jobs };
+}
+
+async function listJobs() {
+  return workflowApi.listJobs ? workflowApi.listJobs(50) : [];
 }
 
 async function getReleaseHistory(): Promise<ReleaseHistoryPayload> {

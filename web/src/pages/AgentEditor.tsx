@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { canEditWorkflowRole, canManageWorkspaceRole } from "@/lib/roles";
 import type {
   AgentInputField,
   AgentInputFieldType,
@@ -16,7 +18,7 @@ import type {
   SaveAgentInput,
 } from "@/lib/types";
 import { relative } from "@/lib/format";
-import { describeNextRun, triggerLabel, TRIGGER_KINDS } from "@/lib/agent-runtime";
+import { describeNextRun, triggerLabel, TRIGGER_KINDS, validateCronSchedule } from "@/lib/agent-runtime";
 import PlaybookEditor from "@/components/PlaybookEditor";
 import RunTranscript from "@/components/RunTranscript";
 import ToolCallTimeline from "@/components/ToolCallTimeline";
@@ -38,12 +40,19 @@ function agentStatusPillClass(status: string) {
   return "pill pill--muted";
 }
 
+function webhookOrigin(): string {
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
+
 export default function AgentEditorPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const { session } = useAuth();
   const isNew = !id;
   const incomingPrompt = (location.state as LocationState | null)?.prompt ?? "";
+  const canManageAgent = canManageWorkspaceRole(session?.workspace.role);
+  const canRunAgent = canEditWorkflowRole(session?.workspace.role);
 
   const [agent, setAgent] = useState<AgentRecord | null>(null);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
@@ -63,6 +72,7 @@ export default function AgentEditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [scheduleTouched, setScheduleTouched] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -113,9 +123,22 @@ export default function AgentEditorPage() {
   }), [agent, incomingPrompt, providers]);
 
   const nextRunLabel = useMemo(() => describeNextRun(schedule, triggerKind), [schedule, triggerKind]);
+  const scheduleValidation = triggerKind === "schedule" ? validateCronSchedule(schedule) : null;
+  const showScheduleValidation = triggerKind === "schedule" && scheduleValidation && scheduleTouched;
 
   const saveAgent = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageAgent) {
+      setError("admin role is required to save agents");
+      setMessage(null);
+      return;
+    }
+    const invalidEnum = inputSchema.find((field) => field.type === "enum" && (field.options ?? []).length === 0);
+    if (invalidEnum) {
+      setError(`enum input ${invalidEnum.key || invalidEnum.label} needs at least one option`);
+      setMessage(null);
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const body: SaveAgentInput = {
       name: field(form, "name"),
@@ -131,6 +154,13 @@ export default function AgentEditorPage() {
       inputSchema,
       enabledTools,
     };
+
+    if (scheduleValidation) {
+      setScheduleTouched(true);
+      setError(scheduleValidation);
+      setMessage(null);
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -154,7 +184,7 @@ export default function AgentEditorPage() {
   };
 
   const archive = async () => {
-    if (!agent) return;
+    if (!agent || !canManageAgent) return;
     setSaving(true);
     setError(null);
     try {
@@ -168,13 +198,13 @@ export default function AgentEditorPage() {
   };
 
   const rotateWebhook = async () => {
-    if (!agent) return;
+    if (!agent || !canManageAgent) return;
     setWebhookBusy(true);
     setError(null);
     try {
       const token = await api.rotateAgentWebhook(agent.id);
-      setAgent({ ...agent, webhookToken: token });
-      setMessage("Webhook token rotated.");
+      setAgent({ ...agent, webhookToken: token, webhookTokenPreview: undefined, hasWebhookToken: true });
+      setMessage("Webhook token rotated. Full URL is shown until this page refreshes.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -183,12 +213,12 @@ export default function AgentEditorPage() {
   };
 
   const removeWebhook = async () => {
-    if (!agent) return;
+    if (!agent || !canManageAgent) return;
     setWebhookBusy(true);
     setError(null);
     try {
       await api.removeAgentWebhook(agent.id);
-      setAgent({ ...agent, webhookToken: undefined });
+      setAgent({ ...agent, webhookToken: undefined, webhookTokenPreview: undefined, hasWebhookToken: false });
       setMessage("Webhook removed.");
     } catch (e) {
       setError((e as Error).message);
@@ -198,6 +228,7 @@ export default function AgentEditorPage() {
   };
 
   const recordAsPlaybook = async (runId: string) => {
+    if (!canRunAgent) return;
     setRecordingRunId(runId);
     setError(null);
     try {
@@ -213,7 +244,7 @@ export default function AgentEditorPage() {
   };
 
   const run = async () => {
-    if (!agent) return;
+    if (!agent || !canRunAgent) return;
     setRunning(true);
     setError(null);
     setMessage(null);
@@ -239,6 +270,9 @@ export default function AgentEditorPage() {
     );
   }
 
+  const webhookPathToken = agent?.webhookToken ?? agent?.webhookTokenPreview;
+  const hasWebhook = Boolean(agent?.webhookToken || agent?.webhookTokenPreview || agent?.hasWebhookToken);
+
   return (
     <div className="page-frame">
       <header className="flex flex-wrap items-end justify-between gap-6 pb-8">
@@ -256,15 +290,23 @@ export default function AgentEditorPage() {
         </div>
         {!isNew && agent && (
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-ghost" onClick={run} disabled={running || saving}>
+            <button type="button" className="btn-ghost" onClick={run} disabled={!canRunAgent || running || saving}>
               {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} Run now
             </button>
-            <button type="button" className="btn-ghost" onClick={archive} disabled={saving}>
-              × Archive
-            </button>
+            {canManageAgent && (
+              <button type="button" className="btn-ghost" onClick={archive} disabled={saving}>
+                × Archive
+              </button>
+            )}
           </div>
         )}
       </header>
+
+      {!canManageAgent && (
+        <div className="mb-6 border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-500">
+          Admin role required to create, edit, archive, or manage webhooks for agents.
+        </div>
+      )}
 
       {error && (
         <div className="mb-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
@@ -279,6 +321,7 @@ export default function AgentEditorPage() {
 
       <div className="grid gap-10 xl:grid-cols-[1fr_360px]">
         <form className="space-y-0" onSubmit={saveAgent}>
+          <fieldset className="contents" disabled={!canManageAgent}>
           <section className="section-band">
             <div className="mb-5 flex items-end justify-between">
               <div>
@@ -348,17 +391,29 @@ export default function AgentEditorPage() {
               ))}
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="CRON SCHEDULE">
+              <Field label={triggerKind === "schedule" ? "CRON SCHEDULE *" : "CRON SCHEDULE · OPTIONAL"}>
                 <input
                   name="schedule"
                   className="workflow-input"
                   value={schedule}
-                  onChange={(event) => setSchedule(event.target.value)}
+                  onBlur={() => setScheduleTouched(true)}
+                  onChange={(event) => {
+                    setSchedule(event.target.value);
+                    setScheduleTouched(true);
+                  }}
                   placeholder="0 8 * * 1-5"
+                  required={triggerKind === "schedule"}
+                  aria-invalid={Boolean(showScheduleValidation)}
                 />
+                <p className="mt-2 font-mono text-[10px] leading-4 text-ink-500">
+                  Five-field cron in workspace time. Examples: <span className="text-ink-300">0 8 * * 1-5</span> weekdays at 08:00, <span className="text-ink-300">*/30 * * * *</span> every 30 minutes, <span className="text-ink-300">15 14 * * *</span> daily at 14:15.
+                </p>
+                {showScheduleValidation && (
+                  <p className="mt-2 font-mono text-[10px] text-signal-red">ERR · {scheduleValidation}</p>
+                )}
               </Field>
               <div>
-                <div className="kicker mb-1.5">NEXT RUN</div>
+                <div className="kicker mb-1.5">{triggerKind === "schedule" ? "NEXT RUN" : "TRIGGER MODE"}</div>
                 <div className="border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs text-ink-300">
                   {nextRunLabel}
                 </div>
@@ -367,13 +422,13 @@ export default function AgentEditorPage() {
             {!isNew && agent && (
               <div className="mt-5 border-t border-ink-700 pt-4">
                 <div className="kicker mb-2">WEBHOOK TRIGGER</div>
-                {agent.webhookToken ? (
+                {hasWebhook ? (
                   <div className="grid gap-2">
                     <div className="break-all border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-[11px] text-ink-200">
-                      POST {window.location.origin}/api/public/webhooks/agents/{agent.webhookToken}
+                      POST {webhookOrigin()}/api/public/webhooks/agents/{webhookPathToken ?? "[redacted]"}
                     </div>
                     <p className="font-mono text-[10px] text-ink-500">
-                      Body is forwarded as the run's `inputs`. Trigger kind = webhook.
+                      Body is forwarded as the run's `inputs`. Trigger kind = webhook. Full token is only shown immediately after rotation.
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button type="button" className="btn-ghost" onClick={rotateWebhook} disabled={webhookBusy}>↺ Rotate token</button>
@@ -428,10 +483,11 @@ export default function AgentEditorPage() {
           </section>
 
           <div className="mt-8 flex justify-end border-t border-ink-700 pt-6">
-            <button type="submit" className="btn-primary" disabled={saving}>
+            <button type="submit" className="btn-primary" disabled={!canManageAgent || saving}>
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "✓"} {isNew ? "Create agent" : "Save agent"}
             </button>
           </div>
+          </fieldset>
         </form>
 
         <aside className="space-y-8">
@@ -454,8 +510,8 @@ export default function AgentEditorPage() {
                   ))}
                 </div>
               )}
-              <button type="button" className="btn-primary mt-4 w-full justify-center" onClick={run} disabled={running || saving}>
-                {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} Execute
+              <button type="button" className="btn-primary mt-4 w-full justify-center" onClick={run} disabled={!canRunAgent || running || saving}>
+                {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "▶"} {canRunAgent ? "Execute" : "Member role required"}
               </button>
             </section>
           )}
@@ -511,7 +567,7 @@ export default function AgentEditorPage() {
                                   type="button"
                                   className="font-mono text-[10px] uppercase tracking-wider text-ink-400 hover:text-signal-amber"
                                   onClick={() => recordAsPlaybook(runRecord.id)}
-                                  disabled={recordingRunId === runRecord.id}
+                                  disabled={!canRunAgent || recordingRunId === runRecord.id}
                                 >
                                   {recordingRunId === runRecord.id ? "RECORDING…" : "▣ RECORD AS PLAYBOOK"}
                                 </button>
@@ -612,6 +668,7 @@ function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; on
               <th>Label</th>
               <th>Type</th>
               <th>Required</th>
+              <th>Options</th>
               <th>Default</th>
               <th />
             </tr>
@@ -639,7 +696,13 @@ function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; on
                   <select
                     className="workflow-input font-mono text-[11px]"
                     value={f.type}
-                    onChange={(event) => update(index, { type: event.target.value as AgentInputFieldType })}
+                    onChange={(event) => {
+                      const type = event.target.value as AgentInputFieldType;
+                      update(index, {
+                        type,
+                        options: type === "enum" ? (f.options && f.options.length > 0 ? f.options : ["option_a"]) : undefined,
+                      });
+                    }}
                   >
                     {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                   </select>
@@ -651,6 +714,19 @@ function InputSchemaEditor({ schema, onChange }: { schema: AgentInputField[]; on
                     checked={f.required}
                     onChange={(event) => update(index, { required: event.target.checked })}
                   />
+                </td>
+                <td>
+                  {f.type === "enum" ? (
+                    <textarea
+                      className="workflow-input min-w-40 resize-none font-mono text-[11px]"
+                      rows={2}
+                      placeholder="one option per line"
+                      value={(f.options ?? []).join("\n")}
+                      onChange={(event) => update(index, { options: lines(event.target.value) })}
+                    />
+                  ) : (
+                    <span className="font-mono text-[11px] text-ink-600">—</span>
+                  )}
                 </td>
                 <td>
                   <input
@@ -744,6 +820,10 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function field(form: FormData, key: string) {
   return String(form.get(key) || "").trim();
+}
+
+function lines(value: string) {
+  return value.split(/\r?\n|,/).map((entry) => entry.trim()).filter(Boolean);
 }
 
 function seedRunInputs(schema: AgentInputField[]): Record<string, string> {

@@ -1,0 +1,394 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { exportWorkspaceData, type ExportWorkspaceDeps } from "./export-workspace.js";
+import type { TaskloomData } from "../taskloom-store.js";
+import { maskSecret } from "../security/redaction.js";
+
+test("exportWorkspaceData throws 404 when the workspace does not exist", () => {
+  const data = makeStore();
+  try {
+    exportWorkspaceData({ workspaceId: "missing" }, makeDeps(data));
+    assert.fail("expected error");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "workspace not found");
+    assert.equal((error as { status?: number }).status, 404);
+  }
+});
+
+test("exportWorkspaceData isolates entries belonging to the requested workspace", () => {
+  const data = makeStore();
+  const result = exportWorkspaceData({ workspaceId: "alpha" }, makeDeps(data));
+
+  assert.equal(result.command, "export-workspace");
+  assert.equal(result.workspaceId, "alpha");
+  assert.ok(!Number.isNaN(Date.parse(result.exportedAt)));
+  assert.equal(result.data.requirements.length, 1);
+  assert.equal(result.data.requirements[0].id, "req_alpha");
+  assert.equal(result.data.implementationPlanItems.length, 1);
+  assert.equal(result.data.workflowConcerns.length, 1);
+  assert.equal(result.data.activities.length, 1);
+  assert.equal(result.data.invitations.length, 1);
+  assert.equal(result.data.shareTokens.length, 1);
+  assert.equal(result.data.workspaceEnvVars.length, 1);
+  assert.equal(result.data.agents.length, 2);
+  assert.equal(result.data.providers.length, 1);
+  assert.equal(result.data.jobs.length, 1);
+  assert.equal(result.data.memberships.length, 1);
+  assert.equal(result.data.users.length, 1);
+  assert.equal(result.data.users[0].id, "user_alpha");
+});
+
+test("exportWorkspaceData masks invitation and share tokens", () => {
+  const data = makeStore();
+  const result = exportWorkspaceData({ workspaceId: "alpha" }, makeDeps(data));
+
+  const invitation = result.data.invitations[0];
+  assert.equal((invitation as { token?: unknown }).token, undefined);
+  assert.equal(invitation.tokenPreview, maskSecret("super-secret-invite-token-1234"));
+  assert.ok(invitation.tokenPreview.endsWith(":1234"));
+
+  const shareToken = result.data.shareTokens[0];
+  assert.equal((shareToken as { token?: unknown }).token, undefined);
+  assert.equal(shareToken.tokenPreview, maskSecret("share-secret-token-abcd"));
+  assert.ok(shareToken.tokenPreview.endsWith(":abcd"));
+
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes("super-secret-invite-token-1234"), false);
+  assert.equal(serialized.includes("share-secret-token-abcd"), false);
+});
+
+test("exportWorkspaceData masks agent webhook tokens", () => {
+  const data = makeStore();
+  const result = exportWorkspaceData({ workspaceId: "alpha" }, makeDeps(data));
+
+  const agentWithHook = result.data.agents.find((entry) => entry.id === "agent_alpha_hook");
+  const agentWithoutHook = result.data.agents.find((entry) => entry.id === "agent_alpha_plain");
+  assert.ok(agentWithHook);
+  assert.ok(agentWithoutHook);
+  assert.equal((agentWithHook as { webhookToken?: unknown }).webhookToken, undefined);
+  assert.equal(agentWithHook.hasWebhookToken, true);
+  assert.equal(agentWithHook.webhookTokenPreview, maskSecret("whk_secret_1234"));
+  assert.equal(agentWithoutHook.hasWebhookToken, false);
+  assert.equal(agentWithoutHook.webhookTokenPreview, "");
+
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes("whk_secret_1234"), false);
+});
+
+test("exportWorkspaceData masks workspace env var secret values", () => {
+  const data = makeStore();
+  const result = exportWorkspaceData({ workspaceId: "alpha" }, makeDeps(data));
+
+  const envVar = result.data.workspaceEnvVars[0];
+  assert.equal((envVar as { value?: unknown }).value, undefined);
+  assert.equal(envVar.hasValue, true);
+  assert.equal(envVar.valuePreview, maskSecret("super-secret-env-value-xyzw"));
+
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes("super-secret-env-value-xyzw"), false);
+});
+
+test("exportWorkspaceData masks provider credentials and reports presence", () => {
+  const data = makeStore();
+  const result = exportWorkspaceData({ workspaceId: "alpha" }, makeDeps(data));
+
+  const provider = result.data.providers[0];
+  assert.equal(provider.hasApiKey, true);
+  assert.equal((provider as { apiKeyConfigured: unknown }).apiKeyConfigured, "[redacted]");
+});
+
+test("exportWorkspaceData recursively redacts nested sensitive values inside job payloads", () => {
+  const data = makeStore();
+  const result = exportWorkspaceData({ workspaceId: "alpha" }, makeDeps(data));
+
+  const job = result.data.jobs[0];
+  const payload = job.payload as { authorization: string; safe: string };
+  assert.notEqual(payload.authorization, "Bearer abc-secret-token-7777");
+  assert.equal(payload.safe, "ok");
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes("abc-secret-token-7777"), false);
+});
+
+function makeDeps(data: TaskloomData): ExportWorkspaceDeps {
+  return { loadStore: () => data };
+}
+
+function makeStore(): TaskloomData {
+  return {
+    users: [
+      {
+        id: "user_alpha",
+        email: "alpha@example.com",
+        displayName: "Alpha User",
+        timezone: "UTC",
+        passwordHash: "hash",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "user_beta",
+        email: "beta@example.com",
+        displayName: "Beta User",
+        timezone: "UTC",
+        passwordHash: "hash",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    sessions: [],
+    rateLimits: [],
+    workspaces: [
+      {
+        id: "alpha",
+        slug: "alpha",
+        name: "Alpha",
+        website: "",
+        automationGoal: "",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "beta",
+        slug: "beta",
+        name: "Beta",
+        website: "",
+        automationGoal: "",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    memberships: [
+      { workspaceId: "alpha", userId: "user_alpha", role: "owner", joinedAt: "2026-04-20T10:00:00.000Z" },
+      { workspaceId: "beta", userId: "user_beta", role: "owner", joinedAt: "2026-04-20T10:00:00.000Z" },
+    ],
+    workspaceInvitations: [
+      {
+        id: "inv_alpha",
+        workspaceId: "alpha",
+        email: "guest@example.com",
+        role: "member",
+        token: "super-secret-invite-token-1234",
+        invitedByUserId: "user_alpha",
+        expiresAt: "2026-05-01T10:00:00.000Z",
+        createdAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "inv_beta",
+        workspaceId: "beta",
+        email: "guest2@example.com",
+        role: "member",
+        token: "beta-only-token-9999",
+        invitedByUserId: "user_beta",
+        expiresAt: "2026-05-01T10:00:00.000Z",
+        createdAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    invitationEmailDeliveries: [
+      {
+        id: "del_alpha",
+        workspaceId: "alpha",
+        invitationId: "inv_alpha",
+        recipientEmail: "guest@example.com",
+        subject: "Invitation",
+        status: "sent",
+        provider: "dev",
+        mode: "dev",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        sentAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    workspaceBriefs: [],
+    workspaceBriefVersions: [],
+    requirements: [
+      {
+        id: "req_alpha",
+        workspaceId: "alpha",
+        title: "Requirement",
+        priority: "must",
+        status: "accepted",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "req_beta",
+        workspaceId: "beta",
+        title: "Beta requirement",
+        priority: "must",
+        status: "accepted",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    implementationPlanItems: [
+      {
+        id: "plan_alpha",
+        workspaceId: "alpha",
+        requirementIds: ["req_alpha"],
+        title: "Build",
+        description: "Build it",
+        status: "done",
+        order: 0,
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    workflowConcerns: [
+      {
+        id: "concern_alpha",
+        workspaceId: "alpha",
+        kind: "blocker",
+        title: "Blocker",
+        description: "blocked",
+        status: "open",
+        severity: "high",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    validationEvidence: [],
+    releaseConfirmations: [],
+    onboardingStates: [],
+    activities: [
+      {
+        id: "act_alpha",
+        workspaceId: "alpha",
+        scope: "workspace",
+        event: "workspace.updated",
+        actor: { type: "user", id: "user_alpha" },
+        data: {},
+        occurredAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "act_beta",
+        workspaceId: "beta",
+        scope: "workspace",
+        event: "workspace.updated",
+        actor: { type: "user", id: "user_beta" },
+        data: {},
+        occurredAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    activationSignals: [],
+    activationFacts: {},
+    agents: [
+      {
+        id: "agent_alpha_hook",
+        workspaceId: "alpha",
+        name: "Hook Agent",
+        description: "",
+        instructions: "",
+        tools: [],
+        webhookToken: "whk_secret_1234",
+        status: "active",
+        createdByUserId: "user_alpha",
+        inputSchema: [],
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "agent_alpha_plain",
+        workspaceId: "alpha",
+        name: "Plain Agent",
+        description: "",
+        instructions: "",
+        tools: [],
+        status: "active",
+        createdByUserId: "user_alpha",
+        inputSchema: [],
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "agent_beta",
+        workspaceId: "beta",
+        name: "Beta Agent",
+        description: "",
+        instructions: "",
+        tools: [],
+        webhookToken: "whk_beta_5678",
+        status: "active",
+        createdByUserId: "user_beta",
+        inputSchema: [],
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    providers: [
+      {
+        id: "prov_alpha",
+        workspaceId: "alpha",
+        name: "OpenAI",
+        kind: "openai",
+        defaultModel: "gpt-4",
+        apiKeyConfigured: true,
+        status: "connected",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    agentRuns: [],
+    workspaceEnvVars: [
+      {
+        id: "env_alpha",
+        workspaceId: "alpha",
+        key: "API_TOKEN",
+        value: "super-secret-env-value-xyzw",
+        scope: "all",
+        secret: true,
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "env_beta",
+        workspaceId: "beta",
+        key: "BETA",
+        value: "beta-secret-only",
+        scope: "all",
+        secret: true,
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    apiKeys: [],
+    providerCalls: [],
+    jobs: [
+      {
+        id: "job_alpha",
+        workspaceId: "alpha",
+        type: "send-email",
+        payload: { authorization: "Bearer abc-secret-token-7777", safe: "ok" },
+        status: "queued",
+        attempts: 0,
+        maxAttempts: 3,
+        scheduledAt: "2026-04-20T10:00:00.000Z",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    jobMetricSnapshots: [],
+    alertEvents: [],
+    shareTokens: [
+      {
+        id: "share_alpha",
+        workspaceId: "alpha",
+        token: "share-secret-token-abcd",
+        scope: "brief",
+        createdByUserId: "user_alpha",
+        readCount: 0,
+        createdAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "share_beta",
+        workspaceId: "beta",
+        token: "share-beta-token-efgh",
+        scope: "brief",
+        createdByUserId: "user_beta",
+        readCount: 0,
+        createdAt: "2026-04-20T10:00:00.000Z",
+      },
+    ],
+    activationMilestones: {},
+    activationReadModels: {},
+  };
+}

@@ -2,6 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Hono } from "hono";
 import { llmStreamRoutes } from "./llm-stream-routes.js";
+import { SESSION_COOKIE_NAME } from "./auth-utils.js";
+import { login } from "./taskloom-services.js";
+import { mutateStore, resetStoreForTests } from "./taskloom-store.js";
+
+function authHeaders(cookieValue: string) {
+  return { Cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
+}
 
 test("/stream requires auth (401 without session)", async () => {
   const app = new Hono();
@@ -19,6 +26,27 @@ test("/cancel/:id requires auth (401)", async () => {
   app.route("/api/app/llm", llmStreamRoutes);
   const res = await app.request("/api/app/llm/cancel/anything", { method: "POST" });
   assert.equal(res.status, 401);
+});
+
+test("/cancel/:id requires at least member role", async () => {
+  resetStoreForTests();
+  const app = new Hono();
+  app.route("/api/app/llm", llmStreamRoutes);
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "viewer";
+  });
+
+  const res = await app.request("/api/app/llm/cancel/anything", {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 403);
+  assert.deepEqual(body, { error: "workspace role member is required" });
 });
 
 test("/stream rejects malformed body (no routeKey)", async () => {

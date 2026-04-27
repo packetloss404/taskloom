@@ -42,16 +42,27 @@ import type {
   PlanModePlanItem,
   AvailableTool,
   RunDiagnostic,
+  CreateShareTokenInput,
+  CreateWorkspaceInvitationInput,
+  PublicSharePayload,
+  ShareTokenRecord,
+  WorkspaceMemberRecord,
+  WorkspaceMembersPayload,
+  WorkspaceRole,
 } from "@/lib/types";
 import { pushExternalToast } from "@/context/ToastContext";
 
 let lastAuthToastAt = 0;
+const CSRF_COOKIE_NAME = "taskloom_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
+  const csrfToken = csrfTokenForRequest(init);
   const response = await fetch(url, {
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      ...(csrfToken ? { [CSRF_HEADER_NAME]: csrfToken } : {}),
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -82,6 +93,17 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+function csrfTokenForRequest(init?: RequestInit) {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return "";
+  if (typeof document === "undefined") return "";
+  return document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${CSRF_COOKIE_NAME}=`))
+    ?.slice(CSRF_COOKIE_NAME.length + 1) ?? "";
+}
+
 export const api = {
   getSession: async (): Promise<Session | null> => {
     const payload = await j<Session | { authenticated: false; user: null; workspace: null; onboarding: null }>("/api/auth/session");
@@ -97,6 +119,16 @@ export const api = {
   completeOnboardingStep: (stepKey: string) => j<{ onboarding: BootstrapPayload["onboarding"] }>(`/api/app/onboarding/steps/${stepKey}/complete`, { method: "POST" }),
   updateProfile: (body: { displayName: string; timezone: string }) => j<{ profile: Session["user"] }>("/api/app/profile", { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.profile),
   updateWorkspace: (body: { name: string; website: string; automationGoal: string }) => j<{ workspace: Session["workspace"] }>("/api/app/workspace", { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.workspace),
+  listWorkspaceMembers: () => j<WorkspaceMembersPayload>("/api/app/members"),
+  createWorkspaceInvitation: (body: CreateWorkspaceInvitationInput) =>
+    j<{ invitation: WorkspaceMembersPayload["invitations"][number] }>("/api/app/invitations", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.invitation),
+  resendWorkspaceInvitation: (invitationId: string) =>
+    j<{ invitation: WorkspaceMembersPayload["invitations"][number] }>(`/api/app/invitations/${invitationId}/resend`, { method: "POST" }).then((payload) => payload.invitation),
+  revokeWorkspaceInvitation: (invitationId: string) =>
+    j<{ invitation: WorkspaceMembersPayload["invitations"][number] }>(`/api/app/invitations/${invitationId}/revoke`, { method: "POST" }).then((payload) => payload.invitation),
+  updateWorkspaceMemberRole: (userId: string, role: WorkspaceRole) =>
+    j<{ member: WorkspaceMemberRecord }>(`/api/app/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }).then((payload) => payload.member),
+  removeWorkspaceMember: (userId: string) => j<{ ok: boolean }>(`/api/app/members/${userId}`, { method: "DELETE" }),
   listActivity: () => j<{ activities: ActivityRecord[] }>("/api/app/activity").then((payload) => payload.activities),
   getActivityDetail: (id: string) => j<ActivityDetailPayload>(`/api/app/activity/${id}`),
   listAgents: () => j<{ agents: AgentRecord[] }>("/api/app/agents").then((payload) => payload.agents),
@@ -173,7 +205,7 @@ export const api = {
   listJobs: (limit = 50) => j<{ jobs: JobRecord[] }>(`/api/app/jobs?limit=${limit}`).then((payload) => payload.jobs),
   enqueueJob: (body: { type: string; payload: Record<string, unknown>; cron?: string; scheduledAt?: string; maxAttempts?: number }) =>
     j<{ job: JobRecord }>("/api/app/jobs", { method: "POST", body: JSON.stringify(body) }).then((p) => p.job),
-  cancelJob: (id: string) => j<{ ok: boolean }>(`/api/app/jobs/${id}/cancel`, { method: "POST" }),
+  cancelJob: (id: string) => j<{ ok: boolean; job: JobRecord }>(`/api/app/jobs/${id}/cancel`, { method: "POST" }).then((p) => p.job),
   requestPlanMode: () => j<PlanModeResult>("/api/app/workflow/plan-mode", { method: "POST", body: "{}" }),
   applyPlanMode: (planItems: PlanModePlanItem[]) =>
     j<{ planItems: WorkflowPlanItem[] }>("/api/app/workflow/plan-mode/apply", { method: "POST", body: JSON.stringify({ planItems }) }).then((p) => p.planItems),
@@ -186,4 +218,9 @@ export const api = {
     j<{ webhookToken: string }>(`/api/app/webhooks/agents/${agentId}/rotate`, { method: "POST" }).then((p) => p.webhookToken),
   removeAgentWebhook: (agentId: string) =>
     j<{ ok: boolean }>(`/api/app/webhooks/agents/${agentId}`, { method: "DELETE" }),
+  listShareTokens: () => j<{ tokens: ShareTokenRecord[] }>("/api/app/share").then((p) => p.tokens),
+  createShareToken: (body: CreateShareTokenInput) =>
+    j<{ token: ShareTokenRecord }>("/api/app/share", { method: "POST", body: JSON.stringify(body) }).then((p) => p.token),
+  deleteShareToken: (id: string) => j<{ ok: boolean }>(`/api/app/share/${id}`, { method: "DELETE" }),
+  getPublicShare: (token: string) => j<{ shared: PublicSharePayload }>(`/api/public/share/${encodeURIComponent(token)}`).then((p) => p.shared),
 };

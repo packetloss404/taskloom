@@ -1,0 +1,114 @@
+# =============================================================================
+# Taskloom proxy access-log redaction example: nginx
+# -----------------------------------------------------------------------------
+# This file is an EXAMPLE. You must tailor it to your nginx deployment (paths,
+# upstream block, TLS, server_name, etc.) before using it in production.
+#
+# Goal: prevent raw secrets from ever landing in the on-disk access log.
+# Taskloom redacts secrets inside its own application logs (see
+# src/security/redaction.ts), but a reverse proxy logs the request line BEFORE
+# it reaches Taskloom, so 404s, TLS errors, and health probes will leak
+# tokens unless the proxy itself rewrites the logged URI.
+#
+# Strategy:
+#   1. Build a $redacted_uri variable from $request_uri using `map` directives
+#      to strip sensitive query params and rewrite token-bearing path segments.
+#   2. Define a custom `log_format` (taskloom_redacted) that uses
+#      $redacted_uri instead of $request_uri.
+#   3. Never log Authorization, Cookie, or X-Api-Key header values.
+#
+# Limitations of stock OSS nginx:
+#   - Plain `map` cannot do regex *substitution* on captured groups; it can
+#     only set a value when the input matches a regex. For richer per-path
+#     token masking, use the OPTIONAL `set_by_lua_block` variant near the
+#     bottom of this file (requires the openresty/lua-nginx-module).
+#   - `proxy_set_header` rewrites headers sent UPSTREAM, not headers that
+#     nginx itself logs. Header logging is controlled by what you reference
+#     in `log_format`, so simply do not reference $http_authorization,
+#     $http_cookie, or $http_x_api_key in the format string.
+# =============================================================================
+
+# --- Strip sensitive query parameters --------------------------------------
+# If the query string contains any sensitive key=value pair, replace the
+# entire query string with [redacted]. This is intentionally conservative.
+# Operators who want to keep non-sensitive query params should use the
+# Lua variant below.
+map $query_string $redacted_query {
+  default                                                    $query_string;
+  "~*(?:^|&)(?:token|access_token|api[_-]?key|apikey|key|secret)=" "[redacted]";
+}
+
+# --- Mask token-bearing path segments --------------------------------------
+# Maps the request URI's path component to a redacted form when it matches
+# one of the known token-bearing routes.
+map $uri $redacted_path {
+  default                                                       $uri;
+  "~*^(/share/)[^/]+(.*)$"                                      "${1}[redacted]$2";
+  "~*^(/api/public/share/)[^/]+(.*)$"                           "${1}[redacted]$2";
+  "~*^(/api/public/webhooks/agents/)[^/]+(.*)$"                 "${1}[redacted]$2";
+  "~*^(/api/app/invitations/)[^/]+(/accept.*)$"                 "${1}[redacted]$2";
+}
+
+# --- Compose the final redacted URI ----------------------------------------
+map $redacted_query $redacted_uri_suffix {
+  ""        "";
+  default   "?$redacted_query";
+}
+
+# --- Custom log format -----------------------------------------------------
+# NOTE: $http_authorization, $http_cookie, and $http_x_api_key are
+# DELIBERATELY OMITTED. Do not add them to this format.
+log_format taskloom_redacted escape=json
+  '{'
+    '"time":"$time_iso8601",'
+    '"method":"$request_method",'
+    '"status":$status,'
+    '"request_time":$request_time,'
+    '"bytes_sent":$bytes_sent,'
+    '"request_id":"$http_x_request_id",'
+    '"uri":"$redacted_path$redacted_uri_suffix"'
+  '}';
+
+# --- Server / location wiring ---------------------------------------------
+server {
+  listen 443 ssl http2;
+  server_name taskloom.example.com;
+
+  # Per-request fallback in case the maps above did not fire.
+  set $redacted_path_final $redacted_path;
+  set $redacted_query_final $redacted_query;
+
+  access_log /var/log/nginx/taskloom-access.log taskloom_redacted;
+
+  # Authorization should NEVER be logged. We do not reference
+  # $http_authorization in log_format above. As an extra defense, do not
+  # forward it back into request-id headers downstream.
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Request-ID    $http_x_request_id;
+
+  location / {
+    proxy_pass http://127.0.0.1:8787;
+  }
+}
+
+# =============================================================================
+# OPTIONAL: openresty / lua-nginx-module variant
+# -----------------------------------------------------------------------------
+# Stock OSS nginx cannot do per-capture-group substitution inside `map`. If
+# you run openresty (or have lua-nginx-module installed), you can replace the
+# `map` blocks above with the following block for richer token masking that
+# preserves non-sensitive query params:
+#
+# set_by_lua_block $redacted_uri {
+#   local uri = ngx.var.request_uri or ""
+#   uri = ngx.re.gsub(uri, [[(/share/)[^/?#]+]],                                  "$1[redacted]", "jo")
+#   uri = ngx.re.gsub(uri, [[(/api/public/share/)[^/?#]+]],                       "$1[redacted]", "jo")
+#   uri = ngx.re.gsub(uri, [[(/api/public/webhooks/agents/)[^/?#]+]],             "$1[redacted]", "jo")
+#   uri = ngx.re.gsub(uri, [[(/api/app/invitations/)[^/?#]+(/accept)]],           "$1[redacted]$2", "jo")
+#   uri = ngx.re.gsub(uri, [[([?&](?:token|access_token|api[_-]?key|apikey|key|secret)=)[^&]+]], "$1[redacted]", "ijo")
+#   return uri
+# }
+#
+# Then reference $redacted_uri directly in log_format instead of
+# $redacted_path$redacted_uri_suffix.
+# =============================================================================

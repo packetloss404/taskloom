@@ -1,0 +1,104 @@
+# =============================================================================
+# Taskloom proxy access-log redaction example: Caddy v2
+# -----------------------------------------------------------------------------
+# This file is an EXAMPLE. Tailor the site address, upstream, and TLS settings
+# before deploying. Tested against Caddy v2.7+.
+#
+# Goal: prevent raw Taskloom tokens from being written to disk by Caddy's
+# access log. Taskloom redacts its own application logs (see
+# src/security/redaction.ts), but Caddy logs the inbound URI before the
+# request ever reaches Taskloom.
+#
+# Caddy v2 stock capabilities:
+#   - The `log` directive supports a JSON encoder and an `omit_headers` field
+#     under `format`. We use `omit_headers` to drop Authorization, Cookie,
+#     and X-Api-Key from logged request headers.
+#   - Caddy does NOT (in stock OSS v2) provide a built-in log filter that
+#     rewrites the logged request URI separately from the served request.
+#     The closest stock mechanism is `log` -> `format json` -> `request>uri`
+#     replacement via the `replace` log filter (caddyserver/transform-encoder
+#     and caddy-l4 plugins offer richer options, but those are non-stock).
+#
+# Workarounds when running stock Caddy:
+#   1. Use `request_header_filter`/`query_filter` log filters (stock in v2)
+#      to redact specific query params at log-write time.
+#   2. For path-segment token masking, ship logs through a downstream
+#      processor (e.g. fluent-bit, vector) that runs the Taskloom validator
+#      (src/security/proxy-access-log-validator.ts) and applies regex
+#      substitution before persisting to long-term storage.
+#
+# We document both below.
+# =============================================================================
+
+{
+  # Global options
+  admin off
+  auto_https disable_redirects
+}
+
+taskloom.example.com {
+  reverse_proxy 127.0.0.1:8787
+
+  log {
+    output file /var/log/caddy/taskloom-access.log {
+      roll_size 100mb
+      roll_keep 14
+    }
+
+    format json {
+      time_format iso8601
+
+      # Drop sensitive headers from the logged record entirely. Caddy will
+      # not write these keys to the access log. Authorization MUST be in
+      # this list. Cookie and X-Api-Key are added defensively.
+      omit_headers ["Authorization", "Cookie", "X-Api-Key", "Set-Cookie"]
+    }
+
+    # ---- Stock Caddy log filters ------------------------------------------
+    # Redact sensitive query parameters in the logged URI. Each
+    # `query` filter replaces one parameter's value with [redacted]
+    # if present. Caddy applies these only to the log record; the
+    # served request is unmodified.
+    format filter {
+      wrap json {
+        time_format iso8601
+        omit_headers ["Authorization", "Cookie", "X-Api-Key", "Set-Cookie"]
+      }
+      fields {
+        request>uri query {
+          replace token        "[redacted]"
+          replace access_token "[redacted]"
+          replace api_key      "[redacted]"
+          replace apikey       "[redacted]"
+          replace key          "[redacted]"
+          replace secret       "[redacted]"
+        }
+      }
+    }
+  }
+}
+
+# =============================================================================
+# LIMITATION: path-segment token masking
+# -----------------------------------------------------------------------------
+# Stock Caddy v2 cannot rewrite the logged URI's PATH component (only the
+# query string is filterable via the `query` log filter above). Tokens
+# embedded in the path - e.g. /share/<token>, /api/public/share/<token>,
+# /api/public/webhooks/agents/<token>, /api/app/invitations/<token>/accept -
+# WILL appear in the JSON access log unless you:
+#
+#   (a) install the caddy-transform-encoder plugin (third-party, non-stock)
+#       and add a `transform` block that runs regex substitutions on
+#       request>uri, OR
+#   (b) pipe the access log through a downstream processor (fluent-bit,
+#       vector, logstash) that runs the Taskloom validator on each line
+#       and substitutes path tokens with [redacted] before the line is
+#       written to its final destination, OR
+#   (c) gate token-bearing routes behind an additional layer (e.g. a
+#       lightweight nginx in front of Caddy that performs the rewrite -
+#       see nginx.conf.example in this directory).
+#
+# Operators should run `node --import tsx src/security/proxy-access-log-validator.ts
+# /var/log/caddy/taskloom-access.log` periodically (or in CI / a cron job)
+# to verify the configured filters are catching everything sensitive.
+# =============================================================================

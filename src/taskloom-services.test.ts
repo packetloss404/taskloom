@@ -8,8 +8,11 @@ import {
   deleteWorkspaceEnvVarById,
   getAgent,
   getPrivateBootstrap,
+  getWorkspaceActivityDetail,
   listAgentRuns,
+  listAgents,
   listReleaseHistory,
+  listWorkspaceActivities,
   listWorkspaceEnvVarsForUser,
   login,
   register,
@@ -19,7 +22,7 @@ import {
   updateWorkspace,
   updateWorkspaceEnvVar,
 } from "./taskloom-services";
-import { loadStore, resetStoreForTests } from "./taskloom-store";
+import { loadStore, resetStoreForTests, snapshotForWorkspace } from "./taskloom-store";
 
 test("register creates a new user and workspace", async () => {
   resetStoreForTests();
@@ -92,7 +95,218 @@ test("agent playbook is persisted and runs produce a step transcript", async () 
   assert.equal(updated.agent.playbook?.[0].instruction, "Updated instruction.");
 });
 
-test("env vars: create masks secrets, prevents duplicate keys, supports update and delete", async () => {
+test("agent tool runtime settings persist on create and update", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Tool Runner",
+    description: "Uses registered tools.",
+    instructions: "Use the selected tools to complete the requested workflow.",
+    enabledTools: ["read_workflow_brief", "browser_screenshot"],
+    routeKey: "agent.reasoning",
+  });
+
+  assert.deepEqual(created.agent.enabledTools, ["read_workflow_brief", "browser_screenshot"]);
+  assert.equal(created.agent.routeKey, "agent.reasoning");
+
+  const updated = updateAgent(auth.context, created.agent.id, {
+    enabledTools: ["list_agents"],
+    routeKey: "agent.fast",
+  });
+
+  assert.deepEqual(updated.agent.enabledTools, ["list_agents"]);
+  assert.equal(updated.agent.routeKey, "agent.fast");
+});
+
+test("agent lists do not expose webhook tokens", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Webhook Agent",
+    description: "Receives webhook calls.",
+    instructions: "Process incoming webhook payloads for the workspace.",
+  });
+
+  const store = loadStore();
+  const agent = store.agents.find((entry) => entry.id === created.agent.id);
+  assert.ok(agent);
+  agent.webhookToken = "whk_test_secret";
+
+  const detail = getAgent(auth.context, created.agent.id);
+  assert.equal(detail.agent.webhookToken, undefined);
+  assert.equal(detail.agent.hasWebhookToken, true);
+  assert.equal(detail.agent.webhookTokenPreview, "[redacted]:cret");
+  const listed = listAgents(auth.context).agents.find((entry) => entry.id === created.agent.id);
+  assert.equal(listed?.webhookToken, undefined);
+  assert.equal(listed?.hasWebhookToken, true);
+});
+
+test("activity detail includes lightweight related domain context", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+  const timestamp = new Date().toISOString();
+
+  store.workflowConcerns.push({
+    id: "blocker_alpha_test",
+    workspaceId: "alpha",
+    kind: "blocker",
+    title: "Validation handoff is blocked",
+    description: "The handoff needs an owner before release.",
+    status: "open",
+    severity: "high",
+    relatedRequirementId: "req_alpha_validation",
+    relatedPlanItemId: "plan_alpha_validation",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  store.activities.unshift({
+    id: "activity_alpha_related",
+    workspaceId: "alpha",
+    scope: "activation",
+    event: "test.related_context",
+    actor: { type: "system", id: "test" },
+    data: {
+      title: "Related context activity",
+      agentId: "agent_alpha_support",
+      runId: "run_alpha_support_latest",
+      blockerId: "blocker_alpha_test",
+      questionId: "question_alpha_reporting",
+      planItemId: "plan_alpha_validation",
+      requirementId: "req_alpha_validation",
+      evidenceId: "evidence_alpha_tests",
+      releaseId: "release_alpha_pending",
+    },
+    occurredAt: timestamp,
+  });
+
+  const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_related");
+
+  assert.equal(detail.activity.id, "activity_alpha_related");
+  assert.equal(detail.related.agent?.name, "Support inbox triage");
+  assert.equal(detail.related.run?.title, "Support inbox scanned");
+  assert.equal(detail.related.blocker?.title, "Validation handoff is blocked");
+  assert.equal(detail.related.question?.title, "Is reporting required for the first release?");
+  assert.equal(detail.related.planItem?.title, "Collect validation proof");
+  assert.equal(detail.related.requirement?.title, "Capture validation evidence before release");
+  assert.equal(detail.related.evidence?.title, "Activation validation checks passed");
+  assert.equal(detail.related.release?.versionLabel, "alpha-validation");
+  assert.doesNotThrow(() => JSON.stringify(detail));
+});
+
+test("activity and run DTOs redact sensitive values", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+  store.activities.unshift({
+    id: "activity_alpha_sensitive",
+    workspaceId: "alpha",
+    scope: "workspace",
+    event: "test.sensitive",
+    actor: { type: "system", id: "test" },
+    data: {
+      title: "Webhook failed at /api/public/webhooks/agents/whk_activity_secret",
+      token: "invitation-token-1234",
+    },
+    occurredAt: new Date().toISOString(),
+  });
+
+  const activity = listWorkspaceActivities(auth.context).find((entry) => entry.id === "activity_alpha_sensitive");
+  assert.ok(activity);
+  assert.equal(JSON.stringify(activity).includes("whk_activity_secret"), false);
+  assert.equal(JSON.stringify(activity).includes("invitation-token-1234"), false);
+
+  const created = createAgent(auth.context, {
+    name: "Sensitive Input Runner",
+    description: "Exercises run DTO redaction.",
+    instructions: "Record supplied inputs for test verification.",
+    inputSchema: [{ key: "api_key", label: "API key", type: "string", required: true }],
+  });
+  const runResult = await runAgent(auth.context, created.agent.id, { inputs: { api_key: "sk_live_secret_1234" } });
+  const detailWithRun = getAgent(auth.context, created.agent.id);
+
+  assert.equal(JSON.stringify(runResult.run).includes("sk_live_secret_1234"), false);
+  assert.equal(JSON.stringify(detailWithRun.runs[0]).includes("sk_live_secret_1234"), false);
+  assert.notEqual(runResult.run.inputs?.api_key, "sk_live_secret_1234");
+});
+
+test("activity detail related context is workspace isolated", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+
+  store.activities.unshift({
+    id: "activity_alpha_cross_workspace_refs",
+    workspaceId: "alpha",
+    scope: "activation",
+    event: "test.cross_workspace_refs",
+    actor: { type: "system", id: "test" },
+    data: {
+      title: "Cross workspace references",
+      agentId: "agent_beta_dependency_watch",
+      runId: "run_beta_dependency_latest",
+      blockerId: "blocker_beta_dependency",
+      questionId: "question_beta_scope",
+      planItemId: "plan_beta_restart",
+      requirementId: "req_beta_dependencies",
+      evidenceId: "evidence_beta_failed_retry",
+      releaseId: "release_beta_blocked",
+    },
+    occurredAt: new Date().toISOString(),
+  });
+
+  const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_cross_workspace_refs");
+
+  assert.deepEqual(detail.related, {});
+});
+
+test("activity list and detail preserve workspace isolation and neighbor ordering", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+
+  store.activities.unshift(
+    {
+      id: "activity_alpha_newest_test",
+      workspaceId: "alpha",
+      scope: "activation",
+      event: "test.activity_newest",
+      actor: { type: "system", id: "test" },
+      data: { title: "Newest alpha activity" },
+      occurredAt: "2099-01-03T00:00:00.000Z",
+    },
+    {
+      id: "activity_beta_hidden_test",
+      workspaceId: "beta",
+      scope: "activation",
+      event: "test.activity_hidden",
+      actor: { type: "system", id: "test" },
+      data: { title: "Hidden beta activity" },
+      occurredAt: "2099-01-02T00:00:00.000Z",
+    },
+    {
+      id: "activity_alpha_next_test",
+      workspaceId: "alpha",
+      scope: "activation",
+      event: "test.activity_next",
+      actor: { type: "system", id: "test" },
+      data: { title: "Next alpha activity" },
+      occurredAt: "2099-01-01T00:00:00.000Z",
+    },
+  );
+
+  const activities = listWorkspaceActivities(auth.context);
+  assert.deepEqual(activities.map((entry) => entry.id).slice(0, 2), ["activity_alpha_newest_test", "activity_alpha_next_test"]);
+  assert.ok(!activities.some((entry) => entry.workspaceId === "beta"));
+
+  const detail = getWorkspaceActivityDetail(auth.context, "activity_alpha_newest_test");
+  assert.equal(detail.previous, null);
+  assert.equal(detail.next?.id, "activity_alpha_next_test");
+});
+
+test("env vars: create masks secrets and sensitive keys, prevents duplicate keys, supports update and delete", async () => {
   resetStoreForTests();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
 
@@ -121,7 +335,8 @@ test("env vars: create masks secrets, prevents duplicate keys, supports update a
 
   const updated = updateWorkspaceEnvVar(auth.context, created.envVar.id, { secret: false });
   assert.equal(updated.envVar.secret, false);
-  assert.equal(updated.envVar.value, "super-secret-value-1234");
+  assert.notEqual(updated.envVar.value, "super-secret-value-1234");
+  assert.match(updated.envVar.value, /1234$/);
 
   const list = listWorkspaceEnvVarsForUser(auth.context);
   assert.ok(list.envVars.some((entry) => entry.id === created.envVar.id));
@@ -150,6 +365,16 @@ test("agent runs: list adds duration and capability flags; cancel and retry beha
 
   const retried = await retryAgentRun(auth.context, failed.id);
   assert.ok(retried.run.id !== failed.id);
+  await retryAgentRun(auth.context, failed.id);
+
+  const store = loadStore();
+  const retrySignals = store.activationSignals.filter((entry) => entry.workspaceId === "beta" && entry.kind === "retry" && entry.sourceId === failed.id);
+  const retryActivities = store.activities.filter((entry) => entry.workspaceId === "beta" && entry.event === "agent.run.retry" && entry.data.previousRunId === failed.id);
+  assert.equal(retrySignals.length, 1);
+  assert.equal(retryActivities.length, 1);
+  assert.equal(snapshotForWorkspace(store, "beta").retryCount, store.activationSignals.filter((entry) => entry.workspaceId === "beta" && entry.kind === "retry").length);
+  assert.equal(retrySignals[0].origin, "user_entered");
+  assert.equal(retrySignals[0].data?.origin, "user_action");
 });
 
 test("release history exposes preflight and prior confirmations", async () => {

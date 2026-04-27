@@ -3,61 +3,81 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import {
-  applySessionCookie,
   archiveAgent,
   cancelAgentRun,
-  completeOnboardingStep,
   createAgent,
   createAgentFromTemplate,
   createProvider,
   createWorkspaceEnvVar,
   deleteWorkspaceEnvVarById,
-  getActivationDetail,
   getAgent,
-  getOnboarding,
-  getPrivateBootstrap,
   getPublicActivationSummary,
-  getWorkspaceActivityDetail,
-  getSessionPayload,
+  handleInvitationEmailJob,
+  INVITATION_EMAIL_JOB_TYPE,
   listPublicActivationSummaries,
   listAgentRuns,
   listAgentTemplates,
   listAgents,
   listProviders,
   listReleaseHistory,
-  listWorkspaceActivities,
   listWorkspaceEnvVarsForUser,
-  login,
-  logout,
-  register,
-  requireAuthenticatedContext,
-  restoreSession,
   retryAgentRun,
   recordRunAsPlaybook,
   runAgent,
   updateAgent,
   updateProvider,
-  updateProfile,
-  updateWorkspace,
   updateWorkspaceEnvVar,
 } from "./taskloom-services.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
+import { appRoutes } from "./app-routes.js";
 import { workflowRoutes } from "./workflow-routes.js";
 import { apiKeyRoutes } from "./api-key-routes.js";
 import { usageRoutes } from "./usage-routes.js";
 import { llmStreamRoutes } from "./llm-stream-routes.js";
 import { jobRoutes } from "./job-routes.js";
 import { JobScheduler } from "./jobs/scheduler.js";
+import { selectSchedulerLeaderLock } from "./jobs/scheduler-leader-selection.js";
+import {
+  ensureMetricsSnapshotCronJob,
+  handleMetricsSnapshotJob,
+  METRICS_SNAPSHOT_JOB_TYPE,
+  type MetricsSnapshotJobPayload,
+} from "./jobs/metrics-snapshot-handler.js";
 import { registerDefaultProviders } from "./providers/bootstrap.js";
 import { registerDefaultTools } from "./tools/bootstrap.js";
+import { getDefaultToolRegistry } from "./tools/registry.js";
 import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 import { agentWebhookRoutes, publicWebhookRoutes } from "./webhook-routes.js";
+import { invitationEmailWebhookRoutes } from "./invitation-email-webhook-routes.js";
+import { enforcePrivateAppMutationSecurity } from "./route-security.js";
+import { redactedErrorMessage } from "./security/redaction.js";
+import { accessLogMiddleware } from "./security/access-log.js";
+import { healthRoutes } from "./health-routes.js";
+import { operationsStatusRoutes } from "./operations-status-routes.js";
+import { operationsHealthRoutes } from "./operations-health-routes.js";
+import { operationsJobMetricsRoutes } from "./operations-job-metrics-routes.js";
+import { operationsAlertsRoutes } from "./operations-alerts-routes.js";
+import {
+  ALERTS_EVALUATE_JOB_TYPE,
+  ensureAlertsCronJob,
+  handleAlertsEvaluateJob,
+  type AlertsEvaluateJobPayload,
+} from "./alerts/alerts-evaluate-handler.js";
+import {
+  ALERTS_DELIVER_JOB_TYPE,
+  handleAlertsDeliverJob,
+  type AlertsDeliverJobPayload,
+} from "./alerts/alerts-deliver-handler.js";
 
 registerDefaultProviders();
 registerDefaultTools();
 
 const app = new Hono();
 
+app.use("*", accessLogMiddleware());
+
 app.get("/api/health", (c) => c.json({ ok: true }));
+app.route("/api/health", healthRoutes);
 
 app.get("/api/activation", async (c) => {
   const summaries = await listPublicActivationSummaries();
@@ -72,135 +92,13 @@ app.get("/api/activation/:workspaceId", async (c) => {
   return c.json(summary);
 });
 
-app.get("/api/auth/session", (c) => {
-  const context = restoreSession(c);
-  if (!context) {
-    return c.json({ authenticated: false, user: null, workspace: null, onboarding: null });
-  }
+app.use("/api/app/*", enforcePrivateAppMutationSecurity);
 
-  return c.json(getSessionPayload(context));
-});
-
-app.post("/api/auth/register", async (c) => {
-  try {
-    const body = (await c.req.json()) as { email?: string; password?: string; displayName?: string };
-    const result = register({
-      email: body.email ?? "",
-      password: body.password ?? "",
-      displayName: body.displayName ?? "",
-    });
-    applySessionCookie(c, result.cookieValue);
-    c.status(201);
-    return c.json(getSessionPayload(result.context));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post("/api/auth/login", async (c) => {
-  try {
-    const body = (await c.req.json()) as { email?: string; password?: string };
-    const result = login({
-      email: body.email ?? "",
-      password: body.password ?? "",
-    });
-    applySessionCookie(c, result.cookieValue);
-    return c.json(getSessionPayload(result.context));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post("/api/auth/logout", (c) => {
-  logout(c);
-  return c.json({ ok: true });
-});
-
-app.get("/api/app/bootstrap", async (c) => {
-  try {
-    return c.json(await getPrivateBootstrap(requireAuthenticatedContext(c)));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/activation", async (c) => {
-  try {
-    return c.json(await getActivationDetail(requireAuthenticatedContext(c)));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/onboarding", (c) => {
-  try {
-    return c.json({ onboarding: getOnboarding(requireAuthenticatedContext(c)) });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post("/api/app/onboarding/steps/:stepKey/complete", async (c) => {
-  try {
-    return c.json({ onboarding: await completeOnboardingStep(requireAuthenticatedContext(c), c.req.param("stepKey")) });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.patch("/api/app/profile", async (c) => {
-  try {
-    const body = (await c.req.json()) as { displayName?: string; timezone?: string };
-    const user = await updateProfile(requireAuthenticatedContext(c), {
-      displayName: body.displayName ?? "",
-      timezone: body.timezone ?? "",
-    });
-    return c.json({
-      profile: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        timezone: user.timezone,
-      },
-    });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.patch("/api/app/workspace", async (c) => {
-  try {
-    const body = (await c.req.json()) as { name?: string; website?: string; automationGoal?: string };
-    const workspace = await updateWorkspace(requireAuthenticatedContext(c), {
-      name: body.name ?? "",
-      website: body.website ?? "",
-      automationGoal: body.automationGoal ?? "",
-    });
-    return c.json({ workspace });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/activity", (c) => {
-  try {
-    return c.json({ activities: listWorkspaceActivities(requireAuthenticatedContext(c)) });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.get("/api/app/activity/:id", (c) => {
-  try {
-    return c.json(getWorkspaceActivityDetail(requireAuthenticatedContext(c), c.req.param("id")));
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
+app.route("/api", appRoutes);
 
 app.get("/api/app/agents", (c) => {
   try {
-    return c.json(listAgents(requireAuthenticatedContext(c)));
+    return c.json(listAgents(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -208,7 +106,7 @@ app.get("/api/app/agents", (c) => {
 
 app.post("/api/app/agents", async (c) => {
   try {
-    return c.json(createAgent(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+    return c.json(createAgent(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -216,7 +114,7 @@ app.post("/api/app/agents", async (c) => {
 
 app.get("/api/app/agents/:agentId", (c) => {
   try {
-    return c.json(getAgent(requireAuthenticatedContext(c), c.req.param("agentId")));
+    return c.json(getAgent(requirePrivateWorkspaceRole(c, "viewer"), c.req.param("agentId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -224,7 +122,7 @@ app.get("/api/app/agents/:agentId", (c) => {
 
 app.patch("/api/app/agents/:agentId", async (c) => {
   try {
-    return c.json(updateAgent(requireAuthenticatedContext(c), c.req.param("agentId"), await readJsonBody(c)));
+    return c.json(updateAgent(requirePrivateWorkspaceRole(c, "admin"), c.req.param("agentId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -232,7 +130,7 @@ app.patch("/api/app/agents/:agentId", async (c) => {
 
 app.delete("/api/app/agents/:agentId", (c) => {
   try {
-    return c.json(archiveAgent(requireAuthenticatedContext(c), c.req.param("agentId")));
+    return c.json(archiveAgent(requirePrivateWorkspaceRole(c, "admin"), c.req.param("agentId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -242,7 +140,7 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
     const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
     const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
-    return c.json(await runAgent(requireAuthenticatedContext(c), c.req.param("agentId"), {
+    return c.json(await runAgent(requirePrivateWorkspaceRole(c, "member"), c.req.param("agentId"), {
       triggerKind: body?.triggerKind,
       inputs,
     }), 201);
@@ -253,7 +151,7 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
 
 app.get("/api/app/agent-templates", (c) => {
   try {
-    requireAuthenticatedContext(c);
+    requirePrivateWorkspaceRole(c, "viewer");
     return c.json(listAgentTemplates());
   } catch (error) {
     return errorResponse(c, error);
@@ -263,7 +161,7 @@ app.get("/api/app/agent-templates", (c) => {
 app.post("/api/app/agents/from-template/:templateId", async (c) => {
   try {
     const body = await readJsonBody(c);
-    return c.json(createAgentFromTemplate(requireAuthenticatedContext(c), c.req.param("templateId"), {
+    return c.json(createAgentFromTemplate(requirePrivateWorkspaceRole(c, "admin"), c.req.param("templateId"), {
       name: typeof body.name === "string" ? body.name : undefined,
       providerId: typeof body.providerId === "string" ? body.providerId : undefined,
       model: typeof body.model === "string" ? body.model : undefined,
@@ -275,7 +173,7 @@ app.post("/api/app/agents/from-template/:templateId", async (c) => {
 
 app.get("/api/app/providers", (c) => {
   try {
-    return c.json(listProviders(requireAuthenticatedContext(c)));
+    return c.json(listProviders(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -283,7 +181,7 @@ app.get("/api/app/providers", (c) => {
 
 app.post("/api/app/providers", async (c) => {
   try {
-    return c.json(createProvider(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+    return c.json(createProvider(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -291,7 +189,7 @@ app.post("/api/app/providers", async (c) => {
 
 app.patch("/api/app/providers/:providerId", async (c) => {
   try {
-    return c.json(updateProvider(requireAuthenticatedContext(c), c.req.param("providerId"), await readJsonBody(c)));
+    return c.json(updateProvider(requirePrivateWorkspaceRole(c, "admin"), c.req.param("providerId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -299,7 +197,7 @@ app.patch("/api/app/providers/:providerId", async (c) => {
 
 app.get("/api/app/agent-runs", (c) => {
   try {
-    return c.json(listAgentRuns(requireAuthenticatedContext(c)));
+    return c.json(listAgentRuns(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -307,7 +205,7 @@ app.get("/api/app/agent-runs", (c) => {
 
 app.post("/api/app/agent-runs/:runId/cancel", (c) => {
   try {
-    return c.json(cancelAgentRun(requireAuthenticatedContext(c), c.req.param("runId")));
+    return c.json(cancelAgentRun(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -315,7 +213,7 @@ app.post("/api/app/agent-runs/:runId/cancel", (c) => {
 
 app.post("/api/app/agent-runs/:runId/retry", async (c) => {
   try {
-    return c.json(await retryAgentRun(requireAuthenticatedContext(c), c.req.param("runId")), 201);
+    return c.json(await retryAgentRun(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -323,7 +221,7 @@ app.post("/api/app/agent-runs/:runId/retry", async (c) => {
 
 app.post("/api/app/agent-runs/:runId/record-as-playbook", (c) => {
   try {
-    return c.json(recordRunAsPlaybook(requireAuthenticatedContext(c), c.req.param("runId")));
+    return c.json(recordRunAsPlaybook(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -331,7 +229,7 @@ app.post("/api/app/agent-runs/:runId/record-as-playbook", (c) => {
 
 app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "member");
     const { loadStore } = await import("./taskloom-store.js");
     const data = loadStore();
     const run = data.agentRuns.find((r) => r.id === c.req.param("runId") && r.workspaceId === ctx.workspace.id);
@@ -346,8 +244,7 @@ app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
 
 app.get("/api/app/tools", (c) => {
   try {
-    requireAuthenticatedContext(c);
-    const { getDefaultToolRegistry } = require("./tools/registry.js");
+    requirePrivateWorkspaceRole(c, "viewer");
     const registry = getDefaultToolRegistry();
     return c.json({
       tools: registry.list().map((t: { name: string; description: string; side: string }) => ({
@@ -363,7 +260,7 @@ app.get("/api/app/tools", (c) => {
 
 app.get("/api/app/env-vars", (c) => {
   try {
-    return c.json(listWorkspaceEnvVarsForUser(requireAuthenticatedContext(c)));
+    return c.json(listWorkspaceEnvVarsForUser(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -371,7 +268,7 @@ app.get("/api/app/env-vars", (c) => {
 
 app.post("/api/app/env-vars", async (c) => {
   try {
-    return c.json(createWorkspaceEnvVar(requireAuthenticatedContext(c), await readJsonBody(c)), 201);
+    return c.json(createWorkspaceEnvVar(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -379,7 +276,7 @@ app.post("/api/app/env-vars", async (c) => {
 
 app.patch("/api/app/env-vars/:envVarId", async (c) => {
   try {
-    return c.json(updateWorkspaceEnvVar(requireAuthenticatedContext(c), c.req.param("envVarId"), await readJsonBody(c)));
+    return c.json(updateWorkspaceEnvVar(requirePrivateWorkspaceRole(c, "admin"), c.req.param("envVarId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -387,7 +284,7 @@ app.patch("/api/app/env-vars/:envVarId", async (c) => {
 
 app.delete("/api/app/env-vars/:envVarId", (c) => {
   try {
-    return c.json(deleteWorkspaceEnvVarById(requireAuthenticatedContext(c), c.req.param("envVarId")));
+    return c.json(deleteWorkspaceEnvVarById(requirePrivateWorkspaceRole(c, "admin"), c.req.param("envVarId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -395,7 +292,7 @@ app.delete("/api/app/env-vars/:envVarId", (c) => {
 
 app.get("/api/app/release-history", (c) => {
   try {
-    return c.json(listReleaseHistory(requireAuthenticatedContext(c)));
+    return c.json(listReleaseHistory(requirePrivateWorkspaceRole(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -410,8 +307,13 @@ app.route("/api/app/share", shareRoutes);
 app.route("/api/public/share", publicShareRoutes);
 app.route("/api/app/webhooks", agentWebhookRoutes);
 app.route("/api/public/webhooks", publicWebhookRoutes);
+app.route("/api/public/webhooks/invitation-email", invitationEmailWebhookRoutes);
+app.route("/api/app/operations/status", operationsStatusRoutes);
+app.route("/api/app/operations/health", operationsHealthRoutes);
+app.route("/api/app/operations/job-metrics", operationsJobMetricsRoutes);
+app.route("/api/app/operations/alerts", operationsAlertsRoutes);
 
-const scheduler = new JobScheduler();
+const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({
   type: "agent.run",
   async handle(job) {
@@ -421,6 +323,7 @@ scheduler.register({
     const data = loadStore();
     const agent = data.agents.find((a) => a.id === payload.agentId);
     if (!agent) throw new Error(`agent ${payload.agentId} not found`);
+    if (agent.workspaceId !== job.workspaceId) throw new Error(`agent ${payload.agentId} is not in job workspace`);
     const owner = data.users.find((u) => u.id === agent.createdByUserId);
     if (!owner) throw new Error(`agent owner not found`);
     const context = {
@@ -437,7 +340,33 @@ scheduler.register({
     return { runId: result.run.id, status: result.run.status };
   },
 });
+scheduler.register({
+  type: INVITATION_EMAIL_JOB_TYPE,
+  async handle(job) {
+    return handleInvitationEmailJob(job);
+  },
+});
+scheduler.register({
+  type: METRICS_SNAPSHOT_JOB_TYPE,
+  async handle(job) {
+    return handleMetricsSnapshotJob(job.payload as MetricsSnapshotJobPayload);
+  },
+});
+scheduler.register({
+  type: ALERTS_EVALUATE_JOB_TYPE,
+  async handle(job) {
+    return handleAlertsEvaluateJob(job.payload as AlertsEvaluateJobPayload);
+  },
+});
+scheduler.register({
+  type: ALERTS_DELIVER_JOB_TYPE,
+  async handle(job) {
+    return handleAlertsDeliverJob(job.payload as unknown as AlertsDeliverJobPayload);
+  },
+});
 scheduler.start();
+ensureMetricsSnapshotCronJob();
+ensureAlertsCronJob();
 const shutdown = async () => {
   await scheduler.stop();
   try {
@@ -463,7 +392,7 @@ serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }
 
 async function readJsonBody(c: Context): Promise<Record<string, unknown>> {

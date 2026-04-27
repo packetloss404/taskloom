@@ -31,6 +31,7 @@ export async function executeTool({ tool, input, context }: ExecuteToolParams): 
       input,
       output: result.output,
       ...(result.error ? { error: result.error } : {}),
+      ...(result.artifacts ? { artifacts: result.artifacts } : {}),
       durationMs: Date.now() - t0,
       startedAt,
       completedAt: new Date().toISOString(),

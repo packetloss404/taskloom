@@ -1,0 +1,136 @@
+# =============================================================================
+# Taskloom access-log shipping example: Vector (vector.dev)
+# -----------------------------------------------------------------------------
+# This is an EXAMPLE Vector v0.x configuration that ships the redacted
+# Phase 20 file-mode access log to Loki, S3, and CloudWatch Logs. You MUST
+# adapt paths, endpoints, credentials, and labels to your environment before
+# using it in production.
+#
+# Source format docs:
+#   https://vector.dev/docs/reference/configuration/sources/file/
+#   https://vector.dev/docs/reference/vrl/
+#   https://vector.dev/docs/reference/configuration/sinks/loki/
+#   https://vector.dev/docs/reference/configuration/sinks/aws_s3/
+#   https://vector.dev/docs/reference/configuration/sinks/aws_cloudwatch_logs/
+#
+# Operator notes:
+#   - Each access-log line is a single redacted JSON object (see
+#     docs/deployment-access-log-shipping.md for the line shape).
+#   - Token-bearing routes are pre-redacted by the middleware. Do NOT add
+#     additional sinks that re-expose the raw request URL.
+#   - Phase 23 rotates files cascade-style: <path> -> <path>.1 -> <path>.2.
+#     The Vector `file` source follows the primary `<path>` after rotation
+#     because rotation is rename-based; if you also want to backfill from
+#     already-rotated files on first start, switch to a glob (see comments).
+#   - Cardinality: do NOT promote userId / workspaceId / requestId to labels.
+#     Keep them in the JSON line; query them at read-time via LogQL / SQL.
+#   - License: example, adapt to taste.
+# =============================================================================
+
+# Optional API for liveness / metrics. Disable in production if not needed.
+[api]
+enabled = true
+address = "127.0.0.1:8686"
+
+# -----------------------------------------------------------------------------
+# Source: tail the Taskloom access log file.
+# -----------------------------------------------------------------------------
+# Substitute the include path below with the value of TASKLOOM_ACCESS_LOG_PATH
+# from the Taskloom service environment.
+#
+# To also pick up rotated siblings on first start, use a glob form:
+#   include = ["/var/log/taskloom/access.log*"]
+# Vector follows renamed files automatically, so the non-glob form is enough
+# for steady-state operation; the glob is only useful for cold backfill.
+[sources.taskloom_access_log]
+type = "file"
+include = ["/var/log/taskloom/access.log"]
+read_from = "beginning"
+ignore_older_secs = 86400
+# `multiline` is intentionally OMITTED: each access-log entry is exactly one
+# JSON object on a single line, so Vector's default line-by-line framing is
+# correct.
+
+# -----------------------------------------------------------------------------
+# Transform: parse each line as JSON, attach host + environment tag.
+# -----------------------------------------------------------------------------
+[transforms.parse_json]
+type = "remap"
+inputs = ["taskloom_access_log"]
+source = '''
+. = parse_json!(.message)
+.host = get_hostname!()
+.env = get_env_var("TASKLOOM_ENV") ?? "unknown"
+.service = "taskloom"
+'''
+
+# -----------------------------------------------------------------------------
+# OPTIONAL transform: drop noisy health-check lines.
+# -----------------------------------------------------------------------------
+# Health-check lines are useful for proving the service is reachable, but
+# they are high-volume and rarely investigated. Comment-out or delete this
+# transform if you want to keep them. If you keep this transform, point the
+# downstream sinks at "drop_health_checks" instead of "parse_json".
+[transforms.drop_health_checks]
+type = "filter"
+inputs = ["parse_json"]
+condition = '.path != "/api/health"'
+
+# -----------------------------------------------------------------------------
+# Sink: Loki (push API).
+# -----------------------------------------------------------------------------
+# Cardinality warning: only LOW-cardinality fields belong as labels.
+# userId / workspaceId / requestId stay inside the JSON line and are queried
+# via LogQL line filters.
+[sinks.loki]
+type = "loki"
+inputs = ["drop_health_checks"]
+endpoint = "https://loki.example.internal"
+compression = "snappy"
+encoding.codec = "json"
+remove_label_fields = true
+
+  [sinks.loki.auth]
+  strategy = "basic"
+  user = "${LOKI_USER}"
+  password = "${LOKI_PASSWORD}"
+
+  [sinks.loki.labels]
+  service = "taskloom"
+  env = "{{ env }}"
+  host = "{{ host }}"
+
+# -----------------------------------------------------------------------------
+# Sink: AWS S3 long-term archival.
+# -----------------------------------------------------------------------------
+# Newline-delimited JSON, partitioned by date for cheap Athena / Glue queries.
+[sinks.s3]
+type = "aws_s3"
+inputs = ["parse_json"]
+bucket = "taskloom-access-log-archive"
+region = "us-east-1"
+key_prefix = "taskloom/access-log/year=%Y/month=%m/day=%d/"
+compression = "gzip"
+framing.method = "newline_delimited"
+encoding.codec = "json"
+
+  [sinks.s3.batch]
+  max_bytes = 10485760
+  timeout_secs = 300
+
+  # Credentials: prefer IAM instance / pod role over static keys.
+  [sinks.s3.auth]
+  assume_role = "arn:aws:iam::123456789012:role/TaskloomVectorShipper"
+
+# -----------------------------------------------------------------------------
+# Sink: AWS CloudWatch Logs.
+# -----------------------------------------------------------------------------
+[sinks.cloudwatch]
+type = "aws_cloudwatch_logs"
+inputs = ["drop_health_checks"]
+group_name = "/taskloom/access"
+stream_name = "{{ host }}"
+region = "us-east-1"
+encoding.codec = "json"
+create_missing_group = true
+create_missing_stream = true

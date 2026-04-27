@@ -386,6 +386,89 @@
   }
 }
 
+.app-main h1,
+.app-main h2,
+.app-main h3,
+.app-main h4,
+.app-main .display,
+.app-main .display-xl,
+.app-main .font-serif {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "ss01", "ss02", "cv05", "cv11";
+  font-variation-settings: normal;
+}
+
+.app-main .display,
+.app-main .display-xl {
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+}
+
+.app-main .display {
+  font-weight: 600;
+}
+
+.app-main .display-xl {
+  font-size: clamp(2.125rem, 3.25vw, 3.25rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.app-main .page-frame {
+  max-width: 1240px;
+  padding: 2rem 2.25rem 3rem;
+}
+
+.app-main header p.font-mono {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.app-main .btn-primary,
+.app-main .btn-ghost,
+.app-main .btn-link {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.875rem;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.app-main select.workflow-input {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.875rem;
+  letter-spacing: normal;
+}
+
+.app-main .card,
+.app-main .spec-frame {
+  border-color: rgba(42, 44, 52, 0.88);
+  background: linear-gradient(180deg, rgba(20, 21, 26, 0.68), rgba(12, 13, 16, 0.72));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+}
+
+.app-main .card-hover {
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.app-main .card-hover:hover,
+.app-main a.card:hover {
+  border-color: #3a3c45;
+  background: rgba(20, 21, 26, 0.82);
+}
+
+.app-main .data-table td {
+  padding: 0.875rem 1rem;
+}
+
+@media (max-width: 768px) {
+  .app-main .page-frame {
+    padding: 1.25rem 1rem 2.25rem;
+  }
+}
+
 .sidebar-glow {
   background: rgb(7 8 9 / 0.92);
 }

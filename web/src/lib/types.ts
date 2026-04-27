@@ -12,6 +12,7 @@ export interface Session {
     name: string;
     website: string;
     automationGoal: string;
+    role?: "owner" | "admin" | "member" | "viewer";
   };
   onboarding: {
     status: string;
@@ -48,8 +49,44 @@ export interface ActivityRecord {
   event: string;
   occurredAt: string;
   actor: { type: "user" | "system"; id: string; displayName?: string };
-  data: Record<string, string | number | boolean | null | undefined>;
+  data: Record<string, unknown>;
 }
+
+export type WorkspaceRole = NonNullable<Session["workspace"]["role"]>;
+
+export interface WorkspaceMemberRecord {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: WorkspaceRole;
+  joinedAt: string;
+}
+
+export interface WorkspaceInvitationRecord {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: WorkspaceRole;
+  token?: string;
+  tokenPreview?: string;
+  invitedByUserId: string;
+  acceptedByUserId: string | null;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  expiresAt: string;
+  createdAt: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+}
+
+export interface WorkspaceMembersPayload {
+  members: WorkspaceMemberRecord[];
+  invitations: WorkspaceInvitationRecord[];
+}
+
+export type CreateWorkspaceInvitationInput = {
+  email: string;
+  role: WorkspaceRole;
+};
 
 export type AgentStatus = "active" | "paused" | "archived";
 export type AgentTriggerKind = "manual" | "schedule" | "webhook" | "email";
@@ -129,6 +166,8 @@ export interface AgentRecord {
   enabledTools?: string[];
   routeKey?: string;
   webhookToken?: string;
+  webhookTokenPreview?: string;
+  hasWebhookToken?: boolean;
   schedule?: string;
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];
@@ -147,6 +186,7 @@ export interface AgentRunToolCall {
   input: Record<string, unknown>;
   output?: unknown;
   error?: string;
+  artifacts?: { path: string; bytes: number; kind: string }[];
   durationMs: number;
   startedAt: string;
   completedAt: string;
@@ -395,6 +435,33 @@ export interface WorkflowOverviewPayload {
   releaseConfirmation: WorkflowReleaseConfirmation;
 }
 
+export type ShareTokenScope = "brief" | "plan" | "overview";
+
+export interface ShareTokenRecord {
+  id: string;
+  token?: string;
+  tokenPreview?: string;
+  scope: ShareTokenScope;
+  revokedAt?: string;
+  expiresAt?: string;
+  readCount: number;
+  lastReadAt?: string;
+  createdAt: string;
+}
+
+export interface PublicSharePayload {
+  scope: ShareTokenScope;
+  workspace: Pick<Session["workspace"], "id" | "name" | "automationGoal">;
+  brief?: WorkflowBrief | null;
+  requirements?: WorkflowRequirement[];
+  planItems?: WorkflowPlanItem[];
+}
+
+export type CreateShareTokenInput = {
+  scope: ShareTokenScope;
+  expiresAt?: string;
+};
+
 export type SaveWorkflowBriefInput = {
   summary: string;
   goals?: string[];
@@ -530,6 +597,32 @@ export interface ActivityDetailPayload {
   activity: ActivityRecord;
   previous: ActivityRecord | null;
   next: ActivityRecord | null;
+  related?: ActivityRelatedContext;
+  agent?: Partial<AgentRecord> | null;
+  run?: Partial<AgentRunRecord> | null;
+  workflow?: ActivityWorkflowContext | null;
+}
+
+export interface ActivityRelatedContext {
+  agent?: Partial<AgentRecord> | null;
+  run?: Partial<AgentRunRecord> | null;
+  blocker?: Partial<WorkflowBlocker> | null;
+  question?: Partial<WorkflowQuestion> | null;
+  planItem?: Partial<WorkflowPlanItem> | null;
+  requirement?: Partial<WorkflowRequirement> | null;
+  evidence?: Partial<WorkflowValidationEvidence> | null;
+  release?: Partial<WorkflowReleaseConfirmation> | null;
+  workflow?: ActivityWorkflowContext | null;
+}
+
+export interface ActivityWorkflowContext {
+  brief?: Partial<WorkflowBrief> | null;
+  requirements?: Partial<WorkflowRequirement>[];
+  planItems?: Partial<WorkflowPlanItem>[];
+  blockers?: Partial<WorkflowBlocker>[];
+  questions?: Partial<WorkflowQuestion>[];
+  validationEvidence?: Partial<WorkflowValidationEvidence>[];
+  releaseConfirmation?: Partial<WorkflowReleaseConfirmation> | null;
 }
 
 export interface BootstrapPayload {

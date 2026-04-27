@@ -1,20 +1,50 @@
 # Taskloom Roadmap
 
-Taskloom currently has a local activation domain, file-backed app services, auth/onboarding/activity/workflow flows, command-driven maintenance jobs, and a React/Vite interface. The next phase is about turning that scaffold into a durable workspace product without losing the clean activation boundaries already in place.
+Taskloom currently has a local activation domain, JSON-backed default storage, an opt-in SQLite app runtime with query-indexed route helpers for high-value records, local SQLite write/concurrency hardening, auth/onboarding/activity/workflow flows, route-level RBAC, invitation/member APIs, local invitation email delivery records with a delivery-adapter seam and webhook retry/dead-letter jobs, proxy-aware same-origin plus CSRF-token mutation checks, deployment-configurable store-backed auth/invitation rate limits with optional HTTP distributed limiter integration, command-driven maintenance jobs, queue-driven agent runs with an opt-in scheduler leader-election gate for multi-process runtimes, public webhook/share links, route/DTO token-redaction enforcement for sensitive list/detail/job/activity/run surfaces, public liveness/readiness probes plus an admin operator-status endpoint, production deployment guidance in `README.md`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, and `docs/deployment-health-endpoints.md`, and a React/Vite interface. The remaining roadmap is mainly about production/deployment implementation hardening and continued workflow polish without losing the clean activation boundaries already in place.
 
 ## Current Baseline
 
 - Activation engine, checklist derivation, stage logic, risk calculation, and summary view model are implemented.
-- Local file-backed storage lives in `data/taskloom.json`.
+- Local file-backed storage lives in `data/taskloom.json` by default; `TASKLOOM_STORE=sqlite` runs the same store API against `data/taskloom.sqlite` or `TASKLOOM_DB_PATH`.
 - App services connect auth, workspaces, onboarding, activation, activity, and workflow records.
 - Workspace records now include membership rows, workflow briefs, requirements, implementation plan items, blockers/open questions, validation evidence, and release confirmations.
-- Public activation endpoints and private app endpoints are available for activation, onboarding, workspace settings, and activity.
-- The workflow route module defines the expected private `/api/app/workflow` endpoint shape.
-- RBAC helpers define owner, admin, member, and viewer roles with view, edit workflow, and manage workspace permissions.
-- Jobs scripts can recompute activation read models and clean up expired sessions against the local store.
-- React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, and activity.
-- The frontend API layer has typed workflow calls for brief, requirements, plan items, blockers, questions, validation evidence, and release confirmation.
+- Public activation endpoints and private app endpoints are available for activation, onboarding, workspace settings, activity, workflows, agents, runs, jobs, providers, API keys, webhooks, usage, LLM calls, and share tokens.
+- The workflow route module implements private `/api/app/workflow` endpoints for briefs, templates, versions, requirements, plan items, blockers, questions, validation evidence, release confirmation, prompt-generated drafts, and Plan Mode.
+- RBAC defines owner, admin, member, and viewer roles with view workspace data, edit workflow, and manage workspace/operations permissions.
+- Private app, workflow, job, agent, provider, env-var, webhook, API-key, usage, LLM, and share routes enforce workspace membership and role-aware permissions.
+- Private mutating app routes reject browser requests whose `Origin` host does not match the request host, and same-origin browser mutations must echo the readable `taskloom_csrf` cookie in `X-CSRF-Token`. `X-Forwarded-Host` is trusted for the origin host comparison only when `TASKLOOM_TRUST_PROXY=true`.
+- Auth register/login and invitation create/accept/resend routes have store-backed rate limits in the active local store, with deployment knobs for `TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS`, `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS`, and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`. JSON keeps buckets in the default app store; SQLite uses dedicated `rate_limit_buckets` storage. `TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL` optionally calls a shared HTTP limiter before the local bucket backstop for multi-process or multi-region abuse-counter coordination.
+- `docs/deployment-auth-hardening.md` documents the optional HTTP distributed limiter protocol, supported app envs, fail-open/fail-closed behavior, multi-process/multi-region caveats, and a validation checklist.
+- Invitation webhook email delivery supports `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` for provider request timeout control and `TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS` for queued retry attempts. Failed webhook create/resend attempts enqueue token-free `invitation.email` jobs that retry through the scheduler and dead-letter as failed jobs after exhaustion; see `docs/invitation-email-operations.md` for production email operations guidance.
+- An optional inbound provider-status webhook at `POST /api/public/webhooks/invitation-email` (gated by `TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET`) records provider-reported delivery status onto `invitationEmailDeliveries` rows, and `npm run jobs:reconcile-invitation-emails` provides a read-only listing plus `--mark-resolved`/`--requeue` flags for stuck deliveries. `docs/invitation-email-operations.md` documents the wire contract, alias map, and CLI flags.
+- Token-redaction helpers now mask known invitation/share/webhook tokens, bearer values, token-bearing routes, sensitive assignments, and sensitive object keys across job responses, agent runs, activities, provider errors, invitation delivery errors, share-token lists, invitation lists, webhook token previews, and frontend display paths. Full bearer tokens remain one-time surfaces on invitation create/resend, share-token create, and webhook rotate responses.
+- An opt-in Hono access-log middleware writes redacted JSON access lines to stdout or a file based on `TASKLOOM_ACCESS_LOG_MODE`/`TASKLOOM_ACCESS_LOG_PATH`. A `jobs:export-workspace` CLI produces redacted per-workspace JSON snapshots, and `docs/deployment-export-redaction.md` plus `docs/deployment/proxy-access-log-redaction/` cover the proxy-level rewriting story with a validator at `src/security/proxy-access-log-validator.ts`.
+- The file-mode access logger now supports built-in rotation through `TASKLOOM_ACCESS_LOG_MAX_BYTES` (default `0` = disabled) and `TASKLOOM_ACCESS_LOG_MAX_FILES` (default `5`), with a manual `npm run access-log:rotate` CLI for cron-driven daily rotation. `docs/deployment-access-log-shipping.md` documents the rotation knobs, the CLI, stdout-mode shipping under supervisors, and recipes for Vector, Fluent Bit, and Promtail/Loki under `docs/deployment/access-log-shipping/`.
+- An optional scheduler leader-election gate is configurable through `TASKLOOM_SCHEDULER_LEADER_MODE` (`off|file|http`, default `off`), with `TASKLOOM_SCHEDULER_LEADER_TTL_MS`, `TASKLOOM_SCHEDULER_LEADER_PROCESS_ID`, file-mode `TASKLOOM_SCHEDULER_LEADER_FILE_PATH`, and http-mode `TASKLOOM_SCHEDULER_LEADER_HTTP_URL`/`SECRET`/`TIMEOUT_MS`/`FAIL_OPEN` knobs. `docs/deployment-scheduler-coordination.md` documents the wire protocol, file-mode caveats, and validation checklist.
+- Public `GET /api/health/live` and `GET /api/health/ready` probes serve container orchestrator and load balancer health checks; admin `GET /api/app/operations/status` returns an `OperationsStatus` summary covering store mode, scheduler leader, jobs queue depth, access-log knobs, and runtime version. The Operations page renders the same payload as a "Production Status" tile for admins. `docs/deployment-health-endpoints.md` documents the wiring.
+- The scheduler now registers a leader probe in `start()`/`stop()` so the operator-status `leaderHeldLocally` field reflects live lock state, and a rolling per-type metrics window (default 50, configurable via `TASKLOOM_SCHEDULER_METRICS_WINDOW_SIZE`) feeds `OperationsStatus.jobMetrics` with `lastDurationMs`/`averageDurationMs`/`p95DurationMs` so the Production Status tile can show scheduler health without log scraping.
+- A new admin `GET /api/app/operations/health` endpoint returns per-subsystem `ok`/`degraded`/`down`/`disabled` classifications for store, scheduler, and access-log, derived from a Phase 26 scheduler-tick heartbeat module and existing access-log/store config. The Operations page renders the report as a "Subsystem health" sub-section. `docs/deployment-health-endpoints.md` documents the classification rules.
+- Persisted job-metrics snapshots: `npm run jobs:snapshot-metrics` writes per-type snapshots into `data.jobMetricSnapshots` with default 30-day retention; admin `GET /api/app/operations/job-metrics/history` returns them filtered/sorted; the Operations page renders a small sparkline alongside the existing Job metrics table.
+- Automated job-metrics snapshot scheduling: `TASKLOOM_JOB_METRICS_SNAPSHOT_CRON` enqueues a single recurring `metrics.snapshot` job (re-enqueued by the existing scheduler), with `TASKLOOM_JOB_METRICS_SNAPSHOT_RETENTION_DAYS` and `TASKLOOM_JOB_METRICS_SNAPSHOT_WORKSPACE_ID` knobs. `OperationsStatus.jobMetricsSnapshots` and the Operations page indicator surface freshness.
+- Webhook-based alerting: `TASKLOOM_ALERT_EVALUATE_CRON` runs scheduled evaluations against subsystem health and job-failure rates; alerts persist in `data.alertEvents` with default 30-day retention and optionally deliver to `TASKLOOM_ALERT_WEBHOOK_URL`. Admin `GET /api/app/operations/alerts` and the Operations page "Recent alerts" tile surface recent history. `docs/deployment-alerting.md` documents the rule set and contract.
+- Alert delivery retry and dead-letter: failed initial deliveries enqueue `alerts.deliver` retry jobs (`TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS` total attempts, default `3`); exhaustion sets `deadLettered: true` on the alert row. The Operations page surfaces delivered/retrying/dead-lettered states.
+- Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
+- Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
+- `docs/deployment-sqlite-topology.md` defines the supported local SQLite posture, WAL/`busy_timeout`/`BEGIN IMMEDIATE` guarantees, backup/restore policy, network filesystem caveats, multi-process/multi-region limits, and thresholds for dedicated relational repositories/backfills beyond indexed `app_records`.
+- Dedicated relational repository for `jobMetricSnapshots`: SQLite migration `0010_job_metric_snapshots.sql` plus `src/repositories/job-metric-snapshots-repo.ts` with a JSON/SQLite-switching factory. Existing `listJobMetricSnapshots` delegates through the repository while `snapshotJobMetrics`/`pruneJobMetricSnapshots` dual-write to both `app_records` and the dedicated table in SQLite mode. Operator CLIs `db:backfill-job-metric-snapshots` and `db:verify-job-metric-snapshots` cover one-shot backfill and drift detection.
+- Dedicated relational repository for `alertEvents`: SQLite migration `0011_alert_events.sql` plus `src/repositories/alert-events-repo.ts` with the same JSON/SQLite-switching factory pattern. `listAlerts` delegates through the repository while `recordAlerts` and `updateAlertDeliveryStatus` dual-write in SQLite mode. Operator CLIs `db:backfill-alert-events` and `db:verify-alert-events` cover backfill and drift detection.
+- Dedicated relational repository for `agentRuns`: SQLite migration `0012_agent_runs.sql` plus `src/repositories/agent-runs-repo.ts`. The three indexed read helpers delegate through the repository; `upsertAgentRun` dual-writes in SQLite mode. Operator CLIs `db:backfill-agent-runs` (with optional `--check-orphans`) and `db:verify-agent-runs` cover backfill and drift detection.
+- Dedicated relational repository for `jobs` (conservative Option-2 cutover): SQLite migration `0013_jobs.sql` plus `src/repositories/jobs-repo.ts` with `claimNext`/`sweepStaleRunning` SQL-native primitives shipped for a future cutover. The two indexed read helpers and every write path dual-write in SQLite mode, but the scheduler keeps its existing load-store-loop pattern with `claimMutex`. Operator CLIs `db:backfill-jobs` and `db:verify-jobs` cover backfill and drift detection.
+- Dedicated relational repository for `invitationEmailDeliveries`: SQLite migration `0014_invitation_email_deliveries_table.sql` plus `src/repositories/invitation-email-deliveries-repo.ts`. The indexed read helper delegates through the repository; all five mutators dual-write in SQLite mode via the deferred-queue mechanism. Operator CLIs `db:backfill-invitation-email-deliveries` and `db:verify-invitation-email-deliveries` cover backfill and drift detection. The Phase 22 schema-additive trick stops working past this step — future field additions need an explicit `ALTER TABLE` migration.
+- The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
+- Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
+- React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, workflow, activity/detail, agents, runs, operations, integrations, and public share views.
+- The frontend API layer has typed workflow calls for brief, requirements, plan items, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, Plan Mode, share tokens, and public share reads.
 - Build, typecheck, and test scripts are available through `npm run build`.
+- Local development uses ignored `data/taskloom.json` and `data/taskloom.sqlite` files that are recreated or migrated from built-in seed data and CLI commands.
+- README, deployment auth hardening, SQLite topology, invitation email operations, and activation docs cover local development, seed/reset, build, release hygiene flows, and production deployment guidance for the current single-node/local-store posture plus optional shared rate-limit integration.
+- Durable activation signal records exist in the local app model for retry and scope-change signals. Runtime snapshots prefer those records and activation-scoped activity events before falling back to legacy activation fact counters, and an app-store activation signal repository now provides JSON and opt-in SQLite list/upsert access with stable-key dedupe and first-class origin metadata.
+- SQLite route and local write hardening is implemented for the current local runtime through `app_record_search` metadata, `app_records` workspace indexes, indexed helper functions for auth/session lookup, workspace membership/invitations, share tokens, workflow reads, activities, agents/runs, jobs, providers, and usage calls, and safer `mutateStore()` whole-store writes. SQLite opens with `busy_timeout`, WAL mode, `synchronous=normal`, and `foreign_keys=on`; SQLite `mutateStore()` writes use `BEGIN IMMEDIATE` and fresh state to avoid stale-cache whole-store overwrites. JSON remains the default runtime, and SQLite remains opt-in through `TASKLOOM_STORE=sqlite`.
 
 ## Landed In This Branch
 
@@ -48,95 +78,498 @@ The workflow route module exposes private endpoints under `/api/app/workflow`:
 - `GET|PUT|POST /validation-evidence`
 - `PATCH /validation-evidence/:evidenceId`
 - `GET|PUT|POST /release-confirmation`
+- `GET /brief/templates`
+- `POST /brief/templates/:templateId/apply`
+- `GET /brief/versions`
+- `POST /brief/versions/:versionId/restore`
+- `GET /templates`
+- `POST /templates/:templateId/apply`
+- `POST /generate-from-prompt`
+- `POST /plan-mode`
+- `POST /plan-mode/apply`
 
-These routes require an authenticated session and operate on the current workspace context.
+These routes require an authenticated session, current workspace membership, and the route-specific permission for read or write actions.
 
-### RBAC Helpers
+### Route-Level RBAC And Membership Enforcement
 
-RBAC currently lives as reusable helpers rather than a full route policy layer:
+Phase 7 is implemented in this branch. Private app APIs now require an authenticated session plus workspace membership, with route-level role checks:
 
 - `viewer`: can view workspace data.
-- `member`: can view workspace data and edit workflow records.
-- `admin`: can view, edit workflow records, and manage workspace settings.
-- `owner`: has the same permissions as admin and remains the seeded default membership role.
+- `member`: can view workspace data and edit workflow records or run member-level actions.
+- `admin`: can view, edit workflow records, and manage workspace settings, operations, agents, providers, env vars, jobs, API keys, and webhooks.
+- `owner`: has admin-level workspace and operations management permissions and remains the seeded default membership role.
+
+Backend route policies are the security boundary. Frontend role-aware controls hide or disable actions for lower roles, but do not replace backend enforcement.
 
 ### Jobs
 
 Two maintenance commands are available:
 
 - `npm run jobs:recompute-activation`
+- `npm run jobs:repair-activation`
 - `npm run jobs:cleanup-sessions`
 
-The recompute job refreshes activation read models and milestone records for every workspace by default, with `--workspace-ids=alpha,beta` for targeted runs. The cleanup job removes expired or invalid sessions.
+The recompute job refreshes activation read models and milestone records for every workspace by default, with `--workspace-ids=alpha,beta` for targeted runs. The repair job reports stale read models it changed. The cleanup job removes expired or invalid sessions.
+
+### Automation Scheduling And Operations
+
+Phase 4 automation operations now have documented queue and webhook behavior:
+
+- Private job queue routes live under `/api/app/jobs` for listing, enqueueing, reading, and canceling jobs in the signed-in workspace.
+- Runtime scheduling is queue-driven. Active scheduled agents need a queued `agent.run` job with matching `cron`; the agent `schedule` field is metadata and does not start runs by itself.
+- Successful cron jobs re-enqueue their next occurrence. Failed jobs retry with backoff until `maxAttempts`, and stale running jobs are swept back to queued on scheduler startup.
+- Public webhook delivery is `POST /api/public/webhooks/agents/:token`; token rotation/removal lives under `/api/app/webhooks/agents/:agentId`.
+- Seed data includes queued cron jobs for the active scheduled Alpha agents and leaves the paused Beta scheduled agent without an active queued job.
+
+Browser tools are available to agent runs but remain operationally constrained: they require a run-scoped `runId`, depend on optional Playwright/browser binaries, block localhost/loopback navigation, and write screenshots under `data/artifacts/:runId/`.
+
+### Product Workflow Expansion
+
+Phase 5 product workflow surfaces are now wired through the private workflow API and React API client:
+
+- Brief editor support includes reusable brief templates and brief version restore.
+- Requirements, implementation plan items, blockers, open questions, validation evidence, and release confirmation write durable local records and activation facts.
+- Workflow templates can seed a brief, requirements, and plan items together.
+- Prompt-generated workflow drafts can be previewed or applied; applied drafts persist the LLM-shaped brief, requirements, and plan items.
+- Plan Mode can suggest implementation plan items from the current brief and requirements, then apply those items back into the workflow plan.
+- Agent input schemas support `string`, `number`, `boolean`, `url`, and `enum`; enum inputs require at least one option.
+- Runs expose telemetry, logs, tool-call timelines, retry/cancel actions, playbook recording, and failed-run diagnostics.
+
+Dashboard filtering and richer activity detail views are present in the UI/API seam, with backend activity context available for workflow-related events.
+
+Share-token routes and frontend wiring exist for `brief`, `plan`, and `overview` scopes. Settings can list/create/revoke tokens, and `/share/:token` renders the public brief/plan/overview payload.
+
+### Dev And Release Hygiene
+
+Phase 6 dev and release hygiene is now in place:
+
+- `README.md` documents prerequisites, dev server ports, seed accounts, local data reset, activation recompute, session cleanup, build checks, and release handoff hygiene.
+- `docs/activation/*` describes the current activation boundary, signal mapping, and remaining persistence/backfill work without stale PR-only framing.
+- Backend API route coverage now exercises auth/session/workspace/onboarding, member/invitation management, private activation/activity scoping, workflow route validation and permissions, jobs, DB CLI helpers, API keys, LLM route authorization, and public/private webhook behavior.
+- Frontend smoke tests cover auth, onboarding, dashboard, activation, role-aware workspace controls, Plan Mode wiring, agent enum options, integrations gating, run diagnostics, and share-token/public-share wiring.
+- Generated local artifacts remain ignored: `data/taskloom.json`, `data/artifacts/`, `web/dist/`, logs, and environment files.
+- Vite outputs to `web/dist/` with `emptyOutDir: true`; generated web assets stay out of source control unless packaging policy changes.
+
+### Phase 10 Activation Signal Repository And Idempotency
+
+Phase 10 is implemented for the current app-store runtime:
+
+- `activationSignals` is part of the JSON app model and is persisted through the opt-in SQLite app runtime because SQLite currently stores full app data in `app_records`.
+- `activationSignalRepository()` provides normalized list/upsert access for JSON and SQLite modes; the SQLite implementation uses `app_records` plus activation-signal indexes/search metadata rather than a dedicated relational signal table.
+- `source` identifies the producer category, such as `seed`, `workflow`, `agent_run`, `activity`, `user_fact`, or `system_fact`; `origin` separately identifies user-entered versus system-observed records.
+- Retry actions write durable `retry` records with `source: "agent_run"`, `origin: "user_entered"`, the failed run as `sourceId`, stable-key dedupe, and stable activation activity ids.
+- Brief scope changes write durable `scope_change` records with `source: "workflow"`, `origin: "user_entered"`, the brief version as `sourceId`, stable-key dedupe, and stable activation activity ids.
+- Recompute jobs normalize legacy retry/scope-change counters into durable `user_fact` signals idempotently when no durable signal records exist for that kind.
+
+### Phase 11 Query-Optimized SQLite Route Hardening
+
+Phase 11 is implemented for the high-value routes that were still doing broad JSON-payload reads in SQLite mode:
+
+- SQLite still persists app collections in `app_records`, but migrations `0005_app_record_search.sql` and `0007_workspace_app_record_reads.sql` add sidecar search metadata plus workspace/read-order indexes for records repeatedly needed by route security, workflow reads, operations, and public token flows.
+- Indexed helpers now cover user lookup by id/email, session lookup/listing, workspace membership lookup/listing, invitation lookup/listing, share-token lookup/listing, workflow records, activity detail context, agents/runs, jobs, providers, and provider-call usage summaries.
+- Route hardening in this codebase means those hot paths can use SQLite-indexed metadata or collection/workspace indexes in opt-in SQLite mode while preserving the same JSON-backed store API and behavior in default JSON mode.
+- The app is not yet split into fully relational repositories for every collection; relational backfills remain future work only if later phases move high-value records out of `app_records` into dedicated tables.
+- Coverage now includes direct helper synchronization checks plus JSON-default versus SQLite-opt-in route parity for auth/session, invitation listing, workflow, jobs, agents, and share-token public/private reads.
+
+### Phase 13 Auth/Invitation Hardening Documentation And Parity
+
+Phase 13 is landed for the local runtime, with webhook invitation delivery and hashed rate-limit buckets in place. Later phases add deployment knobs, proxy-aware origin checks, documentation, and optional distributed limiter integration:
+
+- Invitation create, accept, resend, and revoke APIs are present. Create/resend record `invitationEmailDeliveries` rows and return an `emailDelivery` summary. `TASKLOOM_INVITATION_EMAIL_MODE=dev` records local sent deliveries, `skip` records skipped deliveries, and `webhook` posts delivery requests to `TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL` with optional provider name and shared-secret header configuration. Delivery adapter and webhook failures are recorded without rolling back invitation state. Phase 18 adds built-in webhook retry/dead-letter jobs; token-redaction expectations are documented in `docs/invitation-email-operations.md`.
+- Invitation acceptance requires a signed-in user whose normalized email matches the invitation. Revoked, expired, accepted, and stale rotated tokens are rejected.
+- Store-backed rate limiting covers auth register/login and invitation create/accept/resend with 20 attempts per client key per 60 seconds. Buckets use `local` by default, trust forwarded IP headers only when `TASKLOOM_TRUST_PROXY=true`, and store salted SHA-256 bucket IDs. Buckets stay in JSON for the default runtime; after Phase 14, SQLite mode keeps them in dedicated `rate_limit_buckets` storage. Phase 15 adds deployment environment knobs for thresholds and windows.
+- CSRF behavior is a same-origin `Origin` host check plus double-submit token for browser mutations. Login/register set `taskloom_csrf`; same-origin browser mutations must send `X-CSRF-Token`; requests without `Origin` are allowed for local clients/tests.
+- Runtime parity coverage now checks JSON-default and SQLite-opt-in behavior for session reads, invitation create/list/resend/revoke/revoked-token rejection, local delivery rows including skip mode, share-token reads, CSRF rejection, cross-origin mutation rejection, and rate-limit bucket persistence.
+
+### Phase 14 SQLite Local Storage And Concurrency Hardening
+
+Phase 14 is landed for the opt-in local SQLite runtime. It makes SQLite safer for local concurrent writers without claiming distributed or production-grade multi-process coordination:
+
+- SQLite connections open with `busy_timeout`, WAL mode, `synchronous=normal`, and `foreign_keys=on`.
+- SQLite `mutateStore()` writes use `BEGIN IMMEDIATE` and reload fresh store state inside the write transaction before writing changed collections, avoiding stale-cache whole-store overwrites when another local writer has committed newer state.
+- Auth and invitation rate-limit buckets use dedicated SQLite `rate_limit_buckets` storage in SQLite mode instead of `app_records`; JSON mode remains unchanged and keeps buckets in the default JSON app store.
+- The hardening targets local SQLite runtime correctness and parity. Later phases add deployment-specific abuse controls and guidance, including optional distributed rate-limit integration, while broader production storage topology choices remain future work.
+
+### Phase 15 Production/Deployment Auth Hardening
+
+Phase 15 hardens deployment-facing auth configuration beyond the earlier local defaults, before Phase 17 adds optional distributed limiter integration:
+
+- Auth route rate limits are configurable through `TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS` and `TASKLOOM_AUTH_RATE_LIMIT_WINDOW_MS`.
+- Invitation route rate limits are configurable through `TASKLOOM_INVITATION_RATE_LIMIT_MAX_ATTEMPTS` and `TASKLOOM_INVITATION_RATE_LIMIT_WINDOW_MS`.
+- Invitation webhook delivery timeout is configurable through `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS`, with failures recorded without rolling back invitation state.
+- CSRF origin validation is proxy-aware: `X-Forwarded-Host` is trusted only when `TASKLOOM_TRUST_PROXY=true`; otherwise origin checks compare against `Host`.
+- Rate-limit buckets remain local-store backed. Phase 16 adds full production topology guidance, and Phase 17 adds optional distributed rate-limit integration; email delivery operations are tracked separately in `docs/invitation-email-operations.md`.
+
+### Phase 16 Production Deployment Guidance
+
+Phase 16 lands documentation for production deployment handoff in `README.md#production-deployment-guidance`, focused auth/proxy/rate-limit checks in `docs/deployment-auth-hardening.md`, SQLite/database topology guidance in `docs/deployment-sqlite-topology.md`, and invitation email operations guidance in `docs/invitation-email-operations.md`. It defines the recommended posture for the current runtime without claiming new runtime capabilities:
+
+- HTTPS termination and `NODE_ENV=production` cookie expectations.
+- Proxy trust boundaries for `TASKLOOM_TRUST_PROXY` and forwarded host/IP headers.
+- Secret handling for rate-limit salts, invitation webhook secrets, provider credentials, and environment files.
+- Single-node SQLite persistence guidance with durable `TASKLOOM_DB_PATH`, persistent artifacts, backups, restore validation, network-filesystem caveats, and session cleanup scheduling.
+- Scheduler constraints for the current local store: run one scheduler-active Node process unless external job coordination is added.
+- Abuse-protection limits at that point: built-in auth/invitation buckets remained process/store scoped, so multi-process or multi-region deployments needed edge/shared distributed rate limiting; `docs/deployment-auth-hardening.md` now captures supported env knobs, optional distributed limiter integration, topology caveats, and validation checks.
+- Invitation webhook operational requirements are tracked separately in `docs/invitation-email-operations.md`.
+- Public share/webhook token, API-key, environment-variable, and audit/redaction review expectations for production handoff.
+
+This phase itself is documentation-only. Later phases own implementation work such as distributed limiter integration, distributed locking, managed database repositories, email delivery workers, and broader token-redaction enforcement.
+
+### Phase 17 Optional Distributed Rate Limiter Integration
+
+Phase 17 implements the first production hardening item beyond documentation by adding an optional HTTP distributed rate-limit adapter for auth and invitation routes:
+
+- `TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL` enables a shared limiter call before the local JSON/SQLite bucket backstop.
+- The app sends hashed bucket ids, route scope, max attempts, window, and timestamp; it does not send raw client IPs to the limiter.
+- `TASKLOOM_DISTRIBUTED_RATE_LIMIT_SECRET` adds an optional bearer secret, and `TASKLOOM_DISTRIBUTED_RATE_LIMIT_TIMEOUT_MS` controls the request timeout.
+- Distributed limiter `429`, `{ "limited": true }`, or `{ "allowed": false }` responses return app-level `429` with `Retry-After` before local buckets are updated.
+- Limiter outages fail closed with `503 rate limit service unavailable` by default; `TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN=true` allows requests to continue through the local bucket backstop.
+- The existing local JSON/SQLite buckets remain enabled and continue to provide a final process/store-scoped guardrail when the distributed limiter allows or fail-open behavior is configured.
+
+This phase does not add a hosted limiter service, distributed locking, managed database repositories, email delivery workers, scheduler leader election, or broader token-redaction enforcement.
+
+### Phase 18 Invitation Email Retry And Dead-Letter Hardening
+
+Phase 18 implements the next production hardening item by giving webhook invitation email delivery a Taskloom-owned retry/dead-letter path on top of the existing delivery audit rows:
+
+- Failed webhook create/resend attempts enqueue persisted `invitation.email` jobs after recording the failed delivery row.
+- Retry job payloads store `invitationId`, action, and requesting user id only; invitation tokens and recipient emails are intentionally excluded.
+- Retry handlers resolve the current invitation token at send time, so resend token rotation does not leave stale tokens in queued job payloads.
+- `TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS` controls queued retry attempts, defaulting to 3.
+- Scheduler retry backoff and final `failed` job status provide the dead-letter path for exhausted app-side retries.
+- Retries skipped because an invitation was accepted, revoked, or expired write a `skipped` delivery row instead of sending a stale invitation email.
+
+This phase does not add a managed external email provider, provider-side dead-letter tooling, scheduler leader election for multi-process runtimes, or broader token-redaction enforcement.
+
+### Phase 19 Token Redaction Enforcement
+
+Phase 19 implements the first broad token-redaction pass across API DTOs, persisted error records, and frontend display paths:
+
+- Invitation member lists now return `tokenPreview` without full invitation tokens; create and resend responses remain the one-time full-token surfaces.
+- Share-token lists now return masked previews; share-token create responses remain the one-time full-token surface used to build the public link.
+- Agent list/detail responses no longer expose stored webhook tokens and instead return `hasWebhookToken` plus `webhookTokenPreview`; webhook rotation remains the one-time full-token surface.
+- Job route responses redact sensitive payload, result, and error fields, while stored job payloads remain available for scheduler execution.
+- Scheduler, invitation delivery, provider ledger, LLM stream, app, webhook, and server error paths redact bearer values and token-bearing URLs before returning or recording error text.
+- Agent run and activity DTOs redact sensitive fields before returning list/detail responses.
+- Frontend Settings and Agent Editor views show full tokens only immediately after create/resend/rotate flows and otherwise display masked previews.
+
+This phase does not add a general-purpose export redaction pipeline, reverse-proxy access-log rewriting, managed database topology, external scheduler coordination, or managed external provider operations.
+
+### Phase 20 Export And Access-Log Redaction Controls
+
+Phase 20 implements the next broad redaction pass beyond app-level DTOs by adding in-app access logging with built-in redaction, a workspace export redaction pipeline, and reverse-proxy access-log rewriting templates plus a validator:
+
+- An optional Hono access-log middleware writes one JSON line per request to stdout or a file with the request path/query passed through `redactSensitiveString`. It is configurable via `TASKLOOM_ACCESS_LOG_MODE` (`stdout|file|off`, default `off`) and `TASKLOOM_ACCESS_LOG_PATH`, captures method/status/duration/userId/workspaceId/requestId, and intentionally omits request and response bodies.
+- A `jobs:export-workspace` CLI command produces a per-workspace JSON snapshot with invitation tokens, share tokens, agent webhook tokens, env-var values, and provider credentials replaced by `*Preview` masked values, and remaining nested job/run/activity payloads passed through `redactSensitiveValue`.
+- Reverse-proxy access-log rewriting examples for nginx, Caddy, and Apache live under `docs/deployment/proxy-access-log-redaction/`, with a Taskloom-shipped validator at `src/security/proxy-access-log-validator.ts` that scans a log file for raw bearer/whk_/share/invitation-accept/webhook tokens and sensitive query parameters and exits non-zero on a hit.
+- `docs/deployment-export-redaction.md` documents configuration, redaction guarantees, validation cadence, and the post-deploy checklist.
+
+This phase does not add a request-body access log, managed log shipping/retention, automated scheduled exports, managed database topology, external scheduler coordination, or managed external provider operations.
+
+### Phase 21 External Scheduler Coordination
+
+Phase 21 implements the next production hardening item by adding opt-in leader election to the local job scheduler so multi-process and multi-host deployments stop double-executing jobs:
+
+- A `SchedulerLeaderLock` interface with `acquire()`, `release()`, and `isHeld()` methods gates the scheduler poll loop. The default `noopLeaderLock` keeps single-process behavior identical to today.
+- `TASKLOOM_SCHEDULER_LEADER_MODE=file` selects an atomic file-based lock at `TASKLOOM_SCHEDULER_LEADER_FILE_PATH` (default `data/scheduler-leader.json`) for multi-process runtimes on a single host with a local filesystem.
+- `TASKLOOM_SCHEDULER_LEADER_MODE=http` selects an HTTP coordinator client. The client POSTs `{processId, ttlMs, timestamp}` to `<TASKLOOM_SCHEDULER_LEADER_HTTP_URL>/acquire` and `<url>/release`, accepts `200 {leader: bool}` or `{acquired: bool}` responses, treats 401/403 as a config error, and fails closed on network/timeout errors. `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` adds an optional bearer header; `TASKLOOM_SCHEDULER_LEADER_HTTP_TIMEOUT_MS` (default 5000) caps each request; `TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN=true` opts into preserving the prior leader belief on coordinator outages.
+- `TASKLOOM_SCHEDULER_LEADER_TTL_MS` (default 30000) and `TASKLOOM_SCHEDULER_LEADER_PROCESS_ID` (default `${hostname}-${pid}-${randomShortHex}`) tune lock takeover latency and identify each process.
+- The scheduler skips dequeues on a tick where `acquire()` returns false, never interrupts in-flight jobs, and calls `release()` on graceful stop so the next poller takes over without waiting for TTL expiry.
+- `docs/deployment-scheduler-coordination.md` documents the wire protocol, file-mode caveats, multi-process operating guidance, and the post-deploy validation checklist.
+
+This phase does not ship a hosted coordinator service, leader-aware in-flight job migration, managed database topology, dedicated relational repositories, managed external email provider operations, managed log shipping, or scheduled-export automation.
+
+### Phase 22 Managed External Email Provider Operations
+
+Phase 22 implements the next production hardening item by giving operators an inbound provider-status reconciliation surface and a replay/reconciliation CLI on top of the Phase 18 outbound retry jobs:
+
+- A new public route `POST /api/public/webhooks/invitation-email` accepts `{deliveryId, providerStatus, providerDeliveryId?, providerError?, occurredAt?}` payloads from the external email provider or webhook worker. Auth is bearer via `TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET` (required to enable; absent returns 503), with the header name configurable via `TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET_HEADER` (default `x-taskloom-reconciliation-secret`).
+- The route accepts canonical statuses `delivered|bounced|complained|deferred|dropped|failed` plus common provider aliases (`delivery`, `hard_bounce`, `soft_bounce`, `complaint`, `spam`, `defer`, `drop`, `fail`, `error`). `providerError` is passed through `redactedErrorMessage` before storage so bearer tokens or token-bearing URLs in provider errors do not leak into delivery rows.
+- `InvitationEmailDeliveryRecord` gains optional `providerStatus`, `providerDeliveryId`, `providerStatusAt`, and `providerError` fields. The schema change is additive; SQLite already persists these inside the existing `app_records` JSON payload so no migration is required.
+- `npm run jobs:reconcile-invitation-emails` lists `failed` deliveries grouped by recency with workspace/invitation/delivery filters. `--delivery-id=<id> --mark-resolved` applies a provider `delivered` status without an inbound webhook; `--delivery-id=<id> --requeue` enqueues a fresh Taskloom-side `invitation.email` retry job. Retry payloads continue to omit the invitation token and recipient email per the Phase 18 invariant.
+- `docs/invitation-email-operations.md` documents the inbound webhook contract, the CLI flags, the alias map, and the redaction posture for `providerError`.
+
+This phase does not ship a hosted reconciliation service, automated provider-status polling, dedicated relational repositories for delivery rows, managed log shipping, or scheduled-export automation.
+
+### Phase 23 Access-Log Shipping And Retention Hardening
+
+Phase 23 implements the next production hardening item by giving the Phase 20 file-mode access logger built-in rotation, an operator rotation CLI, and shipping recipes for common log destinations:
+
+- The file-mode access logger now rotates when `TASKLOOM_ACCESS_LOG_MAX_BYTES` (default `0` = disabled) is set. On rotation, `<path>` shifts to `<path>.1` and prior numbered files cascade up to `TASKLOOM_ACCESS_LOG_MAX_FILES` (default `5`, clamp to >= 1); older files are pruned. Rotation runs before writing a line that would exceed the threshold so the active file always stays under the cap.
+- `npm run access-log:rotate -- --path=<file> [--max-files=<n>]` triggers a rotation out of band (cron-friendly: exits 0 when the file is missing). Falls back to `TASKLOOM_ACCESS_LOG_PATH` and `TASKLOOM_ACCESS_LOG_MAX_FILES` env knobs when flags are omitted.
+- Example shipper configs under `docs/deployment/access-log-shipping/` cover Vector (`vector.toml.example`), Fluent Bit (`fluent-bit.conf.example`), and Promtail/Loki (`promtail.yaml.example`).
+- `docs/deployment-access-log-shipping.md` documents the rotation env knobs, manual CLI, stdout-mode shipping for supervised runtimes, the three shipper recipes, SIEM integration notes, and a validation checklist that pairs with `src/security/proxy-access-log-validator.ts`.
+
+This phase does not ship managed log retention storage, hosted shipping infrastructure, content-based redaction enrichment, multi-process rotation coordination beyond `EBUSY` skip-and-retry semantics, managed database topology, or dedicated relational repositories.
+
+### Phase 24 Operational Status And Health Endpoints
+
+Phase 24 implements the next operator-visibility hardening item by adding public liveness/readiness probes for orchestrators and an admin operator-status endpoint that summarizes runtime configuration and queue state in a single call:
+
+- `GET /api/health/live` is a public, fixed-200 liveness probe that does no I/O. Suitable for container orchestrator liveness checks.
+- `GET /api/health/ready` is a public readiness probe that returns 200 when `loadStore()` resolves cleanly and 503 with a redacted error otherwise. Suitable for load balancer readiness checks and blue/green deploys.
+- The existing `GET /api/health` route returning `{ "ok": true }` is preserved unchanged for any existing consumer.
+- `GET /api/app/operations/status` (admin-scoped) returns a structured `OperationsStatus` payload covering store mode, scheduler leader mode and TTL, jobs queue depth grouped by type and status, access-log mode/path/rotation knobs, and runtime Node version. The `lockSummary` field reports the configured leader file path or http URL with any query string stripped, never the secret.
+- The frontend Operations page renders the operator-status payload as an admin-gated "Production Status" tile so operators can spot store/scheduler/access-log misconfiguration without SSHing.
+- `docs/deployment-health-endpoints.md` documents the probe wiring, the response shapes, the `leaderHeldLocally` limitation, and the post-deploy validation checklist.
+
+This phase does not ship managed monitoring/alerting, request-rate or latency histograms, leader-state probes wired into the scheduler, managed database topology, or dedicated relational repositories.
+
+### Phase 25 Scheduler Leader Probe And Per-Type Job Metrics
+
+Phase 25 closes the Phase 24 limitation that `leaderHeldLocally` was always `false` for `file`/`http` scheduler modes, and adds rolling per-type job-duration metrics so the operator-status endpoint and Operations tile can summarize scheduler health without scraping logs:
+
+- `JobScheduler.start()` now registers a probe with `__setSchedulerLeaderProbe(() => this.leaderLock.isHeld())` and clears it in `stop()`. The `OperationsStatus.scheduler.leaderHeldLocally` field now reflects the live `SchedulerLeaderLock` state when the scheduler is running.
+- A new `src/jobs/scheduler-metrics.ts` module records per-type job runs in a rolling window (configurable via `TASKLOOM_SCHEDULER_METRICS_WINDOW_SIZE`, default `50`). The scheduler calls `recordJobRun` on each terminal outcome (`success`, `failed`, `canceled`); the retry-back-to-queued path does not record so retried-and-eventually-succeeded jobs aren't double counted.
+- `OperationsStatus` gains a `jobMetrics: JobTypeMetrics[]` field with `totalRuns`, per-status counters, `lastRunStartedAt`/`lastRunFinishedAt`/`lastDurationMs`, and `averageDurationMs`/`p95DurationMs` computed over success runs only so a failure flood does not poison the latency metric. The metrics live in process memory and reset on restart by design.
+- The Operations page "Production Status" tile renders the new `jobMetrics` payload as a small per-type table next to the existing queue-depth table.
+- `docs/deployment-health-endpoints.md` documents the new field and refreshes the `leaderHeldLocally` notes.
+
+This phase does not ship persisted historical job latency, SLO/SLA dashboards, alerting integration, scheduler-side circuit breakers, managed database topology, or dedicated relational repositories.
+
+### Phase 26 Subsystem Health Probes
+
+Phase 26 implements the next operator-visibility hardening item by adding per-subsystem health classifications to a dedicated admin endpoint and a complementary frontend tile, complementing the binary public readiness probe with actionable diagnostic detail:
+
+- A new `src/jobs/scheduler-heartbeat.ts` module records `recordSchedulerStart`/`recordSchedulerStop`/`recordTickStart`/`recordTickEnd` so the operator-health helper can detect "scheduler has stopped polling" silently. The scheduler integration calls these from `start()`, `stop()`, and a try/finally around the existing `tick()` body.
+- A new `src/operations-health.ts` helper computes per-subsystem `SubsystemHealth { name, status, detail, checkedAt, observedAt? }` for store, scheduler, and access-log, plus an `overall` worst-of classification with the rule that `disabled` never poisons overall.
+- A new admin route `GET /api/app/operations/health` exposes the report. Returns 200 regardless of subsystem status; auth failures return 401/403.
+- The Operations page "Production Status" tile renders the new payload as a "Subsystem health" sub-section with colored badges per subsystem and an overall summary.
+- `docs/deployment-health-endpoints.md` documents the wire shape, classification rules, validation snippets, and the relationship to the existing `/api/health/ready` probe.
+
+This phase does not ship subsystem-specific recovery actions, automated remediation, alerting integration, hosted health-check infrastructure, managed database topology, or dedicated relational repositories.
+
+### Phase 27 Persisted Job Metrics History
+
+Phase 27 implements the next operator-visibility hardening item by adding durable snapshots of the Phase 25 in-memory job metrics so admins can see trends across process restarts:
+
+- A new `src/jobs/job-metrics-snapshot.ts` module exposes `snapshotJobMetrics({ retentionDays? })` (default 30-day retention), `listJobMetricSnapshots({ type?, since?, until?, limit? })` (sorted ascending by `capturedAt`, default limit 100, capped at 500), and `pruneJobMetricSnapshots({ retentionDays })` for explicit retention runs.
+- A new `JobMetricSnapshotRecord` type is added to the store with `id`, `capturedAt`, and the same per-type rolling-window fields the in-memory metrics expose. The new `jobMetricSnapshots` collection lives in `app_records` JSON, so SQLite mode requires no migration.
+- A new admin route `GET /api/app/operations/job-metrics/history` returns persisted snapshots with `type`/`since`/`until`/`limit` filters; invalid timestamps return 400.
+- A new `npm run jobs:snapshot-metrics -- [--retention-days=<n>]` CLI captures a snapshot and prunes older rows in one call. The in-memory metrics are not cleared.
+- The Operations page renders a small SVG sparkline alongside the existing Job metrics table so admins see the recent trend without leaving the page.
+- `docs/deployment-health-endpoints.md` documents the wire shape, CLI usage, recommended cadence/retention, and the validation checklist.
+
+This phase does not ship automated snapshot scheduling inside the Node process, SLO/SLA dashboards, alerting integration, downsampled long-term retention, managed database topology, or dedicated relational repositories.
+
+### Phase 28 Automated Job Metrics Snapshot Scheduling
+
+Phase 28 closes the Phase 27 remaining gap that snapshot capture required external cron, by registering a `metrics.snapshot` job handler that uses the existing scheduler's cron support:
+
+- A new `src/jobs/metrics-snapshot-handler.ts` module exports `handleMetricsSnapshotJob(payload, deps)` (a thin wrapper over `snapshotJobMetrics`) and `ensureMetricsSnapshotCronJob(deps)` (a startup helper).
+- The server bootstrap registers the handler with the JobScheduler and calls `ensureMetricsSnapshotCronJob()` after `scheduler.start()`. When `TASKLOOM_JOB_METRICS_SNAPSHOT_CRON` is set, a single recurring job is enqueued; the scheduler's existing recurring-job behavior re-enqueues subsequent runs after each success.
+- `TASKLOOM_JOB_METRICS_SNAPSHOT_RETENTION_DAYS` (default `30`) and `TASKLOOM_JOB_METRICS_SNAPSHOT_WORKSPACE_ID` (default `"__system__"`) tune the job payload and bookkeeping.
+- Existence is detected by matching type + cron among queued/running/success jobs so process restarts do not enqueue duplicates. Invalid cron expressions log a warning and skip the bootstrap.
+- `OperationsStatus.jobMetricsSnapshots: { total, lastCapturedAt }` is derived from `data.jobMetricSnapshots`. The Operations page renders a "Last snapshot X ago (N total)" indicator next to the existing trend caption so admins can confirm the cron is firing.
+- `docs/deployment-health-endpoints.md` documents the env knobs, the existence-check rule, and the validation checklist.
+
+This phase does not ship per-workspace snapshot scoping, hosted scheduling, alerting on missed snapshots, downsampled long-term retention, managed database topology, or dedicated relational repositories.
+
+### Phase 29 Webhook-Based Alerting
+
+Phase 29 implements the next operator-visibility hardening item by adding rule-based alert evaluation, optional webhook delivery, and persistent alert history on top of the Phase 25/26/27/28 metrics and health surfaces:
+
+- A new `src/alerts/alert-engine.ts` evaluates `OperationsHealthReport` and `JobTypeMetrics[]` against three built-in rules: `subsystem-degraded` (warning), `subsystem-down` (critical), and `job-failure-rate` (warning when failure ratio > threshold and >= minSamples runs; critical above 0.8).
+- A new `src/alerts/alert-webhook.ts` adapter POSTs `{ alerts, deliveredAt }` to `TASKLOOM_ALERT_WEBHOOK_URL` with `TASKLOOM_ALERT_WEBHOOK_SECRET` bearer (header configurable via `TASKLOOM_ALERT_WEBHOOK_SECRET_HEADER`, default `x-taskloom-alert-secret`) and `TASKLOOM_ALERT_WEBHOOK_TIMEOUT_MS` (default `5000`). Errors are structured (never throw) with redacted detail.
+- A new `alerts.evaluate` job handler runs the pipeline: evaluate → deliver → persist. `TASKLOOM_ALERT_EVALUATE_CRON` enqueues a single recurring job using the same scheduler/cron pattern Phase 28 uses for `metrics.snapshot`. Existence-check on type + cron prevents duplicate enqueues.
+- Alerts persist to `data.alertEvents` regardless of webhook delivery outcome. `TASKLOOM_ALERT_RETENTION_DAYS` (default `30`) prunes older rows on each evaluation. Admin `GET /api/app/operations/alerts` returns recent rows newest-first with `severity`/`since`/`until`/`limit` filters.
+- The Operations page renders a "Recent alerts" sub-section showing the last 25 alerts with severity badges and delivery status icons.
+- `docs/deployment-alerting.md` documents the rule set, webhook contract, env knobs, scheduled evaluation, retention, and validation checklist.
+
+This phase does not ship per-rule runtime suppression, custom rule definitions, alert deduplication beyond the per-evaluation context key, retry/dead-letter for webhook delivery, hosted alert routing infrastructure, managed database topology, or dedicated relational repositories.
+
+### Phase 30 Alert Delivery Retry And Dead-Letter
+
+Phase 30 hardens Phase 29 webhook delivery with Taskloom-owned retry on top of the existing scheduler retry-with-backoff path:
+
+- A new `alerts.deliver` job handler in `src/alerts/alerts-deliver-handler.ts` delivers a single alert by id, increments `deliveryAttempts`, updates `lastDeliveryAttemptAt`, and dead-letters via `deadLettered: true` after `TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS` attempts (default `3`, integer >= 1; the inline attempt during evaluate counts as attempt 1).
+- The Phase 29 evaluate handler now enqueues one `alerts.deliver` retry job per undelivered event with `maxAttempts = TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS - 1`. The scheduler's existing 30s/exponential backoff (capped at 1 hour) drives subsequent attempts.
+- `AlertEventRecord` gains three optional fields: `deliveryAttempts`, `lastDeliveryAttemptAt`, `deadLettered`. Successful retries clear `deliveryError`.
+- The Operations page Recent Alerts tile shows distinct visual states for delivered (with attempt count when > 1), retrying (amber), and dead-lettered (rose with explicit label).
+- When `TASKLOOM_ALERT_WEBHOOK_URL` is unset, retry jobs short-circuit with a no-op success so explicitly-disabled webhooks don't generate background work.
+- `docs/deployment-alerting.md` documents the retry semantics, the new env knob, and the dead-letter inspection workflow.
+
+This phase does not ship per-rule retry overrides, alert deduplication beyond the per-evaluation context key, hosted retry infrastructure, managed database topology, or dedicated relational repositories.
+
+### Phase 31 Workflow And Dashboard UX Polish
+
+Phase 31 hardens the Section 5 workflow/UI polish items by making three additive frontend improvements without changing any backend behavior:
+
+- **Dashboard filters are now URL-persisted.** Stage, risk, status, and recency filter state lives in `?stage=...&risk=...&status=...&recency=...` query params (defaults omitted) so refreshes preserve filters and admins can share filtered links. An active-filters chip bar renders above the existing filter controls with one removable chip per active filter and a "Clear all" reset.
+- **Activity detail surfaces workflow context inline.** The `WorkflowPanel` in `ActivityDetail.tsx` now renders up to 3 active blockers (severity badge + title) and up to 3 open questions, plus a "View workflow" link to the full editor. Empty placeholders read "No active blockers." / "No open questions."
+- **Workflow page empty states have explicit CTAs.** When Requirements, Plan items, or Blockers are empty and the user has edit permission, the page shows a friendly empty block with an "Add first ..." button that triggers the existing add flow. The brief header shows a small "N versions" badge when brief versions exist.
+
+This phase does not change backend route behavior, modify activation signal mapping, alter the workflow record schema, or introduce new APIs.
+
+### Phase 32 Relational Repository: Job Metric Snapshots
+
+Phase 32 is the first step of the dedicated-relational-repositories migration plan documented in `docs/roadmap-relational-repositories.md`. It moves `jobMetricSnapshots` from the JSON-payload `app_records` row into a dedicated `job_metric_snapshots` SQLite table while preserving the JSON-default runtime and the existing read-path signature:
+
+- New migration `src/db/migrations/0010_job_metric_snapshots.sql` creates the table (`WITHOUT ROWID`) with indexes on `(captured_at desc, id)` and `(type, captured_at desc, id)`.
+- New repository module `src/repositories/job-metric-snapshots-repo.ts` exposes `createJobMetricSnapshotsRepository(deps?)` with `list`/`insertMany`/`prune`/`count`. The factory switches on `process.env.TASKLOOM_STORE`: SQLite mode reads/writes the dedicated table; JSON mode keeps reading/writing the inline `data.jobMetricSnapshots` array. Both implementations apply identical filter, sort, and limit semantics so JSON-mode and SQLite-mode tests assert behavioral parity.
+- `listJobMetricSnapshots` in `src/jobs/job-metrics-snapshot.ts` now delegates to the repository through a thin `src/jobs/job-metrics-snapshot-read.ts` wrapper. Existing callers and tests are unchanged.
+- In SQLite mode, `snapshotJobMetrics` and `pruneJobMetricSnapshots` dual-write to BOTH `app_records` (legacy JSON-side mirror) and the dedicated table during the cutover window so `db:restore` against a pre-cutover backup keeps working.
+- Two new operator CLI commands: `npm run db:backfill-job-metric-snapshots [-- --dry-run]` for one-shot JSON-side-to-dedicated-table backfill (idempotent via `INSERT OR REPLACE`); `npm run db:verify-job-metric-snapshots` for cron-friendly drift detection between the two surfaces.
+- The JSON-side mirror write is retained for now and will be retired in a later phase (Phase 38) once dual-write has run cleanly across at least one stable phase. Until then, `data.jobMetricSnapshots` continues to round-trip through `app_records`.
+
+This phase does not migrate other collections (alert events, agent runs, jobs, invitation deliveries, activities — those are queued for Phases 33-37), retire the JSON-side mirror write, change `loadStore()` semantics, or introduce a feature flag for opt-out reads.
+
+### Phase 33 Relational Repository: Alert Events
+
+Phase 33 is the second step of the dedicated-relational-repositories migration plan. It moves `alertEvents` from the JSON-payload `app_records` row into a dedicated `alert_events` SQLite table while preserving the JSON-default runtime, the existing `listAlerts` signature, and Phase 30's retry/dead-letter mutation semantics:
+
+- New migration `src/db/migrations/0011_alert_events.sql` creates the table (`WITHOUT ROWID`) with check constraints on `severity` and `delivered`, plus JSON validity on `context`. Indexes cover `(observed_at desc, id)` and `(severity, observed_at desc, id)`.
+- New repository module `src/repositories/alert-events-repo.ts` exposes `createAlertEventsRepository(deps?)` with `list`/`insertMany`/`updateDeliveryStatus`/`prune`/`count`. The factory switches on `process.env.TASKLOOM_STORE`: SQLite mode reads/writes the dedicated table; JSON mode keeps reading/writing the inline `data.alertEvents` array. Both implementations sort by `observedAt` DESCENDING.
+- `listAlerts` in `src/alerts/alert-store.ts` now delegates to the repository through a thin `src/alerts/alert-store-read.ts` wrapper. Existing callers and tests are unchanged.
+- In SQLite mode, `recordAlerts` and `updateAlertDeliveryStatus` dual-write to BOTH `app_records` (legacy JSON-side mirror) and the dedicated table. The `updateDeliveryStatus` mutation pattern (increments `deliveryAttempts`, sets `lastDeliveryAttemptAt`, conditionally clears `deliveryError` on success, conditionally sets `deadLettered`) is the new wrinkle this phase exercises beyond Phase 32's append-only snapshots.
+- Two new operator CLI commands: `npm run db:backfill-alert-events [-- --dry-run]` for one-shot JSON-side-to-dedicated-table backfill (idempotent via `INSERT OR REPLACE`); `npm run db:verify-alert-events` for cron-friendly drift detection.
+- The JSON-side mirror write is retained for now and will be retired in a later phase (Phase 38) once dual-write has run cleanly across at least one stable phase.
+
+This phase does not migrate the remaining queued collections (`agentRuns`, `jobs`, `invitationEmailDeliveries`, `activities` — Phases 34-37), retire the JSON-side mirror write, change `loadStore()` semantics, or introduce a feature flag for opt-out reads.
+
+### Phase 34 Relational Repository: Agent Runs
+
+Phase 34 is the third step of the dedicated-relational-repositories migration plan. It moves `agentRuns` from the JSON-payload `app_records` row into a dedicated `agent_runs` SQLite table while preserving the JSON-default runtime, the existing read-helper signatures, and Phase 11's indexed read patterns:
+
+- New migration `src/db/migrations/0012_agent_runs.sql` creates the table (NOT `WITHOUT ROWID` because rows mutate during a run) with `json_valid` check constraints on `inputs`, `logs`, `tool_calls`, and `transcript`. Indexes cover `(workspace_id, created_at desc, id)` and `(workspace_id, agent_id, created_at desc, id)` to keep the existing read patterns hot.
+- New repository module `src/repositories/agent-runs-repo.ts` exposes `createAgentRunsRepository(deps?)` with `list(workspaceId, limit?)`/`listForAgent(workspaceId, agentId, limit?)`/`find(workspaceId, runId)`/`upsert`/`count`. JSON and SQLite implementations share identical createdAt-DESC sort, default limit 50, cap 200.
+- The three existing read helpers in `src/taskloom-store.ts` now delegate to the repository through a thin `src/agent-runs-read.ts` wrapper. Existing callers and tests are unchanged.
+- In SQLite mode, `upsertAgentRun` dual-writes to BOTH `app_records` and the dedicated `agent_runs` table.
+- Two new operator CLI commands: `npm run db:backfill-agent-runs [-- --dry-run] [-- --check-orphans]` for one-shot JSON-side-to-dedicated-table backfill (idempotent via `INSERT OR REPLACE`); `npm run db:verify-agent-runs` for cron-friendly drift detection. The `--check-orphans` flag reports rows whose `agentId` references a missing `agents` row but does not block the backfill — application-layer integrity remains the boundary.
+- The JSON-side mirror write is retained for now and will be retired in Phase 38 once dual-write has run cleanly across at least one stable phase.
+
+This phase does not migrate the remaining queued collections (`jobs`, `invitationEmailDeliveries`, `activities` — Phases 35-37), retire the JSON-side mirror write, change `loadStore()` semantics, normalize the run sub-arrays into separate tables (`logs`, `toolCalls`, `transcript` continue to live JSON-encoded inside the row per the design doc), or introduce a feature flag for opt-out reads.
+
+### Phase 35 Relational Repository: Jobs (Conservative Cutover)
+
+Phase 35 is the fourth step of the dedicated-relational-repositories migration plan. It moves `jobs` to a dedicated `jobs` SQLite table with a deliberately conservative cutover: the table, repository, dual-write, and CLI ship now, but the scheduler's `claimNextJob` and `sweepStaleRunningJobs` keep their existing load-store-loop pattern with `claimMutex`. The single-statement SQLite-native cutover for those two hot-path functions defers to a later phase.
+
+- New migration `src/db/migrations/0013_jobs.sql` creates the table (NOT `WITHOUT ROWID`; rows mutate heavily through status churn and attempt increments) with check constraints on the `status` enum and `cancel_requested` tri-state, plus `json_valid` checks on `payload` and `result`. Indexes cover `(workspace_id, created_at desc, id)`, `(status, scheduled_at, id)`, and `(status, started_at)` so future single-statement claim/sweep paths can use index-only scans.
+- New repository module `src/repositories/jobs-repo.ts` exposes `createJobsRepository(deps?)` with `list({ workspaceId, status?, limit? })`/`find(id)`/`upsert(record)`/`update(id, patch)`/`count()`/`claimNext(now)`/`sweepStaleRunning(staleAfterMs, now)`. The `claimNext` and `sweepStaleRunning` SQLite implementations use `BEGIN IMMEDIATE` plus a single transactional select-update sequence (or `UPDATE ... RETURNING *` where supported). They are provided for a future cutover but are NOT called by the scheduler in this phase.
+- The two indexed read helpers in `src/taskloom-store.ts` (`listJobsForWorkspaceIndexed`, `findJobIndexed`) now delegate to the repository through a thin `src/jobs-read.ts` wrapper. Existing signatures preserved. The wrapper applies the same defensive merge-and-fall-back pattern Phase 34 used so legacy `mutateStore`-direct test seeding continues to round-trip in SQLite mode.
+- In SQLite mode, every job write — `enqueueJob`, `updateJob`, `cancelJob`, `enqueueRecurringJob`, `maintainScheduledAgentJobs`, plus the state-change emissions from `claimNextJob` and `sweepStaleRunningJobs` — dual-writes to BOTH `app_records` (legacy JSON-side) and the dedicated `jobs` table. The deadlock-avoidance pattern from Phase 34 is reused: dual-writes execute after the `mutateStore` callback returns, not inside the `BEGIN IMMEDIATE` write lock.
+- The conservative cutover means scheduler concurrency semantics are unchanged: `claimMutex` continues to serialize candidate selection in-process, the existing load-store-loop runs against the JSON-side `data.jobs` array, and the dedicated table is updated to mirror the resulting state. A future phase can flip `claimNextJob`/`sweepStaleRunningJobs` to use the SQL-native primitives once dual-write has run cleanly across at least one stable phase.
+- Two new operator CLI commands: `npm run db:backfill-jobs [-- --dry-run]` for one-shot JSON-side-to-dedicated-table backfill (idempotent via `INSERT OR REPLACE`); `npm run db:verify-jobs` for cron-friendly drift detection.
+
+This phase does not flip `claimNextJob` or `sweepStaleRunningJobs` to the SQL-native primitives, migrate the remaining queued collections (`invitationEmailDeliveries`, `activities` — Phases 36-37), retire the JSON-side mirror write, change `loadStore()` semantics, or normalize `payload`/`result` into separate columns.
+
+### Phase 36 Relational Repository: Invitation Email Deliveries
+
+Phase 36 is the fifth step of the dedicated-relational-repositories migration plan. It moves `invitationEmailDeliveries` to a dedicated SQLite table while preserving the JSON-default runtime, the existing `listInvitationEmailDeliveriesIndexed` signature, and the five mutator functions:
+
+- New migration `src/db/migrations/0014_invitation_email_deliveries_table.sql` creates the table (`WITHOUT ROWID`) with indexes `(workspace_id, created_at desc, id)` and `(invitation_id, created_at desc, id)`. The existing `0008_invitation_email_deliveries.sql` (which only adds an `app_records` index) is preserved.
+- New repository module `src/repositories/invitation-email-deliveries-repo.ts` exposes `createInvitationEmailDeliveriesRepository(deps?)` with `list({ workspaceId, invitationId?, limit? })`/`find(id)`/`upsert`/`count`. JSON and SQLite implementations share createdAt-DESC sort with default limit 50, cap 200.
+- `listInvitationEmailDeliveriesIndexed` in `src/taskloom-store.ts` now delegates to the repository through a thin `src/invitation-email-deliveries-read.ts` wrapper. Existing signature preserved.
+- In SQLite mode, all five mutators (`createInvitationEmailDelivery`, `markInvitationEmailDeliverySent`, `markInvitationEmailDeliverySkipped`, `markInvitationEmailDeliveryFailed`, `recordInvitationEmailProviderStatus`) dual-write to BOTH `app_records` and the dedicated table. The dual-write uses the deferred-queue mechanism inside `mutateSqliteStore` so the second connection only opens after the JSON-side `BEGIN IMMEDIATE` transaction commits, avoiding SQLite write-lock deadlock.
+- Two new operator CLI commands: `npm run db:backfill-invitation-email-deliveries [-- --dry-run]` and `npm run db:verify-invitation-email-deliveries`.
+- **The Phase 22 schema-additive trick stops working past this step.** Phase 22 added `providerStatus`, `providerDeliveryId`, `providerStatusAt`, and `providerError` as optional fields without a migration because the data lived inside the `app_records` JSON payload. After Phase 36, any future field on `InvitationEmailDeliveryRecord` requires an explicit `ALTER TABLE invitation_email_deliveries ADD COLUMN ...` migration.
+
+This phase does not migrate the remaining queued collection (`activities` — Phase 37), retire the JSON-side mirror write, change `loadStore()` semantics, normalize provider error strings into a separate audit table, or flip the deferred Phase 35 scheduler hot-path.
 
 ## Roadmap
 
+Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
+
 ### 1. Persistence Foundation
 
-Replace the JSON store with a real database-backed persistence layer while keeping activation logic storage-agnostic.
+Replace the JSON-only runtime with a database-backed persistence layer while keeping activation logic storage-agnostic.
 
-- Add migration tooling around the existing activation schema.
-- Extend the existing JSON-backed model into migrations for users, sessions, memberships, workspaces, workflow records, onboarding state, activities, activation facts, milestones, and activation read models.
-- Introduce database-backed repository implementations behind the existing services.
-- Add seed and reset commands for local development.
-- Preserve deterministic activation recalculation.
+- [x] Add migration tooling around the existing activation schema.
+- [x] Extend the existing JSON-backed model into SQLite migrations for users, sessions, memberships, invitations, workspaces, workflow records, onboarding state, activities, activation facts, milestones, activation read models, agents, jobs, provider calls, and share tokens.
+- [x] Add an opt-in SQLite-backed runtime behind the existing `loadStore()` / `mutateStore()` surface.
+- [x] Harden high-value SQLite route reads with query-indexed helpers while keeping JSON-payload `app_records` as the local compatibility layer.
+- [x] Harden local SQLite mutating writes with `BEGIN IMMEDIATE`, fresh in-transaction state, and connection pragmas for `busy_timeout`, WAL, `synchronous=normal`, and `foreign_keys=on`.
+- [x] Add formal seed and reset commands for local development.
+- [x] Add JSON-to-SQLite app backfill commands.
+- [x] Add local SQLite migration status plus validated backup/restore commands. Executable rollback remains intentionally unsupported; restore from a pre-migration backup is the rollback strategy.
+- [x] Document the production deployment posture for the current JSON-default and single-node SQLite runtime, including persistence, backups, restore validation, network-filesystem caveats, relational-repository thresholds, and scheduler constraints.
+- [x] Preserve deterministic activation recalculation for the local JSON runtime and SQLite activation seed path.
 
 ### 2. Auth And RBAC
 
 Expand local auth from a single-owner workspace flow into a workspace membership model.
 
-- Apply the existing owner/admin/member/viewer helper layer to private app routes.
-- Enforce workspace membership on private API routes.
-- Add invitation and member management flows.
-- Add session cleanup for expired sessions.
-- Review production cookie and password handling before external deployment.
+- [x] Apply owner/admin/member/viewer RBAC to private route policies.
+- [x] Enforce workspace membership before workspace reads, workflow edits, or operational mutations.
+- [x] Add backend invitation and member management APIs.
+- [x] Add invitation email delivery recording for create/resend, including local dev/skip modes, webhook delivery, and failed delivery records.
+- [x] Add webhook invitation email retry jobs and failed-job dead-letter behavior without storing invitation tokens in retry payloads.
+- [x] Add session cleanup for expired sessions.
+- [x] Document production session cookie behavior and cleanup expectations.
+- [x] Add store-backed rate limiting for auth and invitation routes in JSON default and SQLite opt-in modes.
+- [x] Keep SQLite rate-limit buckets in dedicated `rate_limit_buckets` storage while leaving the JSON default store shape unchanged.
+- [x] Add local same-origin and CSRF-token checks for private app browser mutations.
+- [x] Add deployment-specific auth/invitation rate-limit knobs, invitation webhook timeout control, and proxy-aware CSRF origin handling where `X-Forwarded-Host` is trusted only with `TASKLOOM_TRUST_PROXY=true`.
+- [x] Document production deployment guidance for HTTPS/proxy trust, secrets, local-store rate-limit limits, edge/distributed limiter pairing expectations, persistence, backups, and scheduler constraints. Invitation email operations are cross-linked separately.
+- [x] Add optional HTTP distributed rate-limit integration for auth and invitation routes before the local process/store-scoped bucket backstop.
+- [x] Add route/DTO token-redaction enforcement for invitation/share/webhook tokens, API-key-like fields, environment variable display paths, jobs, activities, agent runs, provider errors, and invitation delivery errors.
+- [x] Add export and access-log redaction controls beyond app-level DTO redaction through Phase 20: an opt-in Hono access-log middleware with built-in path/query redaction, a `jobs:export-workspace` CLI with masked tokens/credentials/env-var values and `redactSensitiveValue` for nested payloads, reverse-proxy access-log rewriting templates under `docs/deployment/proxy-access-log-redaction/`, and a `src/security/proxy-access-log-validator.ts` scanner for rotated proxy logs.
+- [x] Add an opt-in scheduler leader-election gate so multi-process or multi-host deployments stop double-executing jobs, with `off`/`file`/`http` modes selectable via `TASKLOOM_SCHEDULER_LEADER_MODE` and the wire protocol, file-mode caveats, and validation checklist documented in `docs/deployment-scheduler-coordination.md`.
+- [x] Add managed external email provider operations beyond the Phase 18 outbound retry jobs through Phase 22: an inbound provider-status webhook at `POST /api/public/webhooks/invitation-email` gated by `TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET`, additive `providerStatus`/`providerDeliveryId`/`providerStatusAt`/`providerError` fields on `InvitationEmailDeliveryRecord`, and a `jobs:reconcile-invitation-emails` CLI with read-only listing plus `--mark-resolved`/`--requeue` actions. See `docs/invitation-email-operations.md`.
+- [x] Add managed log shipping, retention, and SIEM integration around the Phase 20 access-log middleware through Phase 23: built-in size-based rotation through `TASKLOOM_ACCESS_LOG_MAX_BYTES`/`TASKLOOM_ACCESS_LOG_MAX_FILES`, an out-of-band `npm run access-log:rotate` CLI for cron-driven rotation, example shipper configs under `docs/deployment/access-log-shipping/` for Vector, Fluent Bit, and Promtail/Loki, and SIEM integration plus a validation checklist in `docs/deployment-access-log-shipping.md`.
+- [x] Add operational status and health endpoints for orchestrators and operators through Phase 24: public `GET /api/health/live` and `GET /api/health/ready` probes (with redacted readiness error), an admin `GET /api/app/operations/status` endpoint returning store mode, scheduler leader mode/TTL/`leaderHeldLocally`/`lockSummary` (token-stripped), grouped jobs queue depth, access-log mode/path/rotation knobs, and runtime Node version, an admin-gated "Production Status" tile on the Operations page, and `docs/deployment-health-endpoints.md` for probe wiring and the validation checklist.
+- [ ] Continue production hardening implementation beyond process/store-scoped rate limiting, webhook email delivery, CSRF checks, app-level redaction, Phase 20 export/access-log controls, Phase 21 scheduler leader election, Phase 22 managed external email provider operations, Phase 23 access-log shipping/retention, and Phase 24 operational status/health endpoints, such as managed production database topology support and dedicated relational repositories where indexed `app_records` metadata is not enough. SQLite/database topology guidance lives in `docs/deployment-sqlite-topology.md`.
 
 ### 3. Real Activation Signals
 
 Move activation snapshots from onboarding-derived facts toward product-observed signals.
 
-- Implement a real `ActivationSignalRepository`.
-- Map workspace, onboarding, activity, blocker, question, validation, and release records into normalized activation snapshots.
-- Distinguish user-entered facts from system-observed facts.
-- Track blockers, dependency blockers, open questions, validation failures, retries, and scope changes.
-- Keep signal mapping outside the pure activation engine.
+- [x] Implement an app-store `ActivationSignalRepository` for JSON and opt-in SQLite activation signal list/upsert access.
+- [x] Wire runtime activation snapshots to durable workflow, validation, and release records through `buildSignalSnapshotFromProductRecords(...)`, with legacy facts used as fallback.
+- [x] Distinguish user-entered origin from system-observed origin as first-class activation signal metadata.
+- [x] Track durable workflow blockers, dependency blockers, open questions, and validation failures in runtime snapshots.
+- [x] Move retry signals and runtime scope-change writes toward durable records through `activationSignals` and activation-scoped activity mapping, while retaining legacy fact fallback.
+- [x] Complete and verify runtime scope-change signal writes beyond seed data and activity fallback.
+- [x] Add durable signal upsert idempotency by stable key for repository callers.
+- [x] Ensure retry/scope-change service callers consistently provide stable keys or stable ids.
+- [x] Keep signal mapping outside the pure activation engine.
 
 ### 4. Jobs And Backfills
 
 Make activation updates reliable outside request-time reads.
 
-- Decide whether command-driven jobs are enough for local deployment or whether a background scheduler is needed.
-- Add a database backfill command for existing workspaces after persistence moves out of JSON.
-- Ensure activity emission is idempotent.
-- Add stale read-model detection and repair checks.
+- [x] Run the local JSON-backed queue scheduler for `agent.run` jobs with cron re-enqueue, retries/backoff, cancellation, and stale-running-job sweep.
+- [x] Add an optional scheduler leader-election gate so multi-process or multi-host deployments stop double-executing jobs, with `off`/`file`/`http` modes selectable via `TASKLOOM_SCHEDULER_LEADER_MODE`. See `docs/deployment-scheduler-coordination.md`.
+- [x] Expose private job queue routes for list, enqueue, read, and cancel.
+- [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
+- [ ] Add relational database backfills if app records are later split from indexed `app_records` metadata into dedicated repository tables, using `docs/deployment-sqlite-topology.md` thresholds to decide when that split is justified.
+- [ ] Continue the relational-repository migration started in Phases 32-36 (`jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`) through the queued `activities` collection (Phase 37), then drop the legacy JSON-side mirrors and flip the deferred scheduler hot-path to the repository's SQL-native `claimNext`/`sweepStaleRunning` primitives. See `docs/roadmap-relational-repositories.md`.
+- [x] Ensure activation-scoped retry and scope-change activity emission is idempotent enough to avoid double-counting repeated signal writes.
+- [x] Add stale JSON read-model repair checks and a `jobs:repair-activation` command.
+- [x] Add scheduler leader-probe wiring and rolling per-type job-duration metrics surfaced through the operator-status endpoint and Operations tile. See `docs/deployment-health-endpoints.md`.
+- [x] Add a scheduler tick heartbeat (`src/jobs/scheduler-heartbeat.ts`) so silent scheduler stalls surface as a `degraded` subsystem in the operator-health endpoint.
+- [x] Add persisted job-metrics snapshots and a history endpoint plus CLI so the Phase 25 in-memory metrics can be inspected across process restarts. See `docs/deployment-health-endpoints.md`.
+- [x] Add a built-in `metrics.snapshot` cron job handler so the Phase 27 snapshot capture runs without external cron. See `docs/deployment-health-endpoints.md`.
+- [x] Add a built-in `alerts.evaluate` cron job handler that evaluates subsystem health and job-failure rates against rules and optionally delivers via webhook. See `docs/deployment-alerting.md`.
+- [x] Add an `alerts.deliver` retry job handler so webhook delivery failures retry through the existing scheduler backoff and dead-letter on exhaustion. See `docs/deployment-alerting.md`.
 
 ### 5. Product Workflow Expansion
 
 Build the day-to-day workflow surfaces that make activation useful.
 
-- Complete or verify frontend pages for the workflow API surfaces: brief editor, requirements checklist, implementation plan tracker, blockers/open questions, validation evidence capture, and release confirmation.
-- Dashboard filters for stage, risk, status, and recency.
-- Richer activity detail views.
+- [x] Phase 31 added empty-state CTAs for Requirements, Plan items, and Blockers sections plus a brief-versions count badge near the brief header.
+- [ ] Continue further workflow page hardening (additional template surfaces, validation evidence editing flows, prompt-generated draft refinement, and remaining UX polish across blockers/open questions, release confirmation, and Plan Mode).
+- [x] Phase 31 made dashboard filters URL-persisted with active-filter chips so refreshes preserve state and admins can share filtered links. Filter options continue to derive from current backend metadata.
+- [x] Phase 31 expanded the activity-detail WorkflowPanel to surface top active blockers and open questions inline plus a "View workflow" link.
+- [x] Build frontend share-token management and public share-page wiring for the server-side share routes.
 
 ### 6. Dev And Release Hygiene
 
 Strengthen the project rails before larger product work accumulates.
 
-- Keep roadmap, README, and activation docs current as milestones land.
-- Broaden API route coverage beyond smoke tests.
-- Add frontend smoke tests for auth, onboarding, dashboard, and activation.
-- Document local development, reset, seed, build, and release flows.
-- Decide whether built `web/dist` assets should remain committed.
+- [x] Keep roadmap, README, and activation docs current as milestones land.
+- [ ] Continue broadening API route coverage as new route policies and product surfaces land.
+- [x] Maintain frontend smoke/static contract tests for auth, onboarding, dashboard, activation, role-aware controls, workflow wiring, integrations, agents, runs, and share routes.
+- [x] Add SQLite runtime parity tests for auth, RBAC/member invitations, invitation resend/revoke and delivery-row behavior including skip mode, workflow activation, jobs, agents, share links, CSRF rejection, cross-origin mutation rejection, dedicated SQLite rate-limit bucket persistence, and local mutating-write concurrency behavior.
+- [x] Add README cross-links for the roadmap, deployment auth hardening doc, SQLite topology doc, invitation email operations doc, activation docs, and Phase 16 production deployment guidance.
+- [ ] Maintain local development, reset, seed, build, production deployment, and release flow documentation as scripts and deployment posture change.
+- [x] Keep generated `web/dist` assets ignored unless release packaging requirements change.
 
 ## Recommended Order
 
-1. Verify workflow route mounting and frontend workflow pages.
-2. Apply RBAC helpers to private route policies.
-3. Persistence foundation.
-4. Real activation signal mapping.
-5. Jobs scheduling, backfills, and stale read-model repair.
-6. Broader test and release hardening.
+1. Production storage implementation hardening: managed database topology and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
+2. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The next phase is complete when Taskloom can run from database-backed storage, derive activation status from durable workflow records, enforce workspace access through route-level RBAC, expose complete workflow pages, and recompute activation read models without relying on request-time JSON store updates.
+The near-term production hardening track is complete when app-level token-redaction enforcement, the Phase 20 export/access-log redaction controls (in-app middleware, workspace export pipeline, proxy templates, and validator), the Phase 21 scheduler leader-election gate (`off`/`file`/`http` modes with documented wire protocol and validation checklist), the Phase 22 managed external email provider operations (inbound provider-status webhook gated by `TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET` plus the `jobs:reconcile-invitation-emails` CLI), the Phase 23 access-log shipping and retention hardening (built-in rotation, the `access-log:rotate` CLI, and Vector/Fluent Bit/Promtail recipes documented in `docs/deployment-access-log-shipping.md`), the Phase 24 operational status and health endpoints (public `GET /api/health/live` and `GET /api/health/ready` probes plus the admin `GET /api/app/operations/status` endpoint and the Operations "Production Status" tile, documented in `docs/deployment-health-endpoints.md`), the Phase 25 scheduler leader-probe wiring plus per-type job-duration metrics (live `leaderHeldLocally` tracking and the rolling `jobMetrics` window surfaced through the operator-status endpoint and Operations tile, documented in `docs/deployment-health-endpoints.md`), the Phase 26 subsystem health probes (admin `GET /api/app/operations/health` endpoint with per-subsystem classifications for store, scheduler, and access-log driven by a scheduler-tick heartbeat module, plus the "Subsystem health" sub-section on the Operations "Production Status" tile, documented in `docs/deployment-health-endpoints.md`), the Phase 27 persisted job-metrics history (admin `GET /api/app/operations/job-metrics/history` endpoint plus `npm run jobs:snapshot-metrics` CLI and the Operations page sparkline, documented in `docs/deployment-health-endpoints.md`), the Phase 28 automated job-metrics snapshot scheduling (`metrics.snapshot` cron job handler driven by `TASKLOOM_JOB_METRICS_SNAPSHOT_CRON` plus `OperationsStatus.jobMetricsSnapshots` and the Operations page "Last snapshot X ago" indicator, documented in `docs/deployment-health-endpoints.md`), the Phase 29 webhook-based alerting (`alerts.evaluate` cron job handler driven by `TASKLOOM_ALERT_EVALUATE_CRON` evaluating `subsystem-degraded`/`subsystem-down`/`job-failure-rate` rules against the Phase 26 health report and Phase 25 job metrics, optional webhook delivery via `TASKLOOM_ALERT_WEBHOOK_URL`, persisted history in `data.alertEvents` with `TASKLOOM_ALERT_RETENTION_DAYS` retention, the admin `GET /api/app/operations/alerts` endpoint, and the Operations page "Recent alerts" sub-section, documented in `docs/deployment-alerting.md`), the Phase 30 alert delivery retry and dead-letter (`alerts.deliver` retry job handler enqueued per undelivered event with `maxAttempts = TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS - 1`, the scheduler's existing 30s/exponential backoff driving subsequent attempts up to `TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS` total, additive `deliveryAttempts`/`lastDeliveryAttemptAt`/`deadLettered` fields on `AlertEventRecord`, no-op short-circuit when `TASKLOOM_ALERT_WEBHOOK_URL` is unset, and Operations page Recent Alerts badges for delivered/retrying/dead-lettered, documented in `docs/deployment-alerting.md`), the Phase 31 workflow and dashboard UX polish (URL-persisted dashboard filters with active-filter chips for stage/risk/status/recency, expanded activity-detail `WorkflowPanel` surfacing top active blockers, open questions, and a "View workflow" link, plus workflow page empty-state CTAs for Requirements/Plan items/Blockers and a brief-versions count badge), the Phase 32 relational repository for `jobMetricSnapshots` (SQLite migration `0010_job_metric_snapshots.sql`, the `createJobMetricSnapshotsRepository` factory in `src/repositories/job-metric-snapshots-repo.ts`, read-path delegation through `src/jobs/job-metrics-snapshot-read.ts`, dual-write to both `app_records` and the dedicated table in SQLite mode, and the `db:backfill-job-metric-snapshots`/`db:verify-job-metric-snapshots` operator CLIs documented in `docs/deployment-sqlite-topology.md` and `docs/roadmap-relational-repositories.md`), the Phase 33 relational repository for `alertEvents` (SQLite migration `0011_alert_events.sql`, the `createAlertEventsRepository` factory in `src/repositories/alert-events-repo.ts`, read-path delegation through `src/alerts/alert-store-read.ts`, dual-write of `recordAlerts` and `updateAlertDeliveryStatus` to both `app_records` and the dedicated table in SQLite mode, and the `db:backfill-alert-events`/`db:verify-alert-events` operator CLIs documented in `docs/deployment-sqlite-topology.md` and `docs/roadmap-relational-repositories.md`), the Phase 34 relational repository for `agentRuns` (SQLite migration `0012_agent_runs.sql`, the `createAgentRunsRepository` factory in `src/repositories/agent-runs-repo.ts`, read-path delegation through `src/agent-runs-read.ts` for `listAgentRunsForWorkspaceIndexed`/`listAgentRunsForAgentIndexed`/`findAgentRunForWorkspaceIndexed`, dual-write of `upsertAgentRun` to both `app_records` and the dedicated table in SQLite mode, and the `db:backfill-agent-runs` (with optional `--check-orphans`) and `db:verify-agent-runs` operator CLIs documented in `docs/deployment-sqlite-topology.md` and `docs/roadmap-relational-repositories.md`), the Phase 35 relational repository for `jobs` shipped under the conservative Option-2 cutover (SQLite migration `0013_jobs.sql`, the `createJobsRepository` factory in `src/repositories/jobs-repo.ts` exposing `claimNext`/`sweepStaleRunning` SQL-native primitives for a future hot-path cutover, read-path delegation through `src/jobs-read.ts` for `listJobsForWorkspaceIndexed`/`findJobIndexed`, dual-write of `enqueueJob`/`updateJob`/`cancelJob`/`enqueueRecurringJob`/`maintainScheduledAgentJobs` plus the state-change emissions from `claimNextJob` and `sweepStaleRunningJobs` to both `app_records` and the dedicated table in SQLite mode, and the `db:backfill-jobs` and `db:verify-jobs` operator CLIs documented in `docs/deployment-sqlite-topology.md` and `docs/roadmap-relational-repositories.md`; the scheduler-side single-statement cutover of `claimNextJob`/`sweepStaleRunningJobs` to the SQL-native primitives is an explicitly deferred follow-up, with the existing load-store-loop pattern and `claimMutex` retained until dual-write has run cleanly across at least one stable phase), and the Phase 36 relational repository for `invitationEmailDeliveries` (SQLite migration `0014_invitation_email_deliveries_table.sql`, the `createInvitationEmailDeliveriesRepository` factory in `src/repositories/invitation-email-deliveries-repo.ts`, read-path delegation through `src/invitation-email-deliveries-read.ts` for `listInvitationEmailDeliveriesIndexed`, dual-write of all five mutators (`createInvitationEmailDelivery`, `markInvitationEmailDeliverySent`, `markInvitationEmailDeliverySkipped`, `markInvitationEmailDeliveryFailed`, `recordInvitationEmailProviderStatus`) to both `app_records` and the dedicated table in SQLite mode via the deferred-queue mechanism inside `mutateSqliteStore`, and the `db:backfill-invitation-email-deliveries` and `db:verify-invitation-email-deliveries` operator CLIs documented in `docs/deployment-sqlite-topology.md` and `docs/roadmap-relational-repositories.md`; the Phase 22 schema-additive trick stops working past this step, so any future field on `InvitationEmailDeliveryRecord` requires an explicit `ALTER TABLE invitation_email_deliveries ADD COLUMN ...` migration) are paired with managed database topology where needed, dedicated relational repositories/backfills continue rolling out across the remaining queued collections, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes. The remaining gaps after Phase 36 are managed database topology, the in-progress dedicated-relational-repositories migration for the remaining queued `activities` collection plus the Phase 38 retirement of the JSON-side mirror write, the deferred scheduler hot-path cutover that flips `claimNextJob`/`sweepStaleRunningJobs` from the load-store-loop pattern to the repository's SQL-native `claimNext`/`sweepStaleRunning` primitives, and continued workflow/UI/test polish for any features not yet covered.

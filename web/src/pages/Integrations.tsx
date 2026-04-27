@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { relative } from "@/lib/format";
+import { canManageWorkspaceRole } from "@/lib/roles";
 import type {
   ApiKeyProviderName,
   MaskedApiKey,
@@ -15,6 +17,8 @@ import type {
 const VAULT_PROVIDERS: ApiKeyProviderName[] = ["anthropic", "openai", "minimax", "ollama"];
 
 export default function IntegrationsPage() {
+  const { session } = useAuth();
+  const canManageIntegrations = canManageWorkspaceRole(session?.workspace.role);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [envVars, setEnvVars] = useState<WorkspaceEnvVarRecord[]>([]);
   const [apiKeys, setApiKeys] = useState<MaskedApiKey[]>([]);
@@ -47,6 +51,7 @@ export default function IntegrationsPage() {
 
   const addProvider = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageIntegrations) return;
     const form = new FormData(event.currentTarget);
     setSaving(true);
     setError(null);
@@ -71,6 +76,7 @@ export default function IntegrationsPage() {
 
   const addEnvVar = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageIntegrations) return;
     const form = new FormData(event.currentTarget);
     const body: SaveWorkspaceEnvVarInput = {
       key: field(form, "key"),
@@ -95,6 +101,7 @@ export default function IntegrationsPage() {
   };
 
   const removeEnvVar = async (envVar: WorkspaceEnvVarRecord) => {
+    if (!canManageIntegrations) return;
     setSavingEnv(envVar.id);
     setError(null);
     try {
@@ -107,6 +114,7 @@ export default function IntegrationsPage() {
 
   const addApiKey = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageIntegrations) return;
     const form = new FormData(event.currentTarget);
     setSavingKey("new");
     setError(null);
@@ -125,6 +133,7 @@ export default function IntegrationsPage() {
   };
 
   const removeApiKey = async (key: MaskedApiKey) => {
+    if (!canManageIntegrations) return;
     setSavingKey(key.id);
     setError(null);
     try {
@@ -149,6 +158,11 @@ export default function IntegrationsPage() {
 
       {error && <div className="mb-6 border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">ERR · {error}</div>}
       {message && !error && <div className="mb-6 border border-signal-green/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-green">OK · {message}</div>}
+      {!canManageIntegrations && (
+        <div className="mb-6 border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-500">
+          Admin role required to store keys, manage env vars, or create providers.
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center gap-3 text-sm text-ink-400">
@@ -168,7 +182,7 @@ export default function IntegrationsPage() {
               <span className="section-marker">§ 01 / 03</span>
             </div>
 
-            <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-[160px_1fr_2fr_120px] md:items-end" onSubmit={addApiKey}>
+            {canManageIntegrations ? <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-[160px_1fr_2fr_120px] md:items-end" onSubmit={addApiKey}>
               <Field label="PROVIDER">
                 <select name="provider" className="workflow-input" defaultValue="anthropic">
                   {VAULT_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -183,7 +197,7 @@ export default function IntegrationsPage() {
               <button className="btn-primary justify-center" type="submit" disabled={savingKey === "new"}>
                 {savingKey === "new" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "+"} Store
               </button>
-            </form>
+            </form> : <ReadOnlyRoleNotice />}
 
             {apiKeys.length === 0 ? (
               <div className="border border-dashed border-ink-700 px-6 py-8 text-center">
@@ -211,9 +225,11 @@ export default function IntegrationsPage() {
                       <td className="font-mono text-[11px] text-ink-500">{k.lastUsedAt ? relative(k.lastUsedAt) : "—"}</td>
                       <td className="font-mono text-[11px] text-ink-500">{relative(k.createdAt)}</td>
                       <td>
+                        {canManageIntegrations && (
                         <button type="button" className="font-mono text-xs text-ink-500 hover:text-signal-red" onClick={() => removeApiKey(k)} disabled={savingKey === k.id}>
                           × DEL
                         </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -234,7 +250,7 @@ export default function IntegrationsPage() {
               <span className="section-marker">§ 02 / 03</span>
             </div>
 
-            <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-2" onSubmit={addEnvVar}>
+            {canManageIntegrations ? <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-2" onSubmit={addEnvVar}>
               <Field label="KEY">
                 <input
                   name="key"
@@ -268,7 +284,7 @@ export default function IntegrationsPage() {
                   {savingEnv === "new" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "+"} Save variable
                 </button>
               </div>
-            </form>
+            </form> : <ReadOnlyRoleNotice />}
 
             {envVars.length === 0 ? (
               <div className="border border-dashed border-ink-700 px-6 py-8 text-center">
@@ -299,9 +315,11 @@ export default function IntegrationsPage() {
                       <td className="text-sm text-ink-400">{v.description || "—"}</td>
                       <td className="font-mono text-[11px] text-ink-500">{relative(v.updatedAt)}</td>
                       <td>
+                        {canManageIntegrations && (
                         <button type="button" className="font-mono text-xs text-ink-500 hover:text-signal-red" onClick={() => removeEnvVar(v)} disabled={savingEnv === v.id}>
                           × DEL
                         </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -322,7 +340,7 @@ export default function IntegrationsPage() {
               <span className="section-marker">§ 03 / 03</span>
             </div>
 
-            <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-[1fr_140px_1fr_1fr_auto] md:items-end" onSubmit={addProvider}>
+            {canManageIntegrations ? <form className="grid gap-3 border-b border-ink-700 pb-5 md:grid-cols-[1fr_140px_1fr_1fr_auto] md:items-end" onSubmit={addProvider}>
               <Field label="NAME">
                 <input name="name" className="workflow-input" placeholder="OpenAI" required />
               </Field>
@@ -348,7 +366,7 @@ export default function IntegrationsPage() {
                 <input name="apiKeyConfigured" type="checkbox" className="h-3.5 w-3.5 accent-signal-amber" />
                 API KEY CONFIGURED OUTSIDE UI
               </label>
-            </form>
+            </form> : <ReadOnlyRoleNotice />}
 
             {providers.length === 0 ? (
               <div className="border border-dashed border-ink-700 px-6 py-8 text-center">
@@ -386,6 +404,14 @@ export default function IntegrationsPage() {
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+function ReadOnlyRoleNotice() {
+  return (
+    <div className="border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ink-500">
+      Admin role required for changes.
     </div>
   );
 }

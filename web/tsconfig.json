@@ -14,7 +14,7 @@
     "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
-    "types": ["react", "react-dom", "vite/client"],
+    "types": ["node", "react", "react-dom", "vite/client"],
     "baseUrl": "src",
     "paths": {
       "@/*": ["*"]

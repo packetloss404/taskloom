@@ -13,7 +13,7 @@ export default function ActivationPage() {
     api.getActivationDetail().then(setDetail).catch(() => setDetail(null));
   }, []);
 
-  if (!detail) return <div className="text-sm text-ink-400">Loading activation detail…</div>;
+  if (!detail) return <div className="page-frame text-sm text-ink-400">Loading activation detail…</div>;
 
   const status = detail.activation.summary.riskLevel === "high"
     ? "failing"
@@ -24,7 +24,7 @@ export default function ActivationPage() {
         : "never_run";
 
   return (
-    <>
+    <div className="page-frame">
       <Link to="/" className="btn-ghost mb-6">
         <ArrowLeft className="h-4 w-4" /> Dashboard
       </Link>
@@ -80,7 +80,7 @@ export default function ActivationPage() {
           </div>
         </article>
       </section>
-    </>
+    </div>
   );
 }
 

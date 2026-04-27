@@ -16,6 +16,7 @@ import OperationsPage from "./pages/Operations";
 import IntegrationsPage from "./pages/Integrations";
 import RunsPage from "./pages/Runs";
 import NotFoundPage from "./pages/NotFound";
+import PublicSharePage from "./pages/PublicShare";
 
 export default function App() {
   return (
@@ -53,6 +54,7 @@ export default function App() {
         }
       />
       <Route path="/" element={<HomePage />} />
+      <Route path="/share/:token" element={<PublicSharePage />} />
       <Route
         element={
           <RequireAuth>

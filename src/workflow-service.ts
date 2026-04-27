@@ -1,21 +1,27 @@
 import { generateId, now } from "./auth-utils";
 import {
   appendWorkspaceBriefVersion,
+  findWorkspaceBriefIndexed,
   findWorkspaceBrief,
-  findWorkspaceBriefVersion,
-  listImplementationPlanItemsForWorkspace,
+  findWorkspaceBriefVersionIndexed,
+  findWorkspaceByIdIndexed,
+  listImplementationPlanItemsForWorkspaceIndexed,
+  listReleaseConfirmationsForWorkspaceIndexed,
   listReleaseConfirmationsForWorkspace,
-  listRequirementsForWorkspace,
-  listValidationEvidenceForWorkspace,
-  listWorkflowConcernsForWorkspace,
+  listRequirementsForWorkspaceIndexed,
+  listValidationEvidenceForWorkspaceIndexed,
+  listWorkflowConcernsForWorkspaceIndexed,
+  listWorkspaceBriefVersionsIndexed,
   listWorkspaceBriefVersions,
   loadStore,
   mutateStore,
   nextIncompleteStep,
   ONBOARDING_STEPS,
+  upsertActivationSignal,
   upsertReleaseConfirmation,
   upsertWorkspaceBrief,
   type ActivityRecord,
+  type ActivationSignalRecord,
   type ImplementationPlanItemRecord,
   type ImplementationPlanItemStatus,
   type OnboardingStepKey,
@@ -208,8 +214,8 @@ export function getWorkflowOverview(context: WorkflowContext) {
 }
 
 export function readWorkspaceBrief(context: WorkflowContext): WorkspaceBriefRecord {
-  const data = loadCheckedStore(context.workspace.id);
-  return copyRecord(findWorkspaceBrief(data, context.workspace.id) ?? defaultWorkspaceBrief(context));
+  ensureWorkspaceExists(context.workspace.id);
+  return copyRecord(findWorkspaceBriefIndexed(context.workspace.id) ?? defaultWorkspaceBrief(context));
 }
 
 export function updateWorkspaceBrief(
@@ -234,7 +240,8 @@ export function applyWorkspaceBriefTemplate(
 }
 
 export function listWorkspaceBriefHistory(context: WorkflowContext): WorkspaceBriefVersionRecord[] {
-  return listWorkspaceBriefVersions(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listWorkspaceBriefVersionsIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function restoreWorkspaceBriefVersion(
@@ -243,8 +250,8 @@ export function restoreWorkspaceBriefVersion(
 ): WorkspaceBriefRecord {
   const versionId = input.versionId?.trim();
   if (!versionId) throw httpError(400, "brief version id is required");
-  const data = loadCheckedStore(context.workspace.id);
-  const version = findWorkspaceBriefVersion(data, context.workspace.id, versionId);
+  ensureWorkspaceExists(context.workspace.id);
+  const version = findWorkspaceBriefVersionIndexed(context.workspace.id, versionId);
   if (!version) throw httpError(404, "brief version not found");
   return saveWorkspaceBriefInternal(
     context,
@@ -279,6 +286,10 @@ function saveWorkspaceBriefInternal(
 
   return mutateStore((data) => {
     const workspace = ensureWorkspace(data, context.workspace.id);
+    const previousBrief = findWorkspaceBrief(data, workspace.id);
+    const scopeChanged = previousBrief
+      ? briefScopeChanged(previousBrief, { summary, goals, audience, constraints, problemStatement, targetCustomers, desiredOutcome, successMetrics })
+      : false;
     const brief = upsertWorkspaceBrief(
       data,
       {
@@ -296,7 +307,7 @@ function saveWorkspaceBriefInternal(
       timestamp,
     );
 
-    appendWorkspaceBriefVersion(
+    const version = appendWorkspaceBriefVersion(
       data,
       {
         workspaceId: workspace.id,
@@ -321,6 +332,30 @@ function saveWorkspaceBriefInternal(
     const facts = ensureActivationFacts(data, workspace.id, timestamp);
     facts.briefCapturedAt = timestamp;
     markOnboardingStep(data, workspace.id, "create_workspace_profile", timestamp);
+    if (scopeChanged) {
+      const signal = upsertActivationSignal(data, {
+        workspaceId: workspace.id,
+        kind: "scope_change",
+        source: "workflow",
+        origin: "user_entered",
+        sourceId: version.id,
+        stableKey: activationSignalStableKey(workspace.id, "scope_change", "workflow", version.id),
+        data: {
+          source: options.source,
+          sourceLabel: options.sourceLabel,
+          versionNumber: version.versionNumber,
+        },
+      }, timestamp);
+      pushActivity(data, workspace.id, "workflow.scope_changed", actorFor(context), {
+        title: "Workflow scope changed",
+        activationSignalKind: "scope_change",
+        activationSignalId: signal.id,
+        sourceId: version.id,
+        versionNumber: version.versionNumber,
+        origin: "user_entered",
+        observedBy: "workflow_service",
+      }, timestamp, activationActivityId(workspace.id, "workflow.scope_changed", signal.id));
+    }
     pushActivity(data, workspace.id, "workflow.brief_updated", actorFor(context), {
       title: "Workspace brief updated",
       goalCount: goals.length,
@@ -334,7 +369,8 @@ function saveWorkspaceBriefInternal(
 }
 
 export function listRequirements(context: WorkflowContext): RequirementRecord[] {
-  return listRequirementsForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listRequirementsForWorkspaceIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function replaceRequirements(
@@ -363,7 +399,8 @@ export function replaceRequirements(
 }
 
 export function listPlanItems(context: WorkflowContext): ImplementationPlanItemRecord[] {
-  return listImplementationPlanItemsForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listImplementationPlanItemsForWorkspaceIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function replacePlanItems(
@@ -429,10 +466,10 @@ export function updateWorkflowPlanItem(
 }
 
 export function listBlockersAndQuestions(context: WorkflowContext) {
-  const data = loadCheckedStore(context.workspace.id);
+  ensureWorkspaceExists(context.workspace.id);
   return {
-    blockers: listWorkflowConcernsForWorkspace(data, context.workspace.id, "blocker").map(copyRecord),
-    questions: listWorkflowConcernsForWorkspace(data, context.workspace.id, "open_question").map(copyRecord),
+    blockers: listWorkflowConcernsForWorkspaceIndexed(context.workspace.id, "blocker").map(copyRecord),
+    questions: listWorkflowConcernsForWorkspaceIndexed(context.workspace.id, "open_question").map(copyRecord),
   };
 }
 
@@ -520,7 +557,8 @@ export function replaceBlockersAndQuestions(
 }
 
 export function listValidationEvidence(context: WorkflowContext): ValidationEvidenceRecord[] {
-  return listValidationEvidenceForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id).map(copyRecord);
+  ensureWorkspaceExists(context.workspace.id);
+  return listValidationEvidenceForWorkspaceIndexed(context.workspace.id).map(copyRecord);
 }
 
 export function replaceValidationEvidence(
@@ -586,7 +624,8 @@ export function updateWorkflowValidationEvidence(
 }
 
 export function readReleaseConfirmation(context: WorkflowContext): ReleaseConfirmationRecord | null {
-  const confirmations = listReleaseConfirmationsForWorkspace(loadCheckedStore(context.workspace.id), context.workspace.id);
+  ensureWorkspaceExists(context.workspace.id);
+  const confirmations = listReleaseConfirmationsForWorkspaceIndexed(context.workspace.id);
   const latest = confirmations.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   return latest ? copyRecord(latest) : null;
 }
@@ -741,10 +780,8 @@ function normalizeValidationEvidence(
   };
 }
 
-function loadCheckedStore(workspaceId: string): TaskloomData {
-  const data = loadStore();
-  ensureWorkspace(data, workspaceId);
-  return data;
+function ensureWorkspaceExists(workspaceId: string): void {
+  if (!findWorkspaceByIdIndexed(workspaceId)) throw httpError(404, "workspace not found");
 }
 
 function ensureWorkspace(data: TaskloomData, workspaceId: string): WorkspaceRecord {
@@ -809,9 +846,11 @@ function pushActivity(
   actor: ActivityRecord["actor"],
   activityData: ActivityRecord["data"],
   timestamp: string,
+  id = generateId(),
 ) {
+  if (data.activities.some((entry) => entry.id === id)) return;
   data.activities.unshift({
-    id: generateId(),
+    id,
     workspaceId,
     scope: "activation",
     event,
@@ -819,6 +858,41 @@ function pushActivity(
     data: activityData,
     occurredAt: timestamp,
   });
+}
+
+function briefScopeChanged(
+  previous: WorkspaceBriefRecord,
+  next: Pick<WorkspaceBriefRecord, "summary" | "goals" | "audience" | "constraints" | "problemStatement" | "targetCustomers" | "desiredOutcome" | "successMetrics">,
+): boolean {
+  return previous.summary !== next.summary ||
+    previous.audience !== next.audience ||
+    previous.constraints !== next.constraints ||
+    previous.problemStatement !== next.problemStatement ||
+    previous.desiredOutcome !== next.desiredOutcome ||
+    !sameStringList(previous.goals ?? [], next.goals ?? []) ||
+    !sameStringList(previous.targetCustomers ?? [], next.targetCustomers ?? []) ||
+    !sameStringList(previous.successMetrics ?? [], next.successMetrics ?? []);
+}
+
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function activationSignalStableKey(
+  workspaceId: string,
+  kind: ActivationSignalRecord["kind"],
+  source: ActivationSignalRecord["source"],
+  sourceId: string,
+): string {
+  return `${workspaceId}:${kind}:${source}:${sourceId}`;
+}
+
+function activationActivityId(workspaceId: string, event: string, signalId: string): string {
+  return `activity_${stableIdPart(workspaceId)}_${stableIdPart(event)}_${stableIdPart(signalId)}`;
+}
+
+function stableIdPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
 }
 
 function copyRecord<T>(record: T): T {

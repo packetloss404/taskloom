@@ -1,19 +1,36 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
-import { requireAuthenticatedContext } from "./taskloom-services.js";
+import { requirePrivateWorkspaceRole } from "./rbac.js";
 import {
   loadStore,
   mutateStore,
   findWorkspaceBrief,
+  findShareTokenByTokenIndexed,
   listImplementationPlanItemsForWorkspace,
   listRequirementsForWorkspace,
+  listShareTokensForWorkspaceIndexed,
   type ShareTokenRecord,
   type ShareTokenScope,
 } from "./taskloom-store.js";
+import { maskSecret, redactSensitiveString } from "./security/redaction.js";
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactSensitiveString((error as Error).message) });
+}
+
+function summarizeShareToken(t: ShareTokenRecord, options: { includeToken?: boolean } = {}) {
+  return {
+    id: t.id,
+    ...(options.includeToken ? { token: t.token } : {}),
+    tokenPreview: maskSecret(t.token),
+    scope: t.scope,
+    revokedAt: t.revokedAt,
+    expiresAt: t.expiresAt,
+    readCount: t.readCount,
+    lastReadAt: t.lastReadAt,
+    createdAt: t.createdAt,
+  };
 }
 
 function nowIso(): string {
@@ -30,20 +47,9 @@ export const shareRoutes = new Hono();
 
 shareRoutes.get("/", (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
-    const data = loadStore();
-    const tokens = data.shareTokens
-      .filter((t) => t.workspaceId === ctx.workspace.id)
-      .map((t) => ({
-        id: t.id,
-        token: t.token,
-        scope: t.scope,
-        revokedAt: t.revokedAt,
-        expiresAt: t.expiresAt,
-        readCount: t.readCount,
-        lastReadAt: t.lastReadAt,
-        createdAt: t.createdAt,
-      }));
+    const ctx = requirePrivateWorkspaceRole(c, "viewer");
+    const tokens = listShareTokensForWorkspaceIndexed(ctx.workspace.id)
+      .map((t) => summarizeShareToken(t));
     return c.json({ tokens });
   } catch (error) {
     return errorResponse(c, error);
@@ -52,7 +58,7 @@ shareRoutes.get("/", (c) => {
 
 shareRoutes.post("/", async (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "admin");
     const body = (await c.req.json().catch(() => ({}))) as { scope?: string; expiresAt?: string };
     const scope = (body.scope ?? "overview") as ShareTokenScope;
     if (!VALID_SCOPES.includes(scope)) {
@@ -69,7 +75,7 @@ shareRoutes.post("/", async (c) => {
       createdAt: nowIso(),
     };
     mutateStore((data) => { data.shareTokens.push(record); });
-    return c.json({ token: record }, 201);
+    return c.json({ token: summarizeShareToken(record, { includeToken: true }) }, 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -77,7 +83,7 @@ shareRoutes.post("/", async (c) => {
 
 shareRoutes.delete("/:id", (c) => {
   try {
-    const ctx = requireAuthenticatedContext(c);
+    const ctx = requirePrivateWorkspaceRole(c, "admin");
     const id = c.req.param("id");
     const ok = mutateStore((data) => {
       const t = data.shareTokens.find((entry) => entry.id === id && entry.workspaceId === ctx.workspace.id);
@@ -97,8 +103,7 @@ export const publicShareRoutes = new Hono();
 publicShareRoutes.get("/:token", (c) => {
   try {
     const tokenParam = c.req.param("token");
-    const data = loadStore();
-    const record = data.shareTokens.find((t) => t.token === tokenParam);
+    const record = findShareTokenByTokenIndexed(tokenParam);
     if (!record || record.revokedAt) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     if (record.expiresAt && Date.parse(record.expiresAt) < Date.now()) {
       return errorResponse(c, Object.assign(new Error("share token expired"), { status: 410 }));
@@ -110,6 +115,7 @@ publicShareRoutes.get("/:token", (c) => {
         live.readCount += 1;
       }
     });
+    const data = loadStore();
     const workspace = data.workspaces.find((w) => w.id === record.workspaceId);
     if (!workspace) return errorResponse(c, Object.assign(new Error("workspace not found"), { status: 404 }));
     const brief = findWorkspaceBrief(data, record.workspaceId);

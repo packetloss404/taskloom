@@ -22,7 +22,14 @@ test("parses 0 9 * * 1-5 (weekday 9am)", () => {
 test("invalid expression throws", () => {
   assert.throws(() => parseCron("nope"));
   assert.throws(() => parseCron("60 * * * *"));
+  assert.throws(() => parseCron("0 9 * * 5-1"));
   assert.throws(() => parseCron("* * * *"));
+});
+
+test("accepts 7 as Sunday in day-of-week", () => {
+  const expr = parseCron("0 9 * * 7");
+  assert.equal(matches(expr, new Date(2026, 0, 4, 9, 0)), true);
+  assert.equal(matches(expr, new Date(2026, 0, 5, 9, 0)), false);
 });
 
 test("nextAfter returns the next matching minute", () => {

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Hono, type Context } from "hono";
+import { SESSION_COOKIE_NAME } from "./auth-utils.js";
 import {
   WORKSPACE_ROLE_DEFINITIONS,
   WORKSPACE_ROLES,
@@ -10,8 +12,13 @@ import {
   canViewWorkspace,
   getWorkspaceRole,
   hasWorkspaceRole,
+  requirePrivateWorkspace,
+  requirePrivateWorkspacePermission,
+  requirePrivateWorkspaceRole,
   requireWorkspaceRole,
 } from "./rbac";
+import { login } from "./taskloom-services.js";
+import { mutateStore, resetStoreForTests } from "./taskloom-store.js";
 
 test("workspace roles are ordered from least to most privileged", () => {
   assert.deepEqual(WORKSPACE_ROLES, ["viewer", "member", "admin", "owner"]);
@@ -72,3 +79,100 @@ test("assert helpers throw for missing, invalid, or insufficient role", () => {
 
   assert.equal(assertPermission({ role: "admin" }, "manageWorkspace"), "admin");
 });
+
+test("route policy helpers require an authenticated session", async () => {
+  resetStoreForTests();
+  const app = createPolicyApp();
+
+  const response = await app.request("/private");
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "authentication required" });
+});
+
+test("route policy helpers reject malformed workspace memberships", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "billing" as typeof membership.role;
+  });
+  const app = createPolicyApp("membership");
+
+  const response = await app.request("/private", { headers: authHeaders(auth.cookieValue) });
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "workspace membership is required" });
+});
+
+test("route policy helpers reject insufficient workspace permissions", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "viewer";
+  });
+  const app = createPolicyApp();
+
+  const response = await app.request("/private", { headers: authHeaders(auth.cookieValue) });
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "workspace role member is required" });
+});
+
+test("route policy helpers return the authenticated context when permission is allowed", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "member";
+  });
+  const app = createPolicyApp();
+
+  const response = await app.request("/private", { headers: authHeaders(auth.cookieValue) });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { workspaceId: "alpha", userId: "user_alpha" });
+});
+
+test("route role policy helper accepts roles above the minimum", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const app = createPolicyApp("role");
+
+  const response = await app.request("/private", { headers: authHeaders(auth.cookieValue) });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { workspaceId: "alpha", userId: "user_alpha" });
+});
+
+function createPolicyApp(mode: "permission" | "membership" | "role" = "permission") {
+  const app = new Hono();
+  app.get("/private", (c) => {
+    try {
+      const context = routePolicyContext(c, mode);
+      return c.json({ workspaceId: context.workspace.id, userId: context.user.id });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+  return app;
+}
+
+function routePolicyContext(c: Context, mode: "permission" | "membership" | "role") {
+  if (mode === "membership") return requirePrivateWorkspace(c);
+  if (mode === "role") return requirePrivateWorkspaceRole(c, "admin");
+  return requirePrivateWorkspacePermission(c, "editWorkflow");
+}
+
+function authHeaders(cookieValue: string) {
+  return { Cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
+}
+
+function errorResponse(c: Context, error: unknown) {
+  c.status(((error as Error & { status?: number }).status ?? 500) as any);
+  return c.json({ error: (error as Error).message });
+}
