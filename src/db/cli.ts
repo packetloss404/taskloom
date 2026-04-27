@@ -7,7 +7,8 @@ import { activationSubjectForWorkspace } from "../jobs";
 import { sqliteAgentRunsRepository } from "../repositories/agent-runs-repo";
 import { sqliteAlertEventsRepository } from "../repositories/alert-events-repo";
 import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
-import type { AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
+import { sqliteJobsRepository } from "../repositories/jobs-repo";
+import type { AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, JobMetricSnapshotRecord, JobRecord, JobStatus } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -154,6 +155,30 @@ export interface BackfillAgentRunsOptions extends DbCliOptions {
 
 export interface VerifyAgentRunsOptions extends DbCliOptions {
   checkOrphans?: boolean;
+}
+
+export interface BackfillJobsResult {
+  command: "backfill-jobs";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyJobsResult {
+  command: "verify-jobs";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillJobsOptions extends DbCliOptions {
+  dryRun?: boolean;
 }
 
 const DEFAULT_DB_PATH = resolve(process.cwd(), "data", "taskloom.sqlite");
@@ -947,6 +972,202 @@ function canonicalizeAgentRun(record: AgentRunRecord): string {
   });
 }
 
+export function backfillJobs(options: BackfillJobsOptions = {}): BackfillJobsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readJobJsonRows(dbPath);
+  const dedicatedRows = readJobDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: JobRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeJob(existing) === canonicalizeJob(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    const repo = sqliteJobsRepository({ dbPath });
+    for (const record of toInsert) {
+      repo.upsert(record);
+    }
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-jobs",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyJobs(options: DbCliOptions = {}): VerifyJobsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readJobJsonRows(dbPath);
+  const dedicatedRows = readJobDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeJob(jsonRecord) === canonicalizeJob(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-jobs",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function readJobJsonRows(dbPath: string): JobRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'jobs'").all() as Array<{ payload: string }>;
+    return rows.map((row) => normalizeJobRecord(JSON.parse(row.payload) as JobRecord));
+  } finally {
+    db.close();
+  }
+}
+
+function readJobDedicatedRows(dbPath: string): JobRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, workspace_id, type, payload, status, attempts, max_attempts,
+        scheduled_at, started_at, completed_at, cron, result, error,
+        cancel_requested, created_at, updated_at
+      from jobs
+    `).all() as Array<{
+      id: string;
+      workspace_id: string;
+      type: string;
+      payload: string;
+      status: JobStatus;
+      attempts: number;
+      max_attempts: number;
+      scheduled_at: string;
+      started_at: string | null;
+      completed_at: string | null;
+      cron: string | null;
+      result: string | null;
+      error: string | null;
+      cancel_requested: number | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((row) => {
+      const record: JobRecord = {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        type: row.type,
+        payload: parseJobPayload(row.payload),
+        status: row.status,
+        attempts: row.attempts,
+        maxAttempts: row.max_attempts,
+        scheduledAt: row.scheduled_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+      if (row.started_at !== null) record.startedAt = row.started_at;
+      if (row.completed_at !== null) record.completedAt = row.completed_at;
+      if (row.cron !== null) record.cron = row.cron;
+      if (row.result !== null) record.result = parseJobResult(row.result);
+      if (row.error !== null) record.error = row.error;
+      if (row.cancel_requested !== null) record.cancelRequested = row.cancel_requested === 1;
+      return record;
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeJobRecord(record: JobRecord): JobRecord {
+  return { ...record, payload: record.payload && typeof record.payload === "object" && !Array.isArray(record.payload) ? record.payload : {} };
+}
+
+function parseJobPayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJobResult(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalizeJob(record: JobRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    workspaceId: record.workspaceId,
+    type: record.type,
+    payload: record.payload ?? {},
+    status: record.status,
+    attempts: record.attempts,
+    maxAttempts: record.maxAttempts,
+    scheduledAt: record.scheduledAt,
+    startedAt: record.startedAt ?? null,
+    completedAt: record.completedAt ?? null,
+    cron: record.cron ?? null,
+    result: record.result ?? null,
+    error: record.error ?? null,
+    cancelRequested: record.cancelRequested ?? null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  });
+}
+
 function countAgentRunOrphans(dbPath: string, jsonRows: AgentRunRecord[]): number {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1059,6 +1280,15 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(verifyAgentRuns({ ...options, checkOrphans }), null, 2));
       return 0;
     }
+    if (command === "backfill-jobs") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillJobs({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-jobs") {
+      console.log(JSON.stringify(verifyJobs(options), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -1085,7 +1315,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
 }
 
 function isExecutedDirectly(): boolean {

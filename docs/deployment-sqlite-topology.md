@@ -144,6 +144,13 @@ Phase 32 begins the migration of hot collections from the JSON-payload `app_reco
 
 The `--check-orphans` flag additionally counts agent runs whose `agentId` references a missing `agents` row in the JSON-side store. Orphans are surfaced in the report but do not block the backfill — they round-trip into the dedicated table as-is.
 
+### Phase 35 commands
+
+- `npm run db:backfill-jobs [-- --dry-run]`
+- `npm run db:verify-jobs`
+
+Phase 35 ships the dedicated `jobs` table, repository, and dual-write conservatively: `claimNextJob` and `sweepStaleRunningJobs` keep the existing load-store-loop pattern with the in-process `claimMutex` for now. The repository's SQL-native `claimNext`/`sweepStaleRunning` methods are shipped for a future single-statement cutover; until then, expect the dual-write to mirror the JSON-side state changes onto the dedicated table after each `mutateStore` transaction commits.
+
 The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
 
 ### Restore semantics during dual-write

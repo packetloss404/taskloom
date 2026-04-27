@@ -181,6 +181,8 @@ Repository: `src/repositories/jobs-repo.ts` with `list({ workspaceId, status, li
 
 This is the highest-risk step. Section 9 covers the risks.
 
+**Phase 35 conservative-cutover note (actual rollout):** Phase 35 shipped per Option 2 of the user's review: the table, repository (including `claimNext`/`sweepStaleRunning` SQL-native primitives), dual-write, and CLI all landed, but `src/jobs/store.ts`'s `claimNextJob` and `sweepStaleRunningJobs` keep the existing load-store-loop pattern with `claimMutex`. The hot-path single-statement cutover defers to a later phase, after dual-write has run cleanly across at least one stable phase. The repository's SQL-native methods are tested in both modes so the future cutover is a one-line scheduler change rather than a fresh implementation.
+
 ### Step 5: `invitation_email_deliveries`
 
 DDL shape (migration `0014_invitation_email_deliveries_table.sql`):

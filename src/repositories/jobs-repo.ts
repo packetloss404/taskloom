@@ -1,0 +1,402 @@
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+import type { JobRecord, JobStatus, TaskloomData } from "../taskloom-store.js";
+import { loadStore as defaultLoadStore, mutateStore as defaultMutateStore } from "../taskloom-store.js";
+
+const DEFAULT_LIST_LIMIT = 50;
+const MAX_LIST_LIMIT = 200;
+const DEFAULT_DB_FILE = "data/taskloom.sqlite";
+const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "db", "migrations");
+
+export interface ListJobsFilter {
+  workspaceId: string;
+  status?: JobStatus;
+  limit?: number;
+}
+
+export interface JobsRepository {
+  list(filter: ListJobsFilter): JobRecord[];
+  find(id: string): JobRecord | null;
+  upsert(record: JobRecord): void;
+  update(id: string, patch: Partial<JobRecord>): JobRecord | null;
+  count(): number;
+  claimNext(now: Date): JobRecord | null;
+  sweepStaleRunning(staleAfterMs: number, now: Date): number;
+}
+
+export interface JobsRepositoryDeps {
+  loadStore?: () => TaskloomData;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => T) => T;
+  dbPath?: string;
+}
+
+export function createJobsRepository(deps: JobsRepositoryDeps = {}): JobsRepository {
+  if (process.env.TASKLOOM_STORE === "sqlite") return sqliteJobsRepository(deps);
+  return jsonJobsRepository(deps);
+}
+
+export function jsonJobsRepository(deps: JobsRepositoryDeps = {}): JobsRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    list(filter) {
+      const data = load();
+      const collection = Array.isArray(data.jobs) ? data.jobs : [];
+      const filtered = collection.filter((entry) => {
+        if (entry.workspaceId !== filter.workspaceId) return false;
+        if (filter.status !== undefined && entry.status !== filter.status) return false;
+        return true;
+      });
+      return sortAndLimit(filtered, filter.limit);
+    },
+    find(id) {
+      const data = load();
+      const collection = Array.isArray(data.jobs) ? data.jobs : [];
+      return collection.find((entry) => entry.id === id) ?? null;
+    },
+    upsert(record) {
+      mutate((data) => {
+        if (!Array.isArray(data.jobs)) data.jobs = [];
+        const index = data.jobs.findIndex((entry) => entry.id === record.id);
+        if (index >= 0) {
+          data.jobs[index] = record;
+        } else {
+          data.jobs.push(record);
+        }
+        return null;
+      });
+    },
+    update(id, patch) {
+      return mutate((data) => {
+        if (!Array.isArray(data.jobs)) {
+          data.jobs = [];
+          return null;
+        }
+        const target = data.jobs.find((entry) => entry.id === id);
+        if (!target) return null;
+        Object.assign(target, patch, { updatedAt: new Date().toISOString() });
+        return target;
+      });
+    },
+    count() {
+      const data = load();
+      return Array.isArray(data.jobs) ? data.jobs.length : 0;
+    },
+    claimNext(now) {
+      return mutate((data) => {
+        if (!Array.isArray(data.jobs)) {
+          data.jobs = [];
+          return null;
+        }
+        const candidate = data.jobs
+          .filter((entry) => entry.status === "queued" && Date.parse(entry.scheduledAt) <= now.getTime())
+          .sort((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt))[0];
+        if (!candidate) return null;
+        const ts = now.toISOString();
+        candidate.status = "running";
+        candidate.attempts += 1;
+        candidate.startedAt = ts;
+        candidate.updatedAt = ts;
+        return candidate;
+      });
+    },
+    sweepStaleRunning(staleAfterMs, now) {
+      return mutate((data) => {
+        if (!Array.isArray(data.jobs)) {
+          data.jobs = [];
+          return 0;
+        }
+        const cutoff = now.getTime() - staleAfterMs;
+        const ts = now.toISOString();
+        let count = 0;
+        for (const entry of data.jobs) {
+          if (entry.status !== "running") continue;
+          if (!entry.startedAt) continue;
+          const startedMs = Date.parse(entry.startedAt);
+          if (Number.isNaN(startedMs) || startedMs >= cutoff) continue;
+          entry.status = "queued";
+          entry.updatedAt = ts;
+          delete entry.startedAt;
+          count += 1;
+        }
+        return count;
+      });
+    },
+  };
+}
+
+export function sqliteJobsRepository(deps: JobsRepositoryDeps = {}): JobsRepository {
+  const dbPath = resolveDbPath(deps.dbPath);
+  return {
+    list(filter) {
+      const db = openDatabase(dbPath);
+      try {
+        const sql: string[] = ["select * from jobs where workspace_id = ?"];
+        const params: Array<string | number> = [filter.workspaceId];
+        if (filter.status !== undefined) {
+          sql.push("and status = ?");
+          params.push(filter.status);
+        }
+        sql.push("order by created_at desc, id asc limit ?");
+        params.push(clampLimit(filter.limit));
+        const rows = db.prepare(sql.join(" ")).all(...params) as unknown as JobRow[];
+        return rows.map(rowToRecord);
+      } finally {
+        db.close();
+      }
+    },
+    find(id) {
+      const db = openDatabase(dbPath);
+      try {
+        const row = db.prepare("select * from jobs where id = ?").get(id) as JobRow | undefined;
+        return row ? rowToRecord(row) : null;
+      } finally {
+        db.close();
+      }
+    },
+    upsert(record) {
+      const db = openDatabase(dbPath);
+      try {
+        upsertRow(db, record);
+      } finally {
+        db.close();
+      }
+    },
+    update(id, patch) {
+      const db = openDatabase(dbPath);
+      try {
+        db.exec("begin immediate");
+        try {
+          const existing = db.prepare("select * from jobs where id = ?").get(id) as JobRow | undefined;
+          if (!existing) {
+            db.exec("commit");
+            return null;
+          }
+          const merged: JobRecord = { ...rowToRecord(existing), ...patch, updatedAt: new Date().toISOString() };
+          upsertRow(db, merged);
+          db.exec("commit");
+          return merged;
+        } catch (error) {
+          db.exec("rollback");
+          throw error;
+        }
+      } finally {
+        db.close();
+      }
+    },
+    count() {
+      const db = openDatabase(dbPath);
+      try {
+        const row = db.prepare("select count(*) as count from jobs").get() as
+          | { count: number }
+          | undefined;
+        return row?.count ?? 0;
+      } finally {
+        db.close();
+      }
+    },
+    claimNext(now) {
+      const db = openDatabase(dbPath);
+      try {
+        db.exec("begin immediate");
+        try {
+          const candidate = db
+            .prepare(
+              `select * from jobs
+                 where status = 'queued' and scheduled_at <= ?
+                 order by scheduled_at asc, id asc
+                 limit 1`,
+            )
+            .get(now.toISOString()) as JobRow | undefined;
+          if (!candidate) {
+            db.exec("commit");
+            return null;
+          }
+          const ts = now.toISOString();
+          const nextAttempts = candidate.attempts + 1;
+          db.prepare(
+            `update jobs
+               set status = 'running',
+                   attempts = ?,
+                   started_at = ?,
+                   updated_at = ?
+             where id = ?`,
+          ).run(nextAttempts, ts, ts, candidate.id);
+          const updated = db.prepare("select * from jobs where id = ?").get(candidate.id) as
+            | JobRow
+            | undefined;
+          db.exec("commit");
+          return updated ? rowToRecord(updated) : null;
+        } catch (error) {
+          db.exec("rollback");
+          throw error;
+        }
+      } finally {
+        db.close();
+      }
+    },
+    sweepStaleRunning(staleAfterMs, now) {
+      const db = openDatabase(dbPath);
+      try {
+        const cutoffIso = new Date(now.getTime() - staleAfterMs).toISOString();
+        const ts = now.toISOString();
+        const result = db
+          .prepare(
+            `update jobs
+               set status = 'queued',
+                   started_at = null,
+                   updated_at = ?
+             where status = 'running'
+               and started_at is not null
+               and started_at < ?`,
+          )
+          .run(ts, cutoffIso);
+        return Number(result.changes ?? 0);
+      } finally {
+        db.close();
+      }
+    },
+  };
+}
+
+interface JobRow {
+  id: string;
+  workspace_id: string;
+  type: string;
+  payload: string;
+  status: JobStatus;
+  attempts: number;
+  max_attempts: number;
+  scheduled_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cron: string | null;
+  result: string | null;
+  error: string | null;
+  cancel_requested: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function upsertRow(db: DatabaseSync, record: JobRecord): void {
+  db.prepare(`
+    insert or replace into jobs (
+      id, workspace_id, type, payload, status, attempts, max_attempts,
+      scheduled_at, started_at, completed_at, cron, result, error,
+      cancel_requested, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    record.id,
+    record.workspaceId,
+    record.type,
+    JSON.stringify(record.payload ?? {}),
+    record.status,
+    record.attempts,
+    record.maxAttempts,
+    record.scheduledAt,
+    record.startedAt ?? null,
+    record.completedAt ?? null,
+    record.cron ?? null,
+    record.result === undefined ? null : JSON.stringify(record.result),
+    record.error ?? null,
+    record.cancelRequested === undefined ? null : record.cancelRequested ? 1 : 0,
+    record.createdAt,
+    record.updatedAt,
+  );
+}
+
+function rowToRecord(row: JobRow): JobRecord {
+  const record: JobRecord = {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    type: row.type,
+    payload: parsePayload(row.payload),
+    status: row.status,
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    scheduledAt: row.scheduled_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (row.started_at !== null) record.startedAt = row.started_at;
+  if (row.completed_at !== null) record.completedAt = row.completed_at;
+  if (row.cron !== null) record.cron = row.cron;
+  if (row.result !== null) record.result = parseResult(row.result);
+  if (row.error !== null) record.error = row.error;
+  if (row.cancel_requested !== null) record.cancelRequested = row.cancel_requested === 1;
+  return record;
+}
+
+function parsePayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function parseResult(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function sortAndLimit(records: JobRecord[], limit?: number): JobRecord[] {
+  const sorted = records.slice().sort((left, right) => {
+    const cmp = right.createdAt.localeCompare(left.createdAt);
+    if (cmp !== 0) return cmp;
+    return left.id.localeCompare(right.id);
+  });
+  return sorted.slice(0, clampLimit(limit));
+}
+
+function clampLimit(limit?: number): number {
+  const requested = limit ?? DEFAULT_LIST_LIMIT;
+  return Math.min(Math.max(requested, 0), MAX_LIST_LIMIT);
+}
+
+function resolveDbPath(override?: string): string {
+  if (override) return resolve(override);
+  return resolve(process.cwd(), process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE);
+}
+
+function openDatabase(dbPath: string): DatabaseSync {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  db.exec("pragma busy_timeout = 5000");
+  db.exec("pragma journal_mode = wal");
+  db.exec("pragma synchronous = normal");
+  db.exec("pragma foreign_keys = on");
+  applyMigrations(db);
+  return db;
+}
+
+function applyMigrations(db: DatabaseSync): void {
+  db.exec(
+    "create table if not exists schema_migrations (name text primary key, applied_at text not null default (datetime('now')))",
+  );
+  const appliedRows = db.prepare("select name from schema_migrations order by name").all() as Array<{ name: string }>;
+  const alreadyApplied = new Set(appliedRows.map((row) => row.name));
+  const migrations = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql")).sort();
+  for (const name of migrations) {
+    if (alreadyApplied.has(name)) continue;
+    const sql = readFileSync(resolve(MIGRATIONS_DIR, name), "utf8");
+    db.exec("begin");
+    try {
+      db.exec(sql);
+      db.prepare("insert into schema_migrations (name) values (?)").run(name);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  }
+}

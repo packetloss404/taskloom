@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillJobMetricSnapshots, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAgentRuns, verifyAlertEvents, verifyJobMetricSnapshots } from "./cli";
-import type { AgentRunRecord, AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
+import { backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillJobMetricSnapshots, backfillJobs, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAgentRuns, verifyAlertEvents, verifyJobMetricSnapshots, verifyJobs } from "./cli";
+import type { AgentRunRecord, AlertEventRecord, JobMetricSnapshotRecord, JobRecord } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -1088,6 +1088,260 @@ test("verifyAgentRuns --check-orphans surfaces orphan count without blocking ver
 
     assert.equal(result.orphanCount, 1);
     assert.equal(result.matched, 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeJob(overrides: Partial<JobRecord> & { id: string }): JobRecord {
+  const record: JobRecord = {
+    id: overrides.id,
+    workspaceId: overrides.workspaceId ?? "workspace_a",
+    type: overrides.type ?? "agent.run",
+    payload: overrides.payload ?? {},
+    status: overrides.status ?? "queued",
+    attempts: overrides.attempts ?? 0,
+    maxAttempts: overrides.maxAttempts ?? 3,
+    scheduledAt: overrides.scheduledAt ?? "2026-04-26T12:00:00.000Z",
+    createdAt: overrides.createdAt ?? "2026-04-26T12:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-26T12:00:00.000Z",
+  };
+  if (overrides.startedAt !== undefined) record.startedAt = overrides.startedAt;
+  if (overrides.completedAt !== undefined) record.completedAt = overrides.completedAt;
+  if (overrides.cron !== undefined) record.cron = overrides.cron;
+  if (overrides.result !== undefined) record.result = overrides.result;
+  if (overrides.error !== undefined) record.error = overrides.error;
+  if (overrides.cancelRequested !== undefined) record.cancelRequested = overrides.cancelRequested;
+  return record;
+}
+
+function insertAppRecordJob(dbPath: string, record: JobRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('jobs', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedJob(dbPath: string, record: JobRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into jobs (
+        id, workspace_id, type, payload, status, attempts, max_attempts,
+        scheduled_at, started_at, completed_at, cron, result, error,
+        cancel_requested, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.workspaceId,
+      record.type,
+      JSON.stringify(record.payload ?? {}),
+      record.status,
+      record.attempts,
+      record.maxAttempts,
+      record.scheduledAt,
+      record.startedAt ?? null,
+      record.completedAt ?? null,
+      record.cron ?? null,
+      record.result === undefined ? null : JSON.stringify(record.result),
+      record.error ?? null,
+      record.cancelRequested === undefined ? null : record.cancelRequested ? 1 : 0,
+      record.createdAt,
+      record.updatedAt,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedJobs(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from jobs").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillJobs reports zero for an empty store", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+
+    const result = backfillJobs({ dbPath });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 0);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedJobs(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobs inserts JSON-side rows into the dedicated jobs table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordJob(dbPath, makeJob({ id: "job_a" }));
+
+    const result = backfillJobs({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedJobs(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobs is idempotent on re-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordJob(dbPath, makeJob({ id: "job_a" }));
+
+    backfillJobs({ dbPath });
+    const second = backfillJobs({ dbPath });
+
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.drift, 0);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedJobs(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobs --dry-run does not write", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordJob(dbPath, makeJob({ id: "job_a" }));
+    insertAppRecordJob(dbPath, makeJob({ id: "job_b" }));
+
+    const result = backfillJobs({ dbPath, dryRun: true });
+
+    assert.equal(result.dryRun, true);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.wouldInsert, 2);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedJobs(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobs reports drift when content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const jsonRecord = makeJob({ id: "job_a", status: "queued" });
+    insertAppRecordJob(dbPath, jsonRecord);
+    insertDedicatedJob(dbPath, { ...jsonRecord, status: "running" });
+
+    const result = backfillJobs({ dbPath, dryRun: true });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 1);
+    assert.equal(result.inserted, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobs reports matched when both sides identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeJob({ id: "job_a" });
+    insertAppRecordJob(dbPath, record);
+    insertDedicatedJob(dbPath, record);
+
+    const result = verifyJobs({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobs reports jsonOnly when JSON-side has rows not yet backfilled", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordJob(dbPath, makeJob({ id: "job_a" }));
+    insertAppRecordJob(dbPath, makeJob({ id: "job_b" }));
+
+    const result = verifyJobs({ dbPath });
+
+    assert.equal(result.jsonOnly, 2);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobs reports sqliteOnly when dedicated table has extra rows", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertDedicatedJob(dbPath, makeJob({ id: "extra" }));
+
+    const result = verifyJobs({ dbPath });
+
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobs reports contentDrift when ids match but content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeJob({ id: "job_a", status: "queued" });
+    insertAppRecordJob(dbPath, record);
+    insertDedicatedJob(dbPath, { ...record, status: "running" });
+
+    const result = verifyJobs({ dbPath });
+
+    assert.equal(result.contentDrift, 1);
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

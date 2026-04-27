@@ -12,6 +12,7 @@ import {
   listAgentRunsForWorkspaceViaRepository,
 } from "./agent-runs-read.js";
 import { createAgentRunsRepository } from "./repositories/agent-runs-repo.js";
+import { findJobViaRepository, listJobsForWorkspaceViaRepository } from "./jobs-read.js";
 
 export interface UserRecord {
   id: string;
@@ -1086,17 +1087,7 @@ export function listActivitiesForWorkspaceIndexed(workspaceId: string, limit?: n
 }
 
 export function listJobsForWorkspaceIndexed(workspaceId: string, opts: { status?: JobStatus; limit?: number } = {}): JobRecord[] {
-  if (process.env.TASKLOOM_STORE !== "sqlite") {
-    let entries = loadStore().jobs.filter((entry) => entry.workspaceId === workspaceId);
-    if (opts.status) entries = entries.filter((entry) => entry.status === opts.status);
-    entries = entries.slice().reverse();
-    return opts.limit ? entries.slice(0, opts.limit) : entries;
-  }
-  return listWorkspaceRecordsIndexed("jobs", workspaceId, {
-    orderBy: "createdAtDesc",
-    limit: opts.limit,
-    filter: opts.status ? (entry) => entry.status === opts.status : undefined,
-  });
+  return listJobsForWorkspaceViaRepository(workspaceId, opts);
 }
 
 export function listAgentsForWorkspaceIndexed(workspaceId: string, includeArchived = false): AgentRecord[] {
@@ -1289,8 +1280,7 @@ export function findAgentRunForWorkspaceIndexed(workspaceId: string, runId: stri
 }
 
 export function findJobIndexed(jobId: string): JobRecord | null {
-  return sqliteIndexedRecord<JobRecord>("jobs", "app_record_search.id = ?", [jobId])
-    ?? loadStore().jobs.find((entry) => entry.id === jobId) ?? null;
+  return findJobViaRepository(jobId);
 }
 
 function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {
