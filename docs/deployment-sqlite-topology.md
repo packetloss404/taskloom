@@ -132,6 +132,11 @@ Phase 32 begins the migration of hot collections from the JSON-payload `app_reco
 - `npm run db:backfill-job-metric-snapshots [-- --dry-run]`
 - `npm run db:verify-job-metric-snapshots`
 
+### Phase 33 commands
+
+- `npm run db:backfill-alert-events [-- --dry-run]`
+- `npm run db:verify-alert-events`
+
 The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
 
 ### Restore semantics during dual-write

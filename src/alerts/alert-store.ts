@@ -4,11 +4,13 @@ import {
   loadStore as defaultLoadStore,
   mutateStore as defaultMutateStore,
 } from "../taskloom-store.js";
+// Phase 33B: read path delegated to repository wrapper.
+import { listAlertsViaRepository } from "./alert-store-read.js";
+// Phase 33C: dedicated alert_events table dual-write.
+import { createAlertEventsRepository } from "../repositories/alert-events-repo.js";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_RETENTION_DAYS = 30;
-const DEFAULT_LIST_LIMIT = 100;
-const MAX_LIST_LIMIT = 500;
 
 export interface RecordAlertsOptions {
   retentionDays?: number;
@@ -79,7 +81,7 @@ export function recordAlerts(
   const retentionDays = options.retentionDays ?? DEFAULT_RETENTION_DAYS;
   const attemptedAt = nowFn().toISOString();
 
-  return mutate((data) => {
+  const outcome = mutate((data) => {
     const collection = ensureAlertCollection(data);
     const records = events.map((event) => toRecord(event, deliveryOk, deliveryError, attemptedAt));
     for (const record of records) {
@@ -87,8 +89,10 @@ export function recordAlerts(
     }
 
     let pruned = 0;
+    let retainAfterIso: string | null = null;
     if (retentionDays > 0) {
       const cutoff = nowFn().getTime() - retentionDays * DAY_MS;
+      retainAfterIso = new Date(cutoff).toISOString();
       const retained = collection.filter((entry) => Date.parse(entry.observedAt) >= cutoff);
       pruned = collection.length - retained.length;
       if (pruned > 0) {
@@ -96,8 +100,20 @@ export function recordAlerts(
       }
     }
 
-    return { stored: records.length, pruned };
+    return { stored: records.length, pruned, records, retainAfterIso };
   });
+
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    const repo = createAlertEventsRepository({});
+    if (outcome.records.length > 0) {
+      repo.insertMany(outcome.records);
+    }
+    if (outcome.retainAfterIso !== null) {
+      repo.prune(outcome.retainAfterIso);
+    }
+  }
+
+  return { stored: outcome.stored, pruned: outcome.pruned };
 }
 
 export interface UpdateAlertDeliveryStatusInput {
@@ -117,7 +133,7 @@ export function updateAlertDeliveryStatus(
   deps: UpdateAlertDeliveryStatusDeps = {},
 ): AlertEventRecord | null {
   const mutate = deps.mutateStore ?? defaultMutateStore;
-  return mutate((data) => {
+  const updated = mutate((data) => {
     const collection = ensureAlertCollection(data);
     const target = collection.find((entry) => entry.id === input.alertId);
     if (!target) return null;
@@ -139,30 +155,33 @@ export function updateAlertDeliveryStatus(
 
     return { ...target };
   });
+
+  if (updated && process.env.TASKLOOM_STORE === "sqlite") {
+    const repo = createAlertEventsRepository({});
+    const patch: {
+      delivered: boolean;
+      attemptedAt: string;
+      deliveryError?: string;
+      deadLettered?: boolean;
+    } = {
+      delivered: input.delivered,
+      attemptedAt: input.attemptedAt,
+    };
+    if (input.deliveryError !== undefined) {
+      patch.deliveryError = input.deliveryError;
+    }
+    if (input.deadLettered !== undefined) {
+      patch.deadLettered = input.deadLettered;
+    }
+    repo.updateDeliveryStatus(input.alertId, patch);
+  }
+
+  return updated;
 }
 
 export function listAlerts(
   options: ListAlertsOptions = {},
   deps: ListAlertsDeps = {},
 ): AlertEventRecord[] {
-  const load = deps.loadStore ?? defaultLoadStore;
-  const data = load();
-  const collection = Array.isArray(data.alertEvents) ? data.alertEvents : [];
-
-  const sinceMs = options.since ? Date.parse(options.since) : null;
-  const untilMs = options.until ? Date.parse(options.until) : null;
-
-  const filtered = collection.filter((entry) => {
-    if (options.severity !== undefined && entry.severity !== options.severity) return false;
-    const observedMs = Date.parse(entry.observedAt);
-    if (sinceMs !== null && !Number.isNaN(sinceMs) && observedMs < sinceMs) return false;
-    if (untilMs !== null && !Number.isNaN(untilMs) && observedMs > untilMs) return false;
-    return true;
-  });
-
-  filtered.sort((left, right) => right.observedAt.localeCompare(left.observedAt));
-
-  const requestedLimit = options.limit ?? DEFAULT_LIST_LIMIT;
-  const limit = Math.min(Math.max(requestedLimit, 0), MAX_LIST_LIMIT);
-  return filtered.slice(0, limit);
+  return listAlertsViaRepository(options, { loadStore: deps.loadStore });
 }

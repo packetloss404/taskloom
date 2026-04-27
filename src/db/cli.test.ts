@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillAppDatabase, backfillJobMetricSnapshots, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyJobMetricSnapshots } from "./cli";
-import type { JobMetricSnapshotRecord } from "../taskloom-store";
+import { backfillAlertEvents, backfillAppDatabase, backfillJobMetricSnapshots, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAlertEvents, verifyJobMetricSnapshots } from "./cli";
+import type { AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -549,6 +549,251 @@ test("verifyJobMetricSnapshots reports contentDrift when ids match but content d
     insertDedicatedSnapshot(dbPath, { ...record, totalRuns: 99 });
 
     const result = verifyJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.contentDrift, 1);
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeAlertRecord(overrides: Partial<AlertEventRecord> & { id: string }): AlertEventRecord {
+  const record: AlertEventRecord = {
+    id: overrides.id,
+    ruleId: overrides.ruleId ?? "subsystem-degraded",
+    severity: overrides.severity ?? "warning",
+    title: overrides.title ?? "Title",
+    detail: overrides.detail ?? "Detail",
+    observedAt: overrides.observedAt ?? "2026-04-26T12:00:00.000Z",
+    context: overrides.context ?? {},
+    delivered: overrides.delivered ?? true,
+    deliveryAttempts: overrides.deliveryAttempts ?? 1,
+    lastDeliveryAttemptAt: overrides.lastDeliveryAttemptAt ?? "2026-04-26T12:00:00.000Z",
+    deadLettered: overrides.deadLettered ?? false,
+  };
+  if (overrides.deliveryError !== undefined) record.deliveryError = overrides.deliveryError;
+  return record;
+}
+
+function insertAppRecordAlert(dbPath: string, record: AlertEventRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('alertEvents', ?, null, json(?), ?)
+      on conflict(collection, id) do update set payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, JSON.stringify(record), record.observedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedAlert(dbPath: string, record: AlertEventRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into alert_events (
+        id, rule_id, severity, title, detail, observed_at, context,
+        delivered, delivery_error, delivery_attempts, last_delivery_attempt_at, dead_lettered
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.ruleId,
+      record.severity,
+      record.title,
+      record.detail,
+      record.observedAt,
+      JSON.stringify(record.context ?? {}),
+      record.delivered ? 1 : 0,
+      record.deliveryError ?? null,
+      record.deliveryAttempts ?? null,
+      record.lastDeliveryAttemptAt ?? null,
+      record.deadLettered === undefined ? null : record.deadLettered ? 1 : 0,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedAlerts(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from alert_events").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillAlertEvents reports zero for an empty store", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+
+    const result = backfillAlertEvents({ dbPath });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 0);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedAlerts(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAlertEvents inserts JSON-side rows into the dedicated table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAlert(dbPath, makeAlertRecord({ id: "alert_a" }));
+
+    const result = backfillAlertEvents({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedAlerts(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAlertEvents is idempotent on re-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAlert(dbPath, makeAlertRecord({ id: "alert_a" }));
+
+    backfillAlertEvents({ dbPath });
+    const second = backfillAlertEvents({ dbPath });
+
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.drift, 0);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedAlerts(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAlertEvents --dry-run does not write", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAlert(dbPath, makeAlertRecord({ id: "alert_a" }));
+    insertAppRecordAlert(dbPath, makeAlertRecord({ id: "alert_b" }));
+
+    const result = backfillAlertEvents({ dbPath, dryRun: true });
+
+    assert.equal(result.dryRun, true);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.wouldInsert, 2);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedAlerts(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAlertEvents reports drift when content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const jsonRecord = makeAlertRecord({ id: "alert_a", title: "json title" });
+    insertAppRecordAlert(dbPath, jsonRecord);
+    insertDedicatedAlert(dbPath, { ...jsonRecord, title: "drifted title" });
+
+    const result = backfillAlertEvents({ dbPath, dryRun: true });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 1);
+    assert.equal(result.inserted, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAlertEvents reports matched when both sides identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeAlertRecord({ id: "alert_a" });
+    insertAppRecordAlert(dbPath, record);
+    insertDedicatedAlert(dbPath, record);
+
+    const result = verifyAlertEvents({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAlertEvents reports jsonOnly when JSON-side has rows not yet backfilled", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAlert(dbPath, makeAlertRecord({ id: "alert_a" }));
+    insertAppRecordAlert(dbPath, makeAlertRecord({ id: "alert_b" }));
+
+    const result = verifyAlertEvents({ dbPath });
+
+    assert.equal(result.jsonOnly, 2);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAlertEvents reports sqliteOnly when dedicated table has extra rows", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertDedicatedAlert(dbPath, makeAlertRecord({ id: "extra" }));
+
+    const result = verifyAlertEvents({ dbPath });
+
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAlertEvents reports contentDrift when ids match but content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeAlertRecord({ id: "alert_a", title: "json title" });
+    insertAppRecordAlert(dbPath, record);
+    insertDedicatedAlert(dbPath, { ...record, title: "drifted title" });
+
+    const result = verifyAlertEvents({ dbPath });
 
     assert.equal(result.contentDrift, 1);
     assert.equal(result.matched, 0);

@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { deriveActivationStatus } from "../activation/service";
 import { activationSubjectForWorkspace } from "../jobs";
+import { sqliteAlertEventsRepository } from "../repositories/alert-events-repo";
 import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
-import type { JobMetricSnapshotRecord } from "../taskloom-store";
+import type { AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -96,6 +97,30 @@ export interface VerifyJobMetricSnapshotsResult {
 }
 
 export interface BackfillJobMetricSnapshotsOptions extends DbCliOptions {
+  dryRun?: boolean;
+}
+
+export interface BackfillAlertEventsResult {
+  command: "backfill-alert-events";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyAlertEventsResult {
+  command: "verify-alert-events";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillAlertEventsOptions extends DbCliOptions {
   dryRun?: boolean;
 }
 
@@ -523,6 +548,175 @@ function canonicalize(record: JobMetricSnapshotRecord): string {
   });
 }
 
+export function backfillAlertEvents(options: BackfillAlertEventsOptions = {}): BackfillAlertEventsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readAlertEventJsonRows(dbPath);
+  const dedicatedRows = readAlertEventDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: AlertEventRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeAlert(existing) === canonicalizeAlert(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    const repo = sqliteAlertEventsRepository({ dbPath });
+    repo.insertMany(toInsert);
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-alert-events",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyAlertEvents(options: DbCliOptions = {}): VerifyAlertEventsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readAlertEventJsonRows(dbPath);
+  const dedicatedRows = readAlertEventDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeAlert(jsonRecord) === canonicalizeAlert(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-alert-events",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function readAlertEventJsonRows(dbPath: string): AlertEventRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'alertEvents'").all() as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as AlertEventRecord);
+  } finally {
+    db.close();
+  }
+}
+
+function readAlertEventDedicatedRows(dbPath: string): AlertEventRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, rule_id, severity, title, detail, observed_at, context,
+        delivered, delivery_error, delivery_attempts, last_delivery_attempt_at, dead_lettered
+      from alert_events
+    `).all() as Array<{
+      id: string;
+      rule_id: string;
+      severity: "info" | "warning" | "critical";
+      title: string;
+      detail: string;
+      observed_at: string;
+      context: string;
+      delivered: number;
+      delivery_error: string | null;
+      delivery_attempts: number | null;
+      last_delivery_attempt_at: string | null;
+      dead_lettered: number | null;
+    }>;
+    return rows.map((row) => {
+      const record: AlertEventRecord = {
+        id: row.id,
+        ruleId: row.rule_id,
+        severity: row.severity,
+        title: row.title,
+        detail: row.detail,
+        observedAt: row.observed_at,
+        context: parseAlertContext(row.context),
+        delivered: row.delivered === 1,
+      };
+      if (row.delivery_error !== null) record.deliveryError = row.delivery_error;
+      if (row.delivery_attempts !== null) record.deliveryAttempts = row.delivery_attempts;
+      if (row.last_delivery_attempt_at !== null) record.lastDeliveryAttemptAt = row.last_delivery_attempt_at;
+      if (row.dead_lettered !== null) record.deadLettered = row.dead_lettered === 1;
+      return record;
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function parseAlertContext(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function canonicalizeAlert(record: AlertEventRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    ruleId: record.ruleId,
+    severity: record.severity,
+    title: record.title,
+    detail: record.detail,
+    observedAt: record.observedAt,
+    context: record.context ?? {},
+    delivered: record.delivered,
+    deliveryError: record.deliveryError ?? null,
+    deliveryAttempts: record.deliveryAttempts ?? null,
+    lastDeliveryAttemptAt: record.lastDeliveryAttemptAt ?? null,
+    deadLettered: record.deadLettered ?? null,
+  });
+}
+
 export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
   const [command, ...args] = argv;
   const options = parseOptions(args);
@@ -581,6 +775,15 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(verifyJobMetricSnapshots(options), null, 2));
       return 0;
     }
+    if (command === "backfill-alert-events") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillAlertEvents({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-alert-events") {
+      console.log(JSON.stringify(verifyAlertEvents(options), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -607,7 +810,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run]");
 }
 
 function isExecutedDirectly(): boolean {

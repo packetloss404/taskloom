@@ -24,6 +24,8 @@
     "db:reset-app": "node --import tsx src/db/cli.ts reset-app",
     "db:backfill-job-metric-snapshots": "node --import tsx src/db/cli.ts backfill-job-metric-snapshots",
     "db:verify-job-metric-snapshots": "node --import tsx src/db/cli.ts verify-job-metric-snapshots",
+    "db:backfill-alert-events": "node --import tsx src/db/cli.ts backfill-alert-events",
+    "db:verify-alert-events": "node --import tsx src/db/cli.ts verify-alert-events",
     "store:seed": "node --import tsx src/db/cli.ts seed-store",
     "store:reset": "node --import tsx src/db/cli.ts reset-store",
     "jobs:recompute-activation": "node --import tsx src/jobs.ts recompute-activation",
