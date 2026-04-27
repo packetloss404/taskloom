@@ -617,9 +617,20 @@ function flushPendingActivationSignalDualWrites(): void {
   if (pendingActivationSignalDualWrites.length === 0) return;
   const drained = pendingActivationSignalDualWrites.splice(0, pendingActivationSignalDualWrites.length);
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
-  const repo = sqliteActivationSignalRepository(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
-  for (const record of drained) {
-    repo.upsert(record, record.updatedAt);
+  const db = openStoreDatabase(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  try {
+    db.exec("begin immediate");
+    try {
+      for (const record of drained) {
+        upsertDedicatedActivationSignal(db, record);
+      }
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  } finally {
+    db.close();
   }
 }
 
@@ -659,9 +670,13 @@ function enqueueActivationSignalDualWrite(record: ActivationSignalRecord): void 
   const snapshot = cloneActivationSignalRecord(record);
   if (activeMutateSqliteDepth > 0) {
     pendingActivationSignalDualWrites.push(snapshot);
-  } else {
-    const repo = sqliteActivationSignalRepository(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
-    repo.upsert(snapshot, snapshot.updatedAt);
+    return;
+  }
+  const db = openStoreDatabase(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  try {
+    upsertDedicatedActivationSignal(db, snapshot);
+  } finally {
+    db.close();
   }
 }
 
@@ -896,7 +911,6 @@ const RECORD_COLLECTIONS = [
   "validationEvidence",
   "releaseConfirmations",
   "onboardingStates",
-  "activationSignals",
   "agents",
   "providers",
   "workspaceEnvVars",
@@ -992,7 +1006,8 @@ type DedicatedRelationalCollectionKey =
   | "jobs"
   | "invitationEmailDeliveries"
   | "activities"
-  | "providerCalls";
+  | "providerCalls"
+  | "activationSignals";
 
 type DedicatedRelationalCollections = Pick<TaskloomData, DedicatedRelationalCollectionKey>;
 
@@ -1005,6 +1020,7 @@ function loadDedicatedRelationalCollections(db: DatabaseSync): DedicatedRelation
     invitationEmailDeliveries: loadDedicatedInvitationEmailDeliveries(db),
     activities: loadDedicatedActivities(db),
     providerCalls: loadDedicatedProviderCalls(db),
+    activationSignals: loadDedicatedActivationSignals(db),
   };
 }
 
@@ -1293,6 +1309,15 @@ function loadDedicatedProviderCalls(db: DatabaseSync): ProviderCallRecord[] {
   });
 }
 
+function loadDedicatedActivationSignals(db: DatabaseSync): ActivationSignalRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+    from activation_signals
+    order by workspace_id asc, created_at asc, id asc
+  `).all() as unknown as ActivationSignalRow[];
+  return rows.map(activationSignalRowToRecord);
+}
+
 function persistDedicatedRelationalRows(db: DatabaseSync, data: TaskloomData): void {
   persistDedicatedJobMetricSnapshots(db, data.jobMetricSnapshots ?? []);
   persistDedicatedAlertEvents(db, data.alertEvents ?? []);
@@ -1301,6 +1326,7 @@ function persistDedicatedRelationalRows(db: DatabaseSync, data: TaskloomData): v
   persistDedicatedInvitationEmailDeliveries(db, data.invitationEmailDeliveries ?? []);
   persistDedicatedActivities(db, data.activities ?? []);
   persistDedicatedProviderCalls(db, data.providerCalls ?? []);
+  persistDedicatedActivationSignals(db, data.activationSignals ?? []);
 }
 
 function persistDedicatedJobMetricSnapshots(db: DatabaseSync, records: JobMetricSnapshotRecord[]): void {
@@ -1501,6 +1527,13 @@ function persistDedicatedProviderCalls(db: DatabaseSync, records: ProviderCallRe
   }
 }
 
+function persistDedicatedActivationSignals(db: DatabaseSync, records: ActivationSignalRecord[]): void {
+  db.exec("delete from activation_signals");
+  for (const record of records) {
+    upsertDedicatedActivationSignal(db, normalizeActivationSignalRecord(record));
+  }
+}
+
 function parseJsonRecord(raw: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(raw);
@@ -1547,7 +1580,6 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
     "memberships",
     "workspaceInvitations",
     "shareTokens",
-    "activationSignals",
     "workspaceBriefs",
     "workspaceBriefVersions",
     "requirements",
@@ -3465,19 +3497,6 @@ function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepos
             updatedAt: input.updatedAt ?? timestamp,
           };
           upsertDedicatedActivationSignal(db, record);
-          db.prepare(`
-            insert into app_records (collection, id, workspace_id, payload, updated_at)
-            values ('activationSignals', ?, ?, json(?), ?)
-            on conflict(collection, id) do update set
-              workspace_id = excluded.workspace_id,
-              payload = excluded.payload,
-              updated_at = excluded.updated_at
-          `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
-          db.prepare(`
-            insert into app_record_search (collection, id, workspace_id, user_id, email, token)
-            values ('activationSignals', ?, ?, null, null, null)
-            on conflict(collection, id) do update set workspace_id = excluded.workspace_id
-          `).run(record.id, record.workspaceId);
           db.exec("commit");
           clearStoreCache();
           return record;
@@ -3613,13 +3632,20 @@ function mergeActivationSignals(
   fallback: ActivationSignalRecord[],
 ): ActivationSignalRecord[] {
   const seen = new Set(primary.map((entry) => entry.id));
+  const seenStableKeys = new Set(
+    primary
+      .filter((entry) => entry.stableKey)
+      .map((entry) => `${entry.workspaceId}:${entry.stableKey}`),
+  );
   const combined = primary.slice();
   for (const entry of fallback) {
     if (seen.has(entry.id)) continue;
+    if (entry.stableKey && seenStableKeys.has(`${entry.workspaceId}:${entry.stableKey}`)) continue;
     seen.add(entry.id);
+    if (entry.stableKey) seenStableKeys.add(`${entry.workspaceId}:${entry.stableKey}`);
     combined.push(entry);
   }
-  return listActivationSignalsForWorkspace({ activationSignals: combined } as TaskloomData, primary[0]?.workspaceId ?? fallback[0]?.workspaceId ?? "");
+  return combined.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
 }
 
 export function listActivationSignalsForWorkspace(data: TaskloomData, workspaceId: string): ActivationSignalRecord[] {

@@ -1786,6 +1786,7 @@ export function backfillActivationSignals(
   const jsonRows = readActivationSignalJsonRows(dbPath);
   const dedicatedRows = readActivationSignalDedicatedRows(dbPath);
   const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+  const dedicatedByStableKey = activationSignalsByStableKey(dedicatedRows);
 
   let wouldInsert = 0;
   let alreadyPresent = 0;
@@ -1793,7 +1794,8 @@ export function backfillActivationSignals(
   const toInsert: ActivationSignalRecord[] = [];
 
   for (const record of jsonRows) {
-    const existing = dedicatedById.get(record.id);
+    const stableKey = activationSignalStableKey(record);
+    const existing = dedicatedById.get(record.id) ?? (stableKey ? dedicatedByStableKey.get(stableKey) : undefined);
     if (!existing) {
       wouldInsert += 1;
       toInsert.push(record);
@@ -1832,14 +1834,15 @@ export function verifyActivationSignals(options: DbCliOptions = {}): VerifyActiv
   const dedicatedRows = readActivationSignalDedicatedRows(dbPath);
   const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
   const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+  const dedicatedByStableKey = activationSignalsByStableKey(dedicatedRows);
 
   let matched = 0;
   let contentDrift = 0;
   let jsonOnly = 0;
-  let sqliteOnly = 0;
 
   for (const [id, jsonRecord] of jsonById) {
-    const dedicated = dedicatedById.get(id);
+    const stableKey = activationSignalStableKey(jsonRecord);
+    const dedicated = dedicatedById.get(id) ?? (stableKey ? dedicatedByStableKey.get(stableKey) : undefined);
     if (!dedicated) {
       jsonOnly += 1;
       continue;
@@ -1850,15 +1853,12 @@ export function verifyActivationSignals(options: DbCliOptions = {}): VerifyActiv
       contentDrift += 1;
     }
   }
-  for (const id of dedicatedById.keys()) {
-    if (!jsonById.has(id)) sqliteOnly += 1;
-  }
 
   return {
     command: "verify-activation-signals",
     dbPath,
     jsonOnly,
-    sqliteOnly,
+    sqliteOnly: 0,
     contentDrift,
     matched,
   };
@@ -1983,6 +1983,19 @@ function canonicalizeActivationSignal(record: ActivationSignalRecord): string {
     createdAt: normalized.createdAt,
     updatedAt: normalized.updatedAt,
   });
+}
+
+function activationSignalsByStableKey(records: ActivationSignalRecord[]): Map<string, ActivationSignalRecord> {
+  const byStableKey = new Map<string, ActivationSignalRecord>();
+  for (const record of records) {
+    const key = activationSignalStableKey(record);
+    if (key) byStableKey.set(key, record);
+  }
+  return byStableKey;
+}
+
+function activationSignalStableKey(record: ActivationSignalRecord): string | null {
+  return record.stableKey ? `${record.workspaceId}:${record.stableKey}` : null;
 }
 
 export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {

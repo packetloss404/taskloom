@@ -425,6 +425,18 @@ test("sqlite store hydrates retired relational collections from dedicated tables
       startedAt: "2026-04-26T12:06:00.000Z",
       completedAt: "2026-04-26T12:06:01.000Z",
     });
+    data.activationSignals.push({
+      id: "signal_dedicated",
+      workspaceId: "alpha",
+      kind: "retry",
+      source: "user_fact",
+      origin: "user_entered",
+      sourceId: "run_dedicated",
+      stableKey: "alpha:retry:dedicated",
+      data: { reason: "whole-store persist" },
+      createdAt: "2026-04-26T12:07:00.000Z",
+      updatedAt: "2026-04-26T12:07:01.000Z",
+    });
     persistSqliteAppData(dbPath, data);
 
     const db = new DatabaseSync(dbPath);
@@ -439,6 +451,7 @@ test("sqlite store hydrates retired relational collections from dedicated tables
            or (collection = 'invitationEmailDeliveries' and id = 'delivery_dedicated')
            or (collection = 'activities' and id = 'activity_dedicated')
            or (collection = 'providerCalls' and id = 'provider_call_dedicated')
+           or (collection = 'activationSignals' and id = 'signal_dedicated')
       `).get() as { count: number };
       assert.equal(legacyRows.count, 0);
       assert.equal((db.prepare("select count(*) as count from job_metric_snapshots where id = 'metric_dedicated'").get() as { count: number }).count, 1);
@@ -448,6 +461,7 @@ test("sqlite store hydrates retired relational collections from dedicated tables
       assert.equal((db.prepare("select count(*) as count from invitation_email_deliveries where id = 'delivery_dedicated'").get() as { count: number }).count, 1);
       assert.equal((db.prepare("select count(*) as count from activities where id = 'activity_dedicated'").get() as { count: number }).count, 1);
       assert.equal((db.prepare("select count(*) as count from provider_calls where id = 'provider_call_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from activation_signals where id = 'signal_dedicated'").get() as { count: number }).count, 1);
     } finally {
       db.close();
     }
@@ -461,6 +475,7 @@ test("sqlite store hydrates retired relational collections from dedicated tables
     assert.equal(reloaded.invitationEmailDeliveries.some((entry) => entry.id === "delivery_dedicated"), true);
     assert.equal(reloaded.activities.some((entry) => entry.id === "activity_dedicated"), true);
     assert.equal(reloaded.providerCalls.some((entry) => entry.id === "provider_call_dedicated"), true);
+    assert.equal(reloaded.activationSignals.some((entry) => entry.id === "signal_dedicated"), true);
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
@@ -597,12 +612,93 @@ test("activation signal repository persists and lists SQLite records by workspac
     assert.equal(repository.listForWorkspace("workspace_sqlite_signals")[0]?.source, "user_fact");
     assert.equal(repository.listForWorkspace("workspace_sqlite_signals")[0]?.origin, "user_entered");
     assert.equal(activationSignalRowCount(dbPath, "workspace_sqlite_signals"), 1);
+    assert.equal(activationSignalAppRecordRowCount(dbPath), 0);
 
     clearStoreCacheForTests();
     const reloaded = loadStore();
     const signals = listActivationSignalsForWorkspace(reloaded, "workspace_sqlite_signals");
     assert.equal(signals.length, 1);
     assert.equal(signals[0]?.stableKey, "workspace_sqlite_signals:scope:billing");
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("activation signal repository de-dupes legacy fallback rows by stable key", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-signal-fallback-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+
+    resetStoreForTests();
+    const repository = activationSignalRepository();
+    const dedicated = repository.upsert({
+      workspaceId: "workspace_sqlite_signals",
+      kind: "retry",
+      source: "agent_run",
+      stableKey: "workspace_sqlite_signals:retry:shared",
+      sourceId: "run_dedicated",
+    }, "2026-04-04T00:00:00.000Z");
+    insertLegacyActivationSignalAppRecord(dbPath, {
+      ...dedicated,
+      id: "legacy_signal_same_stable_key",
+      sourceId: "run_legacy",
+      updatedAt: "2026-04-05T00:00:00.000Z",
+    });
+
+    const signals = repository.listForWorkspace("workspace_sqlite_signals");
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]?.id, dedicated.id);
+    assert.equal(signals[0]?.sourceId, "run_dedicated");
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("sqlite upsertActivationSignal writes dedicated records during mutations", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-signal-mutation-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+
+    resetStoreForTests();
+    mutateStore((data) => {
+      const record = upsertActivationSignal(data, {
+        workspaceId: "workspace_sqlite_signal_mutation",
+        kind: "retry",
+        source: "agent_run",
+        stableKey: "workspace_sqlite_signal_mutation:retry:run",
+        sourceId: "run_sqlite_signal_mutation",
+        data: { attempt: 2 },
+      }, "2026-04-06T00:00:00.000Z");
+      assert.equal(record.origin, "user_entered");
+    });
+
+    assert.equal(activationSignalRowCount(dbPath, "workspace_sqlite_signal_mutation"), 1);
+    assert.equal(activationSignalAppRecordRowCount(dbPath), 0);
+
+    clearStoreCacheForTests();
+    const signals = listActivationSignalsForWorkspace(loadStore(), "workspace_sqlite_signal_mutation");
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]?.sourceId, "run_sqlite_signal_mutation");
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
@@ -1001,6 +1097,30 @@ function activationSignalRowCount(dbPath: string, workspaceId: string): number {
   try {
     const row = db.prepare("select count(*) as count from activation_signals where workspace_id = ?").get(workspaceId) as { count: number };
     return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+function activationSignalAppRecordRowCount(dbPath: string, workspaceId?: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = workspaceId
+      ? db.prepare("select count(*) as count from app_records where collection = 'activationSignals' and workspace_id = ?").get(workspaceId) as { count: number }
+      : db.prepare("select count(*) as count from app_records where collection = 'activationSignals'").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+function insertLegacyActivationSignalAppRecord(dbPath: string, record: import("./taskloom-store").ActivationSignalRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('activationSignals', ?, ?, json(?), ?)
+    `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
   } finally {
     db.close();
   }

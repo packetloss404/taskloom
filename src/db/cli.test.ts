@@ -203,7 +203,11 @@ test("seedAppDatabase writes the full seed store and activation rows", () => {
     const db = new DatabaseSync(dbPath);
     try {
       const trackCount = db.prepare("select count(*) as count from activation_tracks").get() as { count: number };
+      const signalRows = db.prepare("select count(*) as count from activation_signals").get() as { count: number };
+      const appRecordSignalRows = db.prepare("select count(*) as count from app_records where collection = 'activationSignals'").get() as { count: number };
       assert.equal(trackCount.count, 3);
+      assert.equal(signalRows.count, data?.activationSignals.length ?? 0);
+      assert.equal(appRecordSignalRows.count, 0);
     } finally {
       db.close();
     }
@@ -225,6 +229,14 @@ test("backfillAppDatabase reads a JSON store path into SQLite", () => {
       resetAt: "2026-05-02T00:00:00.000Z",
       updatedAt: "2026-04-02T00:00:00.000Z",
     }];
+    data.activationSignals = [
+      makeActivationSignal({
+        id: "signal_backfill_cli",
+        workspaceId: "alpha",
+        stableKey: "alpha:signal:backfill-cli",
+        data: { source: "backfill" },
+      }),
+    ];
     writeFileSync(jsonPath, JSON.stringify(data));
 
     const result = backfillAppDatabase({ dbPath, jsonPath });
@@ -233,13 +245,18 @@ test("backfillAppDatabase reads a JSON store path into SQLite", () => {
     assert.equal(result.source, "backfill");
     assert.equal(stored?.workspaces[0]?.name, "Backfilled Workspace");
     assert.equal(stored?.rateLimits?.[0]?.id, "auth:login:sha256:backfill");
+    assert.deepEqual(stored?.activationSignals.map((entry) => entry.id), ["signal_backfill_cli"]);
 
     const db = new DatabaseSync(dbPath);
     try {
       const bucketRows = db.prepare("select count(*) as count from rate_limit_buckets").get() as { count: number };
-      const appRecordRows = db.prepare("select count(*) as count from app_records where collection = 'rateLimits'").get() as { count: number };
+      const rateLimitAppRecordRows = db.prepare("select count(*) as count from app_records where collection = 'rateLimits'").get() as { count: number };
+      const signalRows = db.prepare("select count(*) as count from activation_signals where id = 'signal_backfill_cli'").get() as { count: number };
+      const signalAppRecordRows = db.prepare("select count(*) as count from app_records where collection = 'activationSignals'").get() as { count: number };
       assert.equal(bucketRows.count, 1);
-      assert.equal(appRecordRows.count, 0);
+      assert.equal(rateLimitAppRecordRows.count, 0);
+      assert.equal(signalRows.count, 1);
+      assert.equal(signalAppRecordRows.count, 0);
     } finally {
       db.close();
     }
@@ -263,6 +280,16 @@ test("resetAppDatabase recreates migrated DB state with seed app data", () => {
     assert.equal(result.command, "reset-app");
     assert.equal(stored?.workspaces.some((workspace) => workspace.id === "alpha"), true);
     assert.deepEqual(jsonContents.workspaces, [{ id: "json-only" }]);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const signalRows = db.prepare("select count(*) as count from activation_signals").get() as { count: number };
+      const appRecordSignalRows = db.prepare("select count(*) as count from app_records where collection = 'activationSignals'").get() as { count: number };
+      assert.equal(signalRows.count, stored?.activationSignals.length ?? 0);
+      assert.equal(appRecordSignalRows.count, 0);
+    } finally {
+      db.close();
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2196,6 +2223,56 @@ test("backfillActivationSignals is idempotent and supports dry-run", () => {
   }
 });
 
+test("backfillActivationSignals treats matching stable-key rows with different ids as drift", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const jsonRecord = makeActivationSignal({
+      id: "legacy_signal",
+      stableKey: "alpha:signal:shared",
+      source: "user_fact",
+    });
+    const dedicatedRecord = makeActivationSignal({
+      id: "dedicated_signal",
+      stableKey: "alpha:signal:shared",
+      source: "system_fact",
+      origin: "system_observed",
+    });
+    insertAppRecordActivationSignal(dbPath, jsonRecord);
+    insertDedicatedActivationSignal(dbPath, dedicatedRecord);
+
+    const result = backfillActivationSignals({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 1);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedActivationSignals(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyActivationSignals treats dedicated-only rows as healthy after mirror retirement", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertDedicatedActivationSignal(dbPath, makeActivationSignal({ id: "dedicated_only", stableKey: "alpha:dedicated-only" }));
+
+    const result = verifyActivationSignals({ dbPath });
+
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("verifyActivationSignals reports jsonOnly sqliteOnly and contentDrift", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
   try {
@@ -2214,7 +2291,7 @@ test("verifyActivationSignals reports jsonOnly sqliteOnly and contentDrift", () 
 
     assert.equal(result.matched, 1);
     assert.equal(result.jsonOnly, 1);
-    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.sqliteOnly, 0);
     assert.equal(result.contentDrift, 1);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
