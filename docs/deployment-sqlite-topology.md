@@ -150,7 +150,9 @@ The `--check-orphans` flag additionally counts agent runs whose `agentId` refere
 - `npm run db:backfill-jobs [-- --dry-run]`
 - `npm run db:verify-jobs`
 
-Phase 35 ships the dedicated `jobs` table, repository, and dual-write conservatively: `claimNextJob` and `sweepStaleRunningJobs` keep the existing load-store-loop pattern with the in-process `claimMutex` for now. The repository's SQL-native `claimNext`/`sweepStaleRunning` methods are shipped for a future single-statement cutover; until then, expect the dual-write to mirror the JSON-side state changes onto the dedicated table after each `mutateStore` transaction commits.
+Phase 35 originally shipped the dedicated `jobs` table, repository, and dual-write conservatively. After Phase 38 retired the legacy JSON-side mirrors, the scheduler hot-path follow-up landed: in SQLite mode, `claimNextJob` and `sweepStaleRunningJobs` now use the repository's transactional `claimNext`/`sweepStaleRunning` primitives against the dedicated `jobs` table. JSON mode keeps the existing load-store-loop pattern with the in-process `claimMutex`.
+
+This cutover improves the local SQLite scheduler claim/sweep path, but it does not make SQLite a distributed scheduler or multi-writer production topology. The supported posture remains one local SQLite writer at a time; use a deployment-owned coordinator and a managed relational database before scaling writers across processes, hosts, or regions.
 
 ### Phase 36 commands
 

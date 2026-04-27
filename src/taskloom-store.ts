@@ -2736,7 +2736,7 @@ function pruneRateLimitBuckets(data: TaskloomData, maxBuckets: number) {
     .slice(0, limit);
 }
 
-function clearStoreCache(): void {
+export function clearStoreCache(): void {
   cache = null;
   cacheBackendKey = null;
 }

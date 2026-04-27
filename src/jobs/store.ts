@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createJobsRepository } from "../repositories/jobs-repo.js";
-import { findJobIndexed, listJobsForWorkspaceIndexed, mutateStore, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
+import { clearStoreCache, findJobIndexed, listJobsForWorkspaceIndexed, mutateStore, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
 import { nextAfter } from "./cron.js";
 
 const STALE_RUNNING_MS = 5 * 60 * 1000;
@@ -225,6 +225,12 @@ export function cancelJob(id: string): JobRecord | null {
 let claimMutex: Promise<unknown> = Promise.resolve();
 
 export async function claimNextJob(now: Date): Promise<JobRecord | null> {
+  if (isSqliteMode()) {
+    const claimed = createJobsRepository({}).claimNext(now);
+    if (claimed) clearStoreCache();
+    return claimed;
+  }
+
   const previous = claimMutex;
   let release!: () => void;
   claimMutex = new Promise<void>((resolve) => { release = resolve; });
@@ -237,7 +243,7 @@ export async function claimNextJob(now: Date): Promise<JobRecord | null> {
       if (!candidate) return null;
       candidate.status = "running";
       candidate.attempts += 1;
-      candidate.startedAt = nowIso();
+      candidate.startedAt = now.toISOString();
       candidate.updatedAt = candidate.startedAt;
       return candidate;
     });
@@ -248,15 +254,22 @@ export async function claimNextJob(now: Date): Promise<JobRecord | null> {
   }
 }
 
-export function sweepStaleRunningJobs(): number {
+export function sweepStaleRunningJobs(staleAfterMs: number = STALE_RUNNING_MS, now: Date = new Date()): number {
+  if (isSqliteMode()) {
+    const swept = createJobsRepository({}).sweepStaleRunning(staleAfterMs, now);
+    if (swept > 0) clearStoreCache();
+    return swept;
+  }
+
   const swept: JobRecord[] = [];
   const count = mutateStore((data) => {
-    const cutoff = Date.now() - STALE_RUNNING_MS;
+    const cutoff = now.getTime() - staleAfterMs;
+    const timestamp = now.toISOString();
     let count = 0;
     for (const job of data.jobs) {
       if (job.status === "running" && job.startedAt && Date.parse(job.startedAt) < cutoff) {
         job.status = "queued";
-        job.updatedAt = nowIso();
+        job.updatedAt = timestamp;
         delete job.startedAt;
         swept.push(job);
         count++;

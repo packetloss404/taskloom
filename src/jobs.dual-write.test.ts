@@ -14,7 +14,7 @@ import {
   sweepStaleRunningJobs,
   updateJob,
 } from "./jobs/store.js";
-import { clearStoreCacheForTests, resetStoreForTests, type AgentRecord, type JobRecord } from "./taskloom-store.js";
+import { clearStoreCacheForTests, loadStore, resetStoreForTests, type AgentRecord, type JobRecord } from "./taskloom-store.js";
 
 interface JobRow {
   id: string;
@@ -94,6 +94,72 @@ function seedAgentDirectly(dbPath: string, agent: AgentRecord): void {
   } finally {
     db.close();
   }
+}
+
+function seedDedicatedJobDirectly(dbPath: string, job: JobRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into jobs (
+        id, workspace_id, type, payload, status, attempts, max_attempts,
+        scheduled_at, started_at, completed_at, cron, result, error,
+        cancel_requested, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      job.id,
+      job.workspaceId,
+      job.type,
+      JSON.stringify(job.payload ?? {}),
+      job.status,
+      job.attempts,
+      job.maxAttempts,
+      job.scheduledAt,
+      job.startedAt ?? null,
+      job.completedAt ?? null,
+      job.cron ?? null,
+      job.result === undefined ? null : JSON.stringify(job.result),
+      job.error ?? null,
+      job.cancelRequested === undefined ? null : job.cancelRequested ? 1 : 0,
+      job.createdAt,
+      job.updatedAt,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function seedAppRecordJobDirectly(dbPath: string, job: JobRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('jobs', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(job.id, job.workspaceId, JSON.stringify(job), job.updatedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function makeJobRecord(overrides: Partial<JobRecord> & { id: string }): JobRecord {
+  return {
+    id: overrides.id,
+    workspaceId: overrides.workspaceId ?? "workspace_a",
+    type: overrides.type ?? "agent.run",
+    payload: overrides.payload ?? {},
+    status: overrides.status ?? "queued",
+    attempts: overrides.attempts ?? 0,
+    maxAttempts: overrides.maxAttempts ?? 3,
+    scheduledAt: overrides.scheduledAt ?? "2026-04-25T12:00:00.000Z",
+    ...(overrides.startedAt !== undefined ? { startedAt: overrides.startedAt } : {}),
+    ...(overrides.completedAt !== undefined ? { completedAt: overrides.completedAt } : {}),
+    ...(overrides.cron !== undefined ? { cron: overrides.cron } : {}),
+    ...(overrides.result !== undefined ? { result: overrides.result } : {}),
+    ...(overrides.error !== undefined ? { error: overrides.error } : {}),
+    ...(overrides.cancelRequested !== undefined ? { cancelRequested: overrides.cancelRequested } : {}),
+    createdAt: overrides.createdAt ?? "2026-04-25T12:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-25T12:00:00.000Z",
+  };
 }
 
 function makeAgent(overrides: Partial<AgentRecord> & { id: string }): AgentRecord {
@@ -191,63 +257,129 @@ test("cancelJob writes the canceled record to the dedicated table", () => {
   }
 });
 
-test("claimNextJob writes the queued -> running transition to the dedicated table", async () => {
+test("claimNextJob claims a jobs-table-only row in SQLite mode", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
   const restore = withSqliteEnv(dbPath);
   try {
-    const queued = enqueueJob({
-      workspaceId: "workspace_a",
-      type: "agent.run",
+    const queued = makeJobRecord({
+      id: "dedicated_claim_only",
       scheduledAt: "2026-04-25T12:00:00.000Z",
+      createdAt: "2026-04-25T12:00:00.000Z",
+      updatedAt: "2026-04-25T12:00:00.000Z",
     });
+    const appRecordDecoy = makeJobRecord({
+      id: "app_record_claim_decoy",
+      scheduledAt: "2026-04-25T11:00:00.000Z",
+      createdAt: "2026-04-25T11:00:00.000Z",
+      updatedAt: "2026-04-25T11:00:00.000Z",
+    });
+    seedDedicatedJobDirectly(dbPath, queued);
+    seedAppRecordJobDirectly(dbPath, appRecordDecoy);
 
-    const claimed = await claimNextJob(new Date("2026-04-26T12:00:00.000Z"));
+    assert.equal(findAppRecordJob(dbPath, queued.id), null);
+    // Establish a store cache before the repository-native claim; claimNextJob
+    // must invalidate it because the mutation bypasses mutateStore.
+    loadStore();
+
+    const claimTime = new Date("2026-04-26T12:00:00.000Z");
+    const claimed = await claimNextJob(claimTime);
     assert.ok(claimed);
     assert.equal(claimed.id, queued.id);
     assert.equal(claimed.status, "running");
     assert.equal(claimed.attempts, 1);
+    assert.equal(claimed.startedAt, claimTime.toISOString());
 
     const appRecord = findAppRecordJob(dbPath, queued.id);
     assert.equal(appRecord, null);
+    assert.deepEqual(findAppRecordJob(dbPath, appRecordDecoy.id), appRecordDecoy);
 
     const dedicated = findDedicatedJob(dbPath, queued.id);
     assert.ok(dedicated);
     assert.equal(dedicated.status, "running");
     assert.equal(dedicated.attempts, 1);
-    assert.ok(dedicated.started_at);
+    assert.equal(dedicated.started_at, claimTime.toISOString());
+    const hydrated = loadStore().jobs.find((entry) => entry.id === queued.id);
+    assert.equal(hydrated?.status, "running");
+    assert.equal(hydrated?.startedAt, claimTime.toISOString());
   } finally {
     restore();
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("sweepStaleRunningJobs writes the running -> queued transition to the dedicated table", async () => {
+test("sweepStaleRunningJobs sweeps jobs-table-only rows in SQLite mode", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
   const restore = withSqliteEnv(dbPath);
   try {
-    const queued = enqueueJob({
-      workspaceId: "workspace_a",
-      type: "agent.run",
-      scheduledAt: "2026-04-25T12:00:00.000Z",
+    const staleA = makeJobRecord({
+      id: "dedicated_stale_a",
+      status: "running",
+      attempts: 1,
+      startedAt: "2020-01-01T00:00:00.000Z",
     });
-    // Manually mark stale: claim it so it goes to running, then rewrite startedAt to be ancient.
-    await claimNextJob(new Date("2026-04-26T12:00:00.000Z"));
-    updateJob(queued.id, { startedAt: "2020-01-01T00:00:00.000Z" });
+    const staleB = makeJobRecord({
+      id: "dedicated_stale_b",
+      workspaceId: "workspace_b",
+      status: "running",
+      attempts: 2,
+      startedAt: "2020-01-01T00:01:00.000Z",
+    });
+    const fresh = makeJobRecord({
+      id: "dedicated_fresh_running",
+      status: "running",
+      attempts: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const appRecordDecoy = makeJobRecord({
+      id: "app_record_sweep_decoy",
+      status: "running",
+      attempts: 1,
+      startedAt: "2020-01-01T00:00:00.000Z",
+    });
+    seedDedicatedJobDirectly(dbPath, staleA);
+    seedDedicatedJobDirectly(dbPath, staleB);
+    seedDedicatedJobDirectly(dbPath, fresh);
+    seedAppRecordJobDirectly(dbPath, appRecordDecoy);
 
-    const swept = sweepStaleRunningJobs();
-    assert.equal(swept, 1);
+    assert.equal(findAppRecordJob(dbPath, staleA.id), null);
+    assert.equal(findAppRecordJob(dbPath, staleB.id), null);
+    // Establish a store cache before the repository-native sweep; sweep must
+    // invalidate it because the mutation bypasses mutateStore.
+    loadStore();
 
-    const appRecord = findAppRecordJob(dbPath, queued.id);
-    assert.equal(appRecord, null);
+    const sweepTime = new Date("2026-04-26T12:00:00.000Z");
+    const swept = sweepStaleRunningJobs(5 * 60 * 1000, sweepTime);
+    assert.equal(swept, 2);
 
-    const dedicated = findDedicatedJob(dbPath, queued.id);
-    assert.ok(dedicated);
-    assert.equal(dedicated.status, "queued");
-    assert.equal(dedicated.started_at, null);
+    assert.equal(findAppRecordJob(dbPath, staleA.id), null);
+    assert.equal(findAppRecordJob(dbPath, staleB.id), null);
+    assert.deepEqual(findAppRecordJob(dbPath, appRecordDecoy.id), appRecordDecoy);
+
+    const dedicatedA = findDedicatedJob(dbPath, staleA.id);
+    assert.ok(dedicatedA);
+    assert.equal(dedicatedA.status, "queued");
+    assert.equal(dedicatedA.started_at, null);
+
+    const dedicatedB = findDedicatedJob(dbPath, staleB.id);
+    assert.ok(dedicatedB);
+    assert.equal(dedicatedB.status, "queued");
+    assert.equal(dedicatedB.started_at, null);
+    assert.equal(dedicatedB.updated_at, sweepTime.toISOString());
+
+    const dedicatedFresh = findDedicatedJob(dbPath, fresh.id);
+    assert.ok(dedicatedFresh);
+    assert.equal(dedicatedFresh.status, "running");
+    assert.equal(dedicatedFresh.started_at, fresh.startedAt);
+    const hydratedA = loadStore().jobs.find((entry) => entry.id === staleA.id);
+    const hydratedB = loadStore().jobs.find((entry) => entry.id === staleB.id);
+    assert.equal(hydratedA?.status, "queued");
+    assert.equal(hydratedA?.startedAt, undefined);
+    assert.equal(hydratedB?.status, "queued");
+    assert.equal(hydratedB?.startedAt, undefined);
   } finally {
     restore();
     rmSync(tempDir, { recursive: true, force: true });
@@ -352,7 +484,7 @@ test("maintainScheduledAgentJobs writes maintained records to the dedicated tabl
   }
 });
 
-test("maintainScheduledAgentJobs dual-writes cancellations of stale scheduled jobs", () => {
+test("maintainScheduledAgentJobs writes cancellations of stale scheduled jobs to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-jobs-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -398,8 +530,7 @@ test("enqueueJob does not touch the dedicated jobs table in JSON-default mode", 
   const previousDbPath = process.env.TASKLOOM_DB_PATH;
   delete process.env.TASKLOOM_STORE;
   // Point the SQLite path at our temp DB so any accidental writes would land there
-  // (and we can detect them); but since TASKLOOM_STORE is unset, the dual-write
-  // code path is gated off and should not open this DB at all.
+  // and we can detect them; with TASKLOOM_STORE unset, JSON mode should not open this DB.
   process.env.TASKLOOM_DB_PATH = dbPath;
   clearStoreCacheForTests();
   resetStoreForTests();

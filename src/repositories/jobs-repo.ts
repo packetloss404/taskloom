@@ -202,14 +202,20 @@ export function sqliteJobsRepository(deps: JobsRepositoryDeps = {}): JobsReposit
       try {
         db.exec("begin immediate");
         try {
-          const candidate = db
-            .prepare(
-              `select * from jobs
-                 where status = 'queued' and scheduled_at <= ?
-                 order by scheduled_at asc, id asc
-                 limit 1`,
-            )
-            .get(now.toISOString()) as JobRow | undefined;
+          const queued = db
+            .prepare("select * from jobs where status = 'queued'")
+            .all() as unknown as JobRow[];
+          const nowMs = now.getTime();
+          const candidate = queued
+            .filter((row) => {
+              const scheduledMs = Date.parse(row.scheduled_at);
+              return !Number.isNaN(scheduledMs) && scheduledMs <= nowMs;
+            })
+            .sort((left, right) => {
+              const cmp = Date.parse(left.scheduled_at) - Date.parse(right.scheduled_at);
+              if (cmp !== 0) return cmp;
+              return left.id.localeCompare(right.id);
+            })[0];
           if (!candidate) {
             db.exec("commit");
             return null;
@@ -240,20 +246,34 @@ export function sqliteJobsRepository(deps: JobsRepositoryDeps = {}): JobsReposit
     sweepStaleRunning(staleAfterMs, now) {
       const db = openDatabase(dbPath);
       try {
-        const cutoffIso = new Date(now.getTime() - staleAfterMs).toISOString();
+        db.exec("begin immediate");
+        try {
+          const cutoffMs = now.getTime() - staleAfterMs;
+          const staleRows = (db
+            .prepare("select id, started_at from jobs where status = 'running' and started_at is not null")
+            .all() as Array<{ id: string; started_at: string | null }>)
+            .filter((row) => {
+              if (row.started_at === null) return false;
+              const startedMs = Date.parse(row.started_at);
+              return !Number.isNaN(startedMs) && startedMs < cutoffMs;
+            });
         const ts = now.toISOString();
-        const result = db
-          .prepare(
+          const update = db.prepare(
             `update jobs
                set status = 'queued',
                    started_at = null,
                    updated_at = ?
-             where status = 'running'
-               and started_at is not null
-               and started_at < ?`,
-          )
-          .run(ts, cutoffIso);
-        return Number(result.changes ?? 0);
+             where id = ?`,
+          );
+          for (const row of staleRows) {
+            update.run(ts, row.id);
+          }
+          db.exec("commit");
+          return staleRows.length;
+        } catch (error) {
+          db.exec("rollback");
+          throw error;
+        }
       } finally {
         db.close();
       }

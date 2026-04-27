@@ -365,6 +365,32 @@ test("claimNext picks the oldest scheduledAt among queued jobs", () => {
   });
 });
 
+test("claimNext honors Date.parse-valid non-ISO scheduledAt values", () => {
+  runOnBoth((repo) => {
+    repo.upsert(
+      makeRecord({
+        id: "rfc_due",
+        workspaceId: "ws_a",
+        scheduledAt: "Sun, 26 Apr 2026 09:00:00 GMT",
+        createdAt: "2026-04-26T08:00:00.000Z",
+      }),
+    );
+    repo.upsert(
+      makeRecord({
+        id: "iso_later",
+        workspaceId: "ws_a",
+        scheduledAt: "2026-04-26T09:30:00.000Z",
+        createdAt: "2026-04-26T08:00:00.000Z",
+      }),
+    );
+
+    const claimed = repo.claimNext(new Date("2026-04-26T10:00:00.000Z"));
+    assert.equal(claimed?.id, "rfc_due");
+    assert.equal(repo.find("rfc_due")?.status, "running");
+    assert.equal(repo.find("iso_later")?.status, "queued");
+  });
+});
+
 test("claimNext skips jobs scheduled in the future", () => {
   runOnBoth((repo) => {
     repo.upsert(
@@ -458,6 +484,33 @@ test("sweepStaleRunning resets stale rows to queued and clears startedAt", () =>
     const fresh = repo.find("fresh");
     assert.equal(fresh?.status, "running");
     assert.equal(fresh?.startedAt, "2026-04-26T09:59:30.000Z");
+  });
+});
+
+test("sweepStaleRunning honors Date.parse-valid non-ISO startedAt values", () => {
+  runOnBoth((repo) => {
+    repo.upsert(
+      makeRecord({
+        id: "rfc_stale",
+        workspaceId: "ws_a",
+        status: "running",
+        startedAt: "Sun, 26 Apr 2026 09:00:00 GMT",
+      }),
+    );
+    repo.upsert(
+      makeRecord({
+        id: "iso_fresh",
+        workspaceId: "ws_a",
+        status: "running",
+        startedAt: "2026-04-26T09:58:00.000Z",
+      }),
+    );
+
+    const count = repo.sweepStaleRunning(5 * 60 * 1000, new Date("2026-04-26T10:00:00.000Z"));
+    assert.equal(count, 1);
+    assert.equal(repo.find("rfc_stale")?.status, "queued");
+    assert.equal(repo.find("rfc_stale")?.startedAt, undefined);
+    assert.equal(repo.find("iso_fresh")?.status, "running");
   });
 });
 
