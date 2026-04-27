@@ -100,4 +100,4 @@ Invitation email delivery operations are separate from this rate-limit guidance;
 - Confirm cross-origin browser mutations are rejected and same-origin mutations include `X-CSRF-Token`.
 - Confirm repeated auth or invitation attempts return `429` with `Retry-After` at the edge/distributed limiter and still return `429` from the app when the local backstop threshold is exceeded.
 - Confirm expired sessions are cleaned with `npm run jobs:cleanup-sessions` or equivalent scheduler.
-- Confirm logs, retry jobs, dead-letter records, and admin surfaces do not expose invitation tokens beyond intended owner/admin workflows.
+- Confirm logs, retry jobs, dead-letter records, list/detail surfaces, telemetry, and exports do not expose invitation tokens beyond the one-time create/resend response surfaces.

@@ -68,6 +68,7 @@ export interface WorkspaceInvitationRecord {
   email: string;
   role: WorkspaceRole;
   token?: string;
+  tokenPreview?: string;
   invitedByUserId: string;
   acceptedByUserId: string | null;
   acceptedAt: string | null;
@@ -165,6 +166,8 @@ export interface AgentRecord {
   enabledTools?: string[];
   routeKey?: string;
   webhookToken?: string;
+  webhookTokenPreview?: string;
+  hasWebhookToken?: boolean;
   schedule?: string;
   triggerKind?: AgentTriggerKind;
   playbook?: AgentPlaybookStep[];
@@ -436,7 +439,8 @@ export type ShareTokenScope = "brief" | "plan" | "overview";
 
 export interface ShareTokenRecord {
   id: string;
-  token: string;
+  token?: string;
+  tokenPreview?: string;
   scope: ShareTokenScope;
   revokedAt?: string;
   expiresAt?: string;

@@ -42,6 +42,7 @@ import { getDefaultToolRegistry } from "./tools/registry.js";
 import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 import { agentWebhookRoutes, publicWebhookRoutes } from "./webhook-routes.js";
 import { enforcePrivateAppMutationSecurity } from "./route-security.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -338,7 +339,7 @@ serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }
 
 async function readJsonBody(c: Context): Promise<Record<string, unknown>> {

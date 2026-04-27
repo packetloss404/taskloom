@@ -835,7 +835,7 @@ test("private mutating app routes reject cross-origin browser requests", async (
   assert.deepEqual(await rejected.json(), { error: "cross-origin requests are not allowed" });
 });
 
-test("member listing hides invitation tokens from non-admin roles", async () => {
+test("member listing exposes invitation previews without full tokens", async () => {
   resetStoreForTests();
   const app = createTestApp();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
@@ -849,14 +849,16 @@ test("member listing hides invitation tokens from non-admin roles", async () => 
   assert.equal(created.status, 201);
 
   const adminList = await app.request("/api/app/members", { headers: authHeaders(auth.cookieValue) });
-  const adminBody = await adminList.json() as { invitations: Array<{ token?: string }> };
-  assert.ok(adminBody.invitations[0]?.token);
+  const adminBody = await adminList.json() as { invitations: Array<{ token?: string; tokenPreview?: string }> };
+  assert.equal(adminBody.invitations[0]?.token, undefined);
+  assert.ok(adminBody.invitations[0]?.tokenPreview);
 
   setAlphaRole("viewer");
   const viewerList = await app.request("/api/app/members", { headers: authHeaders(auth.cookieValue) });
-  const viewerBody = await viewerList.json() as { invitations: Array<{ token?: string }> };
+  const viewerBody = await viewerList.json() as { invitations: Array<{ token?: string; tokenPreview?: string }> };
   assert.equal(viewerList.status, 200);
   assert.equal(viewerBody.invitations[0]?.token, undefined);
+  assert.ok(viewerBody.invitations[0]?.tokenPreview);
 });
 
 test("admins can invite an existing user and that user can accept", async () => {

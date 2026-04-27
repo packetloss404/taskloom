@@ -3,11 +3,21 @@ import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { cancelJob, enqueueJob, findJob, listJobs } from "./jobs/store.js";
 import { parseCron } from "./jobs/cron.js";
 import { findAgentForWorkspaceIndexed } from "./taskloom-store.js";
-import type { JobStatus } from "./taskloom-store.js";
+import type { JobRecord, JobStatus } from "./taskloom-store.js";
+import { redactSensitiveString, redactSensitiveValue } from "./security/redaction.js";
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactSensitiveString((error as Error).message) });
+}
+
+function serializeJob(job: JobRecord): JobRecord {
+  return {
+    ...job,
+    payload: redactSensitiveValue(job.payload) as Record<string, unknown>,
+    result: redactSensitiveValue(job.result),
+    error: job.error ? redactSensitiveString(job.error) : undefined,
+  };
 }
 
 function badRequest(message: string) {
@@ -51,7 +61,7 @@ jobRoutes.get("/", (c) => {
     const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
     const status = c.req.query("status") as JobStatus | undefined;
     const limit = Number(c.req.query("limit") ?? 50);
-    return c.json({ jobs: listJobs(workspace.id, { status, limit }) });
+    return c.json({ jobs: listJobs(workspace.id, { status, limit }).map(serializeJob) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -77,7 +87,7 @@ jobRoutes.post("/", async (c) => {
       ...(body.cron ? { cron: body.cron } : {}),
       ...(body.maxAttempts !== undefined ? { maxAttempts: body.maxAttempts } : {}),
     });
-    return c.json({ job }, 201);
+    return c.json({ job: serializeJob(job) }, 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -88,7 +98,7 @@ jobRoutes.get("/:id", (c) => {
     const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
     const job = findJob(c.req.param("id"));
     if (!job || job.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
-    return c.json({ job });
+    return c.json({ job: serializeJob(job) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -100,7 +110,8 @@ jobRoutes.post("/:id/cancel", (c) => {
     const existing = findJob(c.req.param("id"));
     if (!existing || existing.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     const job = cancelJob(existing.id);
-    return c.json({ ok: true, job });
+    if (!job) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
+    return c.json({ ok: true, job: serializeJob(job) });
   } catch (error) {
     return errorResponse(c, error);
   }

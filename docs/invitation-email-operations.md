@@ -35,24 +35,24 @@ Use Taskloom failed `invitation.email` jobs to identify exhausted app-side retri
 
 ## Token Redaction
 
-Invitation tokens are bearer secrets. Redact them from logs, traces, analytics events, support bundles, and admin exports unless the surface is one of the existing admin/owner invitation-management API responses that intentionally exposes the active token.
+Invitation tokens are bearer secrets. Redact them from logs, traces, analytics events, support bundles, and admin exports unless the surface is one of the explicit one-time invitation-management API responses that intentionally exposes the active token.
 
 Allowed existing token surfaces:
 
 - `POST /api/app/invitations` response for users with workspace management permission.
 - `POST /api/app/invitations/:invitationId/resend` response for users with workspace management permission.
-- `GET /api/app/members` invitation list for `admin` and `owner`; lower roles receive invitation rows without `token`.
+- `GET /api/app/members` invitation list responses include `tokenPreview` only and never include `token`.
 - `POST /api/app/invitations/:token/accept`, where the token is the route credential supplied by the invited user.
 
 Required redaction areas:
 
 - HTTP access logs and reverse-proxy logs for `POST /api/app/invitations/:token/accept`; redact the token path segment.
 - Webhook request logging at the configured provider or webhook worker; redact the JSON `token` field.
-- Provider error strings returned to Taskloom; do not include request bodies or token-bearing URLs in non-2xx status text or thrown errors.
+- Provider error strings returned to Taskloom; Taskloom redacts known invitation tokens, bearer values, token-bearing URLs, and sensitive assignments before storing delivery errors, but providers should still avoid returning request bodies or token-bearing URLs.
 - Built-in `invitation.email` job payloads, failed-job errors, retry logs, and any future replay tooling; never add invitation tokens to retry payloads or dead-letter metadata.
 - Local store exports, database exports, backups shared outside the trusted operator boundary, and future admin exports; redact `workspaceInvitations.token` and any indexed token metadata unless the export is explicitly a privileged recovery artifact.
-- Browser/client telemetry from Settings or invitation flows; do not capture invitation tokens rendered for admins/owners.
+- Browser/client telemetry from Settings or invitation flows; do not capture one-time invitation tokens rendered after create/resend.
 
-Current production records for invitation delivery and activity store invitation id, email, status, provider/mode, subject, action, delivery id, retry job id when applicable, and error details, but not the invitation token. Test-only delivery records may include tokens to assert webhook payload behavior and should not be treated as production telemetry.
+Current production records for invitation delivery and activity store invitation id, email, status, provider/mode, subject, action, delivery id, retry job id when applicable, and redacted error details, but not the invitation token. Test-only delivery records may include tokens to assert webhook payload behavior and should not be treated as production telemetry.
 
 See `README.md` for the webhook environment variables, `docs/deployment-auth-hardening.md` for invitation create/accept/resend abuse controls, and `docs/roadmap.md` for remaining production hardening context.

@@ -3,10 +3,11 @@ import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { findAgent, loadStore, mutateStore } from "./taskloom-store.js";
 import { enqueueJob } from "./jobs/store.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }
 
 function nowIso(): string {

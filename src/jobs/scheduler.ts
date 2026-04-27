@@ -1,6 +1,7 @@
 import type { JobRecord } from "../taskloom-store.js";
 import { claimNextJob, enqueueRecurringJob, findJob, maintainScheduledAgentJobs, sweepStaleRunningJobs, updateJob } from "./store.js";
 import { nextAfter } from "./cron.js";
+import { redactedErrorMessage } from "../security/redaction.js";
 
 export interface JobHandlerContext {
   signal: AbortSignal;
@@ -99,14 +100,14 @@ export class JobScheduler {
     } catch (error) {
       const fresh = findJob(job.id);
       if (fresh?.cancelRequested || ctrl.signal.aborted) {
-        updateJob(job.id, { status: "canceled", error: (error as Error).message, completedAt: new Date().toISOString() });
+        updateJob(job.id, { status: "canceled", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
         return;
       }
       if (job.attempts < job.maxAttempts) {
         const next = new Date(Date.now() + backoffMs(job.attempts));
-        updateJob(job.id, { status: "queued", error: (error as Error).message, scheduledAt: next.toISOString(), startedAt: undefined });
+        updateJob(job.id, { status: "queued", error: redactedErrorMessage(error), scheduledAt: next.toISOString(), startedAt: undefined });
       } else {
-        updateJob(job.id, { status: "failed", error: (error as Error).message, completedAt: new Date().toISOString() });
+        updateJob(job.id, { status: "failed", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
       }
     } finally {
       clearInterval(cancelWatcher);

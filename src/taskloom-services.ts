@@ -45,6 +45,7 @@ import {
   type AgentRunLogEntry,
   type AgentRunRecord,
   type AgentRunStep,
+  type AgentRunToolCall,
   type AgentStatus,
   type AgentTriggerKind,
   type ImplementationPlanItemRecord,
@@ -75,6 +76,7 @@ import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
 import { LOCAL_INVITATION_EMAIL_PROVIDER, invitationEmailSubject, resolveInvitationEmailMode, resolveInvitationEmailRetryMaxAttempts, resolveInvitationEmailWebhookConfig } from "./invitation-email.js";
 import { deliverInvitationEmail, type InvitationEmailDeliveryAction } from "./invitation-email-delivery.js";
 import { enqueueJob, maintainScheduledAgentJobs } from "./jobs/store.js";
+import { isSensitiveKey, maskSecret as maskBearerSecret, redactSensitiveString, redactSensitiveValue } from "./security/redaction.js";
 import {
   buildSessionCookieValue,
   generateId,
@@ -369,13 +371,12 @@ export async function updateWorkspace(
 
 export function listWorkspaceMembers(context: AuthenticatedContext) {
   const data = loadStore();
-  const canViewInvitationTokens = context.role === "admin" || context.role === "owner";
   return {
     members: listWorkspaceMembershipsIndexed(context.workspace.id)
       .map((membership) => summarizeWorkspaceMember(data, membership))
       .sort((left, right) => left.displayName.localeCompare(right.displayName)),
     invitations: listWorkspaceInvitationsIndexed(context.workspace.id)
-      .map((invitation) => summarizeWorkspaceInvitation(invitation, { includeToken: canViewInvitationTokens })),
+      .map((invitation) => summarizeWorkspaceInvitation(invitation)),
   };
 }
 
@@ -418,7 +419,7 @@ export async function createWorkspaceInvitation(context: AuthenticatedContext, i
       displayName: context.user.displayName,
     }, { title: `Invitation created for ${email}`, email, role }, timestamp));
 
-    return { invitation: summarizeWorkspaceInvitation(invitation), invitationRecord: { ...invitation } };
+    return { invitation: summarizeWorkspaceInvitation(invitation, { includeToken: true }), invitationRecord: { ...invitation } };
   });
 
   const emailDelivery = await recordWorkspaceInvitationEmailDelivery(context, result.invitationRecord, "create");
@@ -484,7 +485,7 @@ export async function resendWorkspaceInvitation(context: AuthenticatedContext, i
       displayName: context.user.displayName,
     }, { title: `Invitation resent for ${invitation.email}`, email: invitation.email, role: invitation.role }, timestamp));
 
-    return { invitation: summarizeWorkspaceInvitation(invitation), invitationRecord: { ...invitation } };
+    return { invitation: summarizeWorkspaceInvitation(invitation, { includeToken: true }), invitationRecord: { ...invitation } };
   });
 
   const emailDelivery = await recordWorkspaceInvitationEmailDelivery(context, result.invitationRecord, "resend");
@@ -597,7 +598,7 @@ export async function completeOnboardingStep(context: AuthenticatedContext, step
 }
 
 export function listWorkspaceActivities(context: AuthenticatedContext) {
-  return listActivitiesForWorkspaceIndexed(context.workspace.id, 50);
+  return listActivitiesForWorkspaceIndexed(context.workspace.id, 50).map(redactActivity);
 }
 
 export function getWorkspaceActivityDetail(context: AuthenticatedContext, activityId: string) {
@@ -794,7 +795,7 @@ export function getAgent(context: AuthenticatedContext, agentId: string) {
 
   return {
     agent: decorateAgentWithProvider(agent, provider),
-    runs: listAgentRunsForAgentIndexed(context.workspace.id, agent.id, 20),
+    runs: listAgentRunsForAgentIndexed(context.workspace.id, agent.id, 20).map(decorateRun),
   };
 }
 
@@ -934,7 +935,7 @@ export async function runAgent(
       triggerKind,
       timestamp,
     });
-    return { run };
+    return { run: decorateRun(run) };
   }
 
   return mutateStore((store) => {
@@ -988,7 +989,7 @@ export async function runAgent(
       displayName: context.user.displayName,
     }, { title: run.title, agentId: liveAgent.id, runId: run.id, status: run.status, triggerKind }, timestamp));
 
-    return { run };
+    return { run: decorateRun(run) };
   });
 }
 
@@ -1090,7 +1091,7 @@ async function runAgentWithToolLoop(args: {
       displayName: context.user.displayName,
     }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status, triggerKind }, timestamp));
 
-    return { run };
+    return { run: decorateRun(run) };
   });
 }
 
@@ -1248,7 +1249,7 @@ export function recordRunAsPlaybook(context: AuthenticatedContext, runId: string
     }));
     agent.playbook = playbook.slice(0, 20);
     agent.updatedAt = now();
-    return { agent };
+    return { agent: decorateAgent(data, agent) };
   });
 }
 
@@ -1458,10 +1459,11 @@ function normalizeEnvVarInput(input: WorkspaceEnvVarInput) {
 }
 
 function maskEnvVar(record: WorkspaceEnvVarRecord) {
+  const shouldMask = record.secret || isSensitiveKey(record.key);
   return {
     ...record,
-    value: record.secret ? maskSecret(record.value) : record.value,
-    valuePreview: record.secret ? maskSecret(record.value) : null,
+    value: shouldMask ? maskSecret(record.value) : record.value,
+    valuePreview: shouldMask ? maskSecret(record.value) : null,
     valueLength: record.value.length,
   };
 }
@@ -1478,6 +1480,17 @@ function decorateRun(run: AgentRunRecord) {
   const durationMs = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null;
   return {
     ...run,
+    transcript: run.transcript?.map((step) => ({ ...step, output: redactSensitiveString(step.output) })),
+    inputs: run.inputs ? redactSensitiveValue(run.inputs) as AgentRunRecord["inputs"] : undefined,
+    output: run.output ? redactSensitiveString(run.output) : undefined,
+    error: run.error ? redactSensitiveString(run.error) : undefined,
+    logs: run.logs.map((entry) => ({ ...entry, message: redactSensitiveString(entry.message) })),
+    toolCalls: run.toolCalls?.map((call) => ({
+      ...call,
+      input: redactSensitiveValue(call.input) as AgentRunToolCall["input"],
+      output: redactSensitiveValue(call.output),
+      error: call.error ? redactSensitiveString(call.error) : undefined,
+    })),
     durationMs,
     canCancel: run.status === "queued" || run.status === "running",
     canRetry: Boolean(run.agentId) && (run.status === "failed" || run.status === "canceled" || run.status === "success"),
@@ -1518,7 +1531,9 @@ function decorateAgent(data: ReturnType<typeof loadStore>, agent: AgentRecord, o
 }
 
 function decorateAgentWithProvider(agent: AgentRecord, provider: ProviderRecord | null, opts: { includeWebhookToken?: boolean } = {}) {
-  const responseAgent = opts.includeWebhookToken === false ? { ...agent, webhookToken: undefined } : agent;
+  const responseAgent = opts.includeWebhookToken
+    ? { ...agent, webhookTokenPreview: agent.webhookToken ? maskBearerSecret(agent.webhookToken) : undefined, hasWebhookToken: Boolean(agent.webhookToken) }
+    : { ...agent, webhookToken: undefined, webhookTokenPreview: agent.webhookToken ? maskBearerSecret(agent.webhookToken) : undefined, hasWebhookToken: Boolean(agent.webhookToken) };
   return {
     ...responseAgent,
     provider: provider
@@ -1901,7 +1916,7 @@ function summarizeWorkspaceMember(data: ReturnType<typeof loadStore>, membership
 
 function summarizeWorkspaceInvitation(
   invitation: WorkspaceInvitationRecord,
-  options: { includeToken?: boolean } = { includeToken: true },
+  options: { includeToken?: boolean } = {},
 ) {
   const expired = new Date(invitation.expiresAt).getTime() <= Date.now();
   return {
@@ -1910,6 +1925,7 @@ function summarizeWorkspaceInvitation(
     email: invitation.email,
     role: invitation.role,
     ...(options.includeToken ? { token: invitation.token } : {}),
+    tokenPreview: maskBearerSecret(invitation.token),
     invitedByUserId: invitation.invitedByUserId,
     acceptedByUserId: invitation.acceptedByUserId ?? null,
     acceptedAt: invitation.acceptedAt ?? null,
@@ -1917,6 +1933,13 @@ function summarizeWorkspaceInvitation(
     expiresAt: invitation.expiresAt,
     createdAt: invitation.createdAt,
     status: invitation.acceptedAt ? "accepted" : invitation.revokedAt ? "revoked" : expired ? "expired" : "pending",
+  };
+}
+
+function redactActivity(activity: ActivityRecord): ActivityRecord {
+  return {
+    ...activity,
+    data: redactSensitiveValue(activity.data) as ActivityRecord["data"],
   };
 }
 

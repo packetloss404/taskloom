@@ -7,6 +7,7 @@ import {
   TASKLOOM_INVITATION_EMAIL_MODE_ENV,
   TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV,
 } from "./invitation-email";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 export type InvitationEmailDeliveryAction = "create" | "resend";
 
@@ -64,7 +65,7 @@ export async function deliverInvitationEmail(
       }
     } catch (caught) {
       status = "failed";
-      error = caught instanceof Error ? caught.message : String(caught);
+      error = redactedErrorMessage(caught, [request.token]);
     }
   }
 

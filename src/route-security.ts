@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { hashSessionSecret, SESSION_COOKIE_NAME, SESSION_TTL_MS } from "./auth-utils.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 export const CSRF_COOKIE_NAME = "taskloom_csrf";
 export const CSRF_HEADER_NAME = "x-csrf-token";
@@ -87,5 +88,5 @@ function httpRouteError(status: number, message: string) {
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }

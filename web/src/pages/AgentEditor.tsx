@@ -203,8 +203,8 @@ export default function AgentEditorPage() {
     setError(null);
     try {
       const token = await api.rotateAgentWebhook(agent.id);
-      setAgent({ ...agent, webhookToken: token });
-      setMessage("Webhook token rotated.");
+      setAgent({ ...agent, webhookToken: token, webhookTokenPreview: undefined, hasWebhookToken: true });
+      setMessage("Webhook token rotated. Full URL is shown until this page refreshes.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -218,7 +218,7 @@ export default function AgentEditorPage() {
     setError(null);
     try {
       await api.removeAgentWebhook(agent.id);
-      setAgent({ ...agent, webhookToken: undefined });
+      setAgent({ ...agent, webhookToken: undefined, webhookTokenPreview: undefined, hasWebhookToken: false });
       setMessage("Webhook removed.");
     } catch (e) {
       setError((e as Error).message);
@@ -269,6 +269,9 @@ export default function AgentEditorPage() {
       </div>
     );
   }
+
+  const webhookPathToken = agent?.webhookToken ?? agent?.webhookTokenPreview;
+  const hasWebhook = Boolean(agent?.webhookToken || agent?.webhookTokenPreview || agent?.hasWebhookToken);
 
   return (
     <div className="page-frame">
@@ -419,13 +422,13 @@ export default function AgentEditorPage() {
             {!isNew && agent && (
               <div className="mt-5 border-t border-ink-700 pt-4">
                 <div className="kicker mb-2">WEBHOOK TRIGGER</div>
-                {agent.webhookToken ? (
+                {hasWebhook ? (
                   <div className="grid gap-2">
                     <div className="break-all border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-[11px] text-ink-200">
-                      POST {webhookOrigin()}/api/public/webhooks/agents/{agent.webhookToken}
+                      POST {webhookOrigin()}/api/public/webhooks/agents/{webhookPathToken ?? "[redacted]"}
                     </div>
                     <p className="font-mono text-[10px] text-ink-500">
-                      Body is forwarded as the run's `inputs`. Trigger kind = webhook.
+                      Body is forwarded as the run's `inputs`. Trigger kind = webhook. Full token is only shown immediately after rotation.
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button type="button" className="btn-ghost" onClick={rotateWebhook} disabled={webhookBusy}>↺ Rotate token</button>

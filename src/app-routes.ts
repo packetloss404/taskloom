@@ -27,6 +27,7 @@ import {
   updateWorkspace,
 } from "./taskloom-services.js";
 import { findWorkspaceMembership, loadStore, rateLimitRepository } from "./taskloom-store.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 export const appRoutes = new Hono();
 
@@ -416,5 +417,5 @@ function httpRouteError(status: number, message: string) {
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }

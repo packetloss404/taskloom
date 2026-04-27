@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { listApiKeysForWorkspace, removeApiKeyForWorkspace, upsertApiKey } from "./security/api-key-store.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 import type { ApiKeyProvider } from "./taskloom-store.js";
 
 const VALID_PROVIDERS: ApiKeyProvider[] = ["anthropic", "openai", "minimax", "ollama"];
@@ -11,7 +12,7 @@ function httpError(status: number, message: string): Error & { status: number } 
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }
 
 export const apiKeyRoutes = new Hono();

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { listProviderCallsForWorkspaceIndexed, mutateStore, type ProviderCallRecord } from "../taskloom-store.js";
+import { redactedErrorMessage, redactSensitiveString } from "../security/redaction.js";
 import type { ProviderName, ProviderStreamChunk, ProviderUsage } from "./types.js";
 
 export interface LedgerContext {
@@ -61,7 +62,7 @@ export async function recordedCall<T extends { usage: ProviderUsage }>(
       costUsd: 0,
       durationMs: Date.now() - t0,
       status: "error",
-      errorMessage: (error as Error).message,
+      errorMessage: redactedErrorMessage(error),
       startedAt,
       completedAt: nowIso(),
     });
@@ -82,11 +83,14 @@ export async function* recordedStream<T extends ProviderStreamChunk>(
     for await (const chunk of iter) {
       if (chunk.usage) usage = chunk.usage;
       if (chunk.error) {
-        errorMessage = chunk.error;
+        errorMessage = redactSensitiveString(chunk.error);
         if (chunk.error === "aborted") canceled = true;
       }
       yield chunk;
     }
+  } catch (error) {
+    errorMessage = redactedErrorMessage(error);
+    throw error;
   } finally {
     appendCall({
       id: randomUUID(),

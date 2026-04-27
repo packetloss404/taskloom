@@ -9,6 +9,7 @@ import {
 } from "./workflow-prompt-service.js";
 import { llmDraftWorkflow, llmPlanMode } from "./workflow-llm-service.js";
 import { replacePlanItems } from "./workflow-service.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 type AuthenticatedContext = ReturnType<typeof requireAuthenticatedContext>;
 type WorkflowServiceFunction = (context: AuthenticatedContext, input?: unknown) => unknown;
@@ -266,7 +267,7 @@ function isMissingWorkflowService(error: unknown): boolean {
 function errorResponse(c: Context, error: unknown) {
   const status = (error as Error & { status?: number }).status ?? 500;
   c.status(status as any);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }
 
 function httpError(status: number, message: string) {

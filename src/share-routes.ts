@@ -12,10 +12,25 @@ import {
   type ShareTokenRecord,
   type ShareTokenScope,
 } from "./taskloom-store.js";
+import { maskSecret, redactSensitiveString } from "./security/redaction.js";
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactSensitiveString((error as Error).message) });
+}
+
+function summarizeShareToken(t: ShareTokenRecord, options: { includeToken?: boolean } = {}) {
+  return {
+    id: t.id,
+    ...(options.includeToken ? { token: t.token } : {}),
+    tokenPreview: maskSecret(t.token),
+    scope: t.scope,
+    revokedAt: t.revokedAt,
+    expiresAt: t.expiresAt,
+    readCount: t.readCount,
+    lastReadAt: t.lastReadAt,
+    createdAt: t.createdAt,
+  };
 }
 
 function nowIso(): string {
@@ -34,16 +49,7 @@ shareRoutes.get("/", (c) => {
   try {
     const ctx = requirePrivateWorkspaceRole(c, "viewer");
     const tokens = listShareTokensForWorkspaceIndexed(ctx.workspace.id)
-      .map((t) => ({
-        id: t.id,
-        token: t.token,
-        scope: t.scope,
-        revokedAt: t.revokedAt,
-        expiresAt: t.expiresAt,
-        readCount: t.readCount,
-        lastReadAt: t.lastReadAt,
-        createdAt: t.createdAt,
-      }));
+      .map((t) => summarizeShareToken(t));
     return c.json({ tokens });
   } catch (error) {
     return errorResponse(c, error);
@@ -69,7 +75,7 @@ shareRoutes.post("/", async (c) => {
       createdAt: nowIso(),
     };
     mutateStore((data) => { data.shareTokens.push(record); });
-    return c.json({ token: record }, 201);
+    return c.json({ token: summarizeShareToken(record, { includeToken: true }) }, 201);
   } catch (error) {
     return errorResponse(c, error);
   }

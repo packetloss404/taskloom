@@ -7,6 +7,12 @@ import type { BootstrapPayload, ShareTokenRecord, ShareTokenScope, WorkspaceInvi
 
 const workspaceRoles: WorkspaceRole[] = ["viewer", "member", "admin", "owner"];
 
+function invitationTokenLabel(invitation: WorkspaceInvitationRecord): ReactNode {
+  if (invitation.token) return invitation.token;
+  if (invitation.tokenPreview) return invitation.tokenPreview;
+  return <span className="text-ink-500">Full token shown only when created or resent</span>;
+}
+
 export default function SettingsPage() {
   const { session, refreshSession } = useAuth();
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
@@ -133,12 +139,13 @@ export default function SettingsPage() {
     setMemberBusyId("invite");
     setMemberMessage(null);
     try {
-      await api.createWorkspaceInvitation({
+      const invitation = await api.createWorkspaceInvitation({
         email: String(form.get("email") || "").trim(),
         role: String(form.get("role") || "member") as WorkspaceRole,
       });
       await refreshMembers();
-      setMemberMessage("Invitation created.");
+      setInvitations((current) => current.map((entry) => entry.id === invitation.id ? { ...entry, token: invitation.token, tokenPreview: invitation.tokenPreview } : entry));
+      setMemberMessage("Invitation created. Full token is shown until this page refreshes.");
       event.currentTarget.reset();
     } catch (error) {
       setMemberMessage((error as Error).message);
@@ -182,9 +189,10 @@ export default function SettingsPage() {
     setMemberBusyId(`resend:${invitation.id}`);
     setMemberMessage(null);
     try {
-      await api.resendWorkspaceInvitation(invitation.id);
+      const resent = await api.resendWorkspaceInvitation(invitation.id);
       await refreshMembers();
-      setMemberMessage("Invitation resent.");
+      setInvitations((current) => current.map((entry) => entry.id === resent.id ? { ...entry, token: resent.token, tokenPreview: resent.tokenPreview } : entry));
+      setMemberMessage("Invitation resent. Full token is shown until this page refreshes.");
     } catch (error) {
       setMemberMessage((error as Error).message);
     } finally {
@@ -398,7 +406,7 @@ export default function SettingsPage() {
                   <td><span className="pill pill--muted">{invitation.role}</span></td>
                   <td><span className={invitation.status === "pending" ? "pill pill--good" : invitation.status === "revoked" || invitation.status === "expired" ? "pill pill--danger" : "pill pill--muted"}>{invitation.status}</span></td>
                   <td className="font-mono text-xs text-ink-400">
-                    {invitation.token ?? <span className="text-ink-500">Visible to admins only</span>}
+                    {invitationTokenLabel(invitation)}
                   </td>
                   <td>
                     {canManageWorkspace && invitation.status === "pending" ? (
@@ -470,15 +478,16 @@ export default function SettingsPage() {
                   <td colSpan={5} className="text-sm text-ink-500">No share tokens yet.</td>
                 </tr>
               ) : shareTokens.map((token) => {
-                const url = shareUrl(token.token);
+                const url = token.token ? shareUrl(token.token) : null;
+                const displayUrl = url ?? `/share/${token.tokenPreview ?? "[redacted]"}`;
                 const revoked = Boolean(token.revokedAt);
                 return (
                   <tr key={token.id}>
                     <td><span className="pill pill--muted">{token.scope}</span></td>
                     <td className="font-mono text-xs text-ink-300">
-                      <a href={url} className="underline decoration-ink-600 underline-offset-4">{url}</a>
+                      {url ? <a href={url} className="underline decoration-ink-600 underline-offset-4">{url}</a> : <span>{displayUrl}</span>}
                       <div className="mt-1 text-[10px] uppercase tracking-wider text-ink-500">
-                        Created {formatDate(token.createdAt)}{token.expiresAt ? ` · Expires ${formatDate(token.expiresAt)}` : ""}
+                        Created {formatDate(token.createdAt)}{token.expiresAt ? ` · Expires ${formatDate(token.expiresAt)}` : ""}{url ? "" : " · full link shown only when created"}
                       </div>
                     </td>
                     <td className="font-mono text-sm tabular-nums text-ink-200">

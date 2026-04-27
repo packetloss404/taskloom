@@ -234,6 +234,40 @@ test("job list filters to the authenticated workspace with status and limit", as
   assert.equal(body.jobs[0]?.status, "queued");
 });
 
+test("job route responses redact sensitive payloads, results, and errors", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const secret = "whk_job_route_secret";
+  const job = enqueueJob({
+    workspaceId: "alpha",
+    type: "test.redaction",
+    payload: {
+      webhookToken: secret,
+      callbackUrl: `https://taskloom.local/api/public/webhooks/agents/${secret}`,
+      nested: { authorization: "Bearer provider-secret-1234" },
+    },
+  });
+  mutateStore((data) => {
+    const stored = data.jobs.find((entry) => entry.id === job.id);
+    assert.ok(stored);
+    stored.result = { shareUrl: "https://taskloom.local/share/share-secret-1234" };
+    stored.error = `failed token=${secret} Authorization=provider-secret-1234`;
+  });
+
+  const detailResponse = await app.request(`/api/app/jobs/${job.id}`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const detailBody = await detailResponse.json();
+  const serialized = JSON.stringify(detailBody);
+
+  assert.equal(detailResponse.status, 200);
+  assert.equal(serialized.includes(secret), false);
+  assert.equal(serialized.includes("provider-secret-1234"), false);
+  assert.equal(serialized.includes("share-secret-1234"), false);
+  assert.equal(serialized.includes("[redacted]"), true);
+});
+
 test("job management requires an admin role but job reads allow viewers", async () => {
   resetStoreForTests();
   const app = createTestApp();

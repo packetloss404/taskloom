@@ -135,9 +135,12 @@ test("agent lists do not expose webhook tokens", () => {
   agent.webhookToken = "whk_test_secret";
 
   const detail = getAgent(auth.context, created.agent.id);
-  assert.equal(detail.agent.webhookToken, "whk_test_secret");
+  assert.equal(detail.agent.webhookToken, undefined);
+  assert.equal(detail.agent.hasWebhookToken, true);
+  assert.equal(detail.agent.webhookTokenPreview, "[redacted]:cret");
   const listed = listAgents(auth.context).agents.find((entry) => entry.id === created.agent.id);
   assert.equal(listed?.webhookToken, undefined);
+  assert.equal(listed?.hasWebhookToken, true);
 });
 
 test("activity detail includes lightweight related domain context", () => {
@@ -191,6 +194,42 @@ test("activity detail includes lightweight related domain context", () => {
   assert.equal(detail.related.evidence?.title, "Activation validation checks passed");
   assert.equal(detail.related.release?.versionLabel, "alpha-validation");
   assert.doesNotThrow(() => JSON.stringify(detail));
+});
+
+test("activity and run DTOs redact sensitive values", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const store = loadStore();
+  store.activities.unshift({
+    id: "activity_alpha_sensitive",
+    workspaceId: "alpha",
+    scope: "workspace",
+    event: "test.sensitive",
+    actor: { type: "system", id: "test" },
+    data: {
+      title: "Webhook failed at /api/public/webhooks/agents/whk_activity_secret",
+      token: "invitation-token-1234",
+    },
+    occurredAt: new Date().toISOString(),
+  });
+
+  const activity = listWorkspaceActivities(auth.context).find((entry) => entry.id === "activity_alpha_sensitive");
+  assert.ok(activity);
+  assert.equal(JSON.stringify(activity).includes("whk_activity_secret"), false);
+  assert.equal(JSON.stringify(activity).includes("invitation-token-1234"), false);
+
+  const created = createAgent(auth.context, {
+    name: "Sensitive Input Runner",
+    description: "Exercises run DTO redaction.",
+    instructions: "Record supplied inputs for test verification.",
+    inputSchema: [{ key: "api_key", label: "API key", type: "string", required: true }],
+  });
+  const runResult = await runAgent(auth.context, created.agent.id, { inputs: { api_key: "sk_live_secret_1234" } });
+  const detailWithRun = getAgent(auth.context, created.agent.id);
+
+  assert.equal(JSON.stringify(runResult.run).includes("sk_live_secret_1234"), false);
+  assert.equal(JSON.stringify(detailWithRun.runs[0]).includes("sk_live_secret_1234"), false);
+  assert.notEqual(runResult.run.inputs?.api_key, "sk_live_secret_1234");
 });
 
 test("activity detail related context is workspace isolated", () => {
@@ -267,7 +306,7 @@ test("activity list and detail preserve workspace isolation and neighbor orderin
   assert.equal(detail.next?.id, "activity_alpha_next_test");
 });
 
-test("env vars: create masks secrets, prevents duplicate keys, supports update and delete", async () => {
+test("env vars: create masks secrets and sensitive keys, prevents duplicate keys, supports update and delete", async () => {
   resetStoreForTests();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
 
@@ -296,7 +335,8 @@ test("env vars: create masks secrets, prevents duplicate keys, supports update a
 
   const updated = updateWorkspaceEnvVar(auth.context, created.envVar.id, { secret: false });
   assert.equal(updated.envVar.secret, false);
-  assert.equal(updated.envVar.value, "super-secret-value-1234");
+  assert.notEqual(updated.envVar.value, "super-secret-value-1234");
+  assert.match(updated.envVar.value, /1234$/);
 
   const list = listWorkspaceEnvVarsForUser(auth.context);
   assert.ok(list.envVars.some((entry) => entry.id === created.envVar.id));

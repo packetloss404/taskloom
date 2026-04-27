@@ -81,15 +81,17 @@ test("SQLite store preserves critical app behavior parity", async (t) => {
     assert.ok(createdBody.invitation.token);
 
     const adminList = await app.request("/api/app/members", { headers: authHeaders(alpha.cookieValue) });
-    const adminBody = await adminList.json() as { invitations: Array<{ token?: string }> };
+    const adminBody = await adminList.json() as { invitations: Array<{ token?: string; tokenPreview?: string }> };
     assert.equal(adminList.status, 200);
-    assert.ok(adminBody.invitations[0]?.token);
+    assert.equal(adminBody.invitations[0]?.token, undefined);
+    assert.ok(adminBody.invitations[0]?.tokenPreview);
 
     setAlphaRole(modules, "viewer");
     const viewerList = await app.request("/api/app/members", { headers: authHeaders(alpha.cookieValue) });
-    const viewerBody = await viewerList.json() as { invitations: Array<{ token?: string }> };
+    const viewerBody = await viewerList.json() as { invitations: Array<{ token?: string; tokenPreview?: string }> };
     assert.equal(viewerList.status, 200);
     assert.equal(viewerBody.invitations[0]?.token, undefined);
+    assert.ok(viewerBody.invitations[0]?.tokenPreview);
 
     const accepted = await app.request(`/api/app/invitations/${createdBody.invitation.token}/accept`, {
       method: "POST",
@@ -368,7 +370,7 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
   const invitationBody = await invitation.json() as { invitation: { id: string; email: string; role: string; status: string; token?: string } };
 
   const members = await app.request("/api/app/members", { headers: authHeaders(alpha.cookieValue) });
-  const membersBody = await members.json() as { invitations: Array<{ email: string; role: string; status: string; token?: string }> };
+  const membersBody = await members.json() as { invitations: Array<{ email: string; role: string; status: string; token?: string; tokenPreview?: string }> };
 
   const resent = await app.request(`/api/app/invitations/${invitationBody.invitation.id}/resend`, {
     method: "POST",
@@ -457,7 +459,7 @@ async function runIndexedRouteScenario(modules: RuntimeModules, label: string) {
         status: invitationBody.invitation.status,
         hasToken: Boolean(invitationBody.invitation.token),
       },
-      listed: membersBody.invitations.some((entry) => entry.email === "indexed.parity@example.com" && entry.role === "member" && entry.status === "pending" && Boolean(entry.token)),
+      listed: membersBody.invitations.some((entry) => entry.email === "indexed.parity@example.com" && entry.role === "member" && entry.status === "pending" && !entry.token && Boolean(entry.tokenPreview)),
       resendStatus: resent.status,
       resendRotatedToken: Boolean(resentBody.invitation.token) && resentBody.invitation.token !== invitationBody.invitation.token,
       revokeStatus: revoked.status,

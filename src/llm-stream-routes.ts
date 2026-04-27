@@ -4,6 +4,7 @@ import { requirePrivateWorkspaceRole } from "./rbac.js";
 import { getDefaultRouter } from "./providers/router.js";
 import { recordedStream } from "./providers/ledger.js";
 import type { ProviderMessage, ProviderToolDef } from "./providers/types.js";
+import { redactedErrorMessage, redactSensitiveString } from "./security/redaction.js";
 
 interface StreamRequestBody {
   routeKey?: string;
@@ -20,7 +21,7 @@ const inflight = new Map<string, AbortController>();
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
-  return c.json({ error: (error as Error).message });
+  return c.json({ error: redactedErrorMessage(error) });
 }
 
 export const llmStreamRoutes = new Hono();
@@ -79,7 +80,7 @@ llmStreamRoutes.post("/stream", async (c) => {
       );
       for await (const chunk of recorded) {
         if (chunk.error) {
-          await sse.writeSSE({ event: "error", data: JSON.stringify({ error: chunk.error }) });
+          await sse.writeSSE({ event: "error", data: JSON.stringify({ error: redactSensitiveString(chunk.error) }) });
           continue;
         }
         await sse.writeSSE({ event: "chunk", data: JSON.stringify(chunk) });
