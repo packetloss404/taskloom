@@ -61,6 +61,7 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.ok(body.store && typeof body.store === "object");
   assert.ok(body.scheduler && typeof body.scheduler === "object");
   assert.ok(Array.isArray(body.jobs));
+  assert.ok(Array.isArray(body.jobMetrics));
   assert.ok(body.accessLog && typeof body.accessLog === "object");
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };

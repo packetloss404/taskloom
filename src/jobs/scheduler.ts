@@ -4,6 +4,8 @@ import { nextAfter } from "./cron.js";
 import { redactedErrorMessage } from "../security/redaction.js";
 import type { SchedulerLeaderLock } from "./scheduler-lock.js";
 import { noopLeaderLock } from "./scheduler-lock.js";
+import { recordJobRun, type JobMetricStatus } from "./scheduler-metrics.js";
+import { __setSchedulerLeaderProbe } from "../operations-status.js";
 
 export interface JobHandlerContext {
   signal: AbortSignal;
@@ -45,6 +47,7 @@ export class JobScheduler {
     this.polling = true;
     maintainScheduledAgentJobs();
     sweepStaleRunningJobs();
+    __setSchedulerLeaderProbe(() => this.leaderLock.isHeld());
     this.scheduleNext(0);
   }
 
@@ -59,6 +62,7 @@ export class JobScheduler {
     while (this.inFlight.size > 0 && Date.now() < cutoff) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    __setSchedulerLeaderProbe(null);
   }
 
   private scheduleNext(ms: number): void {
@@ -92,16 +96,30 @@ export class JobScheduler {
       const fresh = findJob(job.id);
       if (fresh?.cancelRequested) ctrl.abort();
     }, this.cancelWatchMs);
+    const startedAt = new Date().toISOString();
+    const startTime = Date.now();
+    const recordTerminal = (status: JobMetricStatus): void => {
+      recordJobRun({
+        type: job.type,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - startTime,
+        status,
+      });
+    };
     try {
       if (!handler) {
+        recordTerminal("failed");
         updateJob(job.id, { status: "failed", error: `no handler registered for type "${job.type}"`, completedAt: new Date().toISOString() });
         return;
       }
       const result = await handler.handle(job, { signal: ctrl.signal });
       if (ctrl.signal.aborted) {
+        recordTerminal("canceled");
         updateJob(job.id, { status: "canceled", completedAt: new Date().toISOString() });
         return;
       }
+      recordTerminal("success");
       updateJob(job.id, { status: "success", result, completedAt: new Date().toISOString() });
       if (job.cron) {
         try {
@@ -112,13 +130,16 @@ export class JobScheduler {
     } catch (error) {
       const fresh = findJob(job.id);
       if (fresh?.cancelRequested || ctrl.signal.aborted) {
+        recordTerminal("canceled");
         updateJob(job.id, { status: "canceled", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
         return;
       }
       if (job.attempts < job.maxAttempts) {
+        // retry path: do not record metrics; only terminal outcomes are tracked.
         const next = new Date(Date.now() + backoffMs(job.attempts));
         updateJob(job.id, { status: "queued", error: redactedErrorMessage(error), scheduledAt: next.toISOString(), startedAt: undefined });
       } else {
+        recordTerminal("failed");
         updateJob(job.id, { status: "failed", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
       }
     } finally {

@@ -1,5 +1,8 @@
 import type { TaskloomData } from "./taskloom-store.js";
 import { loadStore as defaultLoadStore } from "./taskloom-store.js";
+import { getJobTypeMetrics, type JobTypeMetrics } from "./jobs/scheduler-metrics.js";
+
+export type { JobTypeMetrics } from "./jobs/scheduler-metrics.js";
 
 export interface JobQueueStatusSummary {
   type: string;
@@ -20,6 +23,7 @@ export interface OperationsStatus {
     lockSummary: string;
   };
   jobs: JobQueueStatusSummary[];
+  jobMetrics: JobTypeMetrics[];
   accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
   runtime: { nodeVersion: string };
 }
@@ -28,6 +32,7 @@ export interface OperationsStatusDeps {
   loadStore?: () => TaskloomData;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+  jobTypeMetrics?: () => JobTypeMetrics[];
 }
 
 type LeaderMode = OperationsStatus["scheduler"]["leaderMode"];
@@ -76,7 +81,8 @@ function resolveLockSummary(mode: LeaderMode, env: NodeJS.ProcessEnv): string {
   return "local";
 }
 
-// limitation: when no probe is registered, "off" is treated as held-locally (noop lock) and "file"/"http" default to false.
+// Phase 25 wires the scheduler to set this probe in start() and clear it in stop(),
+// so leaderHeldLocally now reflects the live SchedulerLeaderLock state when the scheduler is running.
 function resolveLeaderHeldLocally(mode: LeaderMode): boolean {
   if (schedulerLeaderProbe) {
     try {
@@ -166,6 +172,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       lockSummary: resolveLockSummary(leaderMode, env),
     },
     jobs: summarizeJobs(data),
+    jobMetrics: (deps?.jobTypeMetrics ?? getJobTypeMetrics)(),
     accessLog: {
       mode: resolveAccessLogMode(env),
       path: resolveAccessLogPath(env),

@@ -140,6 +140,7 @@ test("Operations surface renders the Production Status tile for admin sessions",
   const html = renderOperationsWithRole("admin");
   assert.match(html, /Production Status/);
   assert.match(html, /PRODUCTION STATUS/);
+  assert.match(html, /Job metrics/);
 });
 
 test("Operations surface hides the Production Status tile for viewer sessions", () => {

@@ -84,6 +84,32 @@ Sample 200 response:
     { "type": "agent.run", "queued": 4, "running": 1, "succeeded": 142, "failed": 2, "canceled": 0 },
     { "type": "invitation.email", "queued": 0, "running": 0, "succeeded": 87, "failed": 1, "canceled": 0 }
   ],
+  "jobMetrics": [
+    {
+      "type": "agent.run",
+      "totalRuns": 145,
+      "succeededRuns": 142,
+      "failedRuns": 2,
+      "canceledRuns": 1,
+      "lastRunStartedAt": "2026-04-26T00:00:00.000Z",
+      "lastRunFinishedAt": "2026-04-26T00:00:00.812Z",
+      "lastDurationMs": 812,
+      "averageDurationMs": 734,
+      "p95DurationMs": 1480
+    },
+    {
+      "type": "invitation.email",
+      "totalRuns": 88,
+      "succeededRuns": 87,
+      "failedRuns": 1,
+      "canceledRuns": 0,
+      "lastRunStartedAt": "2026-04-26T00:00:00.000Z",
+      "lastRunFinishedAt": "2026-04-26T00:00:00.214Z",
+      "lastDurationMs": 214,
+      "averageDurationMs": 198,
+      "p95DurationMs": 412
+    }
+  ],
   "accessLog": {
     "mode": "file",
     "path": "/var/log/taskloom/access.log",
@@ -112,9 +138,10 @@ Field-by-field notes:
 - `store.mode` mirrors `TASKLOOM_STORE` (`json` or `sqlite`).
 - `scheduler.leaderMode` mirrors `TASKLOOM_SCHEDULER_LEADER_MODE` (`off`, `file`, or `http`).
 - `scheduler.leaderTtlMs` mirrors `TASKLOOM_SCHEDULER_LEADER_TTL_MS` (default `30000`).
-- `scheduler.leaderHeldLocally` is a known-limitation field. It is `true` for `off` mode because the noop lock always reports the local process as the leader, and `false` for `file` and `http` modes until a future scheduler-state probe is wired in. Treat the field as a configuration sanity check rather than an authoritative leadership signal; cross-link `docs/deployment-scheduler-coordination.md` for the broader leader-election context.
+- `scheduler.leaderHeldLocally` reflects the live `SchedulerLeaderLock.isHeld()` state when the scheduler is running. Phase 25 wires the probe through `JobScheduler.start()`/`stop()`, so the field is `true` for `off` mode (the noop lock always reports the local process as leader), and for `file`/`http` modes it tracks whether this process currently holds the lock. The field is `false` when the scheduler is stopped or has not yet acquired the lock. Cross-link `docs/deployment-scheduler-coordination.md` for the broader leader-election context.
 - `scheduler.lockSummary` reports a redacted view of the leader-lock target: `"local"` for `off` mode, the configured file path for `file` mode, and the configured URL with any query string stripped for `http` mode. The field NEVER contains the configured bearer secret, even when `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` is set. Operators should never see a token here; if they do, file a bug.
 - `jobs[]` contains one row per `type` encountered in the queue, with `queued`, `running`, `succeeded`, `failed`, and `canceled` counts. The array is empty when there are no queued jobs at all.
+- `jobMetrics[]` contains one entry per job `type` that has produced a terminal outcome (`success`, `failed`, or `canceled`) since process start. The retry-back-to-queued path does NOT record an entry, so a job that retries twice and then succeeds counts as one terminal `success` rather than three runs. `lastDurationMs` reflects the most recent run regardless of status. `averageDurationMs` and `p95DurationMs` are computed over success runs only in the rolling window so a flood of failures does not poison the latency metric, and are `null` when the window has no success runs yet. The window is in-memory and resets on process restart by design; configure size with `TASKLOOM_SCHEDULER_METRICS_WINDOW_SIZE` (default `50`, integer >= 1, read at module load). Long-tail and SLO tracking should still rely on shipped logs plus a downstream system; this field is for the on-call's "is the scheduler healthy right now" view rather than historical analysis.
 - `accessLog` mirrors the Phase 20 and Phase 23 environment knobs: `mode` (`stdout`, `file`, or `off`), `path` (when mode is `file`), and the rotation envelope `maxBytes`/`maxFiles`.
 - `runtime.nodeVersion` is `process.versions.node`, useful for confirming the runtime version in place after a rolling deploy.
 
@@ -147,4 +174,5 @@ After deploying Phase 24, walk through:
 - `curl` with an admin or owner session cookie returns `200` with the expected JSON shape: `generatedAt`, `store.mode`, `scheduler.{leaderMode, leaderTtlMs, leaderHeldLocally, lockSummary}`, `jobs[]`, `accessLog.{mode, path, maxBytes, maxFiles}`, and `runtime.nodeVersion`.
 - The `scheduler.lockSummary` field never contains a secret. Confirm `"local"` for `off` mode, the configured file path for `file` mode, and the URL with any query string stripped for `http` mode (even when `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` is set).
 - The Operations page renders the "Production Status" tile for admins and owners and omits it for member/viewer roles.
+- After kicking off a manual job (e.g., `npm run jobs:recompute-activation`), `GET /api/app/operations/status` shows a `jobMetrics` entry for the job type with `totalRuns >= 1` and `lastDurationMs` populated.
 - Cross-link the rest of the production posture: `docs/deployment-scheduler-coordination.md` for the leader-election context behind `scheduler.leaderHeldLocally` and `scheduler.lockSummary`, `docs/deployment-access-log-shipping.md` for the access-log envelope mirrored in `accessLog`, `docs/deployment-auth-hardening.md` for auth/invitation rate limits and CSRF behavior, and `docs/deployment-sqlite-topology.md` for storage topology.

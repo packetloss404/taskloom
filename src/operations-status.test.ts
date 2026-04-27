@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JobRecord, TaskloomData } from "./taskloom-store.js";
-import { getOperationsStatus } from "./operations-status.js";
+import { getOperationsStatus, type JobTypeMetrics } from "./operations-status.js";
 
 function emptyStore(): TaskloomData {
   return { jobs: [] } as unknown as TaskloomData;
@@ -161,4 +161,80 @@ test("generatedAt reflects the injected now", () => {
   });
 
   assert.equal(status.generatedAt, "2026-04-26T13:37:00.000Z");
+});
+
+test("jobMetrics defaults to an empty array when the fixture returns none", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {},
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    jobTypeMetrics: () => [],
+  });
+
+  assert.deepEqual(status.jobMetrics, []);
+});
+
+test("jobMetrics fixture appears verbatim in the result", () => {
+  const fixture: JobTypeMetrics[] = [
+    {
+      type: "agent.run",
+      totalRuns: 3,
+      succeededRuns: 2,
+      failedRuns: 1,
+      canceledRuns: 0,
+      lastRunStartedAt: "2026-04-26T11:59:00.000Z",
+      lastRunFinishedAt: "2026-04-26T11:59:30.000Z",
+      lastDurationMs: 30000,
+      averageDurationMs: 25000,
+      p95DurationMs: 29000,
+    },
+  ];
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {},
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    jobTypeMetrics: () => fixture,
+  });
+
+  assert.deepEqual(status.jobMetrics, fixture);
+});
+
+test("jobMetrics preserves the order returned by the fixture", () => {
+  const fixture: JobTypeMetrics[] = [
+    {
+      type: "zeta.task",
+      totalRuns: 1,
+      succeededRuns: 1,
+      failedRuns: 0,
+      canceledRuns: 0,
+      lastRunStartedAt: "2026-04-26T10:00:00.000Z",
+      lastRunFinishedAt: "2026-04-26T10:00:05.000Z",
+      lastDurationMs: 5000,
+      averageDurationMs: 5000,
+      p95DurationMs: null,
+    },
+    {
+      type: "alpha.task",
+      totalRuns: 2,
+      succeededRuns: 0,
+      failedRuns: 2,
+      canceledRuns: 0,
+      lastRunStartedAt: "2026-04-26T11:00:00.000Z",
+      lastRunFinishedAt: "2026-04-26T11:00:10.000Z",
+      lastDurationMs: 10000,
+      averageDurationMs: null,
+      p95DurationMs: null,
+    },
+  ];
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {},
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    jobTypeMetrics: () => fixture,
+  });
+
+  assert.equal(status.jobMetrics.length, 2);
+  assert.equal(status.jobMetrics[0].type, "zeta.task");
+  assert.equal(status.jobMetrics[1].type, "alpha.task");
+  assert.deepEqual(status.jobMetrics, fixture);
 });

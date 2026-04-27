@@ -571,6 +571,18 @@ interface ProductionStatus {
     lockSummary: string;
   };
   jobs: { type: string; queued: number; running: number; succeeded: number; failed: number; canceled: number }[];
+  jobMetrics: {
+    type: string;
+    totalRuns: number;
+    succeededRuns: number;
+    failedRuns: number;
+    canceledRuns: number;
+    lastRunStartedAt: string | null;
+    lastRunFinishedAt: string | null;
+    lastDurationMs: number | null;
+    averageDurationMs: number | null;
+    p95DurationMs: number | null;
+  }[];
   accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
   runtime: { nodeVersion: string };
 }
@@ -713,6 +725,56 @@ function ProductionStatusPanel() {
               </div>
             )}
           </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-1">JOB METRICS</div>
+            <h3 className="mb-3 font-serif text-base text-ink-100">Job metrics</h3>
+            {status.jobMetrics.length === 0 ? (
+              <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+                No completed runs yet (since process restart)
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full font-mono text-xs">
+                  <thead>
+                    <tr className="text-left text-ink-500">
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Type</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Last duration</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Avg (rolling)</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">p95</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Last finished</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Total runs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.jobMetrics.map((entry) => (
+                      <tr key={entry.type} className="border-t border-ink-800 text-ink-200">
+                        <td className="py-1.5 pr-4">{entry.type}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.lastDurationMs)}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.averageDurationMs)}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{formatDurationMs(entry.p95DurationMs)}</td>
+                        <td className="py-1.5 pr-4">{entry.lastRunFinishedAt ? relative(entry.lastRunFinishedAt) : "—"}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">
+                          {entry.totalRuns}
+                          <span className="ml-1 text-ink-500">({entry.succeededRuns} / {entry.failedRuns})</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!status && !error && (
+        <div className="mt-4 border border-ink-700 bg-ink-875 px-4 py-3">
+          <div className="kicker mb-1">JOB METRICS</div>
+          <h3 className="font-serif text-base text-ink-100">Job metrics</h3>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+            Awaiting status snapshot
+          </p>
         </div>
       )}
     </section>
@@ -739,6 +801,12 @@ function formatBytes(bytes: number): string {
   }
   const formatted = unitIndex === 0 ? value.toString() : value.toFixed(1);
   return `${formatted} ${units[unitIndex]}`;
+}
+
+function formatDurationMs(ms: number | null): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+  return `${Math.round(ms)} ms`;
 }
 
 async function fetchProductionStatus(): Promise<ProductionStatus> {

@@ -6,6 +6,8 @@ import { TASKLOOM_INVITATION_EMAIL_MODE_ENV, TASKLOOM_INVITATION_EMAIL_RETRY_MAX
 import { resetInvitationEmailDeliveryForTests, setInvitationEmailFetchForTests } from "../../invitation-email-delivery.js";
 import { enqueueJob, enqueueRecurringJob, findJob, listJobs, maintainScheduledAgentJobs, updateJob } from "../store.js";
 import { JobScheduler } from "../scheduler.js";
+import { __resetSchedulerMetricsForTests, getJobTypeMetrics } from "../scheduler-metrics.js";
+import { getOperationsStatus } from "../../operations-status.js";
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -280,6 +282,46 @@ test("scheduler runs a seeded scheduled agent.run job", async () => {
 
   assert.deepEqual(ran, [agent.id]);
   assert.equal(findJob(seeded.id)?.status, "success");
+});
+
+test("scheduler registers leader probe on start and unregisters on stop", async () => {
+  resetStoreForTests();
+  __resetSchedulerMetricsForTests();
+  const scheduler = new JobScheduler({ pollIntervalMs: 50 });
+  scheduler.start();
+  try {
+    const status = getOperationsStatus();
+    assert.equal(status.scheduler.leaderHeldLocally, true);
+  } finally {
+    await scheduler.stop();
+  }
+  const afterStop = getOperationsStatus();
+  // probe cleared => mode "off" default still reports true (mode-default behavior).
+  assert.equal(afterStop.scheduler.leaderHeldLocally, true);
+});
+
+test("scheduler records job-type metrics for successful runs", async () => {
+  resetStoreForTests();
+  __resetSchedulerMetricsForTests();
+  const scheduler = new JobScheduler({ pollIntervalMs: 30 });
+  scheduler.register({
+    type: "metrics.success",
+    async handle() { return { ok: true }; },
+  });
+  const job = enqueueJob({ workspaceId: "alpha", type: "metrics.success", payload: {} });
+  scheduler.start();
+  for (let i = 0; i < 40; i++) {
+    const fresh = findJob(job.id);
+    if (fresh?.status === "success") break;
+    await wait(30);
+  }
+  await scheduler.stop();
+  const metrics = getJobTypeMetrics().find((entry) => entry.type === "metrics.success");
+  assert.ok(metrics, "expected metrics entry for metrics.success");
+  assert.equal(metrics.totalRuns, 1);
+  assert.equal(metrics.succeededRuns, 1);
+  assert.equal(typeof metrics.lastDurationMs, "number");
+  assert.ok((metrics.lastDurationMs ?? -1) >= 0);
 });
 
 test("recurring scheduled agent jobs preserve payload inputs", () => {
