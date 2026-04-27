@@ -7,10 +7,42 @@ import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import ActivationPage from "./Activation";
 import DashboardPage from "./Dashboard";
+import OperationsPage from "./Operations";
 import PublicSharePage from "./PublicShare";
+import { AuthContext } from "../context/AuthContext";
+import type { Session, WorkspaceRole } from "../lib/types";
 
 const pageSource = (fileName: string) => readFileSync(fileURLToPath(new URL(fileName, import.meta.url)), "utf8");
 const appSource = () => readFileSync(fileURLToPath(new URL("../App.tsx", import.meta.url)), "utf8");
+
+function buildSession(role: WorkspaceRole): Session {
+  return {
+    authenticated: true,
+    user: { id: "user-1", email: "user@example.com", displayName: "Test User", timezone: "UTC" },
+    workspace: { id: "workspace-1", slug: "ws", name: "Workspace", website: "", automationGoal: "", role },
+    onboarding: { status: "completed", currentStep: "done", completed: true, completedSteps: [], completedAt: null },
+  };
+}
+
+function renderOperationsWithRole(role: WorkspaceRole | null) {
+  const session = role ? buildSession(role) : null;
+  const value = {
+    session,
+    loading: false,
+    refreshSession: async () => session,
+    signIn: async () => undefined,
+    signUp: async () => undefined,
+    signOut: async () => undefined,
+    setSession: () => undefined,
+  };
+  return renderToString(
+    <MemoryRouter initialEntries={["/operations"]}>
+      <AuthContext.Provider value={value}>
+        <OperationsPage />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+}
 
 test("Dashboard surface server-renders its initial loading shell", () => {
   const html = renderToString(
@@ -99,6 +131,21 @@ test("Role-aware workspace controls are surfaced and gated for viewers", () => {
   assert.match(workflow, /disabled=\{isViewer\}/);
   assert.match(operations, /Workspace role · \{session\.workspace\.role\}/);
   assert.match(operations, /isViewer \? <ReadOnlyRoleNotice \/> : <form/);
+  assert.match(operations, /\{canManageOperations && <ProductionStatusPanel \/>\}/);
+  assert.match(operations, /<h2 className="display text-2xl">Production Status<\/h2>/);
+  assert.match(operations, /fetchProductionStatus/);
+});
+
+test("Operations surface renders the Production Status tile for admin sessions", () => {
+  const html = renderOperationsWithRole("admin");
+  assert.match(html, /Production Status/);
+  assert.match(html, /PRODUCTION STATUS/);
+});
+
+test("Operations surface hides the Production Status tile for viewer sessions", () => {
+  const html = renderOperationsWithRole("viewer");
+  assert.doesNotMatch(html, /Production Status/);
+  assert.doesNotMatch(html, /PRODUCTION STATUS/);
 });
 
 test("Previously unwired controls are connected to backend-facing APIs", () => {

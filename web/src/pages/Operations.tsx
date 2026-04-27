@@ -542,6 +542,8 @@ export default function OperationsPage() {
         </div>
       )}
 
+      {canManageOperations && <ProductionStatusPanel />}
+
       <section className="section-band">
         <div className="mb-5 flex items-end justify-between">
           <div>
@@ -557,6 +559,200 @@ export default function OperationsPage() {
       </section>
     </div>
   );
+}
+
+interface ProductionStatus {
+  generatedAt: string;
+  store: { mode: "json" | "sqlite" };
+  scheduler: {
+    leaderMode: "off" | "file" | "http";
+    leaderTtlMs: number;
+    leaderHeldLocally: boolean;
+    lockSummary: string;
+  };
+  jobs: { type: string; queued: number; running: number; succeeded: number; failed: number; canceled: number }[];
+  accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
+  runtime: { nodeVersion: string };
+}
+
+function ProductionStatusPanel() {
+  const [status, setStatus] = useState<ProductionStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [hidden, setHidden] = useState(false);
+
+  const loadStatus = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = await fetchProductionStatus();
+      setStatus(payload);
+    } catch (loadError) {
+      const err = loadError as Error & { status?: number };
+      if (err.status === 401 || err.status === 403) {
+        setHidden(true);
+        return;
+      }
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadStatus();
+  }, []);
+
+  if (hidden) return null;
+
+  return (
+    <section className="section-band">
+      <div className="mb-5 flex items-end justify-between">
+        <div>
+          <div className="kicker mb-2">PRODUCTION STATUS</div>
+          <h2 className="display text-2xl">Production Status</h2>
+          <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+            {status ? `Generated ${relative(status.generatedAt)}` : "Operator snapshot"}
+          </p>
+        </div>
+        <button className="btn-ghost" type="button" onClick={loadStatus} disabled={loading}>
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh status
+        </button>
+      </div>
+
+      {loading && !status && (
+        <div className="flex items-center gap-3 text-sm text-ink-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING STATUS</span>
+        </div>
+      )}
+
+      {error && !loading && (
+        <div className="border border-signal-red/50 bg-ink-950/60 px-3 py-2 font-mono text-xs text-signal-red">
+          STATUS UNAVAILABLE · {error}
+        </div>
+      )}
+
+      {status && (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3">
+            <div className="kicker mb-2">STORE</div>
+            <div className="font-mono text-sm text-ink-200">Store: {status.store.mode}</div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3">
+            <div className="kicker mb-2">RUNTIME</div>
+            <div className="font-mono text-sm text-ink-200">Node {status.runtime.nodeVersion}</div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-3">SCHEDULER</div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KeyValue label="Leader mode" value={status.scheduler.leaderMode} />
+              <KeyValue
+                label="Leader held locally"
+                value={
+                  status.scheduler.leaderHeldLocally ? (
+                    <span className="inline-flex items-center gap-1.5 text-signal-green">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> yes
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-ink-500">
+                      <XCircle className="h-3.5 w-3.5" /> no
+                    </span>
+                  )
+                }
+              />
+              <KeyValue label="Leader TTL" value={`${(status.scheduler.leaderTtlMs / 1000).toFixed(1)}s`} />
+              <KeyValue label="Lock summary" value={status.scheduler.lockSummary || "—"} />
+            </div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-3">ACCESS LOG</div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KeyValue label="Mode" value={status.accessLog.mode} />
+              <KeyValue label="Path" value={status.accessLog.path || "—"} />
+              <KeyValue
+                label="Max bytes"
+                value={status.accessLog.maxBytes > 0 ? formatBytes(status.accessLog.maxBytes) : "disabled"}
+              />
+              <KeyValue label="Max files" value={String(status.accessLog.maxFiles)} />
+            </div>
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-3">JOBS</div>
+            {status.jobs.length === 0 ? (
+              <EmptyState>No queued jobs.</EmptyState>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full font-mono text-xs">
+                  <thead>
+                    <tr className="text-left text-ink-500">
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Type</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Queued</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Running</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Succeeded</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Failed</th>
+                      <th className="py-1.5 pr-4 font-medium uppercase tracking-wider">Canceled</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.jobs.map((entry) => (
+                      <tr key={entry.type} className="border-t border-ink-800 text-ink-200">
+                        <td className="py-1.5 pr-4">{entry.type}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.queued}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.running}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.succeeded}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.failed}</td>
+                        <td className="py-1.5 pr-4 tabular-nums">{entry.canceled}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function KeyValue({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div>
+      <div className="kicker mb-1">{label.toUpperCase()}</div>
+      <div className="font-mono text-sm text-ink-200">{value}</div>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "disabled";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const formatted = unitIndex === 0 ? value.toString() : value.toFixed(1);
+  return `${formatted} ${units[unitIndex]}`;
+}
+
+async function fetchProductionStatus(): Promise<ProductionStatus> {
+  const response = await fetch("/api/app/operations/status", {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  return payload as ProductionStatus;
 }
 
 function WorkflowSection({

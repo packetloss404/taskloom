@@ -149,14 +149,18 @@ Recommended production posture:
 - Enable the in-app access log middleware with `TASKLOOM_ACCESS_LOG_MODE=stdout` or `TASKLOOM_ACCESS_LOG_MODE=file` (defaults to `off`), and set `TASKLOOM_ACCESS_LOG_PATH` to a managed log directory when mode is `file`. The middleware writes one JSON line per request with method, status, duration, userId, workspaceId, requestId, and a path/query that is passed through the same redaction helper used for DTO surfaces. Pair it with reverse-proxy access-log rewriting templates under `docs/deployment/proxy-access-log-redaction/` for traffic the app never sees, and validate proxy logs with `node --import tsx src/security/proxy-access-log-validator.ts <path-to-log>` after every config change.
 - For file-mode access logging, bound local disk usage with `TASKLOOM_ACCESS_LOG_MAX_BYTES` (default `0` = rotation disabled) and `TASKLOOM_ACCESS_LOG_MAX_FILES` (default `5`, clamp to `>= 1`). When `MAX_BYTES > 0`, the middleware rotates the active file before writing a line that would exceed the threshold, cascading `<path>` to `<path>.1`, `<path>.1` to `<path>.2`, and pruning files beyond `MAX_FILES`. Run `npm run access-log:rotate -- --path=<file> [--max-files=<n>]` for cron-driven daily rotation, and pair the rotated files with a managed shipper (Vector, Fluent Bit, Promtail/Loki) using the recipes under `docs/deployment/access-log-shipping/`. See `docs/deployment-access-log-shipping.md` for the full rotation, shipping, and SIEM integration guidance.
 - Use `npm run jobs:export-workspace -- --workspace-id=<id> > export.json` to produce a redacted per-workspace JSON snapshot for audit handoff, support escalation, or data-subject requests. See `docs/deployment-export-redaction.md` for redaction guarantees and the validation checklist.
+- Wire orchestrator health checks to the public probes: `GET /api/health/live` for container liveness checks (no I/O, fixed 200) and `GET /api/health/ready` for load balancer readiness (200 when `loadStore()` resolves cleanly, 503 with a redacted error otherwise). Operators with admin/owner sessions can also call `GET /api/app/operations/status` for a single-call summary of store mode, scheduler leader configuration, jobs queue depth, access-log knobs, and Node version, also rendered as the Operations page "Production Status" tile. See `docs/deployment-health-endpoints.md` for probe wiring guidance and the validation checklist.
 
-Current production guidance still does not add managed database repositories by itself. The app includes an optional HTTP distributed rate-limit adapter, built-in invitation webhook retry jobs, an optional scheduler leader-election gate, and built-in access-log rotation with shipping recipes, but the shared limiter service, scheduler coordinator service, edge provider, external email provider, and managed log retention storage remain deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, and `docs/deployment-access-log-shipping.md` for focused deployment checks.
+Current production guidance still does not add managed database repositories by itself. The app includes an optional HTTP distributed rate-limit adapter, built-in invitation webhook retry jobs, an optional scheduler leader-election gate, built-in access-log rotation with shipping recipes, and public liveness/readiness probes plus an admin operator-status endpoint, but the shared limiter service, scheduler coordinator service, edge provider, external email provider, and managed log retention storage remain deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, and `docs/deployment-health-endpoints.md` for focused deployment checks.
 
 ## API Endpoints
 
 Available endpoints include:
 
 - `GET /api/health`
+- `GET /api/health/live`
+- `GET /api/health/ready`
+- `GET /api/app/operations/status`
 - `GET /api/activation`
 - `GET /api/activation/:workspaceId`
 - `GET /api/auth/session`
@@ -273,6 +277,8 @@ Auth register/login and invitation create/accept/resend routes have store-backed
 
 Production edge/distributed rate-limit guidance, topology caveats, and a validation checklist live in `docs/deployment-auth-hardening.md`.
 
+`GET /api/health/live` is a public, fixed-200 liveness probe that performs no I/O and always returns `{ "status": "live" }`; use it for container orchestrator liveness checks. `GET /api/health/ready` is a public readiness probe that returns `200` with `{ "status": "ready" }` when the local store loads cleanly and `503` with `{ "status": "not_ready", "error": "<redacted>" }` otherwise; use it for load balancer and Kubernetes readiness probes. The pre-existing `GET /api/health` route still returns `{ "ok": true }` for any consumer that depends on the older shape. `GET /api/app/operations/status` is admin-scoped and returns an `OperationsStatus` payload covering store mode, scheduler leader mode/TTL/`leaderHeldLocally`/`lockSummary` (file path or token-stripped URL, never the secret), grouped jobs queue depth, access-log mode/path/`maxBytes`/`maxFiles`, and runtime Node version. The Operations page renders the same payload as a "Production Status" tile for admins. See `docs/deployment-health-endpoints.md` for probe wiring guidance and the post-deploy validation checklist.
+
 Production deployments should terminate HTTPS before the Node server and run the scheduled `cleanup-sessions` job to remove expired sessions.
 
 Workflow writes update the local workflow records, emit workflow activity, and refresh activation facts used by dashboard and activation views.
@@ -377,8 +383,9 @@ Key docs:
 - `docs/deployment-export-redaction.md`
 - `docs/deployment-scheduler-coordination.md`
 - `docs/deployment-access-log-shipping.md`
+- `docs/deployment-health-endpoints.md`
 - `docs/activation/activation-domain.md`
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
 
-Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, and `docs/deployment-access-log-shipping.md`, and is tracked across Phases 16 through 23 in `docs/roadmap.md`.
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, and `docs/deployment-health-endpoints.md`, and is tracked across Phases 16 through 24 in `docs/roadmap.md`.

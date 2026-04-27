@@ -46,6 +46,8 @@ import { invitationEmailWebhookRoutes } from "./invitation-email-webhook-routes.
 import { enforcePrivateAppMutationSecurity } from "./route-security.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 import { accessLogMiddleware } from "./security/access-log.js";
+import { healthRoutes } from "./health-routes.js";
+import { operationsStatusRoutes } from "./operations-status-routes.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -55,6 +57,7 @@ const app = new Hono();
 app.use("*", accessLogMiddleware());
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+app.route("/api/health", healthRoutes);
 
 app.get("/api/activation", async (c) => {
   const summaries = await listPublicActivationSummaries();
@@ -285,6 +288,7 @@ app.route("/api/public/share", publicShareRoutes);
 app.route("/api/app/webhooks", agentWebhookRoutes);
 app.route("/api/public/webhooks", publicWebhookRoutes);
 app.route("/api/public/webhooks/invitation-email", invitationEmailWebhookRoutes);
+app.route("/api/app/operations/status", operationsStatusRoutes);
 
 const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({
