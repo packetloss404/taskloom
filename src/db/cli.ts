@@ -10,7 +10,8 @@ import { sqliteAlertEventsRepository } from "../repositories/alert-events-repo";
 import { sqliteInvitationEmailDeliveriesRepository } from "../repositories/invitation-email-deliveries-repo";
 import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
 import { sqliteJobsRepository } from "../repositories/jobs-repo";
-import type { ActivityRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, InvitationEmailDeliveryMode, InvitationEmailDeliveryRecord, InvitationEmailDeliveryStatus, JobMetricSnapshotRecord, JobRecord, JobStatus } from "../taskloom-store";
+import { sqliteProviderCallsRepository } from "../repositories/provider-calls-repo";
+import type { ActivationSignalRecord, ActivityRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, InvitationEmailDeliveryMode, InvitationEmailDeliveryRecord, InvitationEmailDeliveryStatus, JobMetricSnapshotRecord, JobRecord, JobStatus, ProviderCallRecord } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -228,6 +229,54 @@ export interface VerifyActivitiesResult {
 }
 
 export interface BackfillActivitiesOptions extends DbCliOptions {
+  dryRun?: boolean;
+}
+
+export interface BackfillProviderCallsResult {
+  command: "backfill-provider-calls";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyProviderCallsResult {
+  command: "verify-provider-calls";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillProviderCallsOptions extends DbCliOptions {
+  dryRun?: boolean;
+}
+
+export interface BackfillActivationSignalsResult {
+  command: "backfill-activation-signals";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyActivationSignalsResult {
+  command: "verify-activation-signals";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillActivationSignalsOptions extends DbCliOptions {
   dryRun?: boolean;
 }
 
@@ -1547,6 +1596,395 @@ function canonicalizeAlert(record: AlertEventRecord): string {
   });
 }
 
+interface ProviderCallsWriteRepository {
+  insertMany?: (records: ProviderCallRecord[]) => void;
+  upsert?: (record: ProviderCallRecord) => void;
+}
+
+export function backfillProviderCalls(options: BackfillProviderCallsOptions = {}): BackfillProviderCallsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readProviderCallJsonRows(dbPath);
+  const dedicatedRows = readProviderCallDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: ProviderCallRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeProviderCall(existing) === canonicalizeProviderCall(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    writeProviderCallsViaRepository(dbPath, toInsert);
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-provider-calls",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyProviderCalls(options: DbCliOptions = {}): VerifyProviderCallsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readProviderCallJsonRows(dbPath);
+  const dedicatedRows = readProviderCallDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeProviderCall(jsonRecord) === canonicalizeProviderCall(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-provider-calls",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function writeProviderCallsViaRepository(dbPath: string, records: ProviderCallRecord[]): void {
+  const repo = sqliteProviderCallsRepository({ dbPath }) as ProviderCallsWriteRepository;
+  if (repo.insertMany) {
+    repo.insertMany(records);
+    return;
+  }
+  if (repo.upsert) {
+    for (const record of records) {
+      repo.upsert(record);
+    }
+    return;
+  }
+  throw new Error("sqliteProviderCallsRepository must expose insertMany or upsert");
+}
+
+function readProviderCallJsonRows(dbPath: string): ProviderCallRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'providerCalls'").all() as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as ProviderCallRecord);
+  } finally {
+    db.close();
+  }
+}
+
+function readProviderCallDedicatedRows(dbPath: string): ProviderCallRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, workspace_id, route_key, provider, model,
+        prompt_tokens, completion_tokens, cost_usd, duration_ms,
+        status, error_message, started_at, completed_at
+      from provider_calls
+    `).all() as Array<{
+      id: string;
+      workspace_id: string;
+      route_key: string;
+      provider: ProviderCallRecord["provider"];
+      model: string;
+      prompt_tokens: number;
+      completion_tokens: number;
+      cost_usd: number;
+      duration_ms: number;
+      status: ProviderCallRecord["status"];
+      error_message: string | null;
+      started_at: string;
+      completed_at: string;
+    }>;
+    return rows.map((row) => {
+      const record: ProviderCallRecord = {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        routeKey: row.route_key,
+        provider: row.provider,
+        model: row.model,
+        promptTokens: row.prompt_tokens,
+        completionTokens: row.completion_tokens,
+        costUsd: row.cost_usd,
+        durationMs: row.duration_ms,
+        status: row.status,
+        startedAt: row.started_at,
+        completedAt: row.completed_at,
+      };
+      if (row.error_message !== null) record.errorMessage = row.error_message;
+      return record;
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function canonicalizeProviderCall(record: ProviderCallRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    workspaceId: record.workspaceId,
+    routeKey: record.routeKey,
+    provider: record.provider,
+    model: record.model,
+    promptTokens: record.promptTokens,
+    completionTokens: record.completionTokens,
+    costUsd: record.costUsd,
+    durationMs: record.durationMs,
+    status: record.status,
+    errorMessage: record.errorMessage ?? null,
+    startedAt: record.startedAt,
+    completedAt: record.completedAt,
+  });
+}
+
+export function backfillActivationSignals(
+  options: BackfillActivationSignalsOptions = {},
+): BackfillActivationSignalsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readActivationSignalJsonRows(dbPath);
+  const dedicatedRows = readActivationSignalDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: ActivationSignalRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeActivationSignal(existing) === canonicalizeActivationSignal(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    writeActivationSignalsToDedicatedTable(dbPath, toInsert);
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-activation-signals",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyActivationSignals(options: DbCliOptions = {}): VerifyActivationSignalsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readActivationSignalJsonRows(dbPath);
+  const dedicatedRows = readActivationSignalDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeActivationSignal(jsonRecord) === canonicalizeActivationSignal(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-activation-signals",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function readActivationSignalJsonRows(dbPath: string): ActivationSignalRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'activationSignals'").all() as Array<{ payload: string }>;
+    return rows.map((row) => normalizeActivationSignalForCli(JSON.parse(row.payload) as ActivationSignalRecord));
+  } finally {
+    db.close();
+  }
+}
+
+function readActivationSignalDedicatedRows(dbPath: string): ActivationSignalRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+      from activation_signals
+    `).all() as Array<{
+      id: string;
+      workspace_id: string;
+      kind: ActivationSignalRecord["kind"];
+      source: ActivationSignalRecord["source"];
+      origin: ActivationSignalRecord["origin"] | null;
+      source_id: string | null;
+      stable_key: string | null;
+      data: string | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((row) => {
+      const record: ActivationSignalRecord = {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        kind: row.kind,
+        source: row.source,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+      if (row.origin !== null) record.origin = row.origin;
+      if (row.source_id !== null) record.sourceId = row.source_id;
+      if (row.stable_key !== null) record.stableKey = row.stable_key;
+      if (row.data !== null) record.data = parseRecordData(row.data);
+      return normalizeActivationSignalForCli(record);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function writeActivationSignalsToDedicatedTable(dbPath: string, records: ActivationSignalRecord[]): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("begin immediate");
+    const stmt = db.prepare(`
+      insert or replace into activation_signals (
+        id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const record of records) {
+      stmt.run(
+        record.id,
+        record.workspaceId,
+        record.kind,
+        record.source,
+        record.origin ?? null,
+        record.sourceId ?? null,
+        record.stableKey ?? null,
+        record.data === undefined ? null : JSON.stringify(record.data),
+        record.createdAt,
+        record.updatedAt,
+      );
+    }
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeActivationSignalForCli(record: ActivationSignalRecord): ActivationSignalRecord {
+  return {
+    ...record,
+    origin: record.origin ?? inferActivationSignalOriginForCli(record.source),
+  };
+}
+
+function inferActivationSignalOriginForCli(source: ActivationSignalRecord["source"]): ActivationSignalRecord["origin"] | undefined {
+  if (source === "seed" || source === "system_fact" || source === "activity") return "system_observed";
+  if (source === "user_fact" || source === "workflow" || source === "agent_run") return "user_entered";
+  return undefined;
+}
+
+function parseRecordData(raw: string): Record<string, string | number | boolean | null | undefined> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, string | number | boolean | null | undefined>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function canonicalizeActivationSignal(record: ActivationSignalRecord): string {
+  const normalized = normalizeActivationSignalForCli(record);
+  return JSON.stringify({
+    id: normalized.id,
+    workspaceId: normalized.workspaceId,
+    kind: normalized.kind,
+    source: normalized.source,
+    origin: normalized.origin ?? null,
+    sourceId: normalized.sourceId ?? null,
+    stableKey: normalized.stableKey ?? null,
+    data: normalized.data ?? {},
+    createdAt: normalized.createdAt,
+    updatedAt: normalized.updatedAt,
+  });
+}
+
 export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
   const [command, ...args] = argv;
   const options = parseOptions(args);
@@ -1652,6 +2090,24 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(verifyActivities(options), null, 2));
       return 0;
     }
+    if (command === "backfill-provider-calls") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillProviderCalls({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-provider-calls") {
+      console.log(JSON.stringify(verifyProviderCalls(options), null, 2));
+      return 0;
+    }
+    if (command === "backfill-activation-signals") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillActivationSignals({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-activation-signals") {
+      console.log(JSON.stringify(verifyActivationSignals(options), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -1678,7 +2134,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries|backfill-activities|verify-activities> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries|backfill-activities|verify-activities|backfill-provider-calls|verify-provider-calls|backfill-activation-signals|verify-activation-signals> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
 }
 
 function isExecutedDirectly(): boolean {

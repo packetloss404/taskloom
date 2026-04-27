@@ -31,11 +31,11 @@ Source: `src/taskloom-store.ts` (`TaskloomData` at line 494, `RECORD_COLLECTIONS
 | `jobs` | Mutated heavily: status churn through `queued -> running -> success|failed|canceled`, attempts increment, retry sweep on stale running. Read by workspace, by id, by status; sorted by `scheduledAt` for `claimNextJob`. FK to `agents`/`workspaces`. | `listJobsForWorkspaceIndexed`, `findJobIndexed`, and SQLite-mode repository transactional `claimNextJob`/`sweepStaleRunningJobs`; JSON mode keeps full-store iteration for scheduler claim/sweep | **MIGRATE-PHASE-4** |
 | `invitationEmailDeliveries` | Append-only with later `providerStatus`/`providerError` updates from Phase 22 webhook. Indexed by workspace and invitation. | `listInvitationEmailDeliveriesIndexed` plus `idx_app_records_invitation_email_deliveries_created` | **MIGRATE-PHASE-5** |
 | `activities` | Append-only, ts-keyed (`occurredAt desc`). Read by workspace and for activity detail. | `listWorkspaceRecordsIndexed("activities", ..., orderBy: "occurredAtDesc")` plus `idx_app_records_activity_occurred` | **MIGRATE-PHASE-6** |
-| `providerCalls` | Append-only, ts-keyed. Used for usage rollups. | `listProviderCallsForWorkspaceIndexed` plus `idx_app_records_provider_calls_completed` | **MIGRATE-LATER** (queue after activities; same shape, lower urgency) |
+| `providerCalls` | Append-only, ts-keyed. Used for usage rollups. | `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` plus `idx_app_records_provider_calls_completed`; Phase 39 redirects through a dedicated repository | **MIGRATE-PHASE-7 / PHASE-39 CUTOVER** |
 | `agentRuns` log/tool-call sub-arrays | Embedded arrays inside `AgentRunRecord` | Inlined in JSON payload | **KEEP-IN-JSON** (sub-arrays travel with the parent row; no separate normalization in this roadmap) |
 | `users`, `sessions`, `workspaces`, `memberships`, `workspaceInvitations`, `shareTokens` | Slow growth or session-rotated. Already covered by `app_record_search` indexes. | Indexed by token/email/user/workspace through `app_record_search` | **KEEP-IN-JSON** for now |
 | `workspaceBriefs`, `workspaceBriefVersions`, `requirements`, `implementationPlanItems`, `workflowConcerns`, `validationEvidence`, `releaseConfirmations`, `workspaceEnvVars`, `apiKeys` | Bounded per workspace; small. | Already indexed via `idx_app_records_*` | **KEEP-IN-JSON** |
-| `activationSignals` | Bounded per workspace; first-class repository already exists at `activationSignalRepository()` in `src/taskloom-store.ts:2764`, but still backed by `app_records`. | SQLite path uses `app_records` plus `idx_app_records_activation_signals_*` from migration `0006`. | **KEEP-IN-JSON** unless query patterns change. The repository factory shape is the model for new repositories. |
+| `activationSignals` | Bounded per workspace; first-class repository already exists at `activationSignalRepository()` and is used for retry/scope-change signal writes. | Phase 40 moves the SQLite repository path to `activation_signals` while JSON mode keeps the inline collection. | **MIGRATE-PHASE-8 / PHASE-40 CUTOVER** |
 | `onboardingStates`, `apiKeys` | Per-user/per-workspace, small | Whole-store JSON | **KEEP-IN-JSON** |
 | `activationFacts`, `activationMilestones`, `activationReadModels` | Map-shaped projection; already partially relational via `activation_*` tables in migration `0001` for activation tracking | Map under `MAP_COLLECTIONS` | **KEEP-IN-JSON** at the store layer; activation already has its own tables |
 | `rateLimits` | Already migrated to dedicated `rate_limit_buckets` in migration `0009`. | Dedicated table | **DONE** (precedent for the pattern) |
@@ -235,6 +235,67 @@ Repository: `src/repositories/activities-repo.ts`. The activity service in `src/
 
 **Phase 37 actual rollout:** Phase 37 shipped per the standard A/B/C/D split: migration `0015_activities.sql` plus `src/repositories/activities-repo.ts`; read-redirect of `listActivitiesForWorkspaceIndexed(workspaceId, limit?)` through the repository while preserving the existing helper signature; SQLite dual-write of activity writes to both `app_records` and the dedicated `activities` table during the cutover window; CLIs `db:backfill-activities` and `db:verify-activities`. Documentation updated in `docs/roadmap.md`, `docs/deployment-sqlite-topology.md`, `README.md`, and this file. Phase 37 does not retire the JSON-side mirror, change `loadStore()` semantics, normalize activity payload/data/actor into separate tables, or start Phase 38.
 
+### Step 7: `providerCalls`
+
+DDL shape (migration `0016_provider_calls.sql`):
+
+```
+provider_calls (
+  id                text primary key,
+  workspace_id      text not null,
+  route_key         text not null,
+  provider          text not null,
+  model             text not null,
+  prompt_tokens     integer not null,
+  completion_tokens integer not null,
+  cost_usd          real not null,
+  duration_ms       integer not null,
+  status            text not null check (status in ('success','error','canceled')),
+  error_message     text null,
+  started_at        text not null,
+  completed_at      text not null
+)
+```
+
+Indexes: workspace/completed-at ordering for `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` and usage rollups that scan recent provider calls. The table is append-only from the provider ledger, so `WITHOUT ROWID` is acceptable if the migration keeps lookups keyed by the text primary key and timestamp indexes.
+
+Repository: `src/repositories/provider-calls-repo.ts`. Redirects from `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` while preserving its caller-facing signature, `since` cutoff behavior on `completedAt`, completed-at descending sort, and optional limit. JSON mode keeps using the inline `data.providerCalls` array.
+
+Cutover write path: the provider ledger writes rows to the dedicated `provider_calls` table in SQLite mode, while JSON-default mode keeps using the inline `data.providerCalls` array. The backfill/verify commands remain available for old backups that still have provider calls only in `app_records`.
+
+Backfill CLI: `npm run db:backfill-provider-calls [-- --dry-run]` plus `npm run db:verify-provider-calls`.
+
+**Phase 39 actual rollout:** Phase 39 ships per the standard A/B/C/D split plus immediate mirror retirement: migration `0016_provider_calls.sql` plus `src/repositories/provider-calls-repo.ts`; read-redirect of `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` through the repository while preserving the existing helper signature; SQLite provider ledger writes to the dedicated `provider_calls` table; CLIs `db:backfill-provider-calls` and `db:verify-provider-calls` for old-backup recovery and drift audits. Documentation updates live in `docs/roadmap.md`, `docs/deployment-sqlite-topology.md`, `README.md`, and this file. Phase 39 does not change `loadStore()` semantics or normalize usage aggregates into separate tables.
+
+### Step 8: `activationSignals`
+
+DDL shape (migration `0017_activation_signals.sql`):
+
+```
+activation_signals (
+  id           text primary key,
+  workspace_id text not null,
+  kind         text not null,
+  source       text not null,
+  origin       text null,
+  source_id    text null,
+  stable_key   text null,
+  data         text null check (data is null or json_valid(data)),
+  created_at   text not null,
+  updated_at   text not null
+)
+```
+
+Indexes: workspace/created-at ordering for `activationSignalRepository().listForWorkspace(workspaceId)` and a unique `(workspace_id, stable_key)` index when `stable_key` is not null to preserve the existing stable-key dedupe contract.
+
+Repository: the existing `activationSignalRepository()` in `src/taskloom-store.ts` keeps its caller-facing API. JSON mode keeps using `data.activationSignals`; SQLite mode reads/writes `activation_signals` with legacy `app_records` fallback during the cutover window.
+
+Dual-write: `upsertActivationSignal(data, ...)` queues a dedicated-table write after SQLite `mutateStore()` commits, so existing service call sites continue mutating the full store shape while the dedicated table stays current.
+
+Backfill CLI: `npm run db:backfill-activation-signals [-- --dry-run]` plus `npm run db:verify-activation-signals`.
+
+**Phase 40 actual rollout:** Phase 40 ships migration `0017_activation_signals.sql`, keeps the existing repository API, moves the SQLite repository path to `activation_signals`, dual-writes service helper mutations to the dedicated table, and adds backfill/verify CLIs. This phase does not retire the `activationSignals` JSON-side mirror, change activation facts/read models, or normalize signal `data` into separate columns.
+
 ## 4. Schema and migration mechanics
 
 Current max migration prefix is `0009` (verified: `ls src/db/migrations/` returns `0001`, `0003`-`0009`; `0002` is intentionally absent and remains so). The next available number is `0010`.
@@ -366,7 +427,9 @@ Each phase migrates exactly one collection. Each phase consumes one migration nu
 - **Phase 36: `invitationEmailDeliveries`.** Migration `0014`. ~30-40 new test cases. Phase 22's additive-schema trick stops working past this point; the deployment doc gets an explicit warning.
 - **Phase 37: `activities`.** Migration `0015`. ~40-50 new test cases. Highest fixture-update churn (32 `data.activities` occurrences in `src/taskloom-services.ts`). Slice C size grows accordingly.
 - **Phase 38: drop legacy JSON-side mirrors.** No new migration; the code removes the collection name from `RECORD_COLLECTIONS` in `src/taskloom-store.ts` and from the `app_record_search` insert for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities`. SQLite `loadStore()` keeps returning a fully hydrated `TaskloomData` by reading those six collections from their dedicated tables. `db:backfill-<collection>` commands stay shipped as restore-from-old-backup tools and become no-ops when there are no legacy `app_records` rows to recover. After this mirror retirement, the no-migration scheduler hot-path follow-up flips SQLite-mode `claimNextJob`/`sweepStaleRunningJobs` to the `jobs` repository transactional primitives.
-- **Phase 39+: `providerCalls` and any future MIGRATE-LATER collections** as their thresholds in `docs/deployment-sqlite-topology.md` get crossed.
+- **Phase 39: `providerCalls`.** Migration `0016`. Standard table/repository/read-redirect/backfill/verify rollout plus SQLite mirror retirement. The read path preserves `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })`, and provider ledger writes use `provider_calls` in SQLite mode.
+- **Phase 40: `activationSignals`.** Migration `0017`. Existing repository API moves to a dedicated SQLite table with stable-key uniqueness and cutover-window mirror retention.
+- **Phase 41+: future MIGRATE-LATER collections** as their thresholds in `docs/deployment-sqlite-topology.md` get crossed.
 
 Test deltas are rough order-of-magnitude. Actual counts depend on how aggressively each phase exercises edge cases. The 543 API + 15 web suite is the floor; new tests are additive.
 
@@ -377,4 +440,4 @@ Test deltas are rough order-of-magnitude. Actual counts depend on how aggressive
 - **Dual-write window length policy?** Section 3 mentions "after one stable phase" before retiring the JSON-side write. Is the policy "one phase later" (mechanical), "two stable releases" (calendar), or "until `db:verify-<collection>` reports zero drift across an environment for N consecutive runs" (operational)? Recommendation: "one phase later" plus "zero drift in the most recent verify run" combined.
 - **Should `agentRuns` sub-arrays normalize?** Step 3 keeps `logs`/`toolCalls`/`transcript` as JSON columns inside the row. If observability needs grow (per-tool-call latency aggregation across runs, for example) those become first-class tables in a future phase. For now, keep them inlined. Confirm.
 - **Activation tables interplay?** Migration `0001` already created relational `activation_tracks`/`activation_milestones`/`activation_checklist_items` for the activation domain. Section 2 lists `activationFacts`/`activationMilestones`/`activationReadModels` as KEEP-IN-JSON at the store layer. Confirm that the activation team does not want a unifying step that points the store-side facts at the existing relational activation tables; that's a different scope from this roadmap.
-- **`activationSignals` priority?** Section 2 marks `activationSignals` KEEP-IN-JSON despite already having a repository factory. The `activationSignalRepository()` SQLite path still hits `app_records`. Should an explicit "lift to dedicated table" phase be queued ahead of `providerCalls`, or only when query patterns demand it? Current recommendation: defer; the existing repository factory already isolates callers from the storage choice.
+- **`activationSignals` mirror retirement?** Phase 40 lifts the SQLite repository path to `activation_signals` but keeps the JSON-side mirror during the cutover window. Retire it in a later phase after `db:verify-activation-signals` reports zero drift.

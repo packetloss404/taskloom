@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resetStoreForTests, loadStore } from "../../taskloom-store.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { clearStoreCacheForTests, resetStoreForTests, loadStore, mutateStore, type ProviderCallRecord } from "../../taskloom-store.js";
 import { listProviderCalls, recordedCall, recordedStream, summarizeUsage } from "../ledger.js";
 import type { ProviderStreamChunk } from "../types.js";
 
@@ -113,4 +117,180 @@ test("summarizeUsage excludes records older than 24h from last24h block", () => 
   assert.equal(summary.totalCalls, 1);
   assert.equal(summary.last24h.calls, 0);
   assert.equal(summary.last24h.costUsd, 0);
+});
+
+async function withSqliteLedgerStore(testFn: (dbPath: string) => Promise<void>): Promise<void> {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-ledger-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+    clearStoreCacheForTests();
+    resetStoreForTests();
+    await testFn(dbPath);
+  } finally {
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    clearStoreCacheForTests();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function readProviderCallMirrors(dbPath: string): {
+  appRecords: ProviderCallRecord[];
+  dedicated: ProviderCallRecord[];
+} {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const appRows = db.prepare(`
+      select payload
+      from app_records
+      where collection = 'providerCalls'
+      order by json_extract(payload, '$.completedAt'), id
+    `).all() as Array<{ payload: string }>;
+    const dedicatedRows = db.prepare(`
+      select id, workspace_id, route_key, provider, model, prompt_tokens,
+        completion_tokens, cost_usd, duration_ms, status, error_message,
+        started_at, completed_at
+      from provider_calls
+      order by completed_at, id
+    `).all() as Array<{
+      id: string;
+      workspace_id: string;
+      route_key: string;
+      provider: ProviderCallRecord["provider"];
+      model: string;
+      prompt_tokens: number;
+      completion_tokens: number;
+      cost_usd: number;
+      duration_ms: number;
+      status: ProviderCallRecord["status"];
+      error_message: string | null;
+      started_at: string;
+      completed_at: string;
+    }>;
+    return {
+      appRecords: appRows.map((row) => JSON.parse(row.payload) as ProviderCallRecord),
+      dedicated: dedicatedRows.map((row) => {
+        const record: ProviderCallRecord = {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          routeKey: row.route_key,
+          provider: row.provider,
+          model: row.model,
+          promptTokens: row.prompt_tokens,
+          completionTokens: row.completion_tokens,
+          costUsd: row.cost_usd,
+          durationMs: row.duration_ms,
+          status: row.status,
+          startedAt: row.started_at,
+          completedAt: row.completed_at,
+        };
+        if (row.error_message !== null) record.errorMessage = row.error_message;
+        return record;
+      }),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function makeProviderCallRecord(id: string, index: number): ProviderCallRecord {
+  const timestamp = new Date(Date.UTC(2026, 3, 26, 12, 0, 0) + index * 1000).toISOString();
+  return {
+    id,
+    workspaceId: "alpha",
+    routeKey: `cap.${index}`,
+    provider: "stub",
+    model: "stub-small",
+    promptTokens: 1,
+    completionTokens: 1,
+    costUsd: 0,
+    durationMs: 1,
+    status: "success",
+    startedAt: timestamp,
+    completedAt: timestamp,
+  };
+}
+
+function insertDedicatedProviderCalls(dbPath: string, records: ProviderCallRecord[]): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("begin");
+    const stmt = db.prepare(`
+      insert or replace into provider_calls (
+        id, workspace_id, route_key, provider, model, prompt_tokens,
+        completion_tokens, cost_usd, duration_ms, status, error_message,
+        started_at, completed_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const record of records) {
+      stmt.run(
+        record.id,
+        record.workspaceId,
+        record.routeKey,
+        record.provider,
+        record.model,
+        record.promptTokens,
+        record.completionTokens,
+        record.costUsd,
+        record.durationMs,
+        record.status,
+        record.errorMessage ?? null,
+        record.startedAt,
+        record.completedAt,
+      );
+    }
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+test("recordedCall in sqlite mode writes provider calls to provider_calls only", async () => {
+  await withSqliteLedgerStore(async (dbPath) => {
+    await recordedCall(
+      { workspaceId: "alpha", routeKey: "provider.cutover", provider: "stub", model: "stub-small" },
+      async () => ({ usage: { promptTokens: 4, completionTokens: 6, costUsd: 0.002 } }),
+    );
+
+    const mirrors = readProviderCallMirrors(dbPath);
+    assert.equal(mirrors.appRecords.length, 0);
+    assert.equal(mirrors.dedicated.length, 1);
+    assert.equal(mirrors.dedicated[0].routeKey, "provider.cutover");
+  });
+});
+
+test("recordedCall in sqlite mode prunes provider call cap in the dedicated table", async () => {
+  await withSqliteLedgerStore(async (dbPath) => {
+    const records = Array.from({ length: 5_000 }, (_, index) =>
+      makeProviderCallRecord(`provider_call_${index}`, index),
+    );
+    mutateStore((data) => {
+      data.providerCalls = records;
+      return null;
+    });
+    insertDedicatedProviderCalls(dbPath, records);
+
+    await recordedCall(
+      { workspaceId: "alpha", routeKey: "provider.cap", provider: "stub", model: "stub-small" },
+      async () => ({ usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } }),
+    );
+
+    const mirrors = readProviderCallMirrors(dbPath);
+    const appIds = new Set(mirrors.appRecords.map((entry) => entry.id));
+    const dedicatedIds = new Set(mirrors.dedicated.map((entry) => entry.id));
+    assert.equal(mirrors.appRecords.length, 0);
+    assert.equal(mirrors.dedicated.length, 5_000);
+    assert.equal(appIds.has("provider_call_0"), false);
+    assert.equal(dedicatedIds.has("provider_call_0"), false);
+    assert.equal(mirrors.dedicated.some((entry) => entry.routeKey === "provider.cap"), true);
+  });
 });

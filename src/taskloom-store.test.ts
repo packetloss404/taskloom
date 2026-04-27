@@ -411,6 +411,20 @@ test("sqlite store hydrates retired relational collections from dedicated tables
       actor: { type: "system", id: "test" },
       data: { title: "Dedicated activity" },
     });
+    data.providerCalls.push({
+      id: "provider_call_dedicated",
+      workspaceId: "alpha",
+      routeKey: "provider.dedicated",
+      provider: "stub",
+      model: "stub-small",
+      promptTokens: 1,
+      completionTokens: 2,
+      costUsd: 0.01,
+      durationMs: 10,
+      status: "success",
+      startedAt: "2026-04-26T12:06:00.000Z",
+      completedAt: "2026-04-26T12:06:01.000Z",
+    });
     persistSqliteAppData(dbPath, data);
 
     const db = new DatabaseSync(dbPath);
@@ -424,6 +438,7 @@ test("sqlite store hydrates retired relational collections from dedicated tables
            or (collection = 'jobs' and id = 'job_dedicated')
            or (collection = 'invitationEmailDeliveries' and id = 'delivery_dedicated')
            or (collection = 'activities' and id = 'activity_dedicated')
+           or (collection = 'providerCalls' and id = 'provider_call_dedicated')
       `).get() as { count: number };
       assert.equal(legacyRows.count, 0);
       assert.equal((db.prepare("select count(*) as count from job_metric_snapshots where id = 'metric_dedicated'").get() as { count: number }).count, 1);
@@ -432,6 +447,7 @@ test("sqlite store hydrates retired relational collections from dedicated tables
       assert.equal((db.prepare("select count(*) as count from jobs where id = 'job_dedicated'").get() as { count: number }).count, 1);
       assert.equal((db.prepare("select count(*) as count from invitation_email_deliveries where id = 'delivery_dedicated'").get() as { count: number }).count, 1);
       assert.equal((db.prepare("select count(*) as count from activities where id = 'activity_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from provider_calls where id = 'provider_call_dedicated'").get() as { count: number }).count, 1);
     } finally {
       db.close();
     }
@@ -444,6 +460,7 @@ test("sqlite store hydrates retired relational collections from dedicated tables
     assert.equal(reloaded.jobs.some((entry) => entry.id === "job_dedicated"), true);
     assert.equal(reloaded.invitationEmailDeliveries.some((entry) => entry.id === "delivery_dedicated"), true);
     assert.equal(reloaded.activities.some((entry) => entry.id === "activity_dedicated"), true);
+    assert.equal(reloaded.providerCalls.some((entry) => entry.id === "provider_call_dedicated"), true);
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
@@ -982,7 +999,7 @@ function indexRowCount(dbPath: string): number {
 function activationSignalRowCount(dbPath: string, workspaceId: string): number {
   const db = new DatabaseSync(dbPath);
   try {
-    const row = db.prepare("select count(*) as count from app_records where collection = 'activationSignals' and workspace_id = ?").get(workspaceId) as { count: number };
+    const row = db.prepare("select count(*) as count from activation_signals where workspace_id = ?").get(workspaceId) as { count: number };
     return row.count;
   } finally {
     db.close();

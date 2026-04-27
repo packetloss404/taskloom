@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillActivities, backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillInvitationEmailDeliveries, backfillJobMetricSnapshots, backfillJobs, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyActivities, verifyAgentRuns, verifyAlertEvents, verifyInvitationEmailDeliveries, verifyJobMetricSnapshots, verifyJobs } from "./cli";
-import type { ActivityRecord, AgentRunRecord, AlertEventRecord, InvitationEmailDeliveryRecord, JobMetricSnapshotRecord, JobRecord } from "../taskloom-store";
+import { backfillActivationSignals, backfillActivities, backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillInvitationEmailDeliveries, backfillJobMetricSnapshots, backfillJobs, backfillProviderCalls, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyActivationSignals, verifyActivities, verifyAgentRuns, verifyAlertEvents, verifyInvitationEmailDeliveries, verifyJobMetricSnapshots, verifyJobs, verifyProviderCalls } from "./cli";
+import type { ActivationSignalRecord, ActivityRecord, AgentRunRecord, AlertEventRecord, InvitationEmailDeliveryRecord, JobMetricSnapshotRecord, JobRecord, ProviderCallRecord } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -67,6 +67,7 @@ test("migrateDatabase creates runtime app tables", () => {
       "jobs",
       "share_tokens",
       "rate_limit_buckets",
+      "activation_signals",
       "activation_facts",
       "activation_read_models",
     ];
@@ -1835,6 +1836,386 @@ test("verifyActivities reports contentDrift when ids match but content differs",
     assert.equal(result.matched, 0);
     assert.equal(result.jsonOnly, 0);
     assert.equal(result.sqliteOnly, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeProviderCall(overrides: Partial<ProviderCallRecord> & { id: string }): ProviderCallRecord {
+  const record: ProviderCallRecord = {
+    id: overrides.id,
+    workspaceId: overrides.workspaceId ?? "alpha",
+    routeKey: overrides.routeKey ?? "agent.summary",
+    provider: overrides.provider ?? "stub",
+    model: overrides.model ?? "stub-small",
+    promptTokens: overrides.promptTokens ?? 1,
+    completionTokens: overrides.completionTokens ?? 2,
+    costUsd: overrides.costUsd ?? 0,
+    durationMs: overrides.durationMs ?? 10,
+    status: overrides.status ?? "success",
+    startedAt: overrides.startedAt ?? "2026-04-26T12:00:00.000Z",
+    completedAt: overrides.completedAt ?? "2026-04-26T12:00:01.000Z",
+  };
+  if (overrides.errorMessage !== undefined) record.errorMessage = overrides.errorMessage;
+  return record;
+}
+
+function prepareProviderCallDb(dbPath: string): void {
+  seedDatabase({ dbPath });
+}
+
+function insertAppRecordProviderCall(dbPath: string, record: ProviderCallRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('providerCalls', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, record.workspaceId, JSON.stringify(record), record.completedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedProviderCall(dbPath: string, record: ProviderCallRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into provider_calls (
+        id, workspace_id, route_key, provider, model, prompt_tokens,
+        completion_tokens, cost_usd, duration_ms, status, error_message,
+        started_at, completed_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.workspaceId,
+      record.routeKey,
+      record.provider,
+      record.model,
+      record.promptTokens,
+      record.completionTokens,
+      record.costUsd,
+      record.durationMs,
+      record.status,
+      record.errorMessage ?? null,
+      record.startedAt,
+      record.completedAt,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedProviderCalls(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from provider_calls").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillProviderCalls reports zero for an empty store", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+
+    const result = backfillProviderCalls({ dbPath });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 0);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedProviderCalls(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillProviderCalls inserts JSON-side rows into the dedicated table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    insertAppRecordProviderCall(dbPath, makeProviderCall({ id: "provider_call_a" }));
+
+    const result = backfillProviderCalls({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedProviderCalls(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillProviderCalls is idempotent on re-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    insertAppRecordProviderCall(dbPath, makeProviderCall({ id: "provider_call_a" }));
+
+    backfillProviderCalls({ dbPath });
+    const second = backfillProviderCalls({ dbPath });
+
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.drift, 0);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedProviderCalls(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillProviderCalls --dry-run does not write", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    insertAppRecordProviderCall(dbPath, makeProviderCall({ id: "provider_call_a" }));
+    insertAppRecordProviderCall(dbPath, makeProviderCall({ id: "provider_call_b" }));
+
+    const result = backfillProviderCalls({ dbPath, dryRun: true });
+
+    assert.equal(result.dryRun, true);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.wouldInsert, 2);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedProviderCalls(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillProviderCalls reports drift when content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    const jsonRecord = makeProviderCall({ id: "provider_call_a", promptTokens: 5 });
+    insertAppRecordProviderCall(dbPath, jsonRecord);
+    insertDedicatedProviderCall(dbPath, { ...jsonRecord, promptTokens: 99 });
+
+    const result = backfillProviderCalls({ dbPath, dryRun: true });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 1);
+    assert.equal(result.inserted, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyProviderCalls reports matched when both sides identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    const record = makeProviderCall({ id: "provider_call_a" });
+    insertAppRecordProviderCall(dbPath, record);
+    insertDedicatedProviderCall(dbPath, record);
+
+    const result = verifyProviderCalls({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyProviderCalls reports jsonOnly when JSON-side has rows not yet backfilled", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    insertAppRecordProviderCall(dbPath, makeProviderCall({ id: "provider_call_a" }));
+    insertAppRecordProviderCall(dbPath, makeProviderCall({ id: "provider_call_b" }));
+
+    const result = verifyProviderCalls({ dbPath });
+
+    assert.equal(result.jsonOnly, 2);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyProviderCalls reports sqliteOnly when dedicated table has extra rows", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    insertDedicatedProviderCall(dbPath, makeProviderCall({ id: "extra" }));
+
+    const result = verifyProviderCalls({ dbPath });
+
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyProviderCalls reports contentDrift when ids match but content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    prepareProviderCallDb(dbPath);
+    const record = makeProviderCall({ id: "provider_call_a", status: "success" });
+    insertAppRecordProviderCall(dbPath, record);
+    insertDedicatedProviderCall(dbPath, { ...record, status: "error", errorMessage: "provider failed" });
+
+    const result = verifyProviderCalls({ dbPath });
+
+    assert.equal(result.contentDrift, 1);
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeActivationSignal(overrides: Partial<ActivationSignalRecord> & { id: string }): ActivationSignalRecord {
+  const record: ActivationSignalRecord = {
+    id: overrides.id,
+    workspaceId: overrides.workspaceId ?? "alpha",
+    kind: overrides.kind ?? "retry",
+    source: overrides.source ?? "user_fact",
+    createdAt: overrides.createdAt ?? "2026-04-26T12:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-26T12:00:01.000Z",
+  };
+  if (overrides.origin !== undefined) record.origin = overrides.origin;
+  if (overrides.sourceId !== undefined) record.sourceId = overrides.sourceId;
+  if (overrides.stableKey !== undefined) record.stableKey = overrides.stableKey;
+  if (overrides.data !== undefined) record.data = overrides.data;
+  return record;
+}
+
+function insertAppRecordActivationSignal(dbPath: string, record: ActivationSignalRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('activationSignals', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedActivationSignal(dbPath: string, record: ActivationSignalRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into activation_signals (
+        id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.workspaceId,
+      record.kind,
+      record.source,
+      record.origin ?? null,
+      record.sourceId ?? null,
+      record.stableKey ?? null,
+      record.data === undefined ? null : JSON.stringify(record.data),
+      record.createdAt,
+      record.updatedAt,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedActivationSignals(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from activation_signals").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillActivationSignals inserts JSON-side rows into the dedicated table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordActivationSignal(dbPath, makeActivationSignal({ id: "signal_a", stableKey: "alpha:signal:a" }));
+
+    const result = backfillActivationSignals({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedActivationSignals(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillActivationSignals is idempotent and supports dry-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordActivationSignal(dbPath, makeActivationSignal({ id: "signal_a", stableKey: "alpha:signal:a" }));
+
+    backfillActivationSignals({ dbPath });
+    const second = backfillActivationSignals({ dbPath, dryRun: true });
+
+    assert.equal(second.dryRun, true);
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedActivationSignals(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyActivationSignals reports jsonOnly sqliteOnly and contentDrift", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const matching = makeActivationSignal({ id: "matching", stableKey: "alpha:matching" });
+    const drift = makeActivationSignal({ id: "drift", source: "user_fact", stableKey: "alpha:drift" });
+    insertAppRecordActivationSignal(dbPath, matching);
+    insertDedicatedActivationSignal(dbPath, matching);
+    insertAppRecordActivationSignal(dbPath, makeActivationSignal({ id: "json_only", stableKey: "alpha:json_only" }));
+    insertDedicatedActivationSignal(dbPath, makeActivationSignal({ id: "sqlite_only", stableKey: "alpha:sqlite_only" }));
+    insertAppRecordActivationSignal(dbPath, drift);
+    insertDedicatedActivationSignal(dbPath, { ...drift, source: "system_fact", origin: "system_observed" });
+
+    const result = verifyActivationSignals({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 1);
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.contentDrift, 1);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
