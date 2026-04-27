@@ -81,6 +81,10 @@ export interface InvitationEmailDeliveryRecord {
   createdAt: string;
   sentAt?: string;
   error?: string;
+  providerStatus?: string;
+  providerDeliveryId?: string;
+  providerStatusAt?: string;
+  providerError?: string;
 }
 
 export interface WorkspaceBriefRecord {
@@ -2434,6 +2438,35 @@ export function markInvitationEmailDeliveryFailed(data: TaskloomData, deliveryId
   delivery.status = "failed";
   delete delivery.sentAt;
   delivery.error = error;
+  return delivery;
+}
+
+export interface RecordInvitationEmailProviderStatusInput {
+  deliveryId: string;
+  providerStatus: string;
+  providerDeliveryId?: string;
+  providerError?: string;
+  occurredAt: string;
+}
+
+export function recordInvitationEmailProviderStatus(
+  data: TaskloomData,
+  input: RecordInvitationEmailProviderStatusInput,
+): InvitationEmailDeliveryRecord | null {
+  const delivery = findInvitationEmailDelivery(data, input.deliveryId);
+  if (!delivery) return null;
+  delivery.providerStatus = input.providerStatus;
+  delivery.providerStatusAt = input.occurredAt;
+  if (input.providerDeliveryId !== undefined) {
+    delivery.providerDeliveryId = input.providerDeliveryId;
+  } else {
+    delete delivery.providerDeliveryId;
+  }
+  if (input.providerError !== undefined) {
+    delivery.providerError = input.providerError;
+  } else {
+    delete delivery.providerError;
+  }
   return delivery;
 }
 

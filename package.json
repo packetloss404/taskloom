@@ -28,6 +28,7 @@
     "jobs:repair-activation": "node --import tsx src/jobs.ts repair-activation-read-models",
     "jobs:cleanup-sessions": "node --import tsx src/jobs.ts cleanup-sessions",
     "jobs:export-workspace": "node --import tsx src/jobs.ts export-workspace",
+    "jobs:reconcile-invitation-emails": "node --import tsx src/jobs.ts reconcile-invitation-emails",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "test": "npm run test:api && npm run test:web",
     "test:api": "node --import tsx --test src/**/*.test.ts",

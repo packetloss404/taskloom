@@ -42,6 +42,7 @@ import { registerDefaultTools } from "./tools/bootstrap.js";
 import { getDefaultToolRegistry } from "./tools/registry.js";
 import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 import { agentWebhookRoutes, publicWebhookRoutes } from "./webhook-routes.js";
+import { invitationEmailWebhookRoutes } from "./invitation-email-webhook-routes.js";
 import { enforcePrivateAppMutationSecurity } from "./route-security.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 import { accessLogMiddleware } from "./security/access-log.js";
@@ -283,6 +284,7 @@ app.route("/api/app/share", shareRoutes);
 app.route("/api/public/share", publicShareRoutes);
 app.route("/api/app/webhooks", agentWebhookRoutes);
 app.route("/api/public/webhooks", publicWebhookRoutes);
+app.route("/api/public/webhooks/invitation-email", invitationEmailWebhookRoutes);
 
 const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({

@@ -64,6 +64,29 @@ function resolveInvitationEmailWebhookTimeoutMs(value?: string): number {
   return Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS;
 }
 
+export const TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET_ENV =
+  "TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET";
+export const TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET_HEADER_ENV =
+  "TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET_HEADER";
+export const DEFAULT_INVITATION_EMAIL_RECONCILIATION_SECRET_HEADER =
+  "x-taskloom-reconciliation-secret";
+
+export interface InvitationEmailReconciliationConfig {
+  secret?: string;
+  secretHeader: string;
+}
+
+export function resolveInvitationEmailReconciliationConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): InvitationEmailReconciliationConfig {
+  return {
+    secret: env[TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET_ENV]?.trim() || undefined,
+    secretHeader:
+      env[TASKLOOM_INVITATION_EMAIL_RECONCILIATION_SECRET_HEADER_ENV]?.trim() ||
+      DEFAULT_INVITATION_EMAIL_RECONCILIATION_SECRET_HEADER,
+  };
+}
+
 export function recordLocalInvitationEmailDelivery(
   data: TaskloomData,
   input: RecordInvitationEmailDeliveryInput,

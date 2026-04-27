@@ -16,6 +16,7 @@ import {
   upsertActivationSignal,
 } from "./taskloom-store";
 import { exportWorkspaceData } from "./jobs/export-workspace.js";
+import { reconcileInvitationEmails } from "./jobs/reconcile-invitation-emails.js";
 
 export interface StoreJobDeps {
   loadStore: () => TaskloomData;
@@ -237,6 +238,22 @@ export async function runJobsCli(argv = process.argv.slice(2)): Promise<number> 
     return 0;
   }
 
+  if (command === "reconcile-invitation-emails") {
+    const workspaceId = parseStringFlag(args, "--workspace-id=");
+    const invitationId = parseStringFlag(args, "--invitation-id=");
+    const deliveryId = parseStringFlag(args, "--delivery-id=");
+    const markResolved = args.includes("--mark-resolved");
+    const requeue = args.includes("--requeue");
+    if ((markResolved || requeue) && !deliveryId) {
+      console.error("--mark-resolved and --requeue require --delivery-id=<id>");
+      writeUsage();
+      return 1;
+    }
+    const result = reconcileInvitationEmails({ workspaceId, invitationId, deliveryId, markResolved, requeue });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
+
   console.error(`Unknown jobs command: ${command}`);
   writeUsage();
   return 1;
@@ -274,11 +291,12 @@ function activationStatusEquals(left: ActivationStatusDto | null, right: Activat
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions|export-workspace>");
+  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions|export-workspace|reconcile-invitation-emails>");
   console.error("Options:");
   console.error("  recompute-activation --workspace-ids=alpha,beta");
   console.error("  repair-activation-read-models --workspace-ids=alpha,beta");
   console.error("  export-workspace --workspace-id=alpha");
+  console.error("  reconcile-invitation-emails [--workspace-id=alpha] [--invitation-id=inv] [--delivery-id=del] [--mark-resolved] [--requeue]");
 }
 
 function isExecutedDirectly(): boolean {
