@@ -202,6 +202,39 @@ test("Share tokens are wired through API, settings, and public routes", () => {
   assert.match(publicShare, /shared\.scope === "plan" \|\| shared\.scope === "overview"/);
 });
 
+test("Phase 31 dashboard filters persist to URL search params with active-filter chips", () => {
+  const dashboard = pageSource("Dashboard.tsx");
+
+  assert.match(dashboard, /useSearchParams/);
+  assert.match(dashboard, /searchParams\.get\(["']stage["']\)/);
+  assert.match(dashboard, /searchParams\.get\(["']risk["']\)/);
+  assert.match(dashboard, /searchParams\.get\(["']status["']\)/);
+  assert.match(dashboard, /searchParams\.get\(["']recency["']\)/);
+});
+
+test("Phase 31 activity detail surfaces workflow context inline", () => {
+  const activityDetail = pageSource("ActivityDetail.tsx");
+
+  assert.match(activityDetail, /Active blockers|active blockers/i);
+  assert.match(activityDetail, /Open questions|open questions/i);
+  assert.match(activityDetail, /No active blockers/i);
+  assert.match(activityDetail, /No open questions/i);
+  assert.match(activityDetail, /View workflow/i);
+  assert.match(activityDetail, /["']\/workflows?["']/);
+});
+
+test("Phase 31 workflow page shows empty-state CTAs and brief-versions count badge", () => {
+  const workflow = pageSource("Workflow.tsx");
+
+  assert.match(workflow, /Add first (requirement|requirements)/i);
+  assert.match(workflow, /Add first (plan item|plan-item|task)/i);
+  assert.match(
+    workflow,
+    /Add first (blocker|blockers)|No blockers reported|NO BLOCKERS RECORDED/i,
+  );
+  assert.match(workflow, /(briefVersions|state\.versions|versions)\.length/);
+});
+
 test("Member management is wired through typed API methods and settings UI", () => {
   const api = readFileSync(fileURLToPath(new URL("../lib/api.ts", import.meta.url)), "utf8");
   const types = readFileSync(fileURLToPath(new URL("../lib/types.ts", import.meta.url)), "utf8");

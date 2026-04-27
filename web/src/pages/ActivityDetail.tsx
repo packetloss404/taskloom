@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, Clock3, PlayCircle, UserRound, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Bot, Clock3, HelpCircle, PlayCircle, UserRound, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type { ActivityDetailPayload, ActivityRecord, ActivityWorkflowContext, AgentRecord, AgentRunRecord } from "@/lib/types";
@@ -204,13 +204,78 @@ function WorkflowPanel({ workflow }: { workflow: ActivityWorkflowContext }) {
     countLabel(workflow.questions, "question"),
   ].filter(Boolean);
 
+  const activeBlockers = (workflow.blockers ?? []).filter((b) => {
+    const status = (b.status ?? "").toString().toLowerCase();
+    return status !== "resolved" && status !== "closed" && status !== "obsolete";
+  });
+  const openQuestions = (workflow.questions ?? []).filter((q) => {
+    const status = (q.status ?? "").toString().toLowerCase();
+    return status !== "answered" && status !== "closed" && status !== "obsolete";
+  });
+
+  const visibleBlockers = activeBlockers.slice(0, 3);
+  const extraBlockers = activeBlockers.length - visibleBlockers.length;
+  const visibleQuestions = openQuestions.slice(0, 3);
+  const extraQuestions = openQuestions.length - visibleQuestions.length;
+
   return (
     <ContextPanel icon={<Workflow className="h-4 w-4" />} title={workflow.brief?.summary || "Workflow context"} label="Workflow" href="/workflows">
       <MetaLine label="Audience" value={workflow.brief?.audience} />
       <MetaLine label="Updated" value={relative(workflow.brief?.updatedAt)} />
       {counts.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{counts.map((count) => <span key={count} className="rounded-full border border-ink-800 px-2.5 py-1 text-xs text-ink-400">{count}</span>)}</div>}
+
+      <div className="mt-4 space-y-1.5">
+        <div className="text-[11px] uppercase tracking-[0.18em] text-ink-500">Active blockers</div>
+        {visibleBlockers.length === 0 ? (
+          <div className="text-xs text-ink-500">No active blockers.</div>
+        ) : (
+          <ul className="space-y-1">
+            {visibleBlockers.map((blocker, index) => {
+              const title = stringValue(blocker.title) || stringValue(blocker.detail) || stringValue(blocker.description) || "Untitled blocker";
+              return (
+                <li key={stringValue(blocker.id) || `blocker-${index}`} className="flex items-start gap-2 text-xs text-ink-300">
+                  <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${severityColor(blocker.severity)}`} />
+                  <span className="break-words">{title}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {extraBlockers > 0 && <div className="text-[11px] text-ink-500">+ {extraBlockers} more</div>}
+      </div>
+
+      <div className="mt-3 space-y-1.5">
+        <div className="text-[11px] uppercase tracking-[0.18em] text-ink-500">Open questions</div>
+        {visibleQuestions.length === 0 ? (
+          <div className="text-xs text-ink-500">No open questions.</div>
+        ) : (
+          <ul className="space-y-1">
+            {visibleQuestions.map((question, index) => {
+              const title = stringValue(question.title) || stringValue(question.prompt) || stringValue(question.description) || "Untitled question";
+              return (
+                <li key={stringValue(question.id) || `question-${index}`} className="flex items-start gap-2 text-xs text-ink-300">
+                  <HelpCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <span className="break-words">{title}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {extraQuestions > 0 && <div className="text-[11px] text-ink-500">+ {extraQuestions} more</div>}
+      </div>
+
+      <Link to="/workflows" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-signal-amber hover:text-signal-amber/80">
+        View workflow <ArrowRight className="h-3 w-3" />
+      </Link>
     </ContextPanel>
   );
+}
+
+function severityColor(severity: unknown): string {
+  const s = typeof severity === "string" ? severity.toLowerCase() : "";
+  if (s === "critical" || s === "high") return "text-rose-500";
+  if (s === "medium") return "text-amber-500";
+  return "text-slate-400";
 }
 
 function ContextPanel({ icon, label, title, href, children }: { icon: ReactNode; label: string; title: string; href: string; children: ReactNode }) {

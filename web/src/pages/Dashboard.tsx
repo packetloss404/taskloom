@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Loader2, RefreshCw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { relative } from "@/lib/format";
 import type {
@@ -28,10 +28,21 @@ export default function DashboardPage() {
   const [draft, setDraft] = useState<WorkflowDraft | null>(null);
   const [drafting, setDrafting] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [stageFilter, setStageFilter] = useState("all");
-  const [riskFilter, setRiskFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [recencyFilter, setRecencyFilter] = useState<RecencyFilter>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const stageFilter = searchParams.get("stage") ?? "all";
+  const riskFilter = searchParams.get("risk") ?? "all";
+  const statusFilter = searchParams.get("status") ?? "all";
+  const recencyRaw = searchParams.get("recency");
+  const recencyFilter: RecencyFilter = (["24h", "7d", "30d"].includes(recencyRaw ?? "")
+    ? (recencyRaw as RecencyFilter)
+    : "all");
+
+  const updateFilter = (key: "stage" | "risk" | "status" | "recency", value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === "all") next.delete(key);
+    else next.set(key, value);
+    setSearchParams(next, { replace: true });
+  };
 
   const loadDashboard = async () => {
     setLoading(true);
@@ -128,10 +139,7 @@ export default function DashboardPage() {
     stageFilter !== "all" || riskFilter !== "all" || statusFilter !== "all" || recencyFilter !== "all";
 
   const resetFilters = () => {
-    setStageFilter("all");
-    setRiskFilter("all");
-    setStatusFilter("all");
-    setRecencyFilter("all");
+    setSearchParams({}, { replace: true });
   };
 
   const generateDraft = async () => {
@@ -240,26 +248,26 @@ export default function DashboardPage() {
 
         <div className="grid gap-3 md:grid-cols-4">
           <FilterField label="STAGE">
-            <select className="workflow-input font-mono text-[11px]" value={stageFilter} onChange={(event) => setStageFilter(event.target.value)}>
+            <select className="workflow-input font-mono text-[11px]" value={stageFilter} onChange={(event) => updateFilter("stage", event.target.value)}>
               <option value="all">All stages</option>
               <option value={currentStageKey}>Current · {stage}</option>
             </select>
           </FilterField>
           <FilterField label="RISK">
-            <select className="workflow-input font-mono text-[11px]" value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>
+            <select className="workflow-input font-mono text-[11px]" value={riskFilter} onChange={(event) => updateFilter("risk", event.target.value)}>
               <option value="all">All risks</option>
               <option value={currentRiskKey}>Current · {risk}</option>
             </select>
           </FilterField>
           <FilterField label="STATUS / EVENT">
-            <select className="workflow-input font-mono text-[11px]" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <select className="workflow-input font-mono text-[11px]" value={statusFilter} onChange={(event) => updateFilter("status", event.target.value)}>
               {statusOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
           </FilterField>
           <FilterField label="RECENCY">
-            <select className="workflow-input font-mono text-[11px]" value={recencyFilter} onChange={(event) => setRecencyFilter(event.target.value as RecencyFilter)}>
+            <select className="workflow-input font-mono text-[11px]" value={recencyFilter} onChange={(event) => updateFilter("recency", event.target.value)}>
               <option value="all">All time</option>
               <option value="24h">Last 24h</option>
               <option value="7d">Last 7d</option>
@@ -267,6 +275,35 @@ export default function DashboardPage() {
             </select>
           </FilterField>
         </div>
+
+        {filtersActive && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-ink-800 pt-4" data-testid="active-filters">
+            <span className="kicker mr-1">ACTIVE</span>
+            {stageFilter !== "all" && (
+              <FilterChip label="STAGE" value={stageFilter} onClear={() => updateFilter("stage", "all")} />
+            )}
+            {riskFilter !== "all" && (
+              <FilterChip label="RISK" value={riskFilter} onClear={() => updateFilter("risk", "all")} />
+            )}
+            {statusFilter !== "all" && (
+              <FilterChip
+                label="STATUS"
+                value={statusOptions.find((option) => option.value === statusFilter)?.label ?? statusFilter}
+                onClear={() => updateFilter("status", "all")}
+              />
+            )}
+            {recencyFilter !== "all" && (
+              <FilterChip label="RECENCY" value={recencyFilter} onClear={() => updateFilter("recency", "all")} />
+            )}
+            <button
+              type="button"
+              className="ml-1 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-400 hover:text-signal-amber"
+              onClick={resetFilters}
+            >
+              Clear all →
+            </button>
+          </div>
+        )}
 
         <div className="mt-4 grid grid-cols-2 gap-px bg-ink-800 md:grid-cols-4">
           <FilterCount label="ACTIVITY" count={filteredActivities.length} total={activities.length} />
@@ -709,6 +746,24 @@ function FilterField({ label, children }: { label: string; children: ReactNode }
       <span className="kicker mb-2 block">{label}</span>
       {children}
     </label>
+  );
+}
+
+function FilterChip({ label, value, onClear }: { label: string; value: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-2 border border-ink-700 bg-ink-900 px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-ink-200">
+      <span className="text-ink-500">{label}</span>
+      <span>·</span>
+      <span className="text-ink-100">{value}</span>
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label={`Clear ${label} filter`}
+        className="text-ink-500 transition-colors hover:text-signal-amber"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
   );
 }
 

@@ -670,6 +670,13 @@ export default function WorkflowPage() {
               marker="§ 03 / 06"
               meta="Single source of intent for the workspace. Saving creates a new immutable version."
             />
+            {state.versions && state.versions.length > 0 && (
+              <div className="mt-4 flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-2 py-0.5 text-xs text-slate-400">
+                  <History className="h-3 w-3" /> {state.versions.length} version{state.versions.length === 1 ? "" : "s"}
+                </span>
+              </div>
+            )}
             <div className="mt-8 grid gap-12 lg:grid-cols-[260px_1fr]">
               <aside className="space-y-6">
                 <MetaRow label="WORKSPACE" value={state.brief?.workspaceId ?? "—"} mono />
@@ -787,6 +794,7 @@ export default function WorkflowPage() {
               </aside>
               <div>
                 <form
+                  data-workflow-form="requirements"
                   className="grid gap-3 border border-ink-700 bg-ink-875 p-4 lg:grid-cols-[1fr_140px_140px_auto] lg:items-end"
                   onSubmit={addRequirement}
                 >
@@ -822,6 +830,24 @@ export default function WorkflowPage() {
                   </div>
                   </fieldset>
                 </form>
+
+                {state.requirements.length === 0 && !isViewer && (
+                  <div className="mt-5 rounded-md border border-dashed border-ink-700 bg-ink-875 p-4 text-sm text-slate-400">
+                    <p className="text-slate-300">No requirements captured yet.</p>
+                    <p className="mt-1 text-xs">Add the first requirement to start the implementation plan.</p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .querySelector<HTMLInputElement>('form[data-workflow-form="requirements"] input[name="title"]')
+                          ?.focus()
+                      }
+                      className="mt-3 inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-ink-700"
+                    >
+                      <Plus className="h-3 w-3" /> Add first requirement
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-5 border border-ink-700">
                   <table className="data-table">
@@ -911,6 +937,7 @@ export default function WorkflowPage() {
               </aside>
               <div>
                 <form
+                  data-workflow-form="plan-items"
                   className="grid gap-3 border border-ink-700 bg-ink-875 p-4 lg:grid-cols-[1fr_160px_auto] lg:items-end"
                   onSubmit={addPlanItem}
                 >
@@ -936,6 +963,24 @@ export default function WorkflowPage() {
                   </div>
                   </fieldset>
                 </form>
+
+                {state.planItems.length === 0 && !isViewer && (
+                  <div className="mt-5 rounded-md border border-dashed border-ink-700 bg-ink-875 p-4 text-sm text-slate-400">
+                    <p className="text-slate-300">No plan items yet.</p>
+                    <p className="mt-1 text-xs">Break the brief into discrete tasks to track delivery.</p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .querySelector<HTMLInputElement>('form[data-workflow-form="plan-items"] input[name="title"]')
+                          ?.focus()
+                      }
+                      className="mt-3 inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-ink-700"
+                    >
+                      <Plus className="h-3 w-3" /> Add first plan item
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-5 border border-ink-700">
                   <table className="data-table">
@@ -1107,7 +1152,7 @@ export default function WorkflowPage() {
               <div className="space-y-5 bg-ink-950 p-6">
                 <div>
                   <div className="kicker mb-3">BLOCKERS</div>
-                  <form className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_140px_auto] sm:items-end" onSubmit={addBlocker}>
+                  <form data-workflow-form="blockers" className="grid gap-3 border border-ink-700 bg-ink-875 p-4 sm:grid-cols-[1fr_140px_auto] sm:items-end" onSubmit={addBlocker}>
                     <fieldset className="contents" disabled={isViewer}>
                     <Field label="TITLE">
                       <input name="title" className="workflow-input" required />
@@ -1136,7 +1181,23 @@ export default function WorkflowPage() {
                   </form>
                 </div>
                 {state.blockers.length === 0 ? (
-                  <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500">NO BLOCKERS RECORDED — ADD ONE ABOVE</div>
+                  <div className="rounded-md border border-dashed border-ink-700 bg-ink-875 p-4 text-sm text-slate-400">
+                    <p className="text-slate-300">No blockers reported.</p>
+                    <p className="mt-1 text-xs">Track new dependencies, risks, or open questions as they come up.</p>
+                    {!isViewer && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          document
+                            .querySelector<HTMLInputElement>('form[data-workflow-form="blockers"] input[name="title"]')
+                            ?.focus()
+                        }
+                        className="mt-3 inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-ink-800 hover:text-slate-300"
+                      >
+                        <Plus className="h-3 w-3" /> Add first blocker
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <ul className="divide-y divide-ink-800">
                     {state.blockers.map((blocker, index) => (
