@@ -7,6 +7,7 @@ import { resetInvitationEmailDeliveryForTests, setInvitationEmailFetchForTests }
 import { enqueueJob, enqueueRecurringJob, findJob, listJobs, maintainScheduledAgentJobs, updateJob } from "../store.js";
 import { JobScheduler } from "../scheduler.js";
 import { __resetSchedulerMetricsForTests, getJobTypeMetrics } from "../scheduler-metrics.js";
+import { __resetSchedulerHeartbeatForTests, getSchedulerHeartbeat } from "../scheduler-heartbeat.js";
 import { getOperationsStatus } from "../../operations-status.js";
 
 function wait(ms: number): Promise<void> {
@@ -298,6 +299,28 @@ test("scheduler registers leader probe on start and unregisters on stop", async 
   const afterStop = getOperationsStatus();
   // probe cleared => mode "off" default still reports true (mode-default behavior).
   assert.equal(afterStop.scheduler.leaderHeldLocally, true);
+});
+
+test("scheduler heartbeat reports startedAt and ticks after start", async () => {
+  resetStoreForTests();
+  __resetSchedulerHeartbeatForTests();
+  const scheduler = new JobScheduler({ pollIntervalMs: 20 });
+  scheduler.start();
+  try {
+    for (let i = 0; i < 20; i++) {
+      const heartbeat = getSchedulerHeartbeat();
+      if (heartbeat.schedulerStartedAt !== null && heartbeat.ticksSinceStart >= 1) break;
+      await wait(25);
+    }
+    const heartbeat = getSchedulerHeartbeat();
+    assert.notEqual(heartbeat.schedulerStartedAt, null);
+    assert.ok(heartbeat.ticksSinceStart >= 1, `expected ticksSinceStart >= 1, got ${heartbeat.ticksSinceStart}`);
+  } finally {
+    await scheduler.stop();
+  }
+  const stopped = getSchedulerHeartbeat();
+  assert.equal(stopped.schedulerStartedAt, null);
+  assert.equal(stopped.ticksSinceStart, 0);
 });
 
 test("scheduler records job-type metrics for successful runs", async () => {

@@ -5,6 +5,7 @@ import { redactedErrorMessage } from "../security/redaction.js";
 import type { SchedulerLeaderLock } from "./scheduler-lock.js";
 import { noopLeaderLock } from "./scheduler-lock.js";
 import { recordJobRun, type JobMetricStatus } from "./scheduler-metrics.js";
+import { recordSchedulerStart, recordSchedulerStop, recordTickEnd, recordTickStart } from "./scheduler-heartbeat.js";
 import { __setSchedulerLeaderProbe } from "../operations-status.js";
 
 export interface JobHandlerContext {
@@ -48,6 +49,7 @@ export class JobScheduler {
     maintainScheduledAgentJobs();
     sweepStaleRunningJobs();
     __setSchedulerLeaderProbe(() => this.leaderLock.isHeld());
+    recordSchedulerStart();
     this.scheduleNext(0);
   }
 
@@ -63,6 +65,7 @@ export class JobScheduler {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     __setSchedulerLeaderProbe(null);
+    recordSchedulerStop();
   }
 
   private scheduleNext(ms: number): void {
@@ -72,20 +75,25 @@ export class JobScheduler {
 
   private async tick(): Promise<void> {
     if (!this.polling) return;
+    recordTickStart();
     try {
-      const isLeader = await this.leaderLock.acquire();
-      if (!isLeader) {
-        this.scheduleNext(this.pollIntervalMs);
-        return;
-      }
-      const job = await claimNextJob(new Date());
-      if (job) {
-        void this.runJob(job);
-        this.scheduleNext(0);
-        return;
-      }
-    } catch { /* ignore */ }
-    this.scheduleNext(this.pollIntervalMs);
+      try {
+        const isLeader = await this.leaderLock.acquire();
+        if (!isLeader) {
+          this.scheduleNext(this.pollIntervalMs);
+          return;
+        }
+        const job = await claimNextJob(new Date());
+        if (job) {
+          void this.runJob(job);
+          this.scheduleNext(0);
+          return;
+        }
+      } catch { /* ignore */ }
+      this.scheduleNext(this.pollIntervalMs);
+    } finally {
+      recordTickEnd();
+    }
   }
 
   private async runJob(job: JobRecord): Promise<void> {

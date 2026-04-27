@@ -561,6 +561,22 @@ export default function OperationsPage() {
   );
 }
 
+type SubsystemStatus = "ok" | "degraded" | "down" | "disabled";
+
+interface SubsystemHealthEntry {
+  name: string;
+  status: SubsystemStatus;
+  detail: string;
+  checkedAt: string;
+  observedAt?: string;
+}
+
+interface OperationsHealth {
+  generatedAt: string;
+  overall: SubsystemStatus;
+  subsystems: SubsystemHealthEntry[];
+}
+
 interface ProductionStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -589,6 +605,7 @@ interface ProductionStatus {
 
 function ProductionStatusPanel() {
   const [status, setStatus] = useState<ProductionStatus | null>(null);
+  const [health, setHealth] = useState<OperationsHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
@@ -597,15 +614,31 @@ function ProductionStatusPanel() {
     setLoading(true);
     setError(null);
     try {
-      const payload = await fetchProductionStatus();
-      setStatus(payload);
-    } catch (loadError) {
-      const err = loadError as Error & { status?: number };
-      if (err.status === 401 || err.status === 403) {
-        setHidden(true);
-        return;
+      const [statusResult, healthResult] = await Promise.allSettled([
+        fetchProductionStatus(),
+        fetchOperationsHealth(),
+      ]);
+
+      if (statusResult.status === "fulfilled") {
+        setStatus(statusResult.value);
+      } else {
+        const err = statusResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setHidden(true);
+          return;
+        }
+        setError(err?.message ?? "Failed to load status");
       }
-      setError(err.message);
+
+      if (healthResult.status === "fulfilled") {
+        setHealth(healthResult.value);
+      } else {
+        const err = healthResult.reason as Error & { status?: number };
+        if (err?.status === 401 || err?.status === 403) {
+          setHealth(null);
+        }
+        // Silently ignore other health errors so the rest of the panel still renders.
+      }
     } finally {
       setLoading(false);
     }
@@ -765,16 +798,25 @@ function ProductionStatusPanel() {
               </div>
             )}
           </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <SubsystemHealthSection health={health} />
+          </div>
         </div>
       )}
 
       {!status && !error && (
-        <div className="mt-4 border border-ink-700 bg-ink-875 px-4 py-3">
-          <div className="kicker mb-1">JOB METRICS</div>
-          <h3 className="font-serif text-base text-ink-100">Job metrics</h3>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
-            Awaiting status snapshot
-          </p>
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <div className="kicker mb-1">JOB METRICS</div>
+            <h3 className="font-serif text-base text-ink-100">Job metrics</h3>
+            <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+              Awaiting status snapshot
+            </p>
+          </div>
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <SubsystemHealthSection health={health} />
+          </div>
         </div>
       )}
     </section>
@@ -821,6 +863,101 @@ async function fetchProductionStatus(): Promise<ProductionStatus> {
     throw error;
   }
   return payload as ProductionStatus;
+}
+
+async function fetchOperationsHealth(): Promise<OperationsHealth> {
+  const response = await fetch("/api/app/operations/health", { credentials: "include" });
+  if (!response.ok) {
+    const error = new Error(`status ${response.status}`) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+  return response.json() as Promise<OperationsHealth>;
+}
+
+function subsystemStatusClasses(status: SubsystemStatus) {
+  switch (status) {
+    case "ok":
+      return "text-emerald-500";
+    case "degraded":
+      return "text-amber-500";
+    case "down":
+      return "text-rose-500";
+    case "disabled":
+    default:
+      return "text-slate-500";
+  }
+}
+
+function SubsystemStatusIcon({ status, className }: { status: SubsystemStatus; className?: string }) {
+  const cls = `h-3.5 w-3.5 ${className ?? ""}`.trim();
+  if (status === "ok") return <CheckCircle2 className={cls} />;
+  if (status === "degraded") return <AlertTriangle className={cls} />;
+  if (status === "down") return <XCircle className={cls} />;
+  return <HelpCircle className={cls} />;
+}
+
+function SubsystemHealthSection({ health }: { health: OperationsHealth | null }) {
+  if (!health) {
+    return (
+      <div>
+        <div className="kicker mb-1">SUBSYSTEM HEALTH</div>
+        <h3 className="font-serif text-base text-ink-100">Subsystem health</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting health snapshot
+        </p>
+      </div>
+    );
+  }
+
+  const overallColor = subsystemStatusClasses(health.overall);
+  const overallLabel = health.overall.toUpperCase();
+
+  return (
+    <div>
+      <div className="kicker mb-1">SUBSYSTEM HEALTH</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Subsystem health</h3>
+        <span className={`inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider ${overallColor}`}>
+          <SubsystemStatusIcon status={health.overall} />
+          OVERALL: {overallLabel}
+        </span>
+      </div>
+      {health.subsystems.length === 0 ? (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          No subsystem checks reported.
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-800">
+          {health.subsystems.map((subsystem) => {
+            const color = subsystemStatusClasses(subsystem.status);
+            const label = subsystem.status.toUpperCase();
+            return (
+              <li key={subsystem.name} className="py-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider ${color}`}>
+                      <SubsystemStatusIcon status={subsystem.status} />
+                      {label}
+                    </span>
+                    <span className="font-mono text-sm text-ink-200">{subsystem.name}</span>
+                  </div>
+                  {subsystem.observedAt && (
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                      observed {relative(subsystem.observedAt)}
+                    </span>
+                  )}
+                </div>
+                {subsystem.detail && (
+                  <p className="mt-1 font-mono text-[11px] text-ink-500">{subsystem.detail}</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function WorkflowSection({

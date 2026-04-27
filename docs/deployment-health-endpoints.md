@@ -147,6 +147,49 @@ Field-by-field notes:
 
 The endpoint is intentionally read-only. It does not mutate any state, schedule any jobs, or reach out to external services.
 
+## Operator Subsystem Health (/api/app/operations/health)
+
+`GET /api/app/operations/health` is admin-scoped and returns per-subsystem health classifications with diagnostic detail. It complements the binary public readiness probe by giving operators actionable per-subsystem status without log-scraping.
+
+Auth: standard Taskloom session + RBAC `admin`/`owner`. Returns 401 to unauthenticated requests, 403 to authenticated non-admins. Returns 200 regardless of subsystem statuses — the consumer decides what to alert on.
+
+Response body shape:
+
+```json
+{
+  "generatedAt": "2026-04-26T12:00:00.000Z",
+  "overall": "ok",
+  "subsystems": [
+    { "name": "store", "status": "ok", "detail": "loaded successfully", "checkedAt": "2026-04-26T12:00:00.000Z" },
+    { "name": "scheduler", "status": "ok", "detail": "last tick 12ms ago, ticksSinceStart=4321", "checkedAt": "2026-04-26T12:00:00.000Z", "observedAt": "2026-04-26T11:59:59.988Z" },
+    { "name": "accessLog", "status": "disabled", "detail": "access log is off", "checkedAt": "2026-04-26T12:00:00.000Z" }
+  ]
+}
+```
+
+Subsystem classification:
+
+- **store**:
+  - `ok` — `loadStore()` returned a non-null object.
+  - `down` — `loadStore()` threw, or returned null/non-object.
+- **scheduler** — derived from the in-memory heartbeat that `JobScheduler.start()`/`stop()`/`tick()` records:
+  - `down` — `JobScheduler.start()` was never called in this process.
+  - `degraded` — scheduler started but no tick has completed yet, OR the last completed tick is older than 60 seconds (default; not currently exposed as an env knob — file an issue if you need to tune).
+  - `ok` — last tick completed within 60 seconds.
+- **accessLog**:
+  - `disabled` — mode `off`.
+  - `ok` — mode `stdout`, OR mode `file` with path file present.
+  - `degraded` — mode `file` with path file absent but parent dir present (normal before the first request).
+  - `down` — mode `file` with no `TASKLOOM_ACCESS_LOG_PATH`, OR mode `file` with parent directory absent.
+
+`overall` is the worst-of subsystem status with one important rule: `disabled` never poisons overall. A perfectly healthy deployment with access logging off therefore reports `overall: "ok"`.
+
+### Validation snippet
+
+```bash
+curl -H "Cookie: taskloom_session=$SESSION" http://localhost:8484/api/app/operations/health | jq
+```
+
 ## Suggested Probe Wiring
 
 | Consumer | Endpoint | Notes |
@@ -163,6 +206,10 @@ The operator-status endpoint requires session auth and is therefore not directly
 
 The Operations page now displays the operator-status payload as an admin-gated "Production Status" tile. Admins and owners see the rendered tile with store mode, scheduler leader configuration, jobs queue summary, access-log mode, and Node version; non-admin members do not see the tile, matching the route-level RBAC on the underlying endpoint. The tile is the recommended way for operators to spot store/scheduler/access-log misconfiguration without SSHing into the host. The frontend wiring lives in `web/src/pages/Operations.tsx`.
 
+## Frontend Subsystem Health Tile
+
+The Operations page additionally renders a "Subsystem health" sub-section inside the same admin-gated tile, fed by `GET /api/app/operations/health`. Each subsystem (store, scheduler, accessLog) is shown as a colored status badge (`ok`/`degraded`/`down`/`disabled`) alongside its human-readable detail string, with an overall summary badge above the per-subsystem rows. The sub-section follows the same RBAC as the parent tile, so non-admin members do not see it. The frontend wiring lives in `web/src/pages/Operations.tsx`.
+
 ## Validation Checklist
 
 After deploying Phase 24, walk through:
@@ -175,4 +222,7 @@ After deploying Phase 24, walk through:
 - The `scheduler.lockSummary` field never contains a secret. Confirm `"local"` for `off` mode, the configured file path for `file` mode, and the URL with any query string stripped for `http` mode (even when `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` is set).
 - The Operations page renders the "Production Status" tile for admins and owners and omits it for member/viewer roles.
 - After kicking off a manual job (e.g., `npm run jobs:recompute-activation`), `GET /api/app/operations/status` shows a `jobMetrics` entry for the job type with `totalRuns >= 1` and `lastDurationMs` populated.
+- `curl http://localhost:8484/api/app/operations/health` without a session returns `401`.
+- With an admin session cookie, `GET /api/app/operations/health` returns the expected `OperationsHealthReport` shape with at least the `store`, `scheduler`, and `accessLog` subsystems.
+- After the scheduler has run for >60s without completing a tick (e.g., simulated by suspending the process), the `scheduler` subsystem reports `degraded`.
 - Cross-link the rest of the production posture: `docs/deployment-scheduler-coordination.md` for the leader-election context behind `scheduler.leaderHeldLocally` and `scheduler.lockSummary`, `docs/deployment-access-log-shipping.md` for the access-log envelope mirrored in `accessLog`, `docs/deployment-auth-hardening.md` for auth/invitation rate limits and CSRF behavior, and `docs/deployment-sqlite-topology.md` for storage topology.

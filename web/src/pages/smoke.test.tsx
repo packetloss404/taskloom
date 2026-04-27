@@ -141,12 +141,15 @@ test("Operations surface renders the Production Status tile for admin sessions",
   assert.match(html, /Production Status/);
   assert.match(html, /PRODUCTION STATUS/);
   assert.match(html, /Job metrics/);
+  assert.match(html, /Subsystem health/);
+  assert.match(html, /SUBSYSTEM HEALTH/);
 });
 
 test("Operations surface hides the Production Status tile for viewer sessions", () => {
   const html = renderOperationsWithRole("viewer");
   assert.doesNotMatch(html, /Production Status/);
   assert.doesNotMatch(html, /PRODUCTION STATUS/);
+  assert.doesNotMatch(html, /Subsystem health/);
 });
 
 test("Previously unwired controls are connected to backend-facing APIs", () => {

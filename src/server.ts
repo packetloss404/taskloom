@@ -48,6 +48,7 @@ import { redactedErrorMessage } from "./security/redaction.js";
 import { accessLogMiddleware } from "./security/access-log.js";
 import { healthRoutes } from "./health-routes.js";
 import { operationsStatusRoutes } from "./operations-status-routes.js";
+import { operationsHealthRoutes } from "./operations-health-routes.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -289,6 +290,7 @@ app.route("/api/app/webhooks", agentWebhookRoutes);
 app.route("/api/public/webhooks", publicWebhookRoutes);
 app.route("/api/public/webhooks/invitation-email", invitationEmailWebhookRoutes);
 app.route("/api/app/operations/status", operationsStatusRoutes);
+app.route("/api/app/operations/health", operationsHealthRoutes);
 
 const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({
