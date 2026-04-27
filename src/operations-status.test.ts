@@ -199,6 +199,54 @@ test("jobMetrics fixture appears verbatim in the result", () => {
   assert.deepEqual(status.jobMetrics, fixture);
 });
 
+test("jobMetricsSnapshots reports zero and null when the store has no snapshots", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {},
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.deepEqual(status.jobMetricsSnapshots, { total: 0, lastCapturedAt: null });
+});
+
+test("jobMetricsSnapshots picks the max capturedAt across out-of-order rows", () => {
+  const store = {
+    jobs: [],
+    jobMetricSnapshots: [
+      { id: "s1", capturedAt: "2026-01-01T00:00:00.000Z", type: "agent.run" },
+      { id: "s2", capturedAt: "2026-01-03T00:00:00.000Z", type: "agent.run" },
+      { id: "s3", capturedAt: "2026-01-02T00:00:00.000Z", type: "agent.run" },
+    ],
+  } as unknown as TaskloomData;
+
+  const status = getOperationsStatus({
+    loadStore: () => store,
+    env: {},
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.jobMetricsSnapshots.total, 3);
+  assert.equal(status.jobMetricsSnapshots.lastCapturedAt, "2026-01-03T00:00:00.000Z");
+});
+
+test("jobMetricsSnapshots falls back to null when the only row has an unparseable capturedAt", () => {
+  const store = {
+    jobs: [],
+    jobMetricSnapshots: [
+      { id: "s1", capturedAt: "not-a-date", type: "agent.run" },
+    ],
+  } as unknown as TaskloomData;
+
+  const status = getOperationsStatus({
+    loadStore: () => store,
+    env: {},
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.jobMetricsSnapshots.total, 1);
+  assert.equal(status.jobMetricsSnapshots.lastCapturedAt, null);
+});
+
 test("jobMetrics preserves the order returned by the fixture", () => {
   const fixture: JobTypeMetrics[] = [
     {

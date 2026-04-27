@@ -37,6 +37,12 @@ import { llmStreamRoutes } from "./llm-stream-routes.js";
 import { jobRoutes } from "./job-routes.js";
 import { JobScheduler } from "./jobs/scheduler.js";
 import { selectSchedulerLeaderLock } from "./jobs/scheduler-leader-selection.js";
+import {
+  ensureMetricsSnapshotCronJob,
+  handleMetricsSnapshotJob,
+  METRICS_SNAPSHOT_JOB_TYPE,
+  type MetricsSnapshotJobPayload,
+} from "./jobs/metrics-snapshot-handler.js";
 import { registerDefaultProviders } from "./providers/bootstrap.js";
 import { registerDefaultTools } from "./tools/bootstrap.js";
 import { getDefaultToolRegistry } from "./tools/registry.js";
@@ -327,7 +333,14 @@ scheduler.register({
     return handleInvitationEmailJob(job);
   },
 });
+scheduler.register({
+  type: METRICS_SNAPSHOT_JOB_TYPE,
+  async handle(job) {
+    return handleMetricsSnapshotJob(job.payload as MetricsSnapshotJobPayload);
+  },
+});
 scheduler.start();
+ensureMetricsSnapshotCronJob();
 const shutdown = async () => {
   await scheduler.stop();
   try {

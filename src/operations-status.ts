@@ -24,6 +24,10 @@ export interface OperationsStatus {
   };
   jobs: JobQueueStatusSummary[];
   jobMetrics: JobTypeMetrics[];
+  jobMetricsSnapshots: {
+    total: number;
+    lastCapturedAt: string | null;
+  };
   accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
   runtime: { nodeVersion: string };
 }
@@ -162,6 +166,15 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
   const data = loadStore();
   const leaderMode = resolveLeaderMode(env);
 
+  const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
+  const lastCapturedAt = snapshotRows.length === 0
+    ? null
+    : snapshotRows.reduce((acc, row) => {
+        const t = Date.parse(row.capturedAt);
+        return Number.isFinite(t) && t > acc ? t : acc;
+      }, 0);
+  const lastCapturedAtIso = lastCapturedAt === null || lastCapturedAt === 0 ? null : new Date(lastCapturedAt).toISOString();
+
   return {
     generatedAt: now().toISOString(),
     store: { mode: resolveStoreMode(env) },
@@ -173,6 +186,10 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     },
     jobs: summarizeJobs(data),
     jobMetrics: (deps?.jobTypeMetrics ?? getJobTypeMetrics)(),
+    jobMetricsSnapshots: {
+      total: snapshotRows.length,
+      lastCapturedAt: lastCapturedAtIso,
+    },
     accessLog: {
       mode: resolveAccessLogMode(env),
       path: resolveAccessLogPath(env),

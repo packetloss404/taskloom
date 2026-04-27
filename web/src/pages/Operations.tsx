@@ -599,6 +599,10 @@ interface ProductionStatus {
     averageDurationMs: number | null;
     p95DurationMs: number | null;
   }[];
+  jobMetricsSnapshots: {
+    total: number;
+    lastCapturedAt: string | null;
+  };
   accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
   runtime: { nodeVersion: string };
 }
@@ -832,6 +836,16 @@ function ProductionStatusPanel() {
                 </table>
                 <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
                   Trend = average duration across recent snapshots (run <span className="text-ink-300">npm run jobs:snapshot-metrics</span> to capture)
+                  {status?.jobMetricsSnapshots ? (
+                    <>
+                      {" "}
+                      <span className="ml-1">
+                        {status.jobMetricsSnapshots.lastCapturedAt
+                          ? `Last snapshot ${relative(status.jobMetricsSnapshots.lastCapturedAt)} (${status.jobMetricsSnapshots.total} total).`
+                          : "No snapshots captured yet."}
+                      </span>
+                    </>
+                  ) : null}
                 </p>
               </div>
             )}

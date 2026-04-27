@@ -62,6 +62,12 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.ok(body.scheduler && typeof body.scheduler === "object");
   assert.ok(Array.isArray(body.jobs));
   assert.ok(Array.isArray(body.jobMetrics));
+  assert.ok(body.jobMetricsSnapshots && typeof body.jobMetricsSnapshots === "object");
+  const snapshots = body.jobMetricsSnapshots as Record<string, unknown>;
+  assert.ok("total" in snapshots);
+  assert.ok("lastCapturedAt" in snapshots);
+  assert.equal(typeof snapshots.total, "number");
+  assert.ok(snapshots.lastCapturedAt === null || typeof snapshots.lastCapturedAt === "string");
   assert.ok(body.accessLog && typeof body.accessLog === "object");
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };

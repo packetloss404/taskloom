@@ -251,6 +251,20 @@ Recommended cadence: run on a 5-minute or 15-minute cron interval. Smaller inter
 
 Snapshots live in `data.jobMetricSnapshots` and survive store restarts. They are not deleted automatically except by the retention pruner inside `snapshotJobMetrics`. To prune without snapshotting, you can call `pruneJobMetricSnapshots({ retentionDays })` programmatically, but no separate CLI is currently exposed — file an issue if one would be useful.
 
+### Built-In Cron Scheduling
+
+Phase 28 wires the snapshot to the existing job scheduler so operators can run periodic snapshots without external cron. Configure via env:
+
+- `TASKLOOM_JOB_METRICS_SNAPSHOT_CRON` — cron expression (e.g., `*/15 * * * *` for every 15 minutes). When unset, no auto-snapshot runs (the explicit CLI remains available).
+- `TASKLOOM_JOB_METRICS_SNAPSHOT_RETENTION_DAYS` — integer, default `30`. Passed as the job payload's `retentionDays`.
+- `TASKLOOM_JOB_METRICS_SNAPSHOT_WORKSPACE_ID` — workspace id used for the recurring job's bookkeeping. Default `"__system__"`. The scheduler does not validate this against existing workspaces; it's just a scoping label.
+
+On startup, Taskloom calls `ensureMetricsSnapshotCronJob()` after `scheduler.start()`. It checks whether a `metrics.snapshot` job with the configured cron already exists in `data.jobs` (status queued, running, or success — i.e., an active recurring lineage); if so, it does nothing. Otherwise it enqueues a single recurring job whose first scheduledAt is computed from the cron. Subsequent runs are re-enqueued by the scheduler's existing recurring-job behavior.
+
+If the cron expression is invalid, Taskloom logs a warning and skips the bootstrap so the rest of startup proceeds. Fix the expression and restart to retry.
+
+The `OperationsStatus.jobMetricsSnapshots` field (`{ total, lastCapturedAt }`) and the Operations page "Last snapshot X ago" indicator confirm the cron is firing as expected.
+
 ## Suggested Probe Wiring
 
 | Consumer | Endpoint | Notes |
@@ -290,4 +304,8 @@ After deploying Phase 24, walk through:
 - Snapshots are sorted ascending by `capturedAt`.
 - `?since=<future-iso>` returns an empty array.
 - `?since=not-a-date` returns 400.
+- With `TASKLOOM_JOB_METRICS_SNAPSHOT_CRON` set, the Operations page shows "Last snapshot X ago" within the cron interval after a fresh start.
+- Without the env knob, the Operations page shows "No snapshots captured yet" until `npm run jobs:snapshot-metrics` is run.
+- An invalid cron expression logs a warning at startup and the snapshot job is not enqueued.
+- Restarting the process does not enqueue a duplicate `metrics.snapshot` job (verify by listing jobs).
 - Cross-link the rest of the production posture: `docs/deployment-scheduler-coordination.md` for the leader-election context behind `scheduler.leaderHeldLocally` and `scheduler.lockSummary`, `docs/deployment-access-log-shipping.md` for the access-log envelope mirrored in `accessLog`, `docs/deployment-auth-hardening.md` for auth/invitation rate limits and CSRF behavior, and `docs/deployment-sqlite-topology.md` for storage topology.
