@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { listAlerts, recordAlerts } from "./alert-store.js";
+import { listAlerts, recordAlerts, updateAlertDeliveryStatus } from "./alert-store.js";
 import type { AlertEvent } from "./alert-engine.js";
 import type { AlertEventRecord, TaskloomData } from "../taskloom-store.js";
 
@@ -47,25 +47,45 @@ test("recordAlerts inserts events as records with delivery flags", () => {
     makeEvent({ id: "evt_b", severity: "critical" }),
   ];
 
-  const result = recordAlerts(events, true, undefined, {}, makeStoreDeps(data));
+  const result = recordAlerts(
+    events,
+    true,
+    undefined,
+    { now: () => new Date("2026-04-26T12:30:00.000Z") },
+    makeStoreDeps(data),
+  );
 
   assert.deepEqual(result, { stored: 2, pruned: 0 });
   assert.equal(data.alertEvents.length, 2);
   assert.equal(data.alertEvents[0].id, "evt_a");
   assert.equal(data.alertEvents[0].delivered, true);
   assert.equal(data.alertEvents[0].deliveryError, undefined);
+  assert.equal(data.alertEvents[0].deliveryAttempts, 1);
+  assert.equal(data.alertEvents[0].lastDeliveryAttemptAt, "2026-04-26T12:30:00.000Z");
+  assert.equal(data.alertEvents[0].deadLettered, false);
   assert.equal(data.alertEvents[1].id, "evt_b");
+  assert.equal(data.alertEvents[1].deliveryAttempts, 1);
+  assert.equal(data.alertEvents[1].deadLettered, false);
 });
 
 test("recordAlerts with deliveryOk=false stores deliveryError", () => {
   const data = makeStore();
   const events: AlertEvent[] = [makeEvent({ id: "evt_a" })];
 
-  const result = recordAlerts(events, false, "network: timeout", {}, makeStoreDeps(data));
+  const result = recordAlerts(
+    events,
+    false,
+    "network: timeout",
+    { now: () => new Date("2026-04-26T12:30:00.000Z") },
+    makeStoreDeps(data),
+  );
 
   assert.deepEqual(result, { stored: 1, pruned: 0 });
   assert.equal(data.alertEvents[0].delivered, false);
   assert.equal(data.alertEvents[0].deliveryError, "network: timeout");
+  assert.equal(data.alertEvents[0].deliveryAttempts, 1);
+  assert.equal(data.alertEvents[0].lastDeliveryAttemptAt, "2026-04-26T12:30:00.000Z");
+  assert.equal(data.alertEvents[0].deadLettered, false);
 });
 
 test("recordAlerts with retentionDays prunes older rows", () => {
@@ -169,4 +189,153 @@ test("listAlerts honors limit defaulting to 100 and capping at 500", () => {
 
   const capped = listAlerts({ limit: 1000 }, { loadStore: () => data });
   assert.equal(capped.length, 500);
+});
+
+test("updateAlertDeliveryStatus returns null for unknown alertId", () => {
+  const data = makeStore([
+    makeRecord({ id: "evt_a", observedAt: "2026-04-26T12:00:00.000Z" }),
+  ]);
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "missing",
+      delivered: true,
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+  assert.equal(result, null);
+});
+
+test("updateAlertDeliveryStatus increments attempts and updates timestamp", () => {
+  const data = makeStore([
+    makeRecord({
+      id: "evt_a",
+      observedAt: "2026-04-26T12:00:00.000Z",
+      delivered: false,
+      deliveryError: "network: timeout",
+    }),
+  ]);
+  data.alertEvents[0].deliveryAttempts = 1;
+  data.alertEvents[0].lastDeliveryAttemptAt = "2026-04-26T12:00:00.000Z";
+  data.alertEvents[0].deadLettered = false;
+
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "evt_a",
+      delivered: false,
+      deliveryError: "still failing",
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+
+  assert.ok(result);
+  assert.equal(result?.deliveryAttempts, 2);
+  assert.equal(result?.lastDeliveryAttemptAt, "2026-04-26T13:00:00.000Z");
+  assert.equal(result?.delivered, false);
+  assert.equal(result?.deliveryError, "still failing");
+  assert.equal(data.alertEvents[0].deliveryAttempts, 2);
+  assert.equal(data.alertEvents[0].lastDeliveryAttemptAt, "2026-04-26T13:00:00.000Z");
+});
+
+test("updateAlertDeliveryStatus treats undefined attempts as 0 then increments", () => {
+  const data = makeStore([
+    makeRecord({ id: "evt_a", observedAt: "2026-04-26T12:00:00.000Z", delivered: false }),
+  ]);
+  delete data.alertEvents[0].deliveryAttempts;
+
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "evt_a",
+      delivered: false,
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+
+  assert.equal(result?.deliveryAttempts, 1);
+});
+
+test("updateAlertDeliveryStatus updates delivered flag", () => {
+  const data = makeStore([
+    makeRecord({ id: "evt_a", observedAt: "2026-04-26T12:00:00.000Z", delivered: false }),
+  ]);
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "evt_a",
+      delivered: true,
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+
+  assert.equal(result?.delivered, true);
+  assert.equal(data.alertEvents[0].delivered, true);
+});
+
+test("updateAlertDeliveryStatus clears deliveryError on successful retry", () => {
+  const data = makeStore([
+    makeRecord({
+      id: "evt_a",
+      observedAt: "2026-04-26T12:00:00.000Z",
+      delivered: false,
+      deliveryError: "network: timeout",
+    }),
+  ]);
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "evt_a",
+      delivered: true,
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+
+  assert.equal(result?.delivered, true);
+  assert.equal(result?.deliveryError, undefined);
+  assert.equal(data.alertEvents[0].deliveryError, undefined);
+});
+
+test("updateAlertDeliveryStatus preserves deliveryError when neither delivered nor error provided", () => {
+  const data = makeStore([
+    makeRecord({
+      id: "evt_a",
+      observedAt: "2026-04-26T12:00:00.000Z",
+      delivered: false,
+      deliveryError: "network: timeout",
+    }),
+  ]);
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "evt_a",
+      delivered: false,
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+
+  assert.equal(result?.delivered, false);
+  assert.equal(result?.deliveryError, "network: timeout");
+  assert.equal(data.alertEvents[0].deliveryError, "network: timeout");
+});
+
+test("updateAlertDeliveryStatus updates deadLettered when provided", () => {
+  const data = makeStore([
+    makeRecord({ id: "evt_a", observedAt: "2026-04-26T12:00:00.000Z", delivered: false }),
+  ]);
+  data.alertEvents[0].deadLettered = false;
+
+  const result = updateAlertDeliveryStatus(
+    {
+      alertId: "evt_a",
+      delivered: false,
+      deliveryError: "exhausted",
+      deadLettered: true,
+      attemptedAt: "2026-04-26T13:00:00.000Z",
+    },
+    makeStoreDeps(data),
+  );
+
+  assert.equal(result?.deadLettered, true);
+  assert.equal(data.alertEvents[0].deadLettered, true);
 });

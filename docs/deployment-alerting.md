@@ -63,7 +63,7 @@ Response semantics:
 
 - Any 2xx response is treated as a successful delivery and recorded as `delivered: true` on the persisted alert rows.
 - Any non-2xx response, network error, or timeout is treated as a delivery failure. The error message is passed through `redactedErrorMessage` before storage so bearer tokens or token-bearing URLs in transport errors do not leak into persisted rows.
-- Taskloom does NOT retry failed deliveries on its own. The persisted rows always reflect the evaluation outcome, so consumers can use the admin endpoint below to recover any missed alerts. Phase 29 deliberately does not own a retry/dead-letter loop; if a deployment needs guaranteed delivery, point the webhook at a queue (SQS, Cloud Tasks, Kafka producer, or a thin in-house HTTP-to-queue adapter) and let the queue handle retries.
+- On delivery failure, Taskloom enqueues an `alerts.deliver` retry job for each undelivered event. The scheduler's existing retry-with-backoff drives subsequent attempts up to `TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS` total (default `3`, integer >= 1; the inline attempt during evaluate counts as 1). After exhaustion, the alert row is marked `deadLettered: true` and remains visible in `GET /api/app/operations/alerts` so operators can pull missed alerts.
 
 The webhook adapter NEVER throws. Any error during delivery is captured, redacted, and returned as structured failure metadata so the cron handler can record it without taking the scheduler tick down.
 
@@ -76,6 +76,7 @@ The webhook adapter NEVER throws. Any error during delivery is captured, redacte
 | `TASKLOOM_ALERT_WEBHOOK_SECRET` | unset | Optional shared secret. When set, sent as the configured header on every request. |
 | `TASKLOOM_ALERT_WEBHOOK_SECRET_HEADER` | `x-taskloom-alert-secret` | Header name for the shared secret. |
 | `TASKLOOM_ALERT_WEBHOOK_TIMEOUT_MS` | `5000` | Per-request timeout in milliseconds. |
+| `TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS` | `3` | Total delivery attempts per alert (integer >= 1). The inline attempt during `alerts.evaluate` counts as 1; the remaining attempts are driven by `alerts.deliver` retry jobs. |
 | `TASKLOOM_ALERT_JOB_FAILURE_RATE_THRESHOLD` | `0.5` | Failure-ratio cutoff for the `job-failure-rate` rule. Severity escalates to `critical` above `0.8`. |
 | `TASKLOOM_ALERT_JOB_FAILURE_MIN_SAMPLES` | `5` | Minimum `totalRuns` before the `job-failure-rate` rule evaluates a job type. |
 | `TASKLOOM_ALERT_RETENTION_DAYS` | `30` | Day window for `data.alertEvents`. Older rows are pruned on each evaluation tick. |
@@ -112,6 +113,29 @@ The handler itself runs the pipeline `evaluate -> deliver -> persist`:
 - `deliveredAt` — ISO timestamp of the delivery attempt; `null` when no webhook was configured.
 
 Retention runs on every evaluation tick: rows whose `evaluatedAt` is older than `TASKLOOM_ALERT_RETENTION_DAYS` are pruned in the same call. At a five-minute cron and the 30-day default, expect roughly 8640 evaluation ticks of persisted history; most ticks produce zero rows when the deployment is healthy, so steady-state row count is much lower than the upper bound.
+
+## Delivery Retry And Dead-Letter
+
+Phase 30 adds Taskloom-owned retry on top of the Phase 29 inline delivery. The flow:
+
+1. `alerts.evaluate` cron tick generates events and attempts inline delivery.
+2. On failure, one `alerts.deliver` retry job is enqueued per event with `payload: { alertId }` and `maxAttempts = TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS - 1`.
+3. The scheduler retries each job using the existing 30s/exponential backoff (capped at 1 hour).
+4. Each retry handler call increments `deliveryAttempts` and updates `lastDeliveryAttemptAt`.
+5. On final failure, `deadLettered: true` is set; the job status becomes `failed`.
+6. On any successful retry, `delivered: true` is set and `deliveryError` is cleared.
+
+`AlertEventRecord` gains three optional fields:
+
+- `deliveryAttempts: number` — total attempts so far (1-indexed).
+- `lastDeliveryAttemptAt: string` — ISO of most recent attempt.
+- `deadLettered: boolean` — true when retries are exhausted.
+
+The retry path inherits Phase 29's redaction posture: webhook errors are passed through `redactedErrorMessage` before being persisted on the alert row.
+
+If `TASKLOOM_ALERT_WEBHOOK_URL` is unset, retry jobs short-circuit with a no-op success — operators have explicitly disabled the webhook, so retries would be pointless.
+
+Operators inspect dead-lettered alerts via `GET /api/app/operations/alerts?severity=critical` (filter by severity to focus on the most actionable rows) or via the Operations page Recent Alerts tile, which shows distinct badges for "delivered", "retrying (attempt N)", and "dead-lettered".
 
 ## Admin Endpoint (/api/app/operations/alerts)
 
@@ -185,4 +209,8 @@ After deploying Phase 29, walk through:
 - With `TASKLOOM_ALERT_WEBHOOK_URL` unset and the cron configured, evaluations still run and persist with `delivered: false`, `deliveryError: null`, and `deliveredAt: null`. The Operations page tile shows "no webhook configured" for those rows.
 - After more than `TASKLOOM_ALERT_RETENTION_DAYS` of evaluations, older rows are pruned. Set the env to a small value (e.g., `1`) in a non-production environment to confirm.
 - The `job-failure-rate` rule does not fire when `totalRuns < TASKLOOM_ALERT_JOB_FAILURE_MIN_SAMPLES`, even if the failure ratio is 1.0 over a small number of runs.
+- With `TASKLOOM_ALERT_WEBHOOK_URL` pointing at a deliberately-broken URL (e.g., `http://127.0.0.1:1` to force connection refused), running `alerts.evaluate` enqueues one `alerts.deliver` retry job per failed event.
+- After exhaustion (`TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS` attempts), the alert row reports `deadLettered: true`.
+- Setting the webhook URL to a working endpoint mid-retry results in `delivered: true` after the next scheduler tick (the cleared `deliveryError` confirms the retry succeeded).
+- The Recent Alerts tile shows distinct visual states for delivered, retrying, and dead-lettered.
 - Cross-link the rest of the production posture: `docs/deployment-health-endpoints.md` for the underlying `OperationsHealthReport` and job-metrics surfaces, `docs/deployment-scheduler-coordination.md` for leader-election context if the cron runs across multiple processes, and `docs/invitation-email-operations.md` for the parallel webhook/redaction posture used by invitation email delivery.

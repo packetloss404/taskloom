@@ -63,6 +63,11 @@ import {
   handleAlertsEvaluateJob,
   type AlertsEvaluateJobPayload,
 } from "./alerts/alerts-evaluate-handler.js";
+import {
+  ALERTS_DELIVER_JOB_TYPE,
+  handleAlertsDeliverJob,
+  type AlertsDeliverJobPayload,
+} from "./alerts/alerts-deliver-handler.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -351,6 +356,12 @@ scheduler.register({
   type: ALERTS_EVALUATE_JOB_TYPE,
   async handle(job) {
     return handleAlertsEvaluateJob(job.payload as AlertsEvaluateJobPayload);
+  },
+});
+scheduler.register({
+  type: ALERTS_DELIVER_JOB_TYPE,
+  async handle(job) {
+    return handleAlertsDeliverJob(job.payload as unknown as AlertsDeliverJobPayload);
   },
 });
 scheduler.start();

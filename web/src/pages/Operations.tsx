@@ -632,6 +632,9 @@ interface AlertEvent {
   context: Record<string, unknown>;
   delivered: boolean;
   deliveryError?: string;
+  deliveryAttempts?: number;
+  lastDeliveryAttemptAt?: string;
+  deadLettered?: boolean;
 }
 
 function ProductionStatusPanel() {
@@ -1123,6 +1126,46 @@ function truncate(text: string, max = 120) {
   return `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
+function DeliveryStatusIndicator({ alert }: { alert: AlertEvent }) {
+  const attempts = alert.deliveryAttempts ?? 0;
+
+  if (alert.deadLettered) {
+    const attemptLabel = alert.deliveryAttempts ?? "?";
+    const title = `Dead-lettered after ${attemptLabel} attempt${attemptLabel === 1 ? "" : "s"}${alert.deliveryError ? ` · ${alert.deliveryError}` : ""}`;
+    return (
+      <span className="inline-flex items-center gap-1.5 text-rose-500" aria-label="dead-lettered" title={title}>
+        <XCircle className="h-3.5 w-3.5" />
+        <span className="font-mono text-[10px] uppercase tracking-wider">DEAD-LETTERED</span>
+      </span>
+    );
+  }
+
+  if (alert.delivered === false) {
+    const title = alert.deliveryError || "Delivery failed, retrying";
+    return (
+      <span className="inline-flex items-center gap-1.5 text-amber-500" aria-label="retrying delivery" title={title}>
+        <AlertTriangle className="h-3.5 w-3.5" />
+        <span className="font-mono text-[10px] uppercase tracking-wider">RETRYING (attempt {attempts})</span>
+      </span>
+    );
+  }
+
+  if (alert.delivered === true && attempts > 1) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-emerald-500" aria-label="delivered" title={`Delivered after ${attempts} attempts`}>
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">(after {attempts} attempts)</span>
+      </span>
+    );
+  }
+
+  return (
+    <span aria-label="delivered" title="Delivered">
+      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+    </span>
+  );
+}
+
 function RecentAlertsSection({ alerts }: { alerts: AlertEvent[] | null }) {
   const rows = (alerts ?? []).slice(0, 25);
   const count = rows.length;
@@ -1160,15 +1203,12 @@ function RecentAlertsSection({ alerts }: { alerts: AlertEvent[] | null }) {
                     <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
                       {relative(alert.observedAt)}
                     </span>
-                    {alert.delivered ? (
-                      <span aria-label="delivered" title="Delivered">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                      </span>
-                    ) : (
-                      <span aria-label="not delivered" title={alert.deliveryError || "Delivery failed"}>
-                        <XCircle className="h-3.5 w-3.5 text-rose-500" />
+                    {alert.lastDeliveryAttemptAt && (
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500" title={`Last attempt ${alert.lastDeliveryAttemptAt}`}>
+                        last attempt {relative(alert.lastDeliveryAttemptAt)}
                       </span>
                     )}
+                    <DeliveryStatusIndicator alert={alert} />
                   </div>
                 </div>
                 {truncated && (

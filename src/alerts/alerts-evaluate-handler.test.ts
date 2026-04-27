@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ALERTS_DELIVER_JOB_TYPE,
   ALERTS_EVALUATE_JOB_TYPE,
   ensureAlertsCronJob,
   handleAlertsEvaluateJob,
@@ -73,10 +74,12 @@ function makeDeps(overrides: {
   evaluateCalls: EvaluateAlertsInput[];
   deliverCalls: Array<{ config: AlertWebhookConfig; events: AlertEvent[] }>;
   recordCalls: RecordCall[];
+  enqueueDeliverCalls: EnqueueJobInput[];
 } {
   const evaluateCalls: EvaluateAlertsInput[] = [];
   const deliverCalls: Array<{ config: AlertWebhookConfig; events: AlertEvent[] }> = [];
   const recordCalls: RecordCall[] = [];
+  const enqueueDeliverCalls: EnqueueJobInput[] = [];
   const events = overrides.events ?? [];
   const deps: AlertsEvaluateHandlerDeps = {
     evaluate: (input) => {
@@ -94,10 +97,25 @@ function makeDeps(overrides: {
       recordCalls.push({ events: evts, deliveryOk, deliveryError, options });
       return { stored: evts.length, pruned: 0 };
     },
+    enqueueDeliverJob: (input) => {
+      enqueueDeliverCalls.push(input);
+      return {
+        id: `deliver-${enqueueDeliverCalls.length}`,
+        workspaceId: input.workspaceId,
+        type: input.type,
+        payload: input.payload ?? {},
+        status: "queued",
+        attempts: 0,
+        maxAttempts: input.maxAttempts ?? 3,
+        scheduledAt: input.scheduledAt ?? "2026-04-26T12:00:00.000Z",
+        createdAt: "2026-04-26T12:00:00.000Z",
+        updatedAt: "2026-04-26T12:00:00.000Z",
+      };
+    },
     env: overrides.env ?? {},
     now: () => new Date("2026-04-26T12:00:00.000Z"),
   };
-  return { deps, evaluateCalls, deliverCalls, recordCalls };
+  return { deps, evaluateCalls, deliverCalls, recordCalls, enqueueDeliverCalls };
 }
 
 function captureWarn(): { restore: () => void; calls: unknown[][] } {
@@ -115,7 +133,7 @@ function captureWarn(): { restore: () => void; calls: unknown[][] } {
 }
 
 test("handleAlertsEvaluateJob with no events skips delivery and records nothing extra", async () => {
-  const { deps, evaluateCalls, deliverCalls, recordCalls } = makeDeps({ events: [] });
+  const { deps, evaluateCalls, deliverCalls, recordCalls, enqueueDeliverCalls } = makeDeps({ events: [] });
   const result = await handleAlertsEvaluateJob({}, deps);
 
   assert.equal(evaluateCalls.length, 1);
@@ -127,6 +145,8 @@ test("handleAlertsEvaluateJob with no events skips delivery and records nothing 
   assert.equal(result.delivered, true);
   assert.equal(result.storedCount, 0);
   assert.equal(result.pruned, 0);
+  assert.equal(result.enqueuedDeliverJobs, 0);
+  assert.equal(enqueueDeliverCalls.length, 0);
   assert.equal(result.evaluatedAt, "2026-04-26T12:00:00.000Z");
 });
 
@@ -137,7 +157,11 @@ test("handleAlertsEvaluateJob delivers when events present and webhook configure
     secretHeader: "x-taskloom-alert-secret",
     timeoutMs: 5000,
   };
-  const { deps, deliverCalls, recordCalls } = makeDeps({ events, config, deliverResult: { ok: true, status: 200 } });
+  const { deps, deliverCalls, recordCalls, enqueueDeliverCalls } = makeDeps({
+    events,
+    config,
+    deliverResult: { ok: true, status: 200 },
+  });
   const result = await handleAlertsEvaluateJob({}, deps);
 
   assert.equal(deliverCalls.length, 1);
@@ -148,6 +172,8 @@ test("handleAlertsEvaluateJob delivers when events present and webhook configure
   assert.equal(result.delivered, true);
   assert.equal(result.eventCount, 1);
   assert.equal(result.storedCount, 1);
+  assert.equal(result.enqueuedDeliverJobs, 0);
+  assert.equal(enqueueDeliverCalls.length, 0);
 });
 
 test("handleAlertsEvaluateJob records delivery failure when webhook returns ok=false", async () => {
@@ -170,9 +196,118 @@ test("handleAlertsEvaluateJob records delivery failure when webhook returns ok=f
   assert.equal(recordCalls[0].deliveryError, "http 503");
 });
 
+test("handleAlertsEvaluateJob enqueues a deliver retry job for each undelivered event when delivery fails", async () => {
+  const events = [
+    makeEvent({ id: "evt_1" }),
+    makeEvent({ id: "evt_2", severity: "critical" }),
+  ];
+  const config: AlertWebhookConfig = {
+    url: "https://example.com/hook",
+    secretHeader: "x-taskloom-alert-secret",
+    timeoutMs: 5000,
+  };
+  const { deps, enqueueDeliverCalls } = makeDeps({
+    events,
+    config,
+    deliverResult: { ok: false, status: 502, error: "http 502" },
+  });
+  const result = await handleAlertsEvaluateJob({}, deps);
+
+  assert.equal(result.delivered, false);
+  assert.equal(result.enqueuedDeliverJobs, 2);
+  assert.equal(enqueueDeliverCalls.length, 2);
+  for (let index = 0; index < enqueueDeliverCalls.length; index += 1) {
+    const call = enqueueDeliverCalls[index];
+    assert.equal(call.type, ALERTS_DELIVER_JOB_TYPE);
+    assert.equal(call.workspaceId, "__system__");
+    assert.deepEqual(call.payload, { alertId: events[index].id });
+    assert.ok(typeof call.maxAttempts === "number" && call.maxAttempts >= 1);
+    assert.equal(call.maxAttempts, 2);
+    assert.equal(call.scheduledAt, "2026-04-26T12:00:00.000Z");
+  }
+});
+
+test("handleAlertsEvaluateJob honors custom TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS env knob", async () => {
+  const events = [makeEvent({ id: "evt_1" })];
+  const config: AlertWebhookConfig = {
+    url: "https://example.com/hook",
+    secretHeader: "x-taskloom-alert-secret",
+    timeoutMs: 5000,
+  };
+  const { deps, enqueueDeliverCalls } = makeDeps({
+    events,
+    config,
+    deliverResult: { ok: false, status: 500, error: "http 500" },
+    env: { TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS: "5" },
+  });
+  await handleAlertsEvaluateJob({}, deps);
+
+  assert.equal(enqueueDeliverCalls.length, 1);
+  assert.equal(enqueueDeliverCalls[0].maxAttempts, 4);
+});
+
+test("handleAlertsEvaluateJob clamps deliver retry maxAttempts to >= 1", async () => {
+  const events = [makeEvent({ id: "evt_1" })];
+  const config: AlertWebhookConfig = {
+    url: "https://example.com/hook",
+    secretHeader: "x-taskloom-alert-secret",
+    timeoutMs: 5000,
+  };
+  const { deps, enqueueDeliverCalls } = makeDeps({
+    events,
+    config,
+    deliverResult: { ok: false, status: 500, error: "http 500" },
+    env: { TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS: "1" },
+  });
+  await handleAlertsEvaluateJob({}, deps);
+
+  assert.equal(enqueueDeliverCalls.length, 1);
+  assert.equal(enqueueDeliverCalls[0].maxAttempts, 1);
+});
+
+test("handleAlertsEvaluateJob falls back to default deliver max attempts when env is invalid", async () => {
+  const events = [makeEvent({ id: "evt_1" })];
+  const config: AlertWebhookConfig = {
+    url: "https://example.com/hook",
+    secretHeader: "x-taskloom-alert-secret",
+    timeoutMs: 5000,
+  };
+  const cases = ["", "abc", "0", "-2", "1.5"];
+  for (const value of cases) {
+    const { deps, enqueueDeliverCalls } = makeDeps({
+      events,
+      config,
+      deliverResult: { ok: false, status: 500, error: "http 500" },
+      env: { TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS: value },
+    });
+    await handleAlertsEvaluateJob({}, deps);
+    assert.equal(enqueueDeliverCalls.length, 1, `case ${JSON.stringify(value)}`);
+    assert.equal(enqueueDeliverCalls[0].maxAttempts, 2, `case ${JSON.stringify(value)}`);
+  }
+});
+
+test("handleAlertsEvaluateJob honors workspace env override on retry jobs", async () => {
+  const events = [makeEvent({ id: "evt_1" })];
+  const config: AlertWebhookConfig = {
+    url: "https://example.com/hook",
+    secretHeader: "x-taskloom-alert-secret",
+    timeoutMs: 5000,
+  };
+  const { deps, enqueueDeliverCalls } = makeDeps({
+    events,
+    config,
+    deliverResult: { ok: false, status: 500, error: "boom" },
+    env: { TASKLOOM_ALERT_WORKSPACE_ID: "ops-workspace" },
+  });
+  await handleAlertsEvaluateJob({}, deps);
+
+  assert.equal(enqueueDeliverCalls.length, 1);
+  assert.equal(enqueueDeliverCalls[0].workspaceId, "ops-workspace");
+});
+
 test("handleAlertsEvaluateJob with events but null webhook config persists with informational error", async () => {
   const events = [makeEvent({ id: "evt_1" })];
-  const { deps, deliverCalls, recordCalls } = makeDeps({ events, config: null });
+  const { deps, deliverCalls, recordCalls, enqueueDeliverCalls } = makeDeps({ events, config: null });
   const result = await handleAlertsEvaluateJob({}, deps);
 
   assert.equal(deliverCalls.length, 0);
@@ -180,6 +315,8 @@ test("handleAlertsEvaluateJob with events but null webhook config persists with 
   assert.equal(result.deliveryError, "webhook not configured");
   assert.equal(recordCalls[0].deliveryOk, true);
   assert.equal(recordCalls[0].deliveryError, "webhook not configured");
+  assert.equal(result.enqueuedDeliverJobs, 0);
+  assert.equal(enqueueDeliverCalls.length, 0);
 });
 
 test("handleAlertsEvaluateJob passes payload thresholds to evaluate", async () => {

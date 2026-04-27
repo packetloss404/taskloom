@@ -112,6 +112,9 @@ export interface AlertEventRecord {
   context: Record<string, unknown>;
   delivered: boolean;
   deliveryError?: string;
+  deliveryAttempts?: number;
+  lastDeliveryAttemptAt?: string;
+  deadLettered?: boolean;
 }
 
 export interface WorkspaceBriefRecord {

@@ -18,11 +18,14 @@ export const ALERT_JOB_FAILURE_MIN_SAMPLES_ENV = "TASKLOOM_ALERT_JOB_FAILURE_MIN
 export const ALERT_EVALUATE_CRON_ENV = "TASKLOOM_ALERT_EVALUATE_CRON";
 export const ALERT_RETENTION_DAYS_ENV = "TASKLOOM_ALERT_RETENTION_DAYS";
 export const ALERT_WORKSPACE_ID_ENV = "TASKLOOM_ALERT_WORKSPACE_ID";
+export const ALERT_DELIVER_MAX_ATTEMPTS_ENV = "TASKLOOM_ALERT_DELIVER_MAX_ATTEMPTS";
+export const ALERTS_DELIVER_JOB_TYPE = "alerts.deliver" as const;
 
 const DEFAULT_JOB_FAILURE_RATE_THRESHOLD = 0.5;
 const DEFAULT_JOB_FAILURE_MIN_SAMPLES = 5;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_WORKSPACE_ID = "__system__";
+const DEFAULT_DELIVER_MAX_ATTEMPTS = 3;
 const ACTIVE_RECURRING_STATUSES = new Set(["queued", "running", "success"]);
 
 export interface AlertsEvaluateJobPayload {
@@ -38,6 +41,7 @@ export interface AlertsEvaluateJobResult {
   deliveryError?: string;
   storedCount: number;
   pruned: number;
+  enqueuedDeliverJobs: number;
 }
 
 export interface AlertsEvaluateHandlerDeps {
@@ -47,6 +51,7 @@ export interface AlertsEvaluateHandlerDeps {
   webhookConfig?: () => AlertWebhookConfig | null;
   deliver?: typeof deliverAlertWebhook;
   record?: typeof recordAlerts;
+  enqueueDeliverJob?: (input: EnqueueJobInput) => JobRecord;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
 }
@@ -81,6 +86,15 @@ function parseRetentionFromEnv(raw: string | undefined): number {
   return parsed;
 }
 
+function parseDeliverMaxAttemptsFromEnv(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return DEFAULT_DELIVER_MAX_ATTEMPTS;
+  const trimmed = raw.trim();
+  if (!/^-?\d+$/.test(trimmed)) return DEFAULT_DELIVER_MAX_ATTEMPTS;
+  const parsed = parseInt(trimmed, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_DELIVER_MAX_ATTEMPTS;
+  return parsed;
+}
+
 export async function handleAlertsEvaluateJob(
   payload: AlertsEvaluateJobPayload,
   deps: AlertsEvaluateHandlerDeps = {},
@@ -91,6 +105,7 @@ export async function handleAlertsEvaluateJob(
   const webhookConfigFn = deps.webhookConfig ?? (() => resolveAlertWebhookConfig());
   const deliverFn = deps.deliver ?? deliverAlertWebhook;
   const recordFn = deps.record ?? recordAlerts;
+  const enqueueDeliverFn = deps.enqueueDeliverJob ?? enqueueJob;
   const env = deps.env ?? process.env;
   const nowFn = deps.now ?? (() => new Date());
 
@@ -130,12 +145,31 @@ export async function handleAlertsEvaluateJob(
 
   const recordResult = recordFn(events, delivered, deliveryError, { retentionDays });
 
+  let enqueuedDeliverJobs = 0;
+  if (delivered === false && events.length > 0) {
+    const configuredMax = parseDeliverMaxAttemptsFromEnv(env[ALERT_DELIVER_MAX_ATTEMPTS_ENV]);
+    const retryMaxAttempts = Math.max(1, configuredMax - 1);
+    const workspaceId = env[ALERT_WORKSPACE_ID_ENV]?.trim() || DEFAULT_WORKSPACE_ID;
+    const scheduledAt = nowFn().toISOString();
+    for (const event of events) {
+      enqueueDeliverFn({
+        workspaceId,
+        type: ALERTS_DELIVER_JOB_TYPE,
+        payload: { alertId: event.id },
+        maxAttempts: retryMaxAttempts,
+        scheduledAt,
+      });
+      enqueuedDeliverJobs += 1;
+    }
+  }
+
   const result: AlertsEvaluateJobResult = {
     evaluatedAt,
     eventCount: events.length,
     delivered,
     storedCount: recordResult.stored,
     pruned: recordResult.pruned,
+    enqueuedDeliverJobs,
   };
   if (deliveryError !== undefined) {
     result.deliveryError = deliveryError;

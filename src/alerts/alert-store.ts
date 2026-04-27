@@ -42,7 +42,12 @@ function ensureAlertCollection(data: TaskloomData): AlertEventRecord[] {
   return data.alertEvents;
 }
 
-function toRecord(event: AlertEvent, deliveryOk: boolean, deliveryError: string | undefined): AlertEventRecord {
+function toRecord(
+  event: AlertEvent,
+  deliveryOk: boolean,
+  deliveryError: string | undefined,
+  attemptedAt: string,
+): AlertEventRecord {
   const record: AlertEventRecord = {
     id: event.id,
     ruleId: event.ruleId,
@@ -52,6 +57,9 @@ function toRecord(event: AlertEvent, deliveryOk: boolean, deliveryError: string 
     observedAt: event.observedAt,
     context: event.context,
     delivered: deliveryOk,
+    deliveryAttempts: 1,
+    lastDeliveryAttemptAt: attemptedAt,
+    deadLettered: false,
   };
   if (deliveryError !== undefined) {
     record.deliveryError = deliveryError;
@@ -69,10 +77,11 @@ export function recordAlerts(
   const mutate = deps.mutateStore ?? defaultMutateStore;
   const nowFn = options.now ?? (() => new Date());
   const retentionDays = options.retentionDays ?? DEFAULT_RETENTION_DAYS;
+  const attemptedAt = nowFn().toISOString();
 
   return mutate((data) => {
     const collection = ensureAlertCollection(data);
-    const records = events.map((event) => toRecord(event, deliveryOk, deliveryError));
+    const records = events.map((event) => toRecord(event, deliveryOk, deliveryError, attemptedAt));
     for (const record of records) {
       collection.push(record);
     }
@@ -88,6 +97,47 @@ export function recordAlerts(
     }
 
     return { stored: records.length, pruned };
+  });
+}
+
+export interface UpdateAlertDeliveryStatusInput {
+  alertId: string;
+  delivered: boolean;
+  deliveryError?: string;
+  deadLettered?: boolean;
+  attemptedAt: string;
+}
+
+export interface UpdateAlertDeliveryStatusDeps {
+  mutateStore?: <T>(mutator: (data: TaskloomData) => T) => T;
+}
+
+export function updateAlertDeliveryStatus(
+  input: UpdateAlertDeliveryStatusInput,
+  deps: UpdateAlertDeliveryStatusDeps = {},
+): AlertEventRecord | null {
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return mutate((data) => {
+    const collection = ensureAlertCollection(data);
+    const target = collection.find((entry) => entry.id === input.alertId);
+    if (!target) return null;
+
+    const previousAttempts = typeof target.deliveryAttempts === "number" ? target.deliveryAttempts : 0;
+    target.deliveryAttempts = previousAttempts + 1;
+    target.lastDeliveryAttemptAt = input.attemptedAt;
+    target.delivered = input.delivered;
+
+    if (input.deliveryError !== undefined) {
+      target.deliveryError = input.deliveryError;
+    } else if (input.delivered === true) {
+      target.deliveryError = undefined;
+    }
+
+    if (input.deadLettered !== undefined) {
+      target.deadLettered = input.deadLettered;
+    }
+
+    return { ...target };
   });
 }
 
