@@ -17,6 +17,7 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - `docs/deployment-auth-hardening.md` documents the optional HTTP distributed limiter protocol, supported app envs, fail-open/fail-closed behavior, multi-process/multi-region caveats, and a validation checklist.
 - Invitation webhook email delivery supports `TASKLOOM_INVITATION_EMAIL_WEBHOOK_TIMEOUT_MS` for provider request timeout control and `TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS` for queued retry attempts. Failed webhook create/resend attempts enqueue token-free `invitation.email` jobs that retry through the scheduler and dead-letter as failed jobs after exhaustion; see `docs/invitation-email-operations.md` for production email operations guidance.
 - Token-redaction helpers now mask known invitation/share/webhook tokens, bearer values, token-bearing routes, sensitive assignments, and sensitive object keys across job responses, agent runs, activities, provider errors, invitation delivery errors, share-token lists, invitation lists, webhook token previews, and frontend display paths. Full bearer tokens remain one-time surfaces on invitation create/resend, share-token create, and webhook rotate responses.
+- An opt-in Hono access-log middleware writes redacted JSON access lines to stdout or a file based on `TASKLOOM_ACCESS_LOG_MODE`/`TASKLOOM_ACCESS_LOG_PATH`. A `jobs:export-workspace` CLI produces redacted per-workspace JSON snapshots, and `docs/deployment-export-redaction.md` plus `docs/deployment/proxy-access-log-redaction/` cover the proxy-level rewriting story with a validator at `src/security/proxy-access-log-validator.ts`.
 - Jobs scripts can recompute activation read models, repair stale activation read models, and clean up expired sessions against the local store.
 - Local persistence commands can seed/reset the JSON store, migrate/status/backup/restore SQLite, seed/reset SQLite activation tables, seed/reset full SQLite app data, and backfill SQLite from a JSON store.
 - `docs/deployment-sqlite-topology.md` defines the supported local SQLite posture, WAL/`busy_timeout`/`BEGIN IMMEDIATE` guarantees, backup/restore policy, network filesystem caveats, multi-process/multi-region limits, and thresholds for dedicated relational repositories/backfills beyond indexed `app_records`.
@@ -239,6 +240,17 @@ Phase 19 implements the first broad token-redaction pass across API DTOs, persis
 
 This phase does not add a general-purpose export redaction pipeline, reverse-proxy access-log rewriting, managed database topology, external scheduler coordination, or managed external provider operations.
 
+### Phase 20 Export And Access-Log Redaction Controls
+
+Phase 20 implements the next broad redaction pass beyond app-level DTOs by adding in-app access logging with built-in redaction, a workspace export redaction pipeline, and reverse-proxy access-log rewriting templates plus a validator:
+
+- An optional Hono access-log middleware writes one JSON line per request to stdout or a file with the request path/query passed through `redactSensitiveString`. It is configurable via `TASKLOOM_ACCESS_LOG_MODE` (`stdout|file|off`, default `off`) and `TASKLOOM_ACCESS_LOG_PATH`, captures method/status/duration/userId/workspaceId/requestId, and intentionally omits request and response bodies.
+- A `jobs:export-workspace` CLI command produces a per-workspace JSON snapshot with invitation tokens, share tokens, agent webhook tokens, env-var values, and provider credentials replaced by `*Preview` masked values, and remaining nested job/run/activity payloads passed through `redactSensitiveValue`.
+- Reverse-proxy access-log rewriting examples for nginx, Caddy, and Apache live under `docs/deployment/proxy-access-log-redaction/`, with a Taskloom-shipped validator at `src/security/proxy-access-log-validator.ts` that scans a log file for raw bearer/whk_/share/invitation-accept/webhook tokens and sensitive query parameters and exits non-zero on a hit.
+- `docs/deployment-export-redaction.md` documents configuration, redaction guarantees, validation cadence, and the post-deploy checklist.
+
+This phase does not add a request-body access log, managed log shipping/retention, automated scheduled exports, managed database topology, external scheduler coordination, or managed external provider operations.
+
 ## Roadmap
 
 Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
@@ -276,7 +288,8 @@ Expand local auth from a single-owner workspace flow into a workspace membership
 - [x] Document production deployment guidance for HTTPS/proxy trust, secrets, local-store rate-limit limits, edge/distributed limiter pairing expectations, persistence, backups, and scheduler constraints. Invitation email operations are cross-linked separately.
 - [x] Add optional HTTP distributed rate-limit integration for auth and invitation routes before the local process/store-scoped bucket backstop.
 - [x] Add route/DTO token-redaction enforcement for invitation/share/webhook tokens, API-key-like fields, environment variable display paths, jobs, activities, agent runs, provider errors, and invitation delivery errors.
-- [ ] Continue production hardening implementation beyond process/store-scoped rate limiting, webhook email delivery, CSRF checks, and app-level redaction, such as managed production topology support, scheduler coordination, export/access-log redaction controls, and managed external provider operations. SQLite/database topology guidance now lives in `docs/deployment-sqlite-topology.md`.
+- [x] Add export and access-log redaction controls beyond app-level DTO redaction through Phase 20: an opt-in Hono access-log middleware with built-in path/query redaction, a `jobs:export-workspace` CLI with masked tokens/credentials/env-var values and `redactSensitiveValue` for nested payloads, reverse-proxy access-log rewriting templates under `docs/deployment/proxy-access-log-redaction/`, and a `src/security/proxy-access-log-validator.ts` scanner for rotated proxy logs.
+- [ ] Continue production hardening implementation beyond process/store-scoped rate limiting, webhook email delivery, CSRF checks, app-level redaction, and Phase 20 export/access-log controls, such as managed production topology support, scheduler coordination, and managed external provider operations. SQLite/database topology guidance now lives in `docs/deployment-sqlite-topology.md`.
 
 ### 3. Real Activation Signals
 
@@ -327,10 +340,10 @@ Strengthen the project rails before larger product work accumulates.
 ## Recommended Order
 
 1. Production storage implementation hardening: managed database topology, external scheduler/job coordination for multi-process runtimes, and dedicated relational repositories/backfills where indexed `app_records` metadata is not enough.
-2. Export/access-log redaction controls that sit outside Taskloom's app-level route serializers.
-3. Managed external email provider operational hardening beyond Taskloom's built-in retry jobs, including provider-side dead letters and replay/reconciliation processes.
+2. Managed external email provider operational hardening beyond Taskloom's built-in retry jobs, including provider-side dead letters and replay/reconciliation processes.
+3. Managed log shipping, retention, and SIEM integration around the Phase 20 access-log middleware, workspace export pipeline, and proxy access-log redaction templates.
 4. Continued workflow/UI, test, and release hardening.
 
 ## Near-Term Definition Of Done
 
-The near-term production hardening track is complete when app-level token-redaction enforcement is paired with deployment-owned access-log/export redaction, managed database or external scheduler topology is implemented where needed, managed external provider operations are defined where built-in retry jobs are not enough, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.
+The near-term production hardening track is complete when app-level token-redaction enforcement and the Phase 20 export/access-log redaction controls (in-app middleware, workspace export pipeline, proxy templates, and validator) are paired with deployment-owned managed log shipping/retention, managed database or external scheduler topology is implemented where needed, managed external provider operations are defined where built-in retry jobs are not enough, dedicated relational repositories/backfills are added where indexed `app_records` metadata is not enough, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes.

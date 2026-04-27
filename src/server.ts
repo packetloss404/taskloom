@@ -43,11 +43,14 @@ import { shareRoutes, publicShareRoutes } from "./share-routes.js";
 import { agentWebhookRoutes, publicWebhookRoutes } from "./webhook-routes.js";
 import { enforcePrivateAppMutationSecurity } from "./route-security.js";
 import { redactedErrorMessage } from "./security/redaction.js";
+import { accessLogMiddleware } from "./security/access-log.js";
 
 registerDefaultProviders();
 registerDefaultTools();
 
 const app = new Hono();
+
+app.use("*", accessLogMiddleware());
 
 app.get("/api/health", (c) => c.json({ ok: true }));
 

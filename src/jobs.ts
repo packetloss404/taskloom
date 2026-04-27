@@ -15,6 +15,7 @@ import {
   type TaskloomData,
   upsertActivationSignal,
 } from "./taskloom-store";
+import { exportWorkspaceData } from "./jobs/export-workspace.js";
 
 export interface StoreJobDeps {
   loadStore: () => TaskloomData;
@@ -224,6 +225,18 @@ export async function runJobsCli(argv = process.argv.slice(2)): Promise<number> 
     return 0;
   }
 
+  if (command === "export-workspace") {
+    const workspaceId = parseStringFlag(args, "--workspace-id=");
+    if (!workspaceId) {
+      console.error("export-workspace requires --workspace-id=<id>");
+      writeUsage();
+      return 1;
+    }
+    const result = exportWorkspaceData({ workspaceId });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
+
   console.error(`Unknown jobs command: ${command}`);
   writeUsage();
   return 1;
@@ -241,6 +254,13 @@ function parseWorkspaceIds(args: string[]): string[] | undefined {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
+function parseStringFlag(args: string[], prefix: string): string | undefined {
+  const arg = args.find((entry) => entry.startsWith(prefix));
+  if (!arg) return undefined;
+  const value = arg.slice(prefix.length).trim();
+  return value || undefined;
+}
+
 function normalizeTimestamp(value: Date | string | number): number {
   const timestamp = value instanceof Date ? value.getTime() : typeof value === "number" ? value : Date.parse(value);
   if (!Number.isFinite(timestamp)) {
@@ -254,10 +274,11 @@ function activationStatusEquals(left: ActivationStatusDto | null, right: Activat
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions>");
+  console.error("Usage: node --import tsx src/jobs.ts <recompute-activation|repair-activation-read-models|cleanup-sessions|export-workspace>");
   console.error("Options:");
   console.error("  recompute-activation --workspace-ids=alpha,beta");
   console.error("  repair-activation-read-models --workspace-ids=alpha,beta");
+  console.error("  export-workspace --workspace-id=alpha");
 }
 
 function isExecutedDirectly(): boolean {
