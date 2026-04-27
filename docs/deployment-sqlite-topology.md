@@ -137,6 +137,13 @@ Phase 32 begins the migration of hot collections from the JSON-payload `app_reco
 - `npm run db:backfill-alert-events [-- --dry-run]`
 - `npm run db:verify-alert-events`
 
+### Phase 34 commands
+
+- `npm run db:backfill-agent-runs [-- --dry-run] [-- --check-orphans]`
+- `npm run db:verify-agent-runs [-- --check-orphans]`
+
+The `--check-orphans` flag additionally counts agent runs whose `agentId` references a missing `agents` row in the JSON-side store. Orphans are surfaced in the report but do not block the backfill — they round-trip into the dedicated table as-is.
+
 The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
 
 ### Restore semantics during dual-write

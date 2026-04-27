@@ -6,6 +6,12 @@ import type { DurableActivationProductRecord, WorkspaceActivationFacts } from ".
 import type { ActivationMilestoneRecord, ActivationStatusDto } from "./activation/domain";
 import { buildSignalSnapshotFromFacts, buildSignalSnapshotFromProductRecords } from "./activation/adapters";
 import { generateId, hashPassword, normalizeEmail, now, slugify } from "./auth-utils";
+import {
+  findAgentRunForWorkspaceViaRepository,
+  listAgentRunsForAgentViaRepository,
+  listAgentRunsForWorkspaceViaRepository,
+} from "./agent-runs-read.js";
+import { createAgentRunsRepository } from "./repositories/agent-runs-repo.js";
 
 export interface UserRecord {
   id: string;
@@ -551,9 +557,13 @@ export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
   return result;
 }
 
+let activeMutateSqliteDepth = 0;
+const pendingAgentRunDualWrites: AgentRunRecord[] = [];
+
 function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T): T {
   const db = openStoreDatabase(dbPath);
   const backendKey = `sqlite:${dbPath}`;
+  activeMutateSqliteDepth += 1;
   try {
     db.exec("begin immediate");
     try {
@@ -566,10 +576,23 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
       return result;
     } catch (error) {
       db.exec("rollback");
+      pendingAgentRunDualWrites.length = 0;
       throw error;
     }
   } finally {
     db.close();
+    activeMutateSqliteDepth -= 1;
+    if (activeMutateSqliteDepth === 0) flushPendingAgentRunDualWrites();
+  }
+}
+
+function flushPendingAgentRunDualWrites(): void {
+  if (pendingAgentRunDualWrites.length === 0) return;
+  const drained = pendingAgentRunDualWrites.splice(0, pendingAgentRunDualWrites.length);
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  const repo = createAgentRunsRepository({});
+  for (const record of drained) {
+    repo.upsert(record);
   }
 }
 
@@ -1088,7 +1111,7 @@ export function listProvidersForWorkspaceIndexed(workspaceId: string): ProviderR
 }
 
 export function listAgentRunsForWorkspaceIndexed(workspaceId: string, limit?: number): AgentRunRecord[] {
-  return listWorkspaceRecordsIndexed("agentRuns", workspaceId, { orderBy: "createdAtDesc", limit });
+  return listAgentRunsForWorkspaceViaRepository(workspaceId, limit);
 }
 
 export function listProviderCallsForWorkspaceIndexed(workspaceId: string, opts: { since?: string; limit?: number } = {}): ProviderCallRecord[] {
@@ -1109,7 +1132,7 @@ export function listProviderCallsForWorkspaceIndexed(workspaceId: string, opts: 
 }
 
 export function listAgentRunsForAgentIndexed(workspaceId: string, agentId: string, limit?: number): AgentRunRecord[] {
-  return listAgentRunsForWorkspaceIndexed(workspaceId).filter((entry) => entry.agentId === agentId).slice(0, limit);
+  return listAgentRunsForAgentViaRepository(workspaceId, agentId, limit);
 }
 
 export function findUserByIdIndexed(userId: string): UserRecord | null {
@@ -1262,8 +1285,7 @@ export function findAgentForWorkspaceIndexed(workspaceId: string, agentId: strin
 }
 
 export function findAgentRunForWorkspaceIndexed(workspaceId: string, runId: string): AgentRunRecord | null {
-  return sqliteIndexedRecord<AgentRunRecord>("agentRuns", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, runId])
-    ?? loadStore().agentRuns.find((entry) => entry.workspaceId === workspaceId && entry.id === runId) ?? null;
+  return findAgentRunForWorkspaceViaRepository(workspaceId, runId);
 }
 
 export function findJobIndexed(jobId: string): JobRecord | null {
@@ -2750,7 +2772,16 @@ export function listAgentRunsForAgent(data: TaskloomData, workspaceId: string, a
 }
 
 export function upsertAgentRun(data: TaskloomData, input: AgentRunUpsertInput, timestamp = now()): AgentRunRecord {
-  return upsertRecord(data.agentRuns, input, timestamp);
+  const record = upsertRecord(data.agentRuns, input, timestamp);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    if (activeMutateSqliteDepth > 0) {
+      pendingAgentRunDualWrites.push({ ...record });
+    } else {
+      const repo = createAgentRunsRepository({});
+      repo.upsert(record);
+    }
+  }
+  return record;
 }
 
 export type ActivationSignalUpsertInput = Omit<ActivationSignalRecord, "id" | "createdAt" | "updatedAt"> &

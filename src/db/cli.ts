@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { deriveActivationStatus } from "../activation/service";
 import { activationSubjectForWorkspace } from "../jobs";
+import { sqliteAgentRunsRepository } from "../repositories/agent-runs-repo";
 import { sqliteAlertEventsRepository } from "../repositories/alert-events-repo";
 import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
-import type { AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
+import type { AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -122,6 +123,37 @@ export interface VerifyAlertEventsResult {
 
 export interface BackfillAlertEventsOptions extends DbCliOptions {
   dryRun?: boolean;
+}
+
+export interface BackfillAgentRunsResult {
+  command: "backfill-agent-runs";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+  orphanCount?: number;
+}
+
+export interface VerifyAgentRunsResult {
+  command: "verify-agent-runs";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+  orphanCount?: number;
+}
+
+export interface BackfillAgentRunsOptions extends DbCliOptions {
+  dryRun?: boolean;
+  checkOrphans?: boolean;
+}
+
+export interface VerifyAgentRunsOptions extends DbCliOptions {
+  checkOrphans?: boolean;
 }
 
 const DEFAULT_DB_PATH = resolve(process.cwd(), "data", "taskloom.sqlite");
@@ -700,6 +732,238 @@ function parseAlertContext(raw: string): Record<string, unknown> {
   }
 }
 
+export function backfillAgentRuns(options: BackfillAgentRunsOptions = {}): BackfillAgentRunsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+  const checkOrphans = options.checkOrphans ?? false;
+
+  const jsonRows = readAgentRunJsonRows(dbPath);
+  const dedicatedRows = readAgentRunDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: AgentRunRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeAgentRun(existing) === canonicalizeAgentRun(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    const repo = sqliteAgentRunsRepository({ dbPath });
+    for (const record of toInsert) {
+      repo.upsert(record);
+    }
+    inserted = toInsert.length;
+  }
+
+  const result: BackfillAgentRunsResult = {
+    command: "backfill-agent-runs",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+  if (checkOrphans) {
+    result.orphanCount = countAgentRunOrphans(dbPath, jsonRows);
+  }
+  return result;
+}
+
+export function verifyAgentRuns(options: VerifyAgentRunsOptions = {}): VerifyAgentRunsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const checkOrphans = options.checkOrphans ?? false;
+
+  const jsonRows = readAgentRunJsonRows(dbPath);
+  const dedicatedRows = readAgentRunDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeAgentRun(jsonRecord) === canonicalizeAgentRun(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  const result: VerifyAgentRunsResult = {
+    command: "verify-agent-runs",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+  if (checkOrphans) {
+    result.orphanCount = countAgentRunOrphans(dbPath, jsonRows);
+  }
+  return result;
+}
+
+function readAgentRunJsonRows(dbPath: string): AgentRunRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'agentRuns'").all() as Array<{ payload: string }>;
+    return rows.map((row) => normalizeAgentRunRecord(JSON.parse(row.payload) as AgentRunRecord));
+  } finally {
+    db.close();
+  }
+}
+
+function readAgentRunDedicatedRows(dbPath: string): AgentRunRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, workspace_id, agent_id, title, status, trigger_kind,
+        started_at, completed_at, inputs, output, error,
+        logs, tool_calls, transcript, model_used, cost_usd,
+        created_at, updated_at
+      from agent_runs
+    `).all() as Array<{
+      id: string;
+      workspace_id: string;
+      agent_id: string | null;
+      title: string;
+      status: AgentRunStatus;
+      trigger_kind: AgentTriggerKind | null;
+      started_at: string | null;
+      completed_at: string | null;
+      inputs: string | null;
+      output: string | null;
+      error: string | null;
+      logs: string;
+      tool_calls: string | null;
+      transcript: string | null;
+      model_used: string | null;
+      cost_usd: number | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((row) => {
+      const record: AgentRunRecord = {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        title: row.title,
+        status: row.status,
+        logs: parseAgentRunJsonArray<AgentRunLogEntry>(row.logs),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+      if (row.agent_id !== null) record.agentId = row.agent_id;
+      if (row.trigger_kind !== null) record.triggerKind = row.trigger_kind;
+      if (row.transcript !== null) record.transcript = parseAgentRunJsonArray<AgentRunStep>(row.transcript);
+      if (row.started_at !== null) record.startedAt = row.started_at;
+      if (row.completed_at !== null) record.completedAt = row.completed_at;
+      if (row.inputs !== null) record.inputs = parseAgentRunInputs(row.inputs);
+      if (row.output !== null) record.output = row.output;
+      if (row.error !== null) record.error = row.error;
+      if (row.tool_calls !== null) record.toolCalls = parseAgentRunJsonArray<AgentRunToolCall>(row.tool_calls);
+      if (row.model_used !== null) record.modelUsed = row.model_used;
+      if (row.cost_usd !== null) record.costUsd = row.cost_usd;
+      return record;
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeAgentRunRecord(record: AgentRunRecord): AgentRunRecord {
+  return { ...record, logs: Array.isArray(record.logs) ? record.logs : [] };
+}
+
+function parseAgentRunJsonArray<T>(raw: string | null): T[] {
+  if (raw === null || raw === undefined) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseAgentRunInputs(raw: string): Record<string, string | number | boolean> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, string | number | boolean>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function canonicalizeAgentRun(record: AgentRunRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    workspaceId: record.workspaceId,
+    agentId: record.agentId ?? null,
+    title: record.title,
+    status: record.status,
+    triggerKind: record.triggerKind ?? null,
+    startedAt: record.startedAt ?? null,
+    completedAt: record.completedAt ?? null,
+    inputs: record.inputs ?? null,
+    output: record.output ?? null,
+    error: record.error ?? null,
+    logs: record.logs ?? [],
+    toolCalls: record.toolCalls ?? null,
+    transcript: record.transcript ?? null,
+    modelUsed: record.modelUsed ?? null,
+    costUsd: record.costUsd ?? null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  });
+}
+
+function countAgentRunOrphans(dbPath: string, jsonRows: AgentRunRecord[]): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select id from app_records where collection = 'agents'").all() as Array<{ id: string }>;
+    const agentIds = new Set(rows.map((row) => row.id));
+    let orphans = 0;
+    for (const record of jsonRows) {
+      if (record.agentId !== undefined && record.agentId !== null && !agentIds.has(record.agentId)) {
+        orphans += 1;
+      }
+    }
+    return orphans;
+  } finally {
+    db.close();
+  }
+}
+
 function canonicalizeAlert(record: AlertEventRecord): string {
   return JSON.stringify({
     id: record.id,
@@ -784,6 +1048,17 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(verifyAlertEvents(options), null, 2));
       return 0;
     }
+    if (command === "backfill-agent-runs") {
+      const dryRun = args.includes("--dry-run");
+      const checkOrphans = args.includes("--check-orphans");
+      console.log(JSON.stringify(backfillAgentRuns({ ...options, dryRun, checkOrphans }), null, 2));
+      return 0;
+    }
+    if (command === "verify-agent-runs") {
+      const checkOrphans = args.includes("--check-orphans");
+      console.log(JSON.stringify(verifyAgentRuns({ ...options, checkOrphans }), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -810,7 +1085,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
 }
 
 function isExecutedDirectly(): boolean {

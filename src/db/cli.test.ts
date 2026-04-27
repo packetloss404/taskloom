@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillAlertEvents, backfillAppDatabase, backfillJobMetricSnapshots, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAlertEvents, verifyJobMetricSnapshots } from "./cli";
-import type { AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
+import { backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillJobMetricSnapshots, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAgentRuns, verifyAlertEvents, verifyJobMetricSnapshots } from "./cli";
+import type { AgentRunRecord, AlertEventRecord, JobMetricSnapshotRecord } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -799,6 +799,295 @@ test("verifyAlertEvents reports contentDrift when ids match but content differs"
     assert.equal(result.matched, 0);
     assert.equal(result.jsonOnly, 0);
     assert.equal(result.sqliteOnly, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeAgentRun(overrides: Partial<AgentRunRecord> & { id: string }): AgentRunRecord {
+  return {
+    id: overrides.id,
+    workspaceId: overrides.workspaceId ?? "workspace_a",
+    title: overrides.title ?? "Run title",
+    status: overrides.status ?? "success",
+    logs: overrides.logs ?? [],
+    createdAt: overrides.createdAt ?? "2026-04-26T12:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-26T12:00:00.000Z",
+    ...(overrides.agentId !== undefined ? { agentId: overrides.agentId } : {}),
+    ...(overrides.triggerKind !== undefined ? { triggerKind: overrides.triggerKind } : {}),
+    ...(overrides.transcript !== undefined ? { transcript: overrides.transcript } : {}),
+    ...(overrides.startedAt !== undefined ? { startedAt: overrides.startedAt } : {}),
+    ...(overrides.completedAt !== undefined ? { completedAt: overrides.completedAt } : {}),
+    ...(overrides.inputs !== undefined ? { inputs: overrides.inputs } : {}),
+    ...(overrides.output !== undefined ? { output: overrides.output } : {}),
+    ...(overrides.error !== undefined ? { error: overrides.error } : {}),
+    ...(overrides.toolCalls !== undefined ? { toolCalls: overrides.toolCalls } : {}),
+    ...(overrides.modelUsed !== undefined ? { modelUsed: overrides.modelUsed } : {}),
+    ...(overrides.costUsd !== undefined ? { costUsd: overrides.costUsd } : {}),
+  };
+}
+
+function insertAppRecordAgentRun(dbPath: string, record: AgentRunRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('agentRuns', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedAgentRun(dbPath: string, record: AgentRunRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into agent_runs (
+        id, workspace_id, agent_id, title, status, trigger_kind,
+        started_at, completed_at, inputs, output, error,
+        logs, tool_calls, transcript, model_used, cost_usd,
+        created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.workspaceId,
+      record.agentId ?? null,
+      record.title,
+      record.status,
+      record.triggerKind ?? null,
+      record.startedAt ?? null,
+      record.completedAt ?? null,
+      record.inputs === undefined ? null : JSON.stringify(record.inputs),
+      record.output ?? null,
+      record.error ?? null,
+      JSON.stringify(record.logs ?? []),
+      record.toolCalls === undefined ? null : JSON.stringify(record.toolCalls),
+      record.transcript === undefined ? null : JSON.stringify(record.transcript),
+      record.modelUsed ?? null,
+      record.costUsd ?? null,
+      record.createdAt,
+      record.updatedAt,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function insertAppRecordAgent(dbPath: string, agentId: string, workspaceId: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const payload = JSON.stringify({ id: agentId, workspaceId });
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('agents', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(agentId, workspaceId, payload, "2026-04-26T12:00:00.000Z");
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedAgentRuns(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from agent_runs").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillAgentRuns reports zero for an empty store", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+
+    const result = backfillAgentRuns({ dbPath });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 0);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedAgentRuns(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAgentRuns inserts JSON-side rows into the dedicated table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_a" }));
+
+    const result = backfillAgentRuns({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedAgentRuns(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAgentRuns is idempotent on re-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_a" }));
+
+    backfillAgentRuns({ dbPath });
+    const second = backfillAgentRuns({ dbPath });
+
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.drift, 0);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedAgentRuns(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAgentRuns --dry-run does not write", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_a" }));
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_b" }));
+
+    const result = backfillAgentRuns({ dbPath, dryRun: true });
+
+    assert.equal(result.dryRun, true);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.wouldInsert, 2);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedAgentRuns(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAgentRuns reports matched when both sides identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeAgentRun({ id: "run_a" });
+    insertAppRecordAgentRun(dbPath, record);
+    insertDedicatedAgentRun(dbPath, record);
+
+    const result = verifyAgentRuns({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAgentRuns reports jsonOnly when JSON-side has rows not yet backfilled", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_a" }));
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_b" }));
+
+    const result = verifyAgentRuns({ dbPath });
+
+    assert.equal(result.jsonOnly, 2);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAgentRuns reports sqliteOnly when dedicated table has extra rows", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertDedicatedAgentRun(dbPath, makeAgentRun({ id: "extra" }));
+
+    const result = verifyAgentRuns({ dbPath });
+
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAgentRuns reports contentDrift when ids match but content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeAgentRun({ id: "run_a", status: "success" });
+    insertAppRecordAgentRun(dbPath, record);
+    insertDedicatedAgentRun(dbPath, { ...record, status: "failed" });
+
+    const result = verifyAgentRuns({ dbPath });
+
+    assert.equal(result.contentDrift, 1);
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillAgentRuns --check-orphans counts runs whose agentId references a missing agent", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordAgent(dbPath, "agent_present", "workspace_a");
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_orphan", agentId: "agent_missing" }));
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_attached", agentId: "agent_present" }));
+    insertAppRecordAgentRun(dbPath, makeAgentRun({ id: "run_detached" }));
+
+    const result = backfillAgentRuns({ dbPath, checkOrphans: true });
+
+    assert.equal(result.orphanCount, 1);
+    assert.equal(result.scanned, 3);
+    assert.equal(result.inserted, 3);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAgentRuns --check-orphans surfaces orphan count without blocking verification", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const orphan = makeAgentRun({ id: "run_orphan", agentId: "agent_missing" });
+    insertAppRecordAgentRun(dbPath, orphan);
+    insertDedicatedAgentRun(dbPath, orphan);
+
+    const result = verifyAgentRuns({ dbPath, checkOrphans: true });
+
+    assert.equal(result.orphanCount, 1);
+    assert.equal(result.matched, 1);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
