@@ -17,6 +17,7 @@ import {
   mutateStore,
   nextIncompleteStep,
   ONBOARDING_STEPS,
+  recordActivity,
   upsertActivationSignal,
   upsertReleaseConfirmation,
   upsertWorkspaceBrief,
@@ -849,7 +850,7 @@ function pushActivity(
   id = generateId(),
 ) {
   if (data.activities.some((entry) => entry.id === id)) return;
-  data.activities.unshift({
+  recordActivity(data, {
     id,
     workspaceId,
     scope: "activation",
@@ -857,7 +858,7 @@ function pushActivity(
     actor,
     data: activityData,
     occurredAt: timestamp,
-  });
+  }, { dedupe: true });
 }
 
 function briefScopeChanged(

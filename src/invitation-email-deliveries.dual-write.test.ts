@@ -100,7 +100,7 @@ function createDelivery(): InvitationEmailDeliveryRecord {
   );
 }
 
-test("createInvitationEmailDelivery dual-writes JSON-side and dedicated invitation_email_deliveries table in SQLite mode", () => {
+test("createInvitationEmailDelivery writes the dedicated invitation_email_deliveries table in SQLite mode", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-ied-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -113,9 +113,7 @@ test("createInvitationEmailDelivery dual-writes JSON-side and dedicated invitati
     assert.equal(delivery.status, "pending");
 
     const appRecord = findAppRecord(dbPath, delivery.id);
-    assert.ok(appRecord, "app_records row should exist");
-    assert.equal(appRecord.id, delivery.id);
-    assert.equal(appRecord.status, "pending");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicated(dbPath, delivery.id);
     assert.ok(dedicated, "dedicated row should exist");
@@ -131,7 +129,7 @@ test("createInvitationEmailDelivery dual-writes JSON-side and dedicated invitati
   }
 });
 
-test("markInvitationEmailDeliverySent dual-writes the sent record on both sides", () => {
+test("markInvitationEmailDeliverySent writes the sent record to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-ied-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -147,9 +145,7 @@ test("markInvitationEmailDeliverySent dual-writes the sent record on both sides"
     assert.equal(updated.sentAt, "2026-04-26T12:05:00.000Z");
 
     const appRecord = findAppRecord(dbPath, delivery.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "sent");
-    assert.equal(appRecord.sentAt, "2026-04-26T12:05:00.000Z");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicated(dbPath, delivery.id);
     assert.ok(dedicated);
@@ -162,7 +158,7 @@ test("markInvitationEmailDeliverySent dual-writes the sent record on both sides"
   }
 });
 
-test("markInvitationEmailDeliverySkipped dual-writes the skipped record on both sides", () => {
+test("markInvitationEmailDeliverySkipped writes the skipped record to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-ied-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -178,9 +174,7 @@ test("markInvitationEmailDeliverySkipped dual-writes the skipped record on both 
     assert.equal(updated.error, "skipped-by-config");
 
     const appRecord = findAppRecord(dbPath, delivery.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "skipped");
-    assert.equal(appRecord.error, "skipped-by-config");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicated(dbPath, delivery.id);
     assert.ok(dedicated);
@@ -193,7 +187,7 @@ test("markInvitationEmailDeliverySkipped dual-writes the skipped record on both 
   }
 });
 
-test("markInvitationEmailDeliveryFailed dual-writes the failed record on both sides", () => {
+test("markInvitationEmailDeliveryFailed writes the failed record to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-ied-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -209,9 +203,7 @@ test("markInvitationEmailDeliveryFailed dual-writes the failed record on both si
     assert.equal(updated.error, "smtp timeout");
 
     const appRecord = findAppRecord(dbPath, delivery.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.status, "failed");
-    assert.equal(appRecord.error, "smtp timeout");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicated(dbPath, delivery.id);
     assert.ok(dedicated);
@@ -224,7 +216,7 @@ test("markInvitationEmailDeliveryFailed dual-writes the failed record on both si
   }
 });
 
-test("recordInvitationEmailProviderStatus dual-writes the provider-status update on both sides", () => {
+test("recordInvitationEmailProviderStatus writes the provider-status update to the dedicated table", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "taskloom-ied-dual-"));
   const dbPath = join(tempDir, "taskloom.sqlite");
   migrateDatabase({ dbPath });
@@ -246,10 +238,7 @@ test("recordInvitationEmailProviderStatus dual-writes the provider-status update
     assert.equal(updated.providerStatusAt, "2026-04-26T12:10:00.000Z");
 
     const appRecord = findAppRecord(dbPath, delivery.id);
-    assert.ok(appRecord);
-    assert.equal(appRecord.providerStatus, "delivered");
-    assert.equal(appRecord.providerDeliveryId, "provider-id-123");
-    assert.equal(appRecord.providerStatusAt, "2026-04-26T12:10:00.000Z");
+    assert.equal(appRecord, null);
 
     const dedicated = findDedicated(dbPath, delivery.id);
     assert.ok(dedicated);

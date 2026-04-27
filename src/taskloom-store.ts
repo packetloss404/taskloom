@@ -11,6 +11,8 @@ import {
   listAgentRunsForAgentViaRepository,
   listAgentRunsForWorkspaceViaRepository,
 } from "./agent-runs-read.js";
+import { listActivitiesForWorkspaceViaRepository } from "./activities-read.js";
+import { createActivitiesRepository } from "./repositories/activities-repo.js";
 import { createAgentRunsRepository } from "./repositories/agent-runs-repo.js";
 import { createInvitationEmailDeliveriesRepository } from "./repositories/invitation-email-deliveries-repo.js";
 import { findJobViaRepository, listJobsForWorkspaceViaRepository } from "./jobs-read.js";
@@ -561,6 +563,7 @@ export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
 }
 
 let activeMutateSqliteDepth = 0;
+const pendingActivityDualWrites: ActivityRecord[] = [];
 const pendingAgentRunDualWrites: AgentRunRecord[] = [];
 const pendingInvitationEmailDeliveryDualWrites: InvitationEmailDeliveryRecord[] = [];
 
@@ -580,6 +583,7 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
       return result;
     } catch (error) {
       db.exec("rollback");
+      pendingActivityDualWrites.length = 0;
       pendingAgentRunDualWrites.length = 0;
       pendingInvitationEmailDeliveryDualWrites.length = 0;
       throw error;
@@ -588,9 +592,20 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
     db.close();
     activeMutateSqliteDepth -= 1;
     if (activeMutateSqliteDepth === 0) {
+      flushPendingActivityDualWrites();
       flushPendingAgentRunDualWrites();
       flushPendingInvitationEmailDeliveryDualWrites();
     }
+  }
+}
+
+function flushPendingActivityDualWrites(): void {
+  if (pendingActivityDualWrites.length === 0) return;
+  const drained = pendingActivityDualWrites.splice(0, pendingActivityDualWrites.length);
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  const repo = createActivitiesRepository({});
+  for (const record of drained) {
+    repo.upsert(record);
   }
 }
 
@@ -614,6 +629,17 @@ function flushPendingInvitationEmailDeliveryDualWrites(): void {
   }
 }
 
+function enqueueActivityDualWrite(record: ActivityRecord): void {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  const snapshot = cloneActivityRecord(record);
+  if (activeMutateSqliteDepth > 0) {
+    pendingActivityDualWrites.push(snapshot);
+  } else {
+    const repo = createActivitiesRepository({});
+    repo.upsert(snapshot);
+  }
+}
+
 function enqueueInvitationEmailDeliveryDualWrite(record: InvitationEmailDeliveryRecord): void {
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
   if (activeMutateSqliteDepth > 0) {
@@ -622,6 +648,38 @@ function enqueueInvitationEmailDeliveryDualWrite(record: InvitationEmailDelivery
     const repo = createInvitationEmailDeliveriesRepository({});
     repo.upsert(record);
   }
+}
+
+export interface RecordActivityOptions {
+  position?: "start" | "end";
+  dedupe?: boolean;
+}
+
+export function recordActivity(
+  data: TaskloomData,
+  activity: ActivityRecord,
+  options: RecordActivityOptions = {},
+): ActivityRecord {
+  if (options.dedupe) {
+    const existing = data.activities.find((entry) => entry.id === activity.id);
+    if (existing) return existing;
+  }
+
+  if (options.position === "end") {
+    data.activities.push(activity);
+  } else {
+    data.activities.unshift(activity);
+  }
+  enqueueActivityDualWrite(activity);
+  return activity;
+}
+
+function cloneActivityRecord(record: ActivityRecord): ActivityRecord {
+  return {
+    ...record,
+    actor: { ...record.actor },
+    data: { ...record.data },
+  };
 }
 
 export function persistStore(data: TaskloomData): void {
@@ -798,7 +856,6 @@ const RECORD_COLLECTIONS = [
   "workspaces",
   "memberships",
   "workspaceInvitations",
-  "invitationEmailDeliveries",
   "workspaceBriefs",
   "workspaceBriefVersions",
   "requirements",
@@ -807,17 +864,12 @@ const RECORD_COLLECTIONS = [
   "validationEvidence",
   "releaseConfirmations",
   "onboardingStates",
-  "activities",
   "activationSignals",
   "agents",
   "providers",
-  "agentRuns",
   "workspaceEnvVars",
   "apiKeys",
   "providerCalls",
-  "jobs",
-  "jobMetricSnapshots",
-  "alertEvents",
   "shareTokens",
 ] as const satisfies readonly StoreCollectionKey[];
 
@@ -838,7 +890,9 @@ interface SqliteRateLimitRow {
 function loadSqliteStore(db: DatabaseSync): TaskloomData | null {
   const rows = db.prepare("select collection, payload from app_records order by collection, id").all() as unknown as SqliteStoreRow[];
   const rateLimits = loadSqliteRateLimitBuckets(db);
-  if (rows.length === 0 && rateLimits.length === 0) return null;
+  const dedicatedCollections = loadDedicatedRelationalCollections(db);
+  const hasDedicatedRows = Object.values(dedicatedCollections).some((records) => records.length > 0);
+  if (rows.length === 0 && rateLimits.length === 0 && !hasDedicatedRows) return null;
 
   const partial: Partial<TaskloomData> = { rateLimits };
   for (const row of rows) {
@@ -851,6 +905,7 @@ function loadSqliteStore(db: DatabaseSync): TaskloomData | null {
     const existing = partial[row.collection] as unknown[] | undefined;
     partial[row.collection] = [...(existing ?? []), payload] as never;
   }
+  mergeDedicatedRelationalCollections(partial, dedicatedCollections);
 
   return normalizeStore(partial);
 }
@@ -889,12 +944,486 @@ function persistSqliteStoreRows(db: DatabaseSync, data: TaskloomData): void {
       }
     }
   }
+  persistDedicatedRelationalRows(db, data);
 
   for (const collection of MAP_COLLECTIONS) {
     const map = data[collection] as Record<string, unknown>;
     for (const [workspaceId, payload] of Object.entries(map)) {
       insert.run(collection, workspaceId, workspaceId, JSON.stringify({ [workspaceId]: payload }), null);
     }
+  }
+}
+
+type DedicatedRelationalCollectionKey =
+  | "jobMetricSnapshots"
+  | "alertEvents"
+  | "agentRuns"
+  | "jobs"
+  | "invitationEmailDeliveries"
+  | "activities";
+
+type DedicatedRelationalCollections = Pick<TaskloomData, DedicatedRelationalCollectionKey>;
+
+function loadDedicatedRelationalCollections(db: DatabaseSync): DedicatedRelationalCollections {
+  return {
+    jobMetricSnapshots: loadDedicatedJobMetricSnapshots(db),
+    alertEvents: loadDedicatedAlertEvents(db),
+    agentRuns: loadDedicatedAgentRuns(db),
+    jobs: loadDedicatedJobs(db),
+    invitationEmailDeliveries: loadDedicatedInvitationEmailDeliveries(db),
+    activities: loadDedicatedActivities(db),
+  };
+}
+
+function mergeDedicatedRelationalCollections(
+  partial: Partial<TaskloomData>,
+  dedicatedCollections: DedicatedRelationalCollections,
+): void {
+  for (const collection of Object.keys(dedicatedCollections) as DedicatedRelationalCollectionKey[]) {
+    const records = dedicatedCollections[collection];
+    if (records.length > 0 || partial[collection] === undefined) {
+      partial[collection] = records as never;
+    }
+  }
+}
+
+function loadDedicatedJobMetricSnapshots(db: DatabaseSync): JobMetricSnapshotRecord[] {
+  const rows = db.prepare(`
+    select id, captured_at, type, total_runs, succeeded_runs, failed_runs, canceled_runs,
+      last_run_started_at, last_run_finished_at, last_duration_ms, average_duration_ms, p95_duration_ms
+    from job_metric_snapshots
+    order by captured_at asc, id asc
+  `).all() as Array<{
+    id: string;
+    captured_at: string;
+    type: string;
+    total_runs: number;
+    succeeded_runs: number;
+    failed_runs: number;
+    canceled_runs: number;
+    last_run_started_at: string | null;
+    last_run_finished_at: string | null;
+    last_duration_ms: number | null;
+    average_duration_ms: number | null;
+    p95_duration_ms: number | null;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    capturedAt: row.captured_at,
+    type: row.type,
+    totalRuns: row.total_runs,
+    succeededRuns: row.succeeded_runs,
+    failedRuns: row.failed_runs,
+    canceledRuns: row.canceled_runs,
+    lastRunStartedAt: row.last_run_started_at,
+    lastRunFinishedAt: row.last_run_finished_at,
+    lastDurationMs: row.last_duration_ms,
+    averageDurationMs: row.average_duration_ms,
+    p95DurationMs: row.p95_duration_ms,
+  }));
+}
+
+function loadDedicatedAlertEvents(db: DatabaseSync): AlertEventRecord[] {
+  const rows = db.prepare(`
+    select id, rule_id, severity, title, detail, observed_at, context,
+      delivered, delivery_error, delivery_attempts, last_delivery_attempt_at, dead_lettered
+    from alert_events
+    order by observed_at desc, id asc
+  `).all() as Array<{
+    id: string;
+    rule_id: string;
+    severity: AlertEventRecord["severity"];
+    title: string;
+    detail: string;
+    observed_at: string;
+    context: string;
+    delivered: number;
+    delivery_error: string | null;
+    delivery_attempts: number | null;
+    last_delivery_attempt_at: string | null;
+    dead_lettered: number | null;
+  }>;
+  return rows.map((row) => {
+    const record: AlertEventRecord = {
+      id: row.id,
+      ruleId: row.rule_id,
+      severity: row.severity,
+      title: row.title,
+      detail: row.detail,
+      observedAt: row.observed_at,
+      context: parseJsonRecord(row.context),
+      delivered: row.delivered === 1,
+    };
+    if (row.delivery_error !== null) record.deliveryError = row.delivery_error;
+    if (row.delivery_attempts !== null) record.deliveryAttempts = row.delivery_attempts;
+    if (row.last_delivery_attempt_at !== null) record.lastDeliveryAttemptAt = row.last_delivery_attempt_at;
+    if (row.dead_lettered !== null) record.deadLettered = row.dead_lettered === 1;
+    return record;
+  });
+}
+
+function loadDedicatedAgentRuns(db: DatabaseSync): AgentRunRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, agent_id, title, status, trigger_kind,
+      started_at, completed_at, inputs, output, error,
+      logs, tool_calls, transcript, model_used, cost_usd,
+      created_at, updated_at
+    from agent_runs
+    order by created_at desc, id asc
+  `).all() as Array<{
+    id: string;
+    workspace_id: string;
+    agent_id: string | null;
+    title: string;
+    status: AgentRunStatus;
+    trigger_kind: AgentTriggerKind | null;
+    started_at: string | null;
+    completed_at: string | null;
+    inputs: string | null;
+    output: string | null;
+    error: string | null;
+    logs: string;
+    tool_calls: string | null;
+    transcript: string | null;
+    model_used: string | null;
+    cost_usd: number | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+  return rows.map((row) => {
+    const record: AgentRunRecord = {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      title: row.title,
+      status: row.status,
+      logs: parseJsonArrayValue<AgentRunLogEntry>(row.logs),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    if (row.agent_id !== null) record.agentId = row.agent_id;
+    if (row.trigger_kind !== null) record.triggerKind = row.trigger_kind;
+    if (row.transcript !== null) record.transcript = parseJsonArrayValue<AgentRunStep>(row.transcript);
+    if (row.started_at !== null) record.startedAt = row.started_at;
+    if (row.completed_at !== null) record.completedAt = row.completed_at;
+    if (row.inputs !== null) record.inputs = parseJsonRecord(row.inputs) as Record<string, string | number | boolean>;
+    if (row.output !== null) record.output = row.output;
+    if (row.error !== null) record.error = row.error;
+    if (row.tool_calls !== null) record.toolCalls = parseJsonArrayValue<AgentRunToolCall>(row.tool_calls);
+    if (row.model_used !== null) record.modelUsed = row.model_used;
+    if (row.cost_usd !== null) record.costUsd = row.cost_usd;
+    return record;
+  });
+}
+
+function loadDedicatedJobs(db: DatabaseSync): JobRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, type, payload, status, attempts, max_attempts,
+      scheduled_at, started_at, completed_at, cron, result, error,
+      cancel_requested, created_at, updated_at
+    from jobs
+    order by created_at desc, id asc
+  `).all() as Array<{
+    id: string;
+    workspace_id: string;
+    type: string;
+    payload: string;
+    status: JobStatus;
+    attempts: number;
+    max_attempts: number;
+    scheduled_at: string;
+    started_at: string | null;
+    completed_at: string | null;
+    cron: string | null;
+    result: string | null;
+    error: string | null;
+    cancel_requested: number | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+  return rows.map((row) => {
+    const record: JobRecord = {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      type: row.type,
+      payload: parseJsonRecord(row.payload),
+      status: row.status,
+      attempts: row.attempts,
+      maxAttempts: row.max_attempts,
+      scheduledAt: row.scheduled_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    if (row.started_at !== null) record.startedAt = row.started_at;
+    if (row.completed_at !== null) record.completedAt = row.completed_at;
+    if (row.cron !== null) record.cron = row.cron;
+    if (row.result !== null) record.result = parseJsonUnknown(row.result);
+    if (row.error !== null) record.error = row.error;
+    if (row.cancel_requested !== null) record.cancelRequested = row.cancel_requested === 1;
+    return record;
+  });
+}
+
+function loadDedicatedInvitationEmailDeliveries(db: DatabaseSync): InvitationEmailDeliveryRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, invitation_id, recipient_email, subject,
+      status, provider, mode, created_at, sent_at, error,
+      provider_status, provider_delivery_id, provider_status_at, provider_error
+    from invitation_email_deliveries
+    order by created_at desc, id asc
+  `).all() as Array<{
+    id: string;
+    workspace_id: string;
+    invitation_id: string;
+    recipient_email: string;
+    subject: string;
+    status: InvitationEmailDeliveryStatus;
+    provider: string;
+    mode: InvitationEmailDeliveryMode;
+    created_at: string;
+    sent_at: string | null;
+    error: string | null;
+    provider_status: string | null;
+    provider_delivery_id: string | null;
+    provider_status_at: string | null;
+    provider_error: string | null;
+  }>;
+  return rows.map((row) => {
+    const record: InvitationEmailDeliveryRecord = {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      invitationId: row.invitation_id,
+      recipientEmail: row.recipient_email,
+      subject: row.subject,
+      status: row.status,
+      provider: row.provider,
+      mode: row.mode,
+      createdAt: row.created_at,
+    };
+    if (row.sent_at !== null) record.sentAt = row.sent_at;
+    if (row.error !== null) record.error = row.error;
+    if (row.provider_status !== null) record.providerStatus = row.provider_status;
+    if (row.provider_delivery_id !== null) record.providerDeliveryId = row.provider_delivery_id;
+    if (row.provider_status_at !== null) record.providerStatusAt = row.provider_status_at;
+    if (row.provider_error !== null) record.providerError = row.provider_error;
+    return record;
+  });
+}
+
+function loadDedicatedActivities(db: DatabaseSync): ActivityRecord[] {
+  const rows = db.prepare(`
+    select payload
+    from activities
+    order by occurred_at desc, id desc
+  `).all() as Array<{ payload: string }>;
+  return rows.map((row) => JSON.parse(row.payload) as ActivityRecord);
+}
+
+function persistDedicatedRelationalRows(db: DatabaseSync, data: TaskloomData): void {
+  persistDedicatedJobMetricSnapshots(db, data.jobMetricSnapshots ?? []);
+  persistDedicatedAlertEvents(db, data.alertEvents ?? []);
+  persistDedicatedAgentRuns(db, data.agentRuns ?? []);
+  persistDedicatedJobs(db, data.jobs ?? []);
+  persistDedicatedInvitationEmailDeliveries(db, data.invitationEmailDeliveries ?? []);
+  persistDedicatedActivities(db, data.activities ?? []);
+}
+
+function persistDedicatedJobMetricSnapshots(db: DatabaseSync, records: JobMetricSnapshotRecord[]): void {
+  db.exec("delete from job_metric_snapshots");
+  const stmt = db.prepare(`
+    insert or replace into job_metric_snapshots (
+      id, captured_at, type, total_runs, succeeded_runs, failed_runs, canceled_runs,
+      last_run_started_at, last_run_finished_at, last_duration_ms, average_duration_ms, p95_duration_ms
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.capturedAt,
+      record.type,
+      record.totalRuns,
+      record.succeededRuns,
+      record.failedRuns,
+      record.canceledRuns,
+      record.lastRunStartedAt,
+      record.lastRunFinishedAt,
+      record.lastDurationMs,
+      record.averageDurationMs,
+      record.p95DurationMs,
+    );
+  }
+}
+
+function persistDedicatedAlertEvents(db: DatabaseSync, records: AlertEventRecord[]): void {
+  db.exec("delete from alert_events");
+  const stmt = db.prepare(`
+    insert or replace into alert_events (
+      id, rule_id, severity, title, detail, observed_at, context,
+      delivered, delivery_error, delivery_attempts, last_delivery_attempt_at, dead_lettered
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.ruleId,
+      record.severity,
+      record.title,
+      record.detail,
+      record.observedAt,
+      JSON.stringify(record.context ?? {}),
+      record.delivered ? 1 : 0,
+      record.deliveryError ?? null,
+      record.deliveryAttempts ?? null,
+      record.lastDeliveryAttemptAt ?? null,
+      record.deadLettered === undefined ? null : record.deadLettered ? 1 : 0,
+    );
+  }
+}
+
+function persistDedicatedAgentRuns(db: DatabaseSync, records: AgentRunRecord[]): void {
+  db.exec("delete from agent_runs");
+  const stmt = db.prepare(`
+    insert or replace into agent_runs (
+      id, workspace_id, agent_id, title, status, trigger_kind,
+      started_at, completed_at, inputs, output, error,
+      logs, tool_calls, transcript, model_used, cost_usd,
+      created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.workspaceId,
+      record.agentId ?? null,
+      record.title,
+      record.status,
+      record.triggerKind ?? null,
+      record.startedAt ?? null,
+      record.completedAt ?? null,
+      record.inputs === undefined ? null : JSON.stringify(record.inputs),
+      record.output ?? null,
+      record.error ?? null,
+      JSON.stringify(record.logs ?? []),
+      record.toolCalls === undefined ? null : JSON.stringify(record.toolCalls),
+      record.transcript === undefined ? null : JSON.stringify(record.transcript),
+      record.modelUsed ?? null,
+      record.costUsd ?? null,
+      record.createdAt,
+      record.updatedAt,
+    );
+  }
+}
+
+function persistDedicatedJobs(db: DatabaseSync, records: JobRecord[]): void {
+  db.exec("delete from jobs");
+  const stmt = db.prepare(`
+    insert or replace into jobs (
+      id, workspace_id, type, payload, status, attempts, max_attempts,
+      scheduled_at, started_at, completed_at, cron, result, error,
+      cancel_requested, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.workspaceId,
+      record.type,
+      JSON.stringify(record.payload ?? {}),
+      record.status,
+      record.attempts,
+      record.maxAttempts,
+      record.scheduledAt,
+      record.startedAt ?? null,
+      record.completedAt ?? null,
+      record.cron ?? null,
+      record.result === undefined ? null : JSON.stringify(record.result),
+      record.error ?? null,
+      record.cancelRequested === undefined ? null : record.cancelRequested ? 1 : 0,
+      record.createdAt,
+      record.updatedAt,
+    );
+  }
+}
+
+function persistDedicatedInvitationEmailDeliveries(
+  db: DatabaseSync,
+  records: InvitationEmailDeliveryRecord[],
+): void {
+  db.exec("delete from invitation_email_deliveries");
+  const stmt = db.prepare(`
+    insert or replace into invitation_email_deliveries (
+      id, workspace_id, invitation_id, recipient_email, subject,
+      status, provider, mode, created_at, sent_at, error,
+      provider_status, provider_delivery_id, provider_status_at, provider_error
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.workspaceId,
+      record.invitationId,
+      record.recipientEmail,
+      record.subject,
+      record.status,
+      record.provider,
+      record.mode,
+      record.createdAt,
+      record.sentAt ?? null,
+      record.error ?? null,
+      record.providerStatus ?? null,
+      record.providerDeliveryId ?? null,
+      record.providerStatusAt ?? null,
+      record.providerError ?? null,
+    );
+  }
+}
+
+function persistDedicatedActivities(db: DatabaseSync, records: ActivityRecord[]): void {
+  db.exec("delete from activities");
+  const stmt = db.prepare(`
+    insert or replace into activities (
+      id, workspace_id, occurred_at, type, payload, user_id, related_subject
+    ) values (?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.workspaceId,
+      record.occurredAt,
+      record.event,
+      JSON.stringify(record),
+      record.actor.type === "user" ? record.actor.id : null,
+      null,
+    );
+  }
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonArrayValue<T>(raw: string | null | undefined): T[] {
+  if (raw === null || raw === undefined) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonUnknown(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
   }
 }
 
@@ -913,7 +1442,6 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
     "workspaces",
     "memberships",
     "workspaceInvitations",
-    "invitationEmailDeliveries",
     "shareTokens",
     "activationSignals",
     "workspaceBriefs",
@@ -923,12 +1451,9 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
     "workflowConcerns",
     "validationEvidence",
     "releaseConfirmations",
-    "activities",
     "agents",
     "providers",
-    "agentRuns",
     "workspaceEnvVars",
-    "jobs",
     "providerCalls",
   ].includes(collection)) return null;
   const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : null;
@@ -944,7 +1469,6 @@ type IndexedCollection =
   | "workspaces"
   | "memberships"
   | "workspaceInvitations"
-  | "invitationEmailDeliveries"
   | "workspaceBriefs"
   | "workspaceBriefVersions"
   | "requirements"
@@ -952,11 +1476,8 @@ type IndexedCollection =
   | "workflowConcerns"
   | "validationEvidence"
   | "releaseConfirmations"
-  | "activities"
   | "agents"
   | "providers"
-  | "agentRuns"
-  | "jobs"
   | "providerCalls"
   | "shareTokens";
 
@@ -1106,11 +1627,7 @@ function compareNumbers(left: number, right: number): number {
 }
 
 export function listActivitiesForWorkspaceIndexed(workspaceId: string, limit?: number): ActivityRecord[] {
-  if (process.env.TASKLOOM_STORE !== "sqlite") {
-    const entries = loadStore().activities.filter((entry) => entry.workspaceId === workspaceId);
-    return limit && limit > 0 ? entries.slice(0, limit) : entries;
-  }
-  return listWorkspaceRecordsIndexed("activities", workspaceId, { orderBy: "occurredAtDesc", limit });
+  return listActivitiesForWorkspaceViaRepository(workspaceId, limit);
 }
 
 export function listJobsForWorkspaceIndexed(workspaceId: string, opts: { status?: JobStatus; limit?: number } = {}): JobRecord[] {
@@ -2219,7 +2736,7 @@ function pruneRateLimitBuckets(data: TaskloomData, maxBuckets: number) {
     .slice(0, limit);
 }
 
-function clearStoreCache(): void {
+export function clearStoreCache(): void {
   cache = null;
   cacheBackendKey = null;
 }

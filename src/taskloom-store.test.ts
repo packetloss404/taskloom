@@ -31,7 +31,6 @@ import {
   listInvitationEmailDeliveriesIndexed,
   listValidationEvidenceForWorkspaceIndexed,
   listWorkspaceBriefVersionsIndexed,
-  listWorkspaceRecordsIndexed,
   listWorkflowConcernsForWorkspaceIndexed,
   listWorkspaceInvitationsIndexed,
   listWorkspaceMembershipsIndexed,
@@ -48,6 +47,7 @@ import {
   markInvitationEmailDeliverySkipped,
   mutateStore,
   persistSqliteAppData,
+  recordActivity,
   resetStoreForTests,
   upsertActivationSignal,
   upsertRequirement,
@@ -278,6 +278,172 @@ test("sqlite store persists mutations across cache reloads", () => {
 
     assert.equal(reloaded.requirements.some((entry) => entry.id === "req_sqlite_reload"), true);
     assert.equal(findWorkspaceBrief(reloaded, "alpha")?.workspaceId, "alpha");
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("sqlite recordActivity writes activities to the dedicated table only", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-activity-dual-write-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+    resetStoreForTests();
+
+    mutateStore((data) => {
+      recordActivity(data, {
+        id: "activity_dual_write",
+        workspaceId: "alpha",
+        scope: "workspace",
+        event: "workspace.updated",
+        occurredAt: "2026-04-26T12:00:00.000Z",
+        actor: { type: "user", id: "user_alpha", displayName: "Alpha User" },
+        data: { title: "Workspace updated" },
+      });
+    });
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const appRecord = db.prepare("select count(*) as count from app_records where collection = 'activities' and id = ?")
+        .get("activity_dual_write") as { count: number };
+      const dedicated = db.prepare("select workspace_id, type, payload from activities where id = ?")
+        .get("activity_dual_write") as { workspace_id: string; type: string; payload: string } | undefined;
+      const payload = JSON.parse(dedicated?.payload ?? "{}") as { data?: Record<string, unknown> };
+
+      assert.equal(appRecord.count, 0);
+      assert.equal(dedicated?.workspace_id, "alpha");
+      assert.equal(dedicated?.type, "workspace.updated");
+      assert.deepEqual(payload.data, { title: "Workspace updated" });
+    } finally {
+      db.close();
+    }
+  } finally {
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("sqlite store hydrates retired relational collections from dedicated tables", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-dedicated-hydrate-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+    const data = resetStoreForTests();
+    data.jobMetricSnapshots.push({
+      id: "metric_dedicated",
+      capturedAt: "2026-04-26T12:00:00.000Z",
+      type: "agent.run",
+      totalRuns: 2,
+      succeededRuns: 1,
+      failedRuns: 1,
+      canceledRuns: 0,
+      lastRunStartedAt: null,
+      lastRunFinishedAt: null,
+      lastDurationMs: null,
+      averageDurationMs: null,
+      p95DurationMs: null,
+    });
+    data.alertEvents.push({
+      id: "alert_dedicated",
+      ruleId: "rule_dedicated",
+      severity: "warning",
+      title: "Dedicated alert",
+      detail: "Stored outside app_records.",
+      observedAt: "2026-04-26T12:01:00.000Z",
+      context: { source: "test" },
+      delivered: false,
+    });
+    data.agentRuns.push({
+      id: "run_dedicated",
+      workspaceId: "alpha",
+      title: "Dedicated run",
+      status: "success",
+      logs: [],
+      createdAt: "2026-04-26T12:02:00.000Z",
+      updatedAt: "2026-04-26T12:02:00.000Z",
+    });
+    data.jobs.push({
+      id: "job_dedicated",
+      workspaceId: "alpha",
+      type: "test",
+      payload: { source: "dedicated" },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 1,
+      scheduledAt: "2026-04-26T12:03:00.000Z",
+      createdAt: "2026-04-26T12:03:00.000Z",
+      updatedAt: "2026-04-26T12:03:00.000Z",
+    });
+    data.invitationEmailDeliveries.push({
+      id: "delivery_dedicated",
+      workspaceId: "alpha",
+      invitationId: "invitation_dedicated",
+      recipientEmail: "dedicated@example.com",
+      subject: "Dedicated delivery",
+      status: "pending",
+      provider: "dev",
+      mode: "dev",
+      createdAt: "2026-04-26T12:04:00.000Z",
+    });
+    data.activities.push({
+      id: "activity_dedicated",
+      workspaceId: "alpha",
+      scope: "workspace",
+      event: "workspace.dedicated",
+      occurredAt: "2026-04-26T12:05:00.000Z",
+      actor: { type: "system", id: "test" },
+      data: { title: "Dedicated activity" },
+    });
+    persistSqliteAppData(dbPath, data);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const legacyRows = db.prepare(`
+        select count(*) as count
+        from app_records
+        where (collection = 'jobMetricSnapshots' and id = 'metric_dedicated')
+           or (collection = 'alertEvents' and id = 'alert_dedicated')
+           or (collection = 'agentRuns' and id = 'run_dedicated')
+           or (collection = 'jobs' and id = 'job_dedicated')
+           or (collection = 'invitationEmailDeliveries' and id = 'delivery_dedicated')
+           or (collection = 'activities' and id = 'activity_dedicated')
+      `).get() as { count: number };
+      assert.equal(legacyRows.count, 0);
+      assert.equal((db.prepare("select count(*) as count from job_metric_snapshots where id = 'metric_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from alert_events where id = 'alert_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from agent_runs where id = 'run_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from jobs where id = 'job_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from invitation_email_deliveries where id = 'delivery_dedicated'").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("select count(*) as count from activities where id = 'activity_dedicated'").get() as { count: number }).count, 1);
+    } finally {
+      db.close();
+    }
+
+    clearStoreCacheForTests();
+    const reloaded = loadStore();
+    assert.equal(reloaded.jobMetricSnapshots.some((entry) => entry.id === "metric_dedicated"), true);
+    assert.equal(reloaded.alertEvents.some((entry) => entry.id === "alert_dedicated"), true);
+    assert.equal(reloaded.agentRuns.some((entry) => entry.id === "run_dedicated"), true);
+    assert.equal(reloaded.jobs.some((entry) => entry.id === "job_dedicated"), true);
+    assert.equal(reloaded.invitationEmailDeliveries.some((entry) => entry.id === "delivery_dedicated"), true);
+    assert.equal(reloaded.activities.some((entry) => entry.id === "activity_dedicated"), true);
   } finally {
     clearStoreCacheForTests();
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
@@ -780,7 +946,7 @@ test("sqlite workspace record helpers read scoped collections with route orderin
     assert.equal(listRequirementsForWorkspaceIndexed("workspace_records").some((entry) => entry.id === "req_workspace_records"), true);
     assert.equal(listWorkflowConcernsForWorkspaceIndexed("workspace_records", "open_question").length, 1);
     assert.equal(listValidationEvidenceForWorkspaceIndexed("workspace_records").length, 1);
-    assert.equal(listWorkspaceRecordsIndexed("activities", "workspace_records").some((entry) => entry.workspaceId === "other_workspace"), false);
+    assert.equal(listActivitiesForWorkspaceIndexed("workspace_records").some((entry) => entry.workspaceId === "other_workspace"), false);
 
     mutateStore((data) => {
       const requirement = data.requirements.find((entry) => entry.id === "req_workspace_records");
