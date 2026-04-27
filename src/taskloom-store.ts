@@ -12,7 +12,9 @@ import {
   listAgentRunsForWorkspaceViaRepository,
 } from "./agent-runs-read.js";
 import { createAgentRunsRepository } from "./repositories/agent-runs-repo.js";
+import { createInvitationEmailDeliveriesRepository } from "./repositories/invitation-email-deliveries-repo.js";
 import { findJobViaRepository, listJobsForWorkspaceViaRepository } from "./jobs-read.js";
+import { listInvitationEmailDeliveriesViaRepository } from "./invitation-email-deliveries-read.js";
 
 export interface UserRecord {
   id: string;
@@ -560,6 +562,7 @@ export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
 
 let activeMutateSqliteDepth = 0;
 const pendingAgentRunDualWrites: AgentRunRecord[] = [];
+const pendingInvitationEmailDeliveryDualWrites: InvitationEmailDeliveryRecord[] = [];
 
 function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T): T {
   const db = openStoreDatabase(dbPath);
@@ -578,12 +581,16 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
     } catch (error) {
       db.exec("rollback");
       pendingAgentRunDualWrites.length = 0;
+      pendingInvitationEmailDeliveryDualWrites.length = 0;
       throw error;
     }
   } finally {
     db.close();
     activeMutateSqliteDepth -= 1;
-    if (activeMutateSqliteDepth === 0) flushPendingAgentRunDualWrites();
+    if (activeMutateSqliteDepth === 0) {
+      flushPendingAgentRunDualWrites();
+      flushPendingInvitationEmailDeliveryDualWrites();
+    }
   }
 }
 
@@ -593,6 +600,26 @@ function flushPendingAgentRunDualWrites(): void {
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
   const repo = createAgentRunsRepository({});
   for (const record of drained) {
+    repo.upsert(record);
+  }
+}
+
+function flushPendingInvitationEmailDeliveryDualWrites(): void {
+  if (pendingInvitationEmailDeliveryDualWrites.length === 0) return;
+  const drained = pendingInvitationEmailDeliveryDualWrites.splice(0, pendingInvitationEmailDeliveryDualWrites.length);
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  const repo = createInvitationEmailDeliveriesRepository({});
+  for (const record of drained) {
+    repo.upsert(record);
+  }
+}
+
+function enqueueInvitationEmailDeliveryDualWrite(record: InvitationEmailDeliveryRecord): void {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  if (activeMutateSqliteDepth > 0) {
+    pendingInvitationEmailDeliveryDualWrites.push({ ...record });
+  } else {
+    const repo = createInvitationEmailDeliveriesRepository({});
     repo.upsert(record);
   }
 }
@@ -1175,12 +1202,7 @@ export function listWorkspaceInvitationsIndexed(workspaceId: string): WorkspaceI
 }
 
 export function listInvitationEmailDeliveriesIndexed(workspaceId: string, invitationId?: string): InvitationEmailDeliveryRecord[] {
-  return sqliteIndexedRecords<InvitationEmailDeliveryRecord>(
-    "invitationEmailDeliveries",
-    `app_record_search.workspace_id = ?${invitationId ? " and json_extract(app_records.payload, '$.invitationId') = ?" : ""}`,
-    invitationId ? [workspaceId, invitationId] : [workspaceId],
-    "json_extract(app_records.payload, '$.createdAt') desc, app_records.id desc",
-  ) ?? listInvitationEmailDeliveries(loadStore(), workspaceId, invitationId);
+  return listInvitationEmailDeliveriesViaRepository(workspaceId, invitationId);
 }
 
 export function findShareTokenByTokenIndexed(token: string): ShareTokenRecord | null {
@@ -2451,6 +2473,7 @@ export function createInvitationEmailDelivery(
   };
 
   data.invitationEmailDeliveries.push(delivery);
+  enqueueInvitationEmailDeliveryDualWrite(delivery);
   return delivery;
 }
 
@@ -2470,6 +2493,7 @@ export function markInvitationEmailDeliverySent(data: TaskloomData, deliveryId: 
   delivery.status = "sent";
   delivery.sentAt = timestamp;
   delete delivery.error;
+  enqueueInvitationEmailDeliveryDualWrite(delivery);
   return delivery;
 }
 
@@ -2479,6 +2503,7 @@ export function markInvitationEmailDeliverySkipped(data: TaskloomData, deliveryI
   delivery.status = "skipped";
   delete delivery.sentAt;
   delivery.error = reason;
+  enqueueInvitationEmailDeliveryDualWrite(delivery);
   return delivery;
 }
 
@@ -2488,6 +2513,7 @@ export function markInvitationEmailDeliveryFailed(data: TaskloomData, deliveryId
   delivery.status = "failed";
   delete delivery.sentAt;
   delivery.error = error;
+  enqueueInvitationEmailDeliveryDualWrite(delivery);
   return delivery;
 }
 
@@ -2517,6 +2543,7 @@ export function recordInvitationEmailProviderStatus(
   } else {
     delete delivery.providerError;
   }
+  enqueueInvitationEmailDeliveryDualWrite(delivery);
   return delivery;
 }
 

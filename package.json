@@ -30,6 +30,8 @@
     "db:verify-agent-runs": "node --import tsx src/db/cli.ts verify-agent-runs",
     "db:backfill-jobs": "node --import tsx src/db/cli.ts backfill-jobs",
     "db:verify-jobs": "node --import tsx src/db/cli.ts verify-jobs",
+    "db:backfill-invitation-email-deliveries": "node --import tsx src/db/cli.ts backfill-invitation-email-deliveries",
+    "db:verify-invitation-email-deliveries": "node --import tsx src/db/cli.ts verify-invitation-email-deliveries",
     "store:seed": "node --import tsx src/db/cli.ts seed-store",
     "store:reset": "node --import tsx src/db/cli.ts reset-store",
     "jobs:recompute-activation": "node --import tsx src/jobs.ts recompute-activation",

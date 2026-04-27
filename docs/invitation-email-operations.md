@@ -124,6 +124,12 @@ Action flags:
 
 The CLI never includes invitation tokens in its output and never accepts a token as input. Use the original invitation id or delivery id for all reconciliation actions.
 
+## Schema migration considerations
+
+After Phase 36 of the relational-repositories migration, `invitationEmailDeliveries` lives in a dedicated SQLite table (`invitation_email_deliveries`) in addition to the legacy `app_records` JSON-payload mirror. Any future field added to `InvitationEmailDeliveryRecord` requires an explicit `ALTER TABLE invitation_email_deliveries ADD COLUMN ...` migration before that field can round-trip in SQLite mode. The Phase 22 schema-additive trick (where `providerStatus`, `providerDeliveryId`, `providerStatusAt`, and `providerError` were added without a migration because the data lived inside the JSON payload) no longer applies.
+
+The dual-write window keeps both the legacy `app_records` row and the dedicated table populated until the JSON-side mirror is retired (Phase 38). During the dual-write window, the operator CLIs `db:backfill-invitation-email-deliveries` and `db:verify-invitation-email-deliveries` (documented in `docs/deployment-sqlite-topology.md`) cover one-shot backfill from `app_records` into the dedicated table and cron-friendly drift detection respectively.
+
 ## Token Redaction
 
 Invitation tokens are bearer secrets. Redact them from logs, traces, analytics events, support bundles, and admin exports unless the surface is one of the explicit one-time invitation-management API responses that intentionally exposes the active token.

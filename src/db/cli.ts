@@ -6,9 +6,10 @@ import { deriveActivationStatus } from "../activation/service";
 import { activationSubjectForWorkspace } from "../jobs";
 import { sqliteAgentRunsRepository } from "../repositories/agent-runs-repo";
 import { sqliteAlertEventsRepository } from "../repositories/alert-events-repo";
+import { sqliteInvitationEmailDeliveriesRepository } from "../repositories/invitation-email-deliveries-repo";
 import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
 import { sqliteJobsRepository } from "../repositories/jobs-repo";
-import type { AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, JobMetricSnapshotRecord, JobRecord, JobStatus } from "../taskloom-store";
+import type { AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, InvitationEmailDeliveryMode, InvitationEmailDeliveryRecord, InvitationEmailDeliveryStatus, JobMetricSnapshotRecord, JobRecord, JobStatus } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -178,6 +179,30 @@ export interface VerifyJobsResult {
 }
 
 export interface BackfillJobsOptions extends DbCliOptions {
+  dryRun?: boolean;
+}
+
+export interface BackfillInvitationEmailDeliveriesResult {
+  command: "backfill-invitation-email-deliveries";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyInvitationEmailDeliveriesResult {
+  command: "verify-invitation-email-deliveries";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillInvitationEmailDeliveriesOptions extends DbCliOptions {
   dryRun?: boolean;
 }
 
@@ -1185,6 +1210,177 @@ function countAgentRunOrphans(dbPath: string, jsonRows: AgentRunRecord[]): numbe
   }
 }
 
+export function backfillInvitationEmailDeliveries(
+  options: BackfillInvitationEmailDeliveriesOptions = {},
+): BackfillInvitationEmailDeliveriesResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readInvitationEmailDeliveryJsonRows(dbPath);
+  const dedicatedRows = readInvitationEmailDeliveryDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: InvitationEmailDeliveryRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalizeInvitationEmailDelivery(existing) === canonicalizeInvitationEmailDelivery(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    const repo = sqliteInvitationEmailDeliveriesRepository({ dbPath });
+    for (const record of toInsert) {
+      repo.upsert(record);
+    }
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-invitation-email-deliveries",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyInvitationEmailDeliveries(options: DbCliOptions = {}): VerifyInvitationEmailDeliveriesResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readInvitationEmailDeliveryJsonRows(dbPath);
+  const dedicatedRows = readInvitationEmailDeliveryDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalizeInvitationEmailDelivery(jsonRecord) === canonicalizeInvitationEmailDelivery(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-invitation-email-deliveries",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function readInvitationEmailDeliveryJsonRows(dbPath: string): InvitationEmailDeliveryRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'invitationEmailDeliveries'").all() as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as InvitationEmailDeliveryRecord);
+  } finally {
+    db.close();
+  }
+}
+
+function readInvitationEmailDeliveryDedicatedRows(dbPath: string): InvitationEmailDeliveryRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, workspace_id, invitation_id, recipient_email, subject,
+        status, provider, mode, created_at, sent_at, error,
+        provider_status, provider_delivery_id, provider_status_at, provider_error
+      from invitation_email_deliveries
+    `).all() as Array<{
+      id: string;
+      workspace_id: string;
+      invitation_id: string;
+      recipient_email: string;
+      subject: string;
+      status: InvitationEmailDeliveryStatus;
+      provider: string;
+      mode: InvitationEmailDeliveryMode;
+      created_at: string;
+      sent_at: string | null;
+      error: string | null;
+      provider_status: string | null;
+      provider_delivery_id: string | null;
+      provider_status_at: string | null;
+      provider_error: string | null;
+    }>;
+    return rows.map((row) => {
+      const record: InvitationEmailDeliveryRecord = {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        invitationId: row.invitation_id,
+        recipientEmail: row.recipient_email,
+        subject: row.subject,
+        status: row.status,
+        provider: row.provider,
+        mode: row.mode,
+        createdAt: row.created_at,
+      };
+      if (row.sent_at !== null) record.sentAt = row.sent_at;
+      if (row.error !== null) record.error = row.error;
+      if (row.provider_status !== null) record.providerStatus = row.provider_status;
+      if (row.provider_delivery_id !== null) record.providerDeliveryId = row.provider_delivery_id;
+      if (row.provider_status_at !== null) record.providerStatusAt = row.provider_status_at;
+      if (row.provider_error !== null) record.providerError = row.provider_error;
+      return record;
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function canonicalizeInvitationEmailDelivery(record: InvitationEmailDeliveryRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    workspaceId: record.workspaceId,
+    invitationId: record.invitationId,
+    recipientEmail: record.recipientEmail,
+    subject: record.subject,
+    status: record.status,
+    provider: record.provider,
+    mode: record.mode,
+    createdAt: record.createdAt,
+    sentAt: record.sentAt ?? null,
+    error: record.error ?? null,
+    providerStatus: record.providerStatus ?? null,
+    providerDeliveryId: record.providerDeliveryId ?? null,
+    providerStatusAt: record.providerStatusAt ?? null,
+    providerError: record.providerError ?? null,
+  });
+}
+
 function canonicalizeAlert(record: AlertEventRecord): string {
   return JSON.stringify({
     id: record.id,
@@ -1289,6 +1485,15 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(verifyJobs(options), null, 2));
       return 0;
     }
+    if (command === "backfill-invitation-email-deliveries") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillInvitationEmailDeliveries({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-invitation-email-deliveries") {
+      console.log(JSON.stringify(verifyInvitationEmailDeliveries(options), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -1315,7 +1520,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
 }
 
 function isExecutedDirectly(): boolean {

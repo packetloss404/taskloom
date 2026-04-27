@@ -211,6 +211,8 @@ Repository: `src/repositories/invitation-email-deliveries-repo.ts`. Redirects fr
 
 The existing migration `0008_invitation_email_deliveries.sql` only adds an index on `app_records`; the new dedicated table coexists with that index until the JSON-side drop phase. The Phase 22 `providerStatus`/`providerError` schema-additive trick stops working past this step: any future field needs an explicit `ALTER TABLE` migration. Document that explicitly in `docs/invitation-email-operations.md` when Phase 36 lands.
 
+**Phase 36 actual rollout:** Phase 36 shipped per the standard A/B/C/D split: migration `0014_invitation_email_deliveries_table.sql` plus `src/repositories/invitation-email-deliveries-repo.ts` with `list`/`find`/`upsert`/`count`; read-redirect of `listInvitationEmailDeliveriesIndexed` through `src/invitation-email-deliveries-read.ts` with the merge-and-fall-back pattern; dual-write of all five mutators (`createInvitationEmailDelivery`, `markInvitationEmailDeliverySent/Skipped/Failed`, `recordInvitationEmailProviderStatus`) via the deferred-queue mechanism inside `mutateSqliteStore`; CLIs `db:backfill-invitation-email-deliveries` and `db:verify-invitation-email-deliveries`. Documentation updated in `docs/roadmap.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, and this file. The Phase 22 additive-schema warning is now operational guidance.
+
 ### Step 6: `activities`
 
 DDL shape (migration `0015_activities.sql`):

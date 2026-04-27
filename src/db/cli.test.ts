@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillJobMetricSnapshots, backfillJobs, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAgentRuns, verifyAlertEvents, verifyJobMetricSnapshots, verifyJobs } from "./cli";
-import type { AgentRunRecord, AlertEventRecord, JobMetricSnapshotRecord, JobRecord } from "../taskloom-store";
+import { backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillInvitationEmailDeliveries, backfillJobMetricSnapshots, backfillJobs, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyAgentRuns, verifyAlertEvents, verifyInvitationEmailDeliveries, verifyJobMetricSnapshots, verifyJobs } from "./cli";
+import type { AgentRunRecord, AlertEventRecord, InvitationEmailDeliveryRecord, JobMetricSnapshotRecord, JobRecord } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -1337,6 +1337,266 @@ test("verifyJobs reports contentDrift when ids match but content differs", () =>
     insertDedicatedJob(dbPath, { ...record, status: "running" });
 
     const result = verifyJobs({ dbPath });
+
+    assert.equal(result.contentDrift, 1);
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeInvitationEmailDelivery(
+  overrides: Partial<InvitationEmailDeliveryRecord> & { id: string },
+): InvitationEmailDeliveryRecord {
+  const record: InvitationEmailDeliveryRecord = {
+    id: overrides.id,
+    workspaceId: overrides.workspaceId ?? "workspace_a",
+    invitationId: overrides.invitationId ?? "inv_a",
+    recipientEmail: overrides.recipientEmail ?? "user@example.com",
+    subject: overrides.subject ?? "You're invited",
+    status: overrides.status ?? "pending",
+    provider: overrides.provider ?? "local",
+    mode: overrides.mode ?? "dev",
+    createdAt: overrides.createdAt ?? "2026-04-26T12:00:00.000Z",
+  };
+  if (overrides.sentAt !== undefined) record.sentAt = overrides.sentAt;
+  if (overrides.error !== undefined) record.error = overrides.error;
+  if (overrides.providerStatus !== undefined) record.providerStatus = overrides.providerStatus;
+  if (overrides.providerDeliveryId !== undefined) record.providerDeliveryId = overrides.providerDeliveryId;
+  if (overrides.providerStatusAt !== undefined) record.providerStatusAt = overrides.providerStatusAt;
+  if (overrides.providerError !== undefined) record.providerError = overrides.providerError;
+  return record;
+}
+
+function insertAppRecordInvitationEmailDelivery(
+  dbPath: string,
+  record: InvitationEmailDeliveryRecord,
+): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('invitationEmailDeliveries', ?, ?, json(?), ?)
+      on conflict(collection, id) do update set workspace_id = excluded.workspace_id, payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, record.workspaceId, JSON.stringify(record), record.createdAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedInvitationEmailDelivery(
+  dbPath: string,
+  record: InvitationEmailDeliveryRecord,
+): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into invitation_email_deliveries (
+        id, workspace_id, invitation_id, recipient_email, subject,
+        status, provider, mode, created_at, sent_at, error,
+        provider_status, provider_delivery_id, provider_status_at, provider_error
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.workspaceId,
+      record.invitationId,
+      record.recipientEmail,
+      record.subject,
+      record.status,
+      record.provider,
+      record.mode,
+      record.createdAt,
+      record.sentAt ?? null,
+      record.error ?? null,
+      record.providerStatus ?? null,
+      record.providerDeliveryId ?? null,
+      record.providerStatusAt ?? null,
+      record.providerError ?? null,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedInvitationEmailDeliveries(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from invitation_email_deliveries").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillInvitationEmailDeliveries reports zero for an empty store", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+
+    const result = backfillInvitationEmailDeliveries({ dbPath });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 0);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedInvitationEmailDeliveries(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillInvitationEmailDeliveries inserts JSON-side rows into the dedicated table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "ied_a" }));
+
+    const result = backfillInvitationEmailDeliveries({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedInvitationEmailDeliveries(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillInvitationEmailDeliveries is idempotent on re-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "ied_a" }));
+
+    backfillInvitationEmailDeliveries({ dbPath });
+    const second = backfillInvitationEmailDeliveries({ dbPath });
+
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.drift, 0);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedInvitationEmailDeliveries(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillInvitationEmailDeliveries --dry-run does not write", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "ied_a" }));
+    insertAppRecordInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "ied_b" }));
+
+    const result = backfillInvitationEmailDeliveries({ dbPath, dryRun: true });
+
+    assert.equal(result.dryRun, true);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.wouldInsert, 2);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedInvitationEmailDeliveries(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillInvitationEmailDeliveries reports drift when content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const jsonRecord = makeInvitationEmailDelivery({ id: "ied_a", status: "pending" });
+    insertAppRecordInvitationEmailDelivery(dbPath, jsonRecord);
+    insertDedicatedInvitationEmailDelivery(dbPath, { ...jsonRecord, status: "sent" });
+
+    const result = backfillInvitationEmailDeliveries({ dbPath, dryRun: true });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 1);
+    assert.equal(result.inserted, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyInvitationEmailDeliveries reports matched when both sides identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeInvitationEmailDelivery({ id: "ied_a" });
+    insertAppRecordInvitationEmailDelivery(dbPath, record);
+    insertDedicatedInvitationEmailDelivery(dbPath, record);
+
+    const result = verifyInvitationEmailDeliveries({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyInvitationEmailDeliveries reports jsonOnly when JSON-side has rows not yet backfilled", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "ied_a" }));
+    insertAppRecordInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "ied_b" }));
+
+    const result = verifyInvitationEmailDeliveries({ dbPath });
+
+    assert.equal(result.jsonOnly, 2);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyInvitationEmailDeliveries reports sqliteOnly when dedicated table has extra rows", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertDedicatedInvitationEmailDelivery(dbPath, makeInvitationEmailDelivery({ id: "extra" }));
+
+    const result = verifyInvitationEmailDeliveries({ dbPath });
+
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyInvitationEmailDeliveries reports contentDrift when ids match but content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeInvitationEmailDelivery({ id: "ied_a", status: "pending" });
+    insertAppRecordInvitationEmailDelivery(dbPath, record);
+    insertDedicatedInvitationEmailDelivery(dbPath, { ...record, status: "sent" });
+
+    const result = verifyInvitationEmailDeliveries({ dbPath });
 
     assert.equal(result.contentDrift, 1);
     assert.equal(result.matched, 0);

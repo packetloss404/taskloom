@@ -151,6 +151,13 @@ The `--check-orphans` flag additionally counts agent runs whose `agentId` refere
 
 Phase 35 ships the dedicated `jobs` table, repository, and dual-write conservatively: `claimNextJob` and `sweepStaleRunningJobs` keep the existing load-store-loop pattern with the in-process `claimMutex` for now. The repository's SQL-native `claimNext`/`sweepStaleRunning` methods are shipped for a future single-statement cutover; until then, expect the dual-write to mirror the JSON-side state changes onto the dedicated table after each `mutateStore` transaction commits.
 
+### Phase 36 commands
+
+- `npm run db:backfill-invitation-email-deliveries [-- --dry-run]`
+- `npm run db:verify-invitation-email-deliveries`
+
+After Phase 36, any future field added to `InvitationEmailDeliveryRecord` requires an explicit `ALTER TABLE invitation_email_deliveries ADD COLUMN ...` migration. The Phase 22 schema-additive trick (where `providerStatus` and friends were added without a migration because the data lived in the `app_records` JSON payload) no longer applies once a collection has its own dedicated table.
+
 The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
 
 ### Restore semantics during dual-write
