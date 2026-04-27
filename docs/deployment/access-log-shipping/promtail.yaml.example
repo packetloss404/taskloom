@@ -1,0 +1,94 @@
+# =============================================================================
+# Taskloom access-log shipping example: Grafana Promtail (v2 / v3)
+# -----------------------------------------------------------------------------
+# This is an EXAMPLE Promtail configuration that tails the redacted Phase 20
+# file-mode access log and pushes it to a Loki cluster. You MUST adapt paths,
+# endpoints, credentials, and labels to your environment before using it in
+# production.
+#
+# Source format docs:
+#   https://grafana.com/docs/loki/latest/clients/promtail/configuration/
+#   https://grafana.com/docs/loki/latest/clients/promtail/stages/
+#
+# Operator notes:
+#   - Phase 23 cascade-rotates the access log (<path> -> <path>.1 -> ...).
+#     Promtail tracks file inodes via the positions file, so it follows
+#     renamed files automatically. The optional `*` glob form picks up
+#     already-rotated siblings on first start (cold backfill only).
+#   - Cardinality warning: only LOW-cardinality fields (method, status) are
+#     promoted to labels. userId / workspaceId / requestId stay inside the
+#     line and are queried via LogQL line filters; promoting them would
+#     explode label cardinality and is intentionally OMITTED.
+#   - License: example, adapt to taste.
+# =============================================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: info
+
+positions:
+  filename: /var/log/positions.yaml
+  sync_period: 10s
+
+clients:
+  # Bearer-token authentication is configured via `bearer_token_file` rather
+  # than inlining the secret. Promtail re-reads the file on each push, so
+  # secret rotation does not require a Promtail restart.
+  - url: https://loki.example.internal/loki/api/v1/push
+    tenant_id: taskloom-prod
+    bearer_token_file: /etc/promtail/loki.token
+    backoff_config:
+      min_period: 500ms
+      max_period: 5m
+      max_retries: 10
+    batchwait: 1s
+    batchsize: 1048576
+
+scrape_configs:
+  - job_name: taskloom-access-log
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: taskloom-access-log
+          service: taskloom
+          env: production
+          # Substitute __path__ with TASKLOOM_ACCESS_LOG_PATH from the
+          # Taskloom service environment. To also pick up Phase 23
+          # rotated siblings on first start, use the glob form:
+          #   __path__: /var/log/taskloom/access.log*
+          __path__: /var/log/taskloom/access.log
+
+    pipeline_stages:
+      # 1. Extract a small set of fields from the JSON line. Deeper fields
+      #    (requestId, durationMs sub-millisecond detail, etc.) stay opaque
+      #    inside the original line and are still queryable via LogQL JSON
+      #    filters at read time.
+      - json:
+          expressions:
+            ts: ts
+            method: method
+            status: status
+            path: path
+            durationMs: durationMs
+            userId: userId
+            workspaceId: workspaceId
+
+      # 2. Use the embedded timestamp as the log entry time so backfill on
+      #    restart does not skew clocks.
+      - timestamp:
+          source: ts
+          format: RFC3339Nano
+
+      # 3. Promote ONLY low-cardinality fields to labels. Promoting userId,
+      #    workspaceId, or requestId here would explode Loki's label index
+      #    and is intentionally OMITTED.
+      - labels:
+          method:
+          status:
+
+      # 4. Keep the full original message intact in the stored log line so
+      #    high-cardinality fields remain queryable via LogQL line filters.
+      - output:
+          source:

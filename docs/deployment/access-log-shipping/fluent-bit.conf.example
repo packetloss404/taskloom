@@ -1,0 +1,133 @@
+# =============================================================================
+# Taskloom access-log shipping example: Fluent Bit (v1.9 / v2.x / v3.x)
+# -----------------------------------------------------------------------------
+# This is an EXAMPLE Fluent Bit configuration that tails the redacted Phase 20
+# file-mode access log and forwards it to Loki and (optionally) a downstream
+# Fluentd / aggregator. You MUST adapt paths, hosts, ports, credentials, and
+# tags to your environment before using it in production.
+#
+# Source format docs:
+#   https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file
+#   https://docs.fluentbit.io/manual/pipeline/inputs/tail
+#   https://docs.fluentbit.io/manual/pipeline/filters/record-modifier
+#   https://docs.fluentbit.io/manual/pipeline/outputs/loki
+#   https://docs.fluentbit.io/manual/pipeline/outputs/forward
+#
+# Operator notes:
+#   - The tail input uses a DB file so that file position survives Fluent Bit
+#     restarts AND the Phase 23 cascade rotation (<path> -> <path>.1 -> ...).
+#   - Rotate_Wait gives Fluent Bit a grace window to drain the renamed file
+#     before TASKLOOM_ACCESS_LOG_MAX_FILES prunes it.
+#   - High-cardinality fields (userId, workspaceId, requestId) MUST stay in
+#     the log record and MUST NOT be promoted to Loki labels.
+#   - License: example, adapt to taste.
+# =============================================================================
+
+[SERVICE]
+    Flush             1
+    Daemon            Off
+    Log_Level         info
+    HTTP_Server       On
+    HTTP_Listen       0.0.0.0
+    HTTP_Port         2020
+    Parsers_File      parsers.conf
+    storage.path      /var/lib/fluent-bit/storage
+    storage.sync      normal
+    storage.checksum  off
+
+# -----------------------------------------------------------------------------
+# Input: tail the Taskloom access log.
+# -----------------------------------------------------------------------------
+# Substitute the Path below with the value of TASKLOOM_ACCESS_LOG_PATH from
+# the Taskloom service environment.
+#
+# To also pick up rotated siblings on first start, switch the Path to the
+# glob form:
+#     Path /var/log/taskloom/access.log*
+# In steady state the non-glob form is enough; Fluent Bit follows renamed
+# files via the DB file below.
+[INPUT]
+    Name              tail
+    Path              /var/log/taskloom/access.log
+    Path_Key          source_file
+    Parser            json
+    Tag               taskloom.access
+    DB                /var/log/taskloom/fluent-bit-tail.db
+    DB.Sync           Normal
+    Refresh_Interval  5
+    Rotate_Wait       30
+    Mem_Buf_Limit     16MB
+    Skip_Long_Lines   On
+    Skip_Empty_Lines  On
+    Read_from_Head    On
+
+# -----------------------------------------------------------------------------
+# Filter: attach host + environment metadata to each record.
+# -----------------------------------------------------------------------------
+[FILTER]
+    Name           record_modifier
+    Match          taskloom.access
+    Record         host    ${HOSTNAME}
+    Record         env     ${TASKLOOM_ENV}
+    Record         service taskloom
+
+# -----------------------------------------------------------------------------
+# OPTIONAL filter: drop noisy health-check lines.
+# -----------------------------------------------------------------------------
+# Uncomment if you do not want /api/health probes in long-term storage.
+#
+# [FILTER]
+#     Name      grep
+#     Match     taskloom.access
+#     Exclude   path ^/api/health$
+
+# -----------------------------------------------------------------------------
+# Output: Loki push (requires the optional out_loki plugin, which ships in
+# Fluent Bit core since v1.9).
+# -----------------------------------------------------------------------------
+# Cardinality warning: only LOW-cardinality fields belong as labels. Keep
+# userId / workspaceId / requestId in the log line; query them via LogQL
+# line filters.
+[OUTPUT]
+    Name        loki
+    Match       taskloom.access
+    Host        loki.example.internal
+    Port        3100
+    Tls         On
+    Tls.verify  On
+    Tenant_ID   taskloom-prod
+    Labels      host=$host,service=taskloom,env=$env
+    Label_keys  $method,$status
+    Line_format json
+    Auto_kubernetes_labels off
+
+# -----------------------------------------------------------------------------
+# OPTIONAL output: forward to a downstream Fluentd / aggregator.
+# -----------------------------------------------------------------------------
+# Uncomment if you run a central Fluentd that handles fan-out to additional
+# stores (Elasticsearch, BigQuery, etc.).
+#
+# [OUTPUT]
+#     Name        forward
+#     Match       taskloom.access
+#     Host        fluentd.example.internal
+#     Port        24224
+#     Shared_Key  REPLACE_ME
+#     Tls         On
+#     Tls.verify  On
+
+# =============================================================================
+# Parser definition (place in parsers.conf next to this file).
+# -----------------------------------------------------------------------------
+# Fluent Bit cannot embed parsers inside the main config in classic mode, so
+# create a sibling parsers.conf with at least:
+#
+#   [PARSER]
+#       Name        json
+#       Format      json
+#       Time_Key    ts
+#       Time_Format %Y-%m-%dT%H:%M:%S.%LZ
+#       Time_Keep   On
+#
+# Then point Parsers_File above at it (already done in [SERVICE]).
+# =============================================================================

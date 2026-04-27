@@ -147,9 +147,10 @@ Recommended production posture:
 - For invitation email webhook retry/dead-letter operations, see `docs/invitation-email-operations.md`.
 - Built-in API responses redact sensitive payload fields, route-token URLs, bearer values, job payload/result/error bodies, activity/run DTOs, and list/detail token surfaces. Keep any deployment access logs, reverse-proxy logs, exports, and telemetry aligned with the same redaction posture.
 - Enable the in-app access log middleware with `TASKLOOM_ACCESS_LOG_MODE=stdout` or `TASKLOOM_ACCESS_LOG_MODE=file` (defaults to `off`), and set `TASKLOOM_ACCESS_LOG_PATH` to a managed log directory when mode is `file`. The middleware writes one JSON line per request with method, status, duration, userId, workspaceId, requestId, and a path/query that is passed through the same redaction helper used for DTO surfaces. Pair it with reverse-proxy access-log rewriting templates under `docs/deployment/proxy-access-log-redaction/` for traffic the app never sees, and validate proxy logs with `node --import tsx src/security/proxy-access-log-validator.ts <path-to-log>` after every config change.
+- For file-mode access logging, bound local disk usage with `TASKLOOM_ACCESS_LOG_MAX_BYTES` (default `0` = rotation disabled) and `TASKLOOM_ACCESS_LOG_MAX_FILES` (default `5`, clamp to `>= 1`). When `MAX_BYTES > 0`, the middleware rotates the active file before writing a line that would exceed the threshold, cascading `<path>` to `<path>.1`, `<path>.1` to `<path>.2`, and pruning files beyond `MAX_FILES`. Run `npm run access-log:rotate -- --path=<file> [--max-files=<n>]` for cron-driven daily rotation, and pair the rotated files with a managed shipper (Vector, Fluent Bit, Promtail/Loki) using the recipes under `docs/deployment/access-log-shipping/`. See `docs/deployment-access-log-shipping.md` for the full rotation, shipping, and SIEM integration guidance.
 - Use `npm run jobs:export-workspace -- --workspace-id=<id> > export.json` to produce a redacted per-workspace JSON snapshot for audit handoff, support escalation, or data-subject requests. See `docs/deployment-export-redaction.md` for redaction guarantees and the validation checklist.
 
-Current production guidance still does not add managed database repositories by itself. The app includes an optional HTTP distributed rate-limit adapter, built-in invitation webhook retry jobs, and an optional scheduler leader-election gate, but the shared limiter service, scheduler coordinator service, edge provider, and external email provider remain deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, and `docs/deployment-scheduler-coordination.md` for focused deployment checks.
+Current production guidance still does not add managed database repositories by itself. The app includes an optional HTTP distributed rate-limit adapter, built-in invitation webhook retry jobs, an optional scheduler leader-election gate, and built-in access-log rotation with shipping recipes, but the shared limiter service, scheduler coordinator service, edge provider, external email provider, and managed log retention storage remain deployment-owned. See `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, and `docs/deployment-access-log-shipping.md` for focused deployment checks.
 
 ## API Endpoints
 
@@ -312,6 +313,14 @@ npm run jobs:reconcile-invitation-emails -- --workspace-id=alpha
 
 Default behavior is read-only. Add `--invitation-id=<id>` or `--delivery-id=<id>` to scope further, `--mark-resolved` to apply a `delivered` provider status without an inbound webhook, or `--requeue` to enqueue a fresh `invitation.email` retry job. See `docs/invitation-email-operations.md` for flag semantics and the inbound provider-status webhook contract.
 
+To rotate the file-mode access log out of band (cron-friendly, exits `0` when the file is missing):
+
+```bash
+npm run access-log:rotate -- --path=data/access.log --max-files=10
+```
+
+Falls back to `TASKLOOM_ACCESS_LOG_PATH` and `TASKLOOM_ACCESS_LOG_MAX_FILES` when the flags are omitted. See `docs/deployment-access-log-shipping.md` for built-in size-based rotation, stdout-mode shipping, and the Vector/Fluent Bit/Promtail recipes under `docs/deployment/access-log-shipping/`.
+
 To recompute or repair a subset of workspaces:
 
 ```bash
@@ -367,8 +376,9 @@ Key docs:
 - `docs/invitation-email-operations.md`
 - `docs/deployment-export-redaction.md`
 - `docs/deployment-scheduler-coordination.md`
+- `docs/deployment-access-log-shipping.md`
 - `docs/activation/activation-domain.md`
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
 
-Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, and `docs/deployment-scheduler-coordination.md`, and is tracked across Phases 16 through 22 in `docs/roadmap.md`.
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, and `docs/deployment-access-log-shipping.md`, and is tracked across Phases 16 through 23 in `docs/roadmap.md`.
