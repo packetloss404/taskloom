@@ -8,7 +8,7 @@ const TOKEN_ROUTE_PATTERNS = [
   /(\/api\/public\/webhooks\/agents\/)[^/\s"']+/gi,
 ];
 const SENSITIVE_QUERY_PATTERN = /([?&](?:token|access_token|api[_-]?key|apikey|key|secret)=)[^&\s"']+/gi;
-const SENSITIVE_ASSIGNMENT_PATTERN = /(\b(?:token|access_token|api[_-]?key|apikey|secret|authorization)\b["']?\s*[:=]\s*)[^,\s;}"']+/gi;
+const SENSITIVE_ASSIGNMENT_PATTERN = /(\b(?:token|access_token|api[_-]?key|apikey|secret|authorization)\b["']?\s*[:=]\s*)[^,&\s;}"']+/gi;
 
 export function maskSecret(value: string | null | undefined): string {
   if (!value) return "";
@@ -31,7 +31,7 @@ export function redactSensitiveString(value: string, knownSecrets: Array<string 
   redacted = redacted.replace(SENSITIVE_QUERY_PATTERN, (_match, prefix) => `${prefix}${REDACTED}`);
   redacted = redacted.replace(SENSITIVE_ASSIGNMENT_PATTERN, (_match, prefix) => `${prefix}${REDACTED}`);
   for (const pattern of TOKEN_ROUTE_PATTERNS) {
-    redacted = redacted.replace(pattern, (_match, prefix, suffix = "") => `${prefix}${REDACTED}${suffix}`);
+    redacted = redacted.replace(pattern, (_match, prefix, suffix) => `${prefix}${REDACTED}${typeof suffix === "string" ? suffix : ""}`);
   }
   return redacted;
 }

@@ -24,6 +24,25 @@ test("redaction removes token-bearing URLs and assignments", () => {
   assert.equal(redacted.includes("[redacted]"), true);
 });
 
+test("redaction does not append match offset for routes without a trailing capture group", () => {
+  const redacted = redactSensitiveString("/share/raw-token-1234 then /api/public/webhooks/agents/whk_secret_value tail");
+
+  assert.equal(redacted.includes("raw-token-1234"), false);
+  assert.equal(redacted.includes("whk_secret_value"), false);
+  assert.equal(/\/share\/\[redacted\](?!\d)/.test(redacted), true);
+  assert.equal(/\/api\/public\/webhooks\/agents\/\[redacted\](?!\d)/.test(redacted), true);
+});
+
+test("redaction stops at & boundaries when redacting assignments", () => {
+  const redacted = redactSensitiveString("?token=raw-token-1234&access_token=other-secret-9876&keep=visible");
+
+  assert.equal(redacted.includes("raw-token-1234"), false);
+  assert.equal(redacted.includes("other-secret-9876"), false);
+  assert.equal(redacted.includes("keep=visible"), true);
+  assert.equal(redacted.includes("token=[redacted]"), true);
+  assert.equal(redacted.includes("access_token=[redacted]"), true);
+});
+
 test("value redaction masks sensitive keys recursively", () => {
   const redacted = redactSensitiveValue({
     safe: "hello",
