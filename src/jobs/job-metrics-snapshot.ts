@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { createJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo.js";
 import type { JobMetricSnapshotRecord, TaskloomData } from "../taskloom-store.js";
 import { loadStore as defaultLoadStore, mutateStore as defaultMutateStore } from "../taskloom-store.js";
 import { getJobTypeMetrics, type JobTypeMetrics } from "./scheduler-metrics.js";
+// Phase 32 read-redirect (Slice B):
+import { listJobMetricSnapshotsViaRepository } from "./job-metrics-snapshot-read.js";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_RETENTION_DAYS = 30;
-const DEFAULT_LIST_LIMIT = 100;
-const MAX_LIST_LIMIT = 500;
 
 export interface SnapshotJobMetricsResult {
   command: "snapshot-job-metrics";
@@ -89,7 +90,7 @@ export function snapshotJobMetrics(
   const capturedAt = now.toISOString();
   const metrics = metricsSource();
 
-  return mutate((data) => {
+  const result = mutate((data) => {
     const collection = ensureSnapshotCollection(data);
     const snapshots: JobMetricSnapshotRecord[] = metrics.map((metric) => buildSnapshot(metric, capturedAt, generateId()));
     for (const snapshot of snapshots) {
@@ -97,8 +98,10 @@ export function snapshotJobMetrics(
     }
 
     let removed = 0;
+    let retainAfterIso: string | null = null;
     if (retentionDays > 0) {
       const cutoff = now.getTime() - retentionDays * DAY_MS;
+      retainAfterIso = new Date(cutoff).toISOString();
       const retained = collection.filter((entry) => Date.parse(entry.capturedAt) >= cutoff);
       removed = collection.length - retained.length;
       if (removed > 0) {
@@ -111,34 +114,33 @@ export function snapshotJobMetrics(
       capturedAt,
       snapshots,
       removed,
+      retainAfterIso,
     };
   });
+
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    const repo = createJobMetricSnapshotsRepository({});
+    if (result.snapshots.length > 0) {
+      repo.insertMany(result.snapshots);
+    }
+    if (result.retainAfterIso !== null) {
+      repo.prune(result.retainAfterIso);
+    }
+  }
+
+  return {
+    command: result.command,
+    capturedAt: result.capturedAt,
+    snapshots: result.snapshots,
+    removed: result.removed,
+  };
 }
 
 export function listJobMetricSnapshots(
   options: ListJobMetricSnapshotsOptions = {},
   deps: ListJobMetricSnapshotsDeps = {},
 ): JobMetricSnapshotRecord[] {
-  const load = deps.loadStore ?? defaultLoadStore;
-  const data = load();
-  const collection = Array.isArray(data.jobMetricSnapshots) ? data.jobMetricSnapshots : [];
-
-  const sinceMs = options.since ? Date.parse(options.since) : null;
-  const untilMs = options.until ? Date.parse(options.until) : null;
-
-  const filtered = collection.filter((entry) => {
-    if (options.type !== undefined && entry.type !== options.type) return false;
-    const capturedMs = Date.parse(entry.capturedAt);
-    if (sinceMs !== null && !Number.isNaN(sinceMs) && capturedMs < sinceMs) return false;
-    if (untilMs !== null && !Number.isNaN(untilMs) && capturedMs > untilMs) return false;
-    return true;
-  });
-
-  filtered.sort((left, right) => left.capturedAt.localeCompare(right.capturedAt));
-
-  const requestedLimit = options.limit ?? DEFAULT_LIST_LIMIT;
-  const limit = Math.min(Math.max(requestedLimit, 0), MAX_LIST_LIMIT);
-  return filtered.slice(0, limit);
+  return listJobMetricSnapshotsViaRepository(options, { loadStore: deps.loadStore });
 }
 
 export function pruneJobMetricSnapshots(
@@ -152,8 +154,9 @@ export function pruneJobMetricSnapshots(
   const mutate = deps.mutateStore ?? defaultMutateStore;
   const nowFn = deps.now ?? (() => new Date());
   const cutoff = nowFn().getTime() - options.retentionDays * DAY_MS;
+  const retainAfterIso = new Date(cutoff).toISOString();
 
-  return mutate((data) => {
+  const result = mutate((data) => {
     const collection = ensureSnapshotCollection(data);
     const retained = collection.filter((entry) => Date.parse(entry.capturedAt) >= cutoff);
     const removed = collection.length - retained.length;
@@ -162,4 +165,11 @@ export function pruneJobMetricSnapshots(
     }
     return { removed };
   });
+
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    const repo = createJobMetricSnapshotsRepository({});
+    repo.prune(retainAfterIso);
+  }
+
+  return result;
 }

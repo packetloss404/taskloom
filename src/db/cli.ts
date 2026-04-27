@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { deriveActivationStatus } from "../activation/service";
 import { activationSubjectForWorkspace } from "../jobs";
+import { sqliteJobMetricSnapshotsRepository } from "../repositories/job-metric-snapshots-repo";
+import type { JobMetricSnapshotRecord } from "../taskloom-store";
 import {
   createSeedStore,
   loadSqliteAppData,
@@ -71,6 +73,30 @@ export interface AppDataResult {
 export interface ResetResult {
   command: "reset-db" | "reset-store" | "seed-store";
   path: string;
+}
+
+export interface BackfillJobMetricSnapshotsResult {
+  command: "backfill-job-metric-snapshots";
+  dbPath: string;
+  dryRun: boolean;
+  scanned: number;
+  wouldInsert: number;
+  alreadyPresent: number;
+  drift: number;
+  inserted: number;
+}
+
+export interface VerifyJobMetricSnapshotsResult {
+  command: "verify-job-metric-snapshots";
+  dbPath: string;
+  jsonOnly: number;
+  sqliteOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface BackfillJobMetricSnapshotsOptions extends DbCliOptions {
+  dryRun?: boolean;
 }
 
 const DEFAULT_DB_PATH = resolve(process.cwd(), "data", "taskloom.sqlite");
@@ -343,6 +369,160 @@ export function resetLocalDataStore(): ResetResult {
   return { command: "reset-store", path: resolve(process.cwd(), "data", "taskloom.json") };
 }
 
+export function backfillJobMetricSnapshots(options: BackfillJobMetricSnapshotsOptions = {}): BackfillJobMetricSnapshotsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+  const dryRun = options.dryRun ?? false;
+
+  const jsonRows = readJobMetricSnapshotJsonRows(dbPath);
+  const dedicatedRows = readJobMetricSnapshotDedicatedRows(dbPath);
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let wouldInsert = 0;
+  let alreadyPresent = 0;
+  let drift = 0;
+  const toInsert: JobMetricSnapshotRecord[] = [];
+
+  for (const record of jsonRows) {
+    const existing = dedicatedById.get(record.id);
+    if (!existing) {
+      wouldInsert += 1;
+      toInsert.push(record);
+      continue;
+    }
+    if (canonicalize(existing) === canonicalize(record)) {
+      alreadyPresent += 1;
+    } else {
+      drift += 1;
+    }
+  }
+
+  let inserted = 0;
+  if (!dryRun && toInsert.length > 0) {
+    const repo = sqliteJobMetricSnapshotsRepository({ dbPath });
+    repo.insertMany(toInsert);
+    inserted = toInsert.length;
+  }
+
+  return {
+    command: "backfill-job-metric-snapshots",
+    dbPath,
+    dryRun,
+    scanned: jsonRows.length,
+    wouldInsert,
+    alreadyPresent,
+    drift,
+    inserted,
+  };
+}
+
+export function verifyJobMetricSnapshots(options: DbCliOptions = {}): VerifyJobMetricSnapshotsResult {
+  const migrated = migrateDatabase(options);
+  const dbPath = migrated.dbPath;
+
+  const jsonRows = readJobMetricSnapshotJsonRows(dbPath);
+  const dedicatedRows = readJobMetricSnapshotDedicatedRows(dbPath);
+  const jsonById = new Map(jsonRows.map((row) => [row.id, row]));
+  const dedicatedById = new Map(dedicatedRows.map((row) => [row.id, row]));
+
+  let matched = 0;
+  let contentDrift = 0;
+  let jsonOnly = 0;
+  let sqliteOnly = 0;
+
+  for (const [id, jsonRecord] of jsonById) {
+    const dedicated = dedicatedById.get(id);
+    if (!dedicated) {
+      jsonOnly += 1;
+      continue;
+    }
+    if (canonicalize(jsonRecord) === canonicalize(dedicated)) {
+      matched += 1;
+    } else {
+      contentDrift += 1;
+    }
+  }
+  for (const id of dedicatedById.keys()) {
+    if (!jsonById.has(id)) sqliteOnly += 1;
+  }
+
+  return {
+    command: "verify-job-metric-snapshots",
+    dbPath,
+    jsonOnly,
+    sqliteOnly,
+    contentDrift,
+    matched,
+  };
+}
+
+function readJobMetricSnapshotJsonRows(dbPath: string): JobMetricSnapshotRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare("select payload from app_records where collection = 'jobMetricSnapshots'").all() as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as JobMetricSnapshotRecord);
+  } finally {
+    db.close();
+  }
+}
+
+function readJobMetricSnapshotDedicatedRows(dbPath: string): JobMetricSnapshotRecord[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const rows = db.prepare(`
+      select id, captured_at, type, total_runs, succeeded_runs, failed_runs, canceled_runs,
+        last_run_started_at, last_run_finished_at, last_duration_ms, average_duration_ms, p95_duration_ms
+      from job_metric_snapshots
+    `).all() as Array<{
+      id: string;
+      captured_at: string;
+      type: string;
+      total_runs: number;
+      succeeded_runs: number;
+      failed_runs: number;
+      canceled_runs: number;
+      last_run_started_at: string | null;
+      last_run_finished_at: string | null;
+      last_duration_ms: number | null;
+      average_duration_ms: number | null;
+      p95_duration_ms: number | null;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      capturedAt: row.captured_at,
+      type: row.type,
+      totalRuns: row.total_runs,
+      succeededRuns: row.succeeded_runs,
+      failedRuns: row.failed_runs,
+      canceledRuns: row.canceled_runs,
+      lastRunStartedAt: row.last_run_started_at,
+      lastRunFinishedAt: row.last_run_finished_at,
+      lastDurationMs: row.last_duration_ms,
+      averageDurationMs: row.average_duration_ms,
+      p95DurationMs: row.p95_duration_ms,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+function canonicalize(record: JobMetricSnapshotRecord): string {
+  return JSON.stringify({
+    id: record.id,
+    capturedAt: record.capturedAt,
+    type: record.type,
+    totalRuns: record.totalRuns,
+    succeededRuns: record.succeededRuns,
+    failedRuns: record.failedRuns,
+    canceledRuns: record.canceledRuns,
+    lastRunStartedAt: record.lastRunStartedAt,
+    lastRunFinishedAt: record.lastRunFinishedAt,
+    lastDurationMs: record.lastDurationMs,
+    averageDurationMs: record.averageDurationMs,
+    p95DurationMs: record.p95DurationMs,
+  });
+}
+
 export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
   const [command, ...args] = argv;
   const options = parseOptions(args);
@@ -392,6 +572,15 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(resetLocalDataStore(), null, 2));
       return 0;
     }
+    if (command === "backfill-job-metric-snapshots") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(backfillJobMetricSnapshots({ ...options, dryRun }), null, 2));
+      return 0;
+    }
+    if (command === "verify-job-metric-snapshots") {
+      console.log(JSON.stringify(verifyJobMetricSnapshots(options), null, 2));
+      return 0;
+    }
     writeUsage();
     return 1;
   } catch (error) {
@@ -418,7 +607,7 @@ function readOption(args: string[], prefix: string): string | undefined {
 }
 
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run]");
 }
 
 function isExecutedDirectly(): boolean {

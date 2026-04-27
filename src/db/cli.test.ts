@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillAppDatabase, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase } from "./cli";
+import { backfillAppDatabase, backfillJobMetricSnapshots, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyJobMetricSnapshots } from "./cli";
+import type { JobMetricSnapshotRecord } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -309,6 +310,250 @@ test("resetDatabase recreates an empty migrated database", () => {
     } finally {
       db.close();
     }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function makeJobMetricSnapshot(overrides: Partial<JobMetricSnapshotRecord> & { id: string }): JobMetricSnapshotRecord {
+  return {
+    id: overrides.id,
+    capturedAt: overrides.capturedAt ?? "2026-04-26T12:00:00.000Z",
+    type: overrides.type ?? "scheduler.tick",
+    totalRuns: overrides.totalRuns ?? 0,
+    succeededRuns: overrides.succeededRuns ?? 0,
+    failedRuns: overrides.failedRuns ?? 0,
+    canceledRuns: overrides.canceledRuns ?? 0,
+    lastRunStartedAt: overrides.lastRunStartedAt ?? null,
+    lastRunFinishedAt: overrides.lastRunFinishedAt ?? null,
+    lastDurationMs: overrides.lastDurationMs ?? null,
+    averageDurationMs: overrides.averageDurationMs ?? null,
+    p95DurationMs: overrides.p95DurationMs ?? null,
+  };
+}
+
+function insertAppRecordSnapshot(dbPath: string, record: JobMetricSnapshotRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert into app_records (collection, id, workspace_id, payload, updated_at)
+      values ('jobMetricSnapshots', ?, null, json(?), ?)
+      on conflict(collection, id) do update set payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(record.id, JSON.stringify(record), record.capturedAt);
+  } finally {
+    db.close();
+  }
+}
+
+function insertDedicatedSnapshot(dbPath: string, record: JobMetricSnapshotRecord): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(`
+      insert or replace into job_metric_snapshots (
+        id, captured_at, type, total_runs, succeeded_runs, failed_runs, canceled_runs,
+        last_run_started_at, last_run_finished_at, last_duration_ms, average_duration_ms, p95_duration_ms
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.capturedAt,
+      record.type,
+      record.totalRuns,
+      record.succeededRuns,
+      record.failedRuns,
+      record.canceledRuns,
+      record.lastRunStartedAt,
+      record.lastRunFinishedAt,
+      record.lastDurationMs,
+      record.averageDurationMs,
+      record.p95DurationMs,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function countDedicatedSnapshots(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as count from job_metric_snapshots").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+test("backfillJobMetricSnapshots reports zero for an empty store", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+
+    const result = backfillJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 0);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedSnapshots(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobMetricSnapshots inserts JSON-side rows into the dedicated table", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordSnapshot(dbPath, makeJobMetricSnapshot({ id: "snap_a", totalRuns: 5 }));
+
+    const result = backfillJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 1);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.inserted, 1);
+    assert.equal(countDedicatedSnapshots(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobMetricSnapshots is idempotent on re-run", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordSnapshot(dbPath, makeJobMetricSnapshot({ id: "snap_a", totalRuns: 5 }));
+
+    backfillJobMetricSnapshots({ dbPath });
+    const second = backfillJobMetricSnapshots({ dbPath });
+
+    assert.equal(second.scanned, 1);
+    assert.equal(second.wouldInsert, 0);
+    assert.equal(second.alreadyPresent, 1);
+    assert.equal(second.drift, 0);
+    assert.equal(second.inserted, 0);
+    assert.equal(countDedicatedSnapshots(dbPath), 1);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobMetricSnapshots --dry-run does not write", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordSnapshot(dbPath, makeJobMetricSnapshot({ id: "snap_a" }));
+    insertAppRecordSnapshot(dbPath, makeJobMetricSnapshot({ id: "snap_b" }));
+
+    const result = backfillJobMetricSnapshots({ dbPath, dryRun: true });
+
+    assert.equal(result.dryRun, true);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.wouldInsert, 2);
+    assert.equal(result.inserted, 0);
+    assert.equal(countDedicatedSnapshots(dbPath), 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("backfillJobMetricSnapshots reports drift when content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const jsonRecord = makeJobMetricSnapshot({ id: "snap_a", totalRuns: 5 });
+    insertAppRecordSnapshot(dbPath, jsonRecord);
+    insertDedicatedSnapshot(dbPath, { ...jsonRecord, totalRuns: 99 });
+
+    const result = backfillJobMetricSnapshots({ dbPath, dryRun: true });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.wouldInsert, 0);
+    assert.equal(result.alreadyPresent, 0);
+    assert.equal(result.drift, 1);
+    assert.equal(result.inserted, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobMetricSnapshots reports matched when both sides identical", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeJobMetricSnapshot({ id: "snap_a", totalRuns: 7 });
+    insertAppRecordSnapshot(dbPath, record);
+    insertDedicatedSnapshot(dbPath, record);
+
+    const result = verifyJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.matched, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobMetricSnapshots reports jsonOnly when JSON-side has rows not yet backfilled", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertAppRecordSnapshot(dbPath, makeJobMetricSnapshot({ id: "snap_a" }));
+    insertAppRecordSnapshot(dbPath, makeJobMetricSnapshot({ id: "snap_b" }));
+
+    const result = verifyJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.jsonOnly, 2);
+    assert.equal(result.sqliteOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobMetricSnapshots reports sqliteOnly when dedicated table has extra rows", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    insertDedicatedSnapshot(dbPath, makeJobMetricSnapshot({ id: "extra" }));
+
+    const result = verifyJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.sqliteOnly, 1);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.matched, 0);
+    assert.equal(result.contentDrift, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyJobMetricSnapshots reports contentDrift when ids match but content differs", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    migrateDatabase({ dbPath });
+    const record = makeJobMetricSnapshot({ id: "snap_a", totalRuns: 5 });
+    insertAppRecordSnapshot(dbPath, record);
+    insertDedicatedSnapshot(dbPath, { ...record, totalRuns: 99 });
+
+    const result = verifyJobMetricSnapshots({ dbPath });
+
+    assert.equal(result.contentDrift, 1);
+    assert.equal(result.matched, 0);
+    assert.equal(result.jsonOnly, 0);
+    assert.equal(result.sqliteOnly, 0);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

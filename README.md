@@ -73,9 +73,11 @@ npm run db:reset
 npm run db:seed-app
 npm run db:reset-app
 npm run db:backfill -- --json-path=data/taskloom.json
+npm run db:backfill-job-metric-snapshots
+npm run db:verify-job-metric-snapshots
 ```
 
-These commands target `data/taskloom.sqlite` by default. Pass `-- --db-path=path/to/taskloom.sqlite` to use a different database file. `db:seed-app` writes the built-in app seed data to SQLite, `db:backfill` imports an existing JSON store into SQLite, and `db:reset-app` recreates the SQLite app seed state without modifying `data/taskloom.json`.
+These commands target `data/taskloom.sqlite` by default. Pass `-- --db-path=path/to/taskloom.sqlite` to use a different database file. `db:seed-app` writes the built-in app seed data to SQLite, `db:backfill` imports an existing JSON store into SQLite, and `db:reset-app` recreates the SQLite app seed state without modifying `data/taskloom.json`. `db:backfill-job-metric-snapshots` populates the dedicated `job_metric_snapshots` table from existing `app_records` rows (idempotent via `INSERT OR REPLACE`; pass `-- --dry-run` to inspect counts without writing), and `db:verify-job-metric-snapshots` reports `{ jsonOnly, sqliteOnly, contentDrift, matched }` between the JSON-side collection and the dedicated table for cron-friendly drift detection. See `docs/roadmap-relational-repositories.md` for the migration plan.
 
 To refresh or repair activation read models after editing local data manually:
 
@@ -391,6 +393,7 @@ Taskloom now uses a React/Vite GUI modeled on the Automate shell and patterns:
 Key docs:
 
 - `docs/roadmap.md`
+- `docs/roadmap-relational-repositories.md`
 - `docs/deployment-auth-hardening.md`
 - `docs/deployment-sqlite-topology.md`
 - `docs/invitation-email-operations.md`
@@ -402,4 +405,4 @@ Key docs:
 - `docs/activation/activation-signals.md`
 - `docs/activation/activation-roadmap.md`
 
-Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, and `docs/deployment-health-endpoints.md`, and is tracked across Phases 16 through 31 in `docs/roadmap.md`. Phase 31 adds URL-persisted dashboard filters with active-filter chips, expanded activity-detail workflow context (top active blockers, open questions, and a "View workflow" link), and workflow page empty-state CTAs for Requirements/Plan items/Blockers plus a brief-versions count badge.
+Deployment guidance lives in `README.md#production-deployment-guidance`, `docs/deployment-auth-hardening.md`, `docs/deployment-sqlite-topology.md`, `docs/invitation-email-operations.md`, `docs/deployment-export-redaction.md`, `docs/deployment-scheduler-coordination.md`, `docs/deployment-access-log-shipping.md`, `docs/deployment-health-endpoints.md`, and `docs/roadmap-relational-repositories.md`, and is tracked across Phases 16 through 32 in `docs/roadmap.md`. Phase 32 begins the dedicated-relational-repositories migration by moving `jobMetricSnapshots` into a dedicated SQLite table behind a JSON/SQLite-switching repository factory, with dual-write to `app_records` during the cutover window and operator CLIs `db:backfill-job-metric-snapshots` and `db:verify-job-metric-snapshots`.

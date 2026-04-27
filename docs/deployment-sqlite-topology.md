@@ -109,3 +109,31 @@ When promoting a collection beyond `app_records`:
 - Update rollback guidance to restore from a pre-migration backup if the migration cannot be safely reversed.
 
 The roadmap item for relational backfills should remain future work until a specific collection crosses one of the thresholds above.
+
+## Relational Repository Backfills
+
+Phase 32 begins the migration of hot collections from the JSON-payload `app_records` row into dedicated SQLite tables. Each migration step ships:
+
+- A new SQLite migration creating the dedicated table (`src/db/migrations/<NNNN>_<collection>.sql`).
+- A repository module under `src/repositories/<collection>-repo.ts` with a factory that switches on `process.env.TASKLOOM_STORE` so JSON mode keeps using the inline collection.
+- Read-path delegation through the repository while preserving existing function signatures.
+- Dual-write in SQLite mode: writes go to BOTH `app_records` (legacy JSON-side) and the dedicated table during the cutover window.
+- Operator CLI commands for backfill and drift detection.
+
+### Operator workflow during a cutover window
+
+1. Apply the new migration: `npm run db:migrate`.
+2. Backfill existing rows: `npm run db:backfill-<collection> -- --dry-run` first to inspect counts, then without `--dry-run` to insert. The backfill is idempotent via `INSERT OR REPLACE` keyed on the row id; safe to re-run.
+3. Verify drift periodically during the dual-write window: `npm run db:verify-<collection>`. Output reports `{ jsonOnly, sqliteOnly, contentDrift, matched }`. Zero `jsonOnly`/`sqliteOnly`/`contentDrift` is the steady-state goal.
+4. After at least one stable phase has elapsed AND the most recent verify run reports zero drift, a follow-up phase retires the JSON-side mirror write. Operators do not need to take action for the retire — it ships as a code change.
+
+### Phase 32 commands
+
+- `npm run db:backfill-job-metric-snapshots [-- --dry-run]`
+- `npm run db:verify-job-metric-snapshots`
+
+The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
+
+### Restore semantics during dual-write
+
+A `db:restore` to a backup taken inside the dual-write window restores both `app_records` and the dedicated table consistently. A `db:restore` to a backup from before the migration of a given collection requires a one-time `db:backfill-<collection>` re-run after the restore to repopulate the dedicated table. Document this in your operator runbook before the first migrated collection ships to production.
