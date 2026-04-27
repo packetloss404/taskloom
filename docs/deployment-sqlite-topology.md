@@ -39,7 +39,7 @@ These guarantees are local SQLite guarantees. They do not provide distributed co
 
 The current SQLite runtime persists most app collections through `app_records` rows with JSON payloads. Query-critical routes use sidecar metadata and indexes, including `app_record_search`, workspace indexes, and helper functions for session/user lookup, memberships, invitations, share tokens, workflow records, providers, and usage reads.
 
-Dedicated relational storage exists where it is already needed by the local runtime, including activation migration tables, SQLite `rate_limit_buckets`, and the Phase 32-37 relational repositories for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities`. After Phase 38, those six collections are no longer mirrored into `app_records` in SQLite mode; `loadStore()` still returns a fully hydrated `TaskloomData` by reading them from their dedicated tables.
+Dedicated relational storage exists where it is already needed by the local runtime, including activation migration tables, SQLite `rate_limit_buckets`, the Phase 32-37 relational repositories for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities`, the Phase 39 `providerCalls` table, and the Phase 40 `activationSignals` table. After Phase 38, the providerCalls follow-up, and the post-Phase-40 activationSignals mirror-retirement follow-up, the retired migrated collections are no longer mirrored into `app_records` in SQLite mode; `loadStore()` still returns a fully hydrated `TaskloomData` by reading them from their dedicated tables.
 
 This means SQLite mode improves local persistence and route-read behavior, but it should still be treated as an app-record compatibility layer rather than the final production data model.
 
@@ -127,6 +127,8 @@ Phase 32 begins the migration of hot collections from the JSON-payload `app_reco
 3. Verify drift periodically during the dual-write window: `npm run db:verify-<collection>`. Output reports `{ jsonOnly, sqliteOnly, contentDrift, matched }`. Zero `jsonOnly`/`sqliteOnly`/`contentDrift` is the steady-state goal.
 4. After at least one stable phase has elapsed AND the most recent verify run reports zero drift, a follow-up phase retires the JSON-side mirror write. Operators do not need to take action for the retire — it ships as a code change.
 5. After Phase 38, fresh SQLite writes for `jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, and `activities` no longer create `app_records` mirror rows. The backfill commands remain available for restore-from-old-backup workflows.
+6. After the providerCalls mirror-retirement follow-up, fresh SQLite writes for `providerCalls` no longer create `app_records` mirror rows. The backfill command remains available for restore-from-old-backup workflows.
+7. After the post-Phase-40 activationSignals mirror-retirement follow-up, fresh SQLite writes for `activationSignals` use `activation_signals` and no longer create `app_records` mirror rows. `loadStore()` remains fully hydrated, JSON mode is unchanged, and the backfill command remains available for restore-from-old-backup workflows.
 
 ### Phase 32 commands
 
@@ -172,6 +174,22 @@ Phase 38 retires the legacy `app_records` mirror for `jobMetricSnapshots`, `aler
 
 The migration plan and per-collection rollout sequence is documented in `docs/roadmap-relational-repositories.md`.
 
+### Phase 39 commands
+
+- `npm run db:backfill-provider-calls [-- --dry-run]`
+- `npm run db:verify-provider-calls`
+
+Phase 39 creates `provider_calls` with migration `0016_provider_calls.sql`, redirects `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` through `src/repositories/provider-calls-repo.ts`, and writes provider ledger rows to the dedicated table in SQLite mode. Operators restoring an old backup should run the dry-run backfill before the write backfill, then run `db:verify-provider-calls` to audit drift. For fresh SQLite writes after mirror retirement, a clean verify normally has zero `jsonOnly` rows because no `app_records` mirror is written.
+
+The providerCalls mirror-retirement follow-up keeps `db:backfill-provider-calls` and `db:verify-provider-calls` shipped as old-backup recovery tools. JSON-default mode still stores provider calls in the inline `data.providerCalls` array.
+
+### Phase 40 commands
+
+- `npm run db:backfill-activation-signals [-- --dry-run]`
+- `npm run db:verify-activation-signals`
+
+Phase 40 creates `activation_signals` with migration `0017_activation_signals.sql` and moves the SQLite implementation of `activationSignalRepository()` to that table while preserving the existing repository API and JSON-default inline collection. The post-Phase-40 mirror-retirement follow-up (Phase 41, no new migration) retires the SQLite `app_records` mirror: fresh SQLite writes use `activation_signals`, `loadStore()` remains fully hydrated, and JSON mode is unchanged. Operators can still use the backfill and verify commands to recover old backups and audit drift.
+
 ### Restore semantics during and after mirror retirement
 
-A `db:restore` to a backup taken inside the dual-write window restores both `app_records` and the dedicated table consistently. A `db:restore` to a backup from before the migration of a given collection requires a one-time `db:backfill-<collection>` re-run after the restore to repopulate the dedicated table. After Phase 38, restored fresh-schema databases no longer need JSON-side mirror rows for the six retired collections; the backfill commands remain the recovery path for old backups whose dedicated tables are empty.
+A `db:restore` to a backup taken inside a dual-write window restores both `app_records` and the dedicated table consistently. A `db:restore` to a backup from before the migration of a given collection requires a one-time `db:backfill-<collection>` re-run after the restore to repopulate the dedicated table. After mirror retirement, restored fresh-schema databases no longer need JSON-side mirror rows for the retired collections; the backfill commands remain the recovery path for old backups whose dedicated tables are empty. Restore from a pre-Phase-39 backup requires `db:backfill-provider-calls`, and restored provider-calls data can be audited with `db:verify-provider-calls`. Restore from a pre-Phase-40 activationSignals backup requires `db:backfill-activation-signals`, and restored activation-signal data can be audited with `db:verify-activation-signals`.

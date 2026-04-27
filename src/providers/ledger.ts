@@ -1,7 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { sqliteProviderCallsRepository } from "../repositories/provider-calls-repo.js";
 import { listProviderCallsForWorkspaceIndexed, mutateStore, type ProviderCallRecord } from "../taskloom-store.js";
 import { redactedErrorMessage, redactSensitiveString } from "../security/redaction.js";
 import type { ProviderName, ProviderStreamChunk, ProviderUsage } from "./types.js";
+
+const DEFAULT_DB_FILE = "data/taskloom.sqlite";
+const PROVIDER_CALL_CAP = 5_000;
+
+interface ProviderCallsWriteRepository {
+  insertMany?: (records: ProviderCallRecord[]) => void;
+  upsert?: (record: ProviderCallRecord) => void;
+  pruneRetainLatest?: (maxRows: number) => number;
+}
 
 export interface LedgerContext {
   workspaceId: string;
@@ -14,13 +26,54 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function appendCall(record: ProviderCallRecord): void {
-  mutateStore((data) => {
+interface AppendCallResult {
+  inserted: ProviderCallRecord;
+  removedIds: string[];
+}
+
+function appendCall(record: ProviderCallRecord): AppendCallResult {
+  const result = mutateStore((data) => {
     data.providerCalls.push(record);
-    if (data.providerCalls.length > 5_000) {
-      data.providerCalls.splice(0, data.providerCalls.length - 5_000);
-    }
+    const overflow = data.providerCalls.length - PROVIDER_CALL_CAP;
+    const removedIds = overflow > 0
+      ? data.providerCalls.splice(0, overflow).map((entry) => entry.id)
+      : [];
+    return { inserted: record, removedIds };
   });
+
+  dualWriteProviderCall(result);
+  return result;
+}
+
+function dualWriteProviderCall(result: AppendCallResult): void {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+
+  const repo = sqliteProviderCallsRepository({}) as ProviderCallsWriteRepository;
+  if (repo.insertMany) {
+    repo.insertMany([result.inserted]);
+  } else if (repo.upsert) {
+    repo.upsert(result.inserted);
+  } else {
+    throw new Error("sqliteProviderCallsRepository must expose insertMany or upsert");
+  }
+
+  if (result.removedIds.length > 0) {
+    deleteProviderCallRows(result.removedIds);
+  }
+  repo.pruneRetainLatest?.(PROVIDER_CALL_CAP);
+}
+
+function deleteProviderCallRows(ids: string[]): void {
+  const dbPath = resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE);
+  const db = new DatabaseSync(dbPath);
+  try {
+    const stmt = db.prepare("delete from provider_calls where id = ?");
+    for (const id of ids) {
+      stmt.run(id);
+    }
+  } finally {
+    db.close();
+  }
 }
 
 function emptyUsage(): ProviderUsage {

@@ -37,6 +37,8 @@ Taskloom currently has a local activation domain, JSON-backed default storage, a
 - Dedicated relational repository and SQLite scheduler hot-path for `jobs`: SQLite migration `0013_jobs.sql` plus `src/repositories/jobs-repo.ts` with transactional `claimNext`/`sweepStaleRunning` primitives. The two indexed read helpers delegate through the repository; SQLite mode `claimNextJob` and `sweepStaleRunningJobs` now use the repository primitives directly, while JSON mode keeps the existing in-process `claimMutex` and load-store-loop behavior. Operator CLIs `db:backfill-jobs` and `db:verify-jobs` cover old-backup recovery and drift audits.
 - Dedicated relational repository for `invitationEmailDeliveries`: SQLite migration `0014_invitation_email_deliveries_table.sql` plus `src/repositories/invitation-email-deliveries-repo.ts`. The indexed read helper and all five mutators use the dedicated table in SQLite mode after Phase 38 mirror retirement. Operator CLIs `db:backfill-invitation-email-deliveries` and `db:verify-invitation-email-deliveries` cover old-backup recovery and drift audits. The Phase 22 schema-additive trick stops working past this step — future field additions need an explicit `ALTER TABLE` migration.
 - Dedicated relational repository for `activities`: SQLite migration `0015_activities.sql` plus `src/repositories/activities-repo.ts`. `listActivitiesForWorkspaceIndexed(workspaceId, limit?)` and activity writes use the dedicated table in SQLite mode after Phase 38 mirror retirement. Operator CLIs `db:backfill-activities` and `db:verify-activities` cover old-backup recovery and drift audits.
+- Dedicated relational repository for `providerCalls`: SQLite migration `0016_provider_calls.sql` plus `src/repositories/provider-calls-repo.ts`. `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` delegates through the repository without changing the caller-facing signature, and provider ledger writes use the dedicated `provider_calls` table in SQLite mode after mirror retirement. Operator CLIs `db:backfill-provider-calls` and `db:verify-provider-calls` cover old-backup recovery and drift audits.
+- Dedicated relational repository for `activationSignals`: SQLite migration `0017_activation_signals.sql` plus the existing `activationSignalRepository()` API now backed by `activation_signals` in SQLite mode after the post-Phase-40 mirror-retirement follow-up. JSON mode keeps the inline `data.activationSignals` collection; SQLite `loadStore()` remains fully hydrated, and operator CLIs `db:backfill-activation-signals` and `db:verify-activation-signals` cover old-backup recovery and drift audits.
 - The app runtime starts a persisted job scheduler for queued `agent.run` jobs, including cron re-enqueue after successful runs.
 - Public agent webhooks enqueue `agent.run` jobs through tokenized `/api/public/webhooks/agents/:token` requests.
 - React pages cover sign-in/sign-up, onboarding, dashboard, settings, activation, workflow, activity/detail, agents, runs, operations, integrations, and public share views.
@@ -155,8 +157,8 @@ Phase 6 dev and release hygiene is now in place:
 
 Phase 10 is implemented for the current app-store runtime:
 
-- `activationSignals` is part of the JSON app model and is persisted through the opt-in SQLite app runtime because SQLite currently stores full app data in `app_records`.
-- `activationSignalRepository()` provides normalized list/upsert access for JSON and SQLite modes; the SQLite implementation uses `app_records` plus activation-signal indexes/search metadata rather than a dedicated relational signal table.
+- `activationSignals` is part of the JSON app model and is persisted through the opt-in SQLite app runtime. Phase 40 added a dedicated `activation_signals` table for the SQLite repository path, and the post-Phase-40 mirror-retirement follow-up removed the SQLite `app_records` mirror without a new migration. JSON mode keeps the inline collection.
+- `activationSignalRepository()` provides normalized list/upsert access for JSON and SQLite modes; the SQLite implementation now uses `activation_signals` for fresh writes, and `loadStore()` remains fully hydrated by reading those rows back into `data.activationSignals`.
 - `source` identifies the producer category, such as `seed`, `workflow`, `agent_run`, `activity`, `user_fact`, or `system_fact`; `origin` separately identifies user-entered versus system-observed records.
 - Retry actions write durable `retry` records with `source: "agent_run"`, `origin: "user_entered"`, the failed run as `sourceId`, stable-key dedupe, and stable activation activity ids.
 - Brief scope changes write durable `scope_change` records with `source: "workflow"`, `origin: "user_entered"`, the brief version as `sourceId`, stable-key dedupe, and stable activation activity ids.
@@ -491,6 +493,30 @@ Phase 38 retires the SQLite `app_records` mirror for the six collections that no
 
 This phase does not change the JSON-default runtime, remove the collection fields from `TaskloomData`, remove the backfill/verify CLIs, or make SQLite a multi-writer or distributed production topology. The Phase 35 scheduler hot path has now landed as a no-migration code/docs/test follow-up after mirror retirement.
 
+### Phase 39 Relational Repository: Provider Calls
+
+Phase 39 starts the next dedicated-relational-repository cutover by moving `providerCalls` from indexed `app_records` reads into a dedicated SQLite table while preserving the JSON-default runtime, provider usage semantics, and the existing `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` read signature:
+
+- New migration `src/db/migrations/0016_provider_calls.sql` creates the `provider_calls` table for provider ledger rows, including workspace, route, provider/model, token/cost/duration, status/error, and started/completed timestamps.
+- New repository module `src/repositories/provider-calls-repo.ts` provides the JSON/SQLite-switching repository path. JSON mode continues to use the inline `data.providerCalls` collection; SQLite mode reads from the dedicated table.
+- `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` now delegates through the repository while preserving the caller-facing filter, sort, and limit behavior used by usage rollups.
+- In SQLite mode, provider ledger writes dual-write to BOTH `app_records` (legacy JSON-side mirror) and the dedicated `provider_calls` table during the cutover window.
+- Two new operator CLI commands: `npm run db:backfill-provider-calls [-- --dry-run]` for one-shot JSON-side-to-dedicated-table backfill (idempotent via `INSERT OR REPLACE`); `npm run db:verify-provider-calls` for cron-friendly drift detection.
+
+This phase retires the JSON-side mirror write for `providerCalls` in SQLite mode after the dedicated table path is in place. It does not change `loadStore()` semantics, normalize provider usage into separate aggregate tables, or make SQLite a multi-writer or distributed production topology.
+
+### Phase 40 Relational Repository: Activation Signals
+
+Phase 40 lifts `activationSignals` from the `app_records` compatibility layer into a dedicated SQLite table while preserving the JSON-default runtime and the existing `activationSignalRepository()` API. The post-Phase-40 mirror-retirement follow-up (Phase 41, no new migration) retires the SQLite `app_records` mirror for activation signals:
+
+- New migration `src/db/migrations/0017_activation_signals.sql` creates `activation_signals` with workspace/created-at and workspace/stable-key indexes.
+- The SQLite implementation of `activationSignalRepository()` now reads/writes the dedicated table, while JSON mode continues to use the inline `data.activationSignals` collection.
+- Direct service writes through `upsertActivationSignal(data, ...)` continue to mutate the hydrated `TaskloomData` shape; in SQLite mode, fresh writes persist through `activation_signals` instead of creating a legacy `app_records` mirror row.
+- SQLite `loadStore()` still returns a fully hydrated `TaskloomData` by reading activation signal rows from `activation_signals` into `data.activationSignals`.
+- Two operator CLI commands remain shipped: `npm run db:backfill-activation-signals [-- --dry-run]` for old-backup recovery and `npm run db:verify-activation-signals` for drift audits.
+
+Phase 40 itself did not retire the JSON-side mirror write for `activationSignals`; the no-migration post-Phase-40 follow-up does. Neither step changes activation fact/read-model storage, normalizes signal `data` into separate columns, changes JSON mode, or makes SQLite a multi-writer or distributed production topology.
+
 ## Roadmap
 
 Status markers: `[x]` is landed in this branch; `[ ]` remains future or ongoing work.
@@ -508,6 +534,7 @@ Replace the JSON-only runtime with a database-backed persistence layer while kee
 - [x] Add JSON-to-SQLite app backfill commands.
 - [x] Add local SQLite migration status plus validated backup/restore commands. Executable rollback remains intentionally unsupported; restore from a pre-migration backup is the rollback strategy.
 - [x] Document the production deployment posture for the current JSON-default and single-node SQLite runtime, including persistence, backups, restore validation, network-filesystem caveats, relational-repository thresholds, and scheduler constraints.
+- [x] Start the Phase 39 `providerCalls` relational-repository cutover with migration `0016_provider_calls.sql`, `src/repositories/provider-calls-repo.ts`, preserved `listProviderCallsForWorkspaceIndexed(workspaceId, { since?, limit? })` semantics, provider ledger dual-write, and backfill/verify CLIs. The JSON-side mirror remains active during this cutover.
 - [x] Preserve deterministic activation recalculation for the local JSON runtime and SQLite activation seed path.
 
 ### 2. Auth And RBAC
@@ -559,6 +586,8 @@ Make activation updates reliable outside request-time reads.
 - [x] Add a JSON-to-SQLite backfill command for existing local workspaces.
 - [ ] Add relational database backfills if app records are later split from indexed `app_records` metadata into dedicated repository tables, using `docs/deployment-sqlite-topology.md` thresholds to decide when that split is justified.
 - [x] Complete the relational-repository migration through Phase 38 (`jobMetricSnapshots`, `alertEvents`, `agentRuns`, `jobs`, `invitationEmailDeliveries`, `activities`) with dedicated SQLite tables, JSON/SQLite-switching repositories, operator backfill/verify CLIs, and retired legacy `app_records` mirrors in SQLite mode. See `docs/roadmap-relational-repositories.md`.
+- [x] Complete the Phase 39 `providerCalls` relational-repository cutover with a dedicated SQLite table, JSON/SQLite-switching repository, read delegation, provider ledger dedicated-table writes, mirror retirement in SQLite mode, and `db:backfill-provider-calls` / `db:verify-provider-calls` for old-backup recovery.
+- [x] Complete the Phase 40 `activationSignals` relational-repository cutover plus the post-Phase-40 mirror-retirement follow-up: SQLite mode now uses `activation_signals` for fresh writes behind the existing repository API, `loadStore()` remains hydrated, JSON mode is unchanged, and `db:backfill-activation-signals` / `db:verify-activation-signals` remain old-backup recovery and drift-audit tools.
 - [x] Flip the scheduler hot-path to the repository's transactional `claimNext`/`sweepStaleRunning` primitives in SQLite mode after Phase 38 mirror retirement; JSON mode keeps the in-process mutex/load-store loop.
 - [x] Ensure activation-scoped retry and scope-change activity emission is idempotent enough to avoid double-counting repeated signal writes.
 - [x] Add stale JSON read-model repair checks and a `jobs:repair-activation` command.
@@ -598,4 +627,4 @@ Strengthen the project rails before larger product work accumulates.
 
 ## Near-Term Definition Of Done
 
-The near-term production hardening track is complete when the Phases 20 through 38 deployment, observability, alerting, workflow-polish, and relational-repository milestones are paired with managed database topology where needed, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes. The relational-repository track now includes Phase 38 mirror retirement and the no-migration jobs scheduler hot-path follow-up: SQLite mode uses the `jobs` repository transactional `claimNext`/`sweepStaleRunning` primitives, while JSON mode keeps the in-process mutex/load-store loop. Remaining gaps are managed database topology and continued workflow/UI/test polish for features not yet covered; SQLite remains a local single-node posture, not a multi-writer or distributed production topology.
+The near-term production hardening track is complete when the Phases 20 through 40 deployment, observability, alerting, workflow-polish, and relational-repository milestones are paired with managed database topology where needed, and the existing route-level RBAC/workflow/job/agent/share parity suite continues to pass on both storage modes. The relational-repository track now includes Phase 38 mirror retirement for the first six migrated collections, the no-migration jobs scheduler hot-path follow-up, the Phase 39 `providerCalls` cutover and mirror retirement, and the Phase 40 `activationSignals` dedicated-table cutover plus post-Phase-40 mirror retirement. Remaining gaps are managed database topology and continued workflow/UI/test polish for features not yet covered; SQLite remains a local single-node posture, not a multi-writer or distributed production topology.

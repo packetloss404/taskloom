@@ -17,6 +17,7 @@ import { createAgentRunsRepository } from "./repositories/agent-runs-repo.js";
 import { createInvitationEmailDeliveriesRepository } from "./repositories/invitation-email-deliveries-repo.js";
 import { findJobViaRepository, listJobsForWorkspaceViaRepository } from "./jobs-read.js";
 import { listInvitationEmailDeliveriesViaRepository } from "./invitation-email-deliveries-read.js";
+import { listProviderCallsForWorkspaceViaRepository } from "./provider-calls-read.js";
 
 export interface UserRecord {
   id: string;
@@ -564,6 +565,7 @@ export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
 
 let activeMutateSqliteDepth = 0;
 const pendingActivityDualWrites: ActivityRecord[] = [];
+const pendingActivationSignalDualWrites: ActivationSignalRecord[] = [];
 const pendingAgentRunDualWrites: AgentRunRecord[] = [];
 const pendingInvitationEmailDeliveryDualWrites: InvitationEmailDeliveryRecord[] = [];
 
@@ -584,6 +586,7 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
     } catch (error) {
       db.exec("rollback");
       pendingActivityDualWrites.length = 0;
+      pendingActivationSignalDualWrites.length = 0;
       pendingAgentRunDualWrites.length = 0;
       pendingInvitationEmailDeliveryDualWrites.length = 0;
       throw error;
@@ -593,6 +596,7 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
     activeMutateSqliteDepth -= 1;
     if (activeMutateSqliteDepth === 0) {
       flushPendingActivityDualWrites();
+      flushPendingActivationSignalDualWrites();
       flushPendingAgentRunDualWrites();
       flushPendingInvitationEmailDeliveryDualWrites();
     }
@@ -606,6 +610,27 @@ function flushPendingActivityDualWrites(): void {
   const repo = createActivitiesRepository({});
   for (const record of drained) {
     repo.upsert(record);
+  }
+}
+
+function flushPendingActivationSignalDualWrites(): void {
+  if (pendingActivationSignalDualWrites.length === 0) return;
+  const drained = pendingActivationSignalDualWrites.splice(0, pendingActivationSignalDualWrites.length);
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  const db = openStoreDatabase(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  try {
+    db.exec("begin immediate");
+    try {
+      for (const record of drained) {
+        upsertDedicatedActivationSignal(db, record);
+      }
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  } finally {
+    db.close();
   }
 }
 
@@ -637,6 +662,21 @@ function enqueueActivityDualWrite(record: ActivityRecord): void {
   } else {
     const repo = createActivitiesRepository({});
     repo.upsert(snapshot);
+  }
+}
+
+function enqueueActivationSignalDualWrite(record: ActivationSignalRecord): void {
+  if (process.env.TASKLOOM_STORE !== "sqlite") return;
+  const snapshot = cloneActivationSignalRecord(record);
+  if (activeMutateSqliteDepth > 0) {
+    pendingActivationSignalDualWrites.push(snapshot);
+    return;
+  }
+  const db = openStoreDatabase(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  try {
+    upsertDedicatedActivationSignal(db, snapshot);
+  } finally {
+    db.close();
   }
 }
 
@@ -679,6 +719,13 @@ function cloneActivityRecord(record: ActivityRecord): ActivityRecord {
     ...record,
     actor: { ...record.actor },
     data: { ...record.data },
+  };
+}
+
+function cloneActivationSignalRecord(record: ActivationSignalRecord): ActivationSignalRecord {
+  return {
+    ...record,
+    ...(record.data ? { data: { ...record.data } } : {}),
   };
 }
 
@@ -864,12 +911,10 @@ const RECORD_COLLECTIONS = [
   "validationEvidence",
   "releaseConfirmations",
   "onboardingStates",
-  "activationSignals",
   "agents",
   "providers",
   "workspaceEnvVars",
   "apiKeys",
-  "providerCalls",
   "shareTokens",
 ] as const satisfies readonly StoreCollectionKey[];
 
@@ -960,7 +1005,9 @@ type DedicatedRelationalCollectionKey =
   | "agentRuns"
   | "jobs"
   | "invitationEmailDeliveries"
-  | "activities";
+  | "activities"
+  | "providerCalls"
+  | "activationSignals";
 
 type DedicatedRelationalCollections = Pick<TaskloomData, DedicatedRelationalCollectionKey>;
 
@@ -972,6 +1019,8 @@ function loadDedicatedRelationalCollections(db: DatabaseSync): DedicatedRelation
     jobs: loadDedicatedJobs(db),
     invitationEmailDeliveries: loadDedicatedInvitationEmailDeliveries(db),
     activities: loadDedicatedActivities(db),
+    providerCalls: loadDedicatedProviderCalls(db),
+    activationSignals: loadDedicatedActivationSignals(db),
   };
 }
 
@@ -1218,6 +1267,57 @@ function loadDedicatedActivities(db: DatabaseSync): ActivityRecord[] {
   return rows.map((row) => JSON.parse(row.payload) as ActivityRecord);
 }
 
+function loadDedicatedProviderCalls(db: DatabaseSync): ProviderCallRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, route_key, provider, model, prompt_tokens,
+      completion_tokens, cost_usd, duration_ms, status, error_message,
+      started_at, completed_at
+    from provider_calls
+    order by completed_at asc, id asc
+  `).all() as Array<{
+    id: string;
+    workspace_id: string;
+    route_key: string;
+    provider: ProviderCallRecord["provider"];
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost_usd: number;
+    duration_ms: number;
+    status: ProviderCallRecord["status"];
+    error_message: string | null;
+    started_at: string;
+    completed_at: string;
+  }>;
+  return rows.map((row) => {
+    const record: ProviderCallRecord = {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      routeKey: row.route_key,
+      provider: row.provider,
+      model: row.model,
+      promptTokens: row.prompt_tokens,
+      completionTokens: row.completion_tokens,
+      costUsd: row.cost_usd,
+      durationMs: row.duration_ms,
+      status: row.status,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+    };
+    if (row.error_message !== null) record.errorMessage = row.error_message;
+    return record;
+  });
+}
+
+function loadDedicatedActivationSignals(db: DatabaseSync): ActivationSignalRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+    from activation_signals
+    order by workspace_id asc, created_at asc, id asc
+  `).all() as unknown as ActivationSignalRow[];
+  return rows.map(activationSignalRowToRecord);
+}
+
 function persistDedicatedRelationalRows(db: DatabaseSync, data: TaskloomData): void {
   persistDedicatedJobMetricSnapshots(db, data.jobMetricSnapshots ?? []);
   persistDedicatedAlertEvents(db, data.alertEvents ?? []);
@@ -1225,6 +1325,8 @@ function persistDedicatedRelationalRows(db: DatabaseSync, data: TaskloomData): v
   persistDedicatedJobs(db, data.jobs ?? []);
   persistDedicatedInvitationEmailDeliveries(db, data.invitationEmailDeliveries ?? []);
   persistDedicatedActivities(db, data.activities ?? []);
+  persistDedicatedProviderCalls(db, data.providerCalls ?? []);
+  persistDedicatedActivationSignals(db, data.activationSignals ?? []);
 }
 
 function persistDedicatedJobMetricSnapshots(db: DatabaseSync, records: JobMetricSnapshotRecord[]): void {
@@ -1397,6 +1499,41 @@ function persistDedicatedActivities(db: DatabaseSync, records: ActivityRecord[])
   }
 }
 
+function persistDedicatedProviderCalls(db: DatabaseSync, records: ProviderCallRecord[]): void {
+  db.exec("delete from provider_calls");
+  const stmt = db.prepare(`
+    insert or replace into provider_calls (
+      id, workspace_id, route_key, provider, model, prompt_tokens,
+      completion_tokens, cost_usd, duration_ms, status, error_message,
+      started_at, completed_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const record of records) {
+    stmt.run(
+      record.id,
+      record.workspaceId,
+      record.routeKey,
+      record.provider,
+      record.model,
+      record.promptTokens,
+      record.completionTokens,
+      record.costUsd,
+      record.durationMs,
+      record.status,
+      record.errorMessage ?? null,
+      record.startedAt,
+      record.completedAt,
+    );
+  }
+}
+
+function persistDedicatedActivationSignals(db: DatabaseSync, records: ActivationSignalRecord[]): void {
+  db.exec("delete from activation_signals");
+  for (const record of records) {
+    upsertDedicatedActivationSignal(db, normalizeActivationSignalRecord(record));
+  }
+}
+
 function parseJsonRecord(raw: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(raw);
@@ -1443,7 +1580,6 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
     "memberships",
     "workspaceInvitations",
     "shareTokens",
-    "activationSignals",
     "workspaceBriefs",
     "workspaceBriefVersions",
     "requirements",
@@ -1454,7 +1590,6 @@ function searchValuesForRecord(collection: StoreCollectionKey, payload: unknown)
     "agents",
     "providers",
     "workspaceEnvVars",
-    "providerCalls",
   ].includes(collection)) return null;
   const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : null;
   const userId = typeof record.userId === "string" ? record.userId : null;
@@ -1478,7 +1613,6 @@ type IndexedCollection =
   | "releaseConfirmations"
   | "agents"
   | "providers"
-  | "providerCalls"
   | "shareTokens";
 
 function sqliteIndexedRecord<T>(collection: IndexedCollection, whereSql: string, values: SQLInputValue[]): T | null {
@@ -1650,20 +1784,7 @@ export function listAgentRunsForWorkspaceIndexed(workspaceId: string, limit?: nu
 }
 
 export function listProviderCallsForWorkspaceIndexed(workspaceId: string, opts: { since?: string; limit?: number } = {}): ProviderCallRecord[] {
-  if (process.env.TASKLOOM_STORE !== "sqlite") {
-    let entries = loadStore().providerCalls.filter((entry) => entry.workspaceId === workspaceId);
-    if (opts.since) {
-      const cutoff = Date.parse(opts.since);
-      entries = entries.filter((entry) => Date.parse(entry.completedAt) >= cutoff);
-    }
-    entries = entries.slice().reverse();
-    return opts.limit ? entries.slice(0, opts.limit) : entries;
-  }
-  return listWorkspaceRecordsIndexed("providerCalls", workspaceId, {
-    orderBy: "completedAtDesc",
-    limit: opts.limit,
-    filter: opts.since ? (entry) => Date.parse(entry.completedAt) >= Date.parse(opts.since as string) : undefined,
-  });
+  return listProviderCallsForWorkspaceViaRepository(workspaceId, opts);
 }
 
 export function listAgentRunsForAgentIndexed(workspaceId: string, agentId: string, limit?: number): AgentRunRecord[] {
@@ -3347,13 +3468,15 @@ function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepos
     listForWorkspace(workspaceId) {
       const db = openStoreDatabase(dbPath);
       try {
-        const rows = db.prepare(`
+        const primary = readDedicatedActivationSignalsForWorkspace(db, workspaceId);
+        const fallbackRows = db.prepare(`
           select payload
           from app_records
           where collection = 'activationSignals' and workspace_id = ?
           order by json_extract(payload, '$.createdAt'), id
         `).all(workspaceId) as Array<{ payload: string }>;
-        return rows.map((row) => normalizeActivationSignalRecord(JSON.parse(row.payload) as ActivationSignalRecord));
+        const fallback = fallbackRows.map((row) => normalizeActivationSignalRecord(JSON.parse(row.payload) as ActivationSignalRecord));
+        return mergeActivationSignals(primary, fallback);
       } finally {
         db.close();
       }
@@ -3373,19 +3496,7 @@ function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepos
             createdAt: input.createdAt ?? existing?.createdAt ?? timestamp,
             updatedAt: input.updatedAt ?? timestamp,
           };
-          db.prepare(`
-            insert into app_records (collection, id, workspace_id, payload, updated_at)
-            values ('activationSignals', ?, ?, json(?), ?)
-            on conflict(collection, id) do update set
-              workspace_id = excluded.workspace_id,
-              payload = excluded.payload,
-              updated_at = excluded.updated_at
-          `).run(record.id, record.workspaceId, JSON.stringify(record), record.updatedAt);
-          db.prepare(`
-            insert into app_record_search (collection, id, workspace_id, user_id, email, token)
-            values ('activationSignals', ?, ?, null, null, null)
-            on conflict(collection, id) do update set workspace_id = excluded.workspace_id
-          `).run(record.id, record.workspaceId);
+          upsertDedicatedActivationSignal(db, record);
           db.exec("commit");
           clearStoreCache();
           return record;
@@ -3401,6 +3512,9 @@ function sqliteActivationSignalRepository(dbPath: string): ActivationSignalRepos
 }
 
 function findSqliteActivationSignalForUpsert(db: DatabaseSync, input: ActivationSignalUpsertInput): ActivationSignalRecord | null {
+  const dedicated = findDedicatedActivationSignalForUpsert(db, input);
+  if (dedicated) return dedicated;
+
   const stableKeyRow = input.stableKey
     ? db.prepare(`
       select payload
@@ -3423,6 +3537,117 @@ function findSqliteActivationSignalForUpsert(db: DatabaseSync, input: Activation
   return idRow ? normalizeActivationSignalRecord(JSON.parse(idRow.payload) as ActivationSignalRecord) : null;
 }
 
+interface ActivationSignalRow {
+  id: string;
+  workspace_id: string;
+  kind: ActivationSignalKind;
+  source: ActivationSignalSource;
+  origin: ActivationSignalOrigin | null;
+  source_id: string | null;
+  stable_key: string | null;
+  data: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function readDedicatedActivationSignalsForWorkspace(db: DatabaseSync, workspaceId: string): ActivationSignalRecord[] {
+  const rows = db.prepare(`
+    select id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+    from activation_signals
+    where workspace_id = ?
+    order by created_at asc, id asc
+  `).all(workspaceId) as unknown as ActivationSignalRow[];
+  return rows.map(activationSignalRowToRecord);
+}
+
+function findDedicatedActivationSignalForUpsert(
+  db: DatabaseSync,
+  input: ActivationSignalUpsertInput,
+): ActivationSignalRecord | null {
+  const row = input.stableKey
+    ? db.prepare(`
+      select id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+      from activation_signals
+      where workspace_id = ? and stable_key = ?
+      limit 1
+    `).get(input.workspaceId, input.stableKey) as ActivationSignalRow | undefined
+    : input.id
+      ? db.prepare(`
+        select id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+        from activation_signals
+        where id = ?
+        limit 1
+      `).get(input.id) as ActivationSignalRow | undefined
+      : undefined;
+  return row ? activationSignalRowToRecord(row) : null;
+}
+
+function activationSignalRowToRecord(row: ActivationSignalRow): ActivationSignalRecord {
+  const record: ActivationSignalRecord = {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    kind: row.kind,
+    source: row.source,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (row.origin !== null) record.origin = row.origin;
+  if (row.source_id !== null) record.sourceId = row.source_id;
+  if (row.stable_key !== null) record.stableKey = row.stable_key;
+  if (row.data !== null) record.data = parseJsonRecord(row.data) as ActivationSignalRecord["data"];
+  return normalizeActivationSignalRecord(record);
+}
+
+function upsertDedicatedActivationSignal(db: DatabaseSync, record: ActivationSignalRecord): void {
+  db.prepare(`
+    insert into activation_signals (
+      id, workspace_id, kind, source, origin, source_id, stable_key, data, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      workspace_id = excluded.workspace_id,
+      kind = excluded.kind,
+      source = excluded.source,
+      origin = excluded.origin,
+      source_id = excluded.source_id,
+      stable_key = excluded.stable_key,
+      data = excluded.data,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
+  `).run(
+    record.id,
+    record.workspaceId,
+    record.kind,
+    record.source,
+    record.origin ?? null,
+    record.sourceId ?? null,
+    record.stableKey ?? null,
+    record.data === undefined ? null : JSON.stringify(record.data),
+    record.createdAt,
+    record.updatedAt,
+  );
+}
+
+function mergeActivationSignals(
+  primary: ActivationSignalRecord[],
+  fallback: ActivationSignalRecord[],
+): ActivationSignalRecord[] {
+  const seen = new Set(primary.map((entry) => entry.id));
+  const seenStableKeys = new Set(
+    primary
+      .filter((entry) => entry.stableKey)
+      .map((entry) => `${entry.workspaceId}:${entry.stableKey}`),
+  );
+  const combined = primary.slice();
+  for (const entry of fallback) {
+    if (seen.has(entry.id)) continue;
+    if (entry.stableKey && seenStableKeys.has(`${entry.workspaceId}:${entry.stableKey}`)) continue;
+    seen.add(entry.id);
+    if (entry.stableKey) seenStableKeys.add(`${entry.workspaceId}:${entry.stableKey}`);
+    combined.push(entry);
+  }
+  return combined.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+}
+
 export function listActivationSignalsForWorkspace(data: TaskloomData, workspaceId: string): ActivationSignalRecord[] {
   return data.activationSignals
     .filter((entry) => entry.workspaceId === workspaceId)
@@ -3439,9 +3664,12 @@ export function upsertActivationSignal(data: TaskloomData, input: ActivationSign
   };
   if (existing) {
     Object.assign(existing, normalizedInput, { id: existing.id, createdAt: input.createdAt ?? existing.createdAt, updatedAt: input.updatedAt ?? timestamp });
+    enqueueActivationSignalDualWrite(existing);
     return existing;
   }
-  return upsertRecord(data.activationSignals, normalizedInput, timestamp);
+  const record = upsertRecord(data.activationSignals, normalizedInput, timestamp);
+  enqueueActivationSignalDualWrite(record);
+  return record;
 }
 
 function inferActivationSignalOrigin(source: ActivationSignalSource): ActivationSignalOrigin | undefined {
