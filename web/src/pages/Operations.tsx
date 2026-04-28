@@ -577,6 +577,18 @@ interface OperationsHealth {
   subsystems: SubsystemHealthEntry[];
 }
 
+interface ManagedDatabaseRuntimeBoundaryStatus {
+  source?: string;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  detail?: string;
+  label?: string;
+  allowed?: boolean;
+  enforced?: boolean;
+  [key: string]: unknown;
+}
+
 interface ProductionStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -607,6 +619,7 @@ interface ProductionStatus {
   storageTopology: StorageTopologyReport;
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+  managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryStatus | null;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -731,6 +744,10 @@ interface ManagedDatabaseRuntimeGuardReport {
   status?: string;
   classification?: string;
   summary?: string;
+  runtimeBoundary?: ManagedDatabaseRuntimeBoundaryStatus | string | boolean;
+  managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryStatus | string | boolean;
+  runtimeBoundaryStatus?: ManagedDatabaseRuntimeBoundaryStatus | string | boolean;
+  boundaryStatus?: ManagedDatabaseRuntimeBoundaryStatus | string | boolean;
   checks?: ManagedDatabaseRuntimeGuardCheck[];
   blockers?: ReleaseReadinessIssue[];
   warnings?: ReleaseReadinessIssue[];
@@ -1004,7 +1021,10 @@ function ProductionStatusPanel() {
           </div>
 
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
-            <ManagedDatabaseRuntimeGuardSection report={status.managedDatabaseRuntimeGuard} />
+            <ManagedDatabaseRuntimeGuardSection
+              report={status.managedDatabaseRuntimeGuard}
+              boundary={status.managedDatabaseRuntimeBoundary}
+            />
           </div>
 
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
@@ -1450,7 +1470,13 @@ function isManagedDatabaseTopologyCheck(value: unknown): value is ManagedDatabas
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function ManagedDatabaseRuntimeGuardSection({ report }: { report: ManagedDatabaseRuntimeGuardReport | null | undefined }) {
+function ManagedDatabaseRuntimeGuardSection({
+  report,
+  boundary,
+}: {
+  report: ManagedDatabaseRuntimeGuardReport | null | undefined;
+  boundary?: ManagedDatabaseRuntimeBoundaryStatus | null;
+}) {
   if (!report) {
     return (
       <div>
@@ -1463,6 +1489,7 @@ function ManagedDatabaseRuntimeGuardSection({ report }: { report: ManagedDatabas
     );
   }
 
+  const runtimeBoundary = boundary ?? managedDatabaseRuntimeGuardBoundary(report);
   const readiness = managedDatabaseRuntimeGuardReadiness(report);
   const fields = managedDatabaseRuntimeGuardFields(report);
   const checks = managedDatabaseRuntimeGuardChecks(report);
@@ -1483,6 +1510,7 @@ function ManagedDatabaseRuntimeGuardSection({ report }: { report: ManagedDatabas
       {report.summary && (
         <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{report.summary}</p>
       )}
+      {runtimeBoundary && <ManagedDatabaseRuntimeBoundaryPanel boundary={runtimeBoundary} />}
       {fields.length > 0 && (
         <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {fields.map((field) => (
@@ -1521,6 +1549,34 @@ function ManagedDatabaseRuntimeGuardSection({ report }: { report: ManagedDatabas
   );
 }
 
+function ManagedDatabaseRuntimeBoundaryPanel({ boundary }: { boundary: ManagedDatabaseRuntimeBoundaryStatus }) {
+  const status = managedDatabaseRuntimeBoundaryStatus(boundary);
+  const fields = managedDatabaseRuntimeBoundaryFields(boundary);
+  const summary = managedDatabaseRuntimeBoundarySummary(boundary);
+
+  return (
+    <div className="mb-3 border border-ink-700 bg-ink-950/30 px-3 py-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="kicker mb-1">MANAGED DB RUNTIME BOUNDARY</div>
+          <h4 className="font-serif text-sm text-ink-100">Managed DB runtime boundary</h4>
+        </div>
+        <StatusBadge value={status.label} tone={status.tone} />
+      </div>
+      {summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function managedDatabaseRuntimeGuardReadiness(report: ManagedDatabaseRuntimeGuardReport): {
   label: string;
   tone: ReleaseReadinessTone;
@@ -1534,6 +1590,60 @@ function managedDatabaseRuntimeGuardReadiness(report: ManagedDatabaseRuntimeGuar
     allowedLabel: allowed === undefined ? "allowed unknown" : allowed ? "allowed" : "blocking",
     allowedTone: allowed === undefined ? "muted" : allowed ? "good" : "danger",
   };
+}
+
+function managedDatabaseRuntimeGuardBoundary(report: ManagedDatabaseRuntimeGuardReport): ManagedDatabaseRuntimeBoundaryStatus | null {
+  const boundary =
+    report.managedDatabaseRuntimeBoundary ??
+    report.runtimeBoundary ??
+    report.runtimeBoundaryStatus ??
+    report.boundaryStatus;
+  return normalizeManagedDatabaseRuntimeBoundary(boundary);
+}
+
+function normalizeManagedDatabaseRuntimeBoundary(value: unknown): ManagedDatabaseRuntimeBoundaryStatus | null {
+  if (typeof value === "string") {
+    const status = value.trim();
+    return status ? { status } : null;
+  }
+  if (typeof value === "boolean") {
+    return { enforced: value, status: value ? "enforced" : "not-enforced" };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as ManagedDatabaseRuntimeBoundaryStatus;
+}
+
+function managedDatabaseRuntimeBoundaryStatus(
+  boundary: ManagedDatabaseRuntimeBoundaryStatus,
+): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof boundary.enforced === "boolean") {
+    return boundary.enforced
+      ? releaseReadinessTone(boundary.status ?? boundary.classification ?? "enforced")
+      : releaseReadinessTone(boundary.status ?? boundary.classification ?? "not enforced");
+  }
+  if (typeof boundary.allowed === "boolean") {
+    return boundary.allowed ? { label: "allowed", tone: "good" } : releaseReadinessTone(boundary.status ?? "blocked");
+  }
+  return releaseReadinessTone(boundary.status ?? boundary.classification ?? boundary.label);
+}
+
+function managedDatabaseRuntimeBoundarySummary(boundary: ManagedDatabaseRuntimeBoundaryStatus): string {
+  const summary = boundary.summary ?? boundary.detail;
+  return typeof summary === "string" ? summary : "";
+}
+
+function managedDatabaseRuntimeBoundaryFields(boundary: ManagedDatabaseRuntimeBoundaryStatus) {
+  const entries: Array<[string, unknown]> = [
+    ["Source", boundary.source],
+    ["Classification", boundary.classification],
+    ["Enforced", boundary.enforced],
+    ["Allowed", boundary.allowed],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
 }
 
 function managedDatabaseRuntimeGuardCheckStatus(check: ManagedDatabaseRuntimeGuardCheck): { label: string; tone: ReleaseReadinessTone } {

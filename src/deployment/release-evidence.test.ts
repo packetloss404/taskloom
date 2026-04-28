@@ -3,7 +3,10 @@ import test from "node:test";
 import { assessReleaseEvidence, buildReleaseEvidenceBundle, type ReleaseEvidenceEntry } from "./release-evidence.js";
 import type { ManagedDatabaseRuntimeGuardReport } from "./managed-database-runtime-guard.js";
 import type { ManagedDatabaseTopologyReport } from "./managed-database-topology.js";
-import type { ReleaseReadinessReport } from "./release-readiness.js";
+import {
+  buildManagedDatabaseRuntimeBoundaryReport,
+  type ReleaseReadinessReport,
+} from "./release-readiness.js";
 import type { StorageTopologyReport } from "./storage-topology.js";
 
 function evidenceEntry(entries: ReleaseEvidenceEntry[], name: string): ReleaseEvidenceEntry {
@@ -37,6 +40,8 @@ function injectedStorageTopology(): StorageTopologyReport {
 }
 
 function injectedReleaseReadiness(storageTopology: StorageTopologyReport): ReleaseReadinessReport {
+  const managedDatabaseTopology = injectedManagedDatabaseTopology();
+  const managedDatabaseRuntimeGuard = injectedManagedDatabaseRuntimeGuard();
   return {
     phase: "43",
     readyForRelease: true,
@@ -46,8 +51,12 @@ function injectedReleaseReadiness(storageTopology: StorageTopologyReport): Relea
     warnings: [],
     nextSteps: ["Injected release next step."],
     storageTopology,
-    managedDatabaseTopology: injectedManagedDatabaseTopology(),
-    managedDatabaseRuntimeGuard: injectedManagedDatabaseRuntimeGuard(),
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseRuntimeBoundary: buildManagedDatabaseRuntimeBoundaryReport(
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+    ),
   };
 }
 
@@ -120,6 +129,7 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.equal(bundle.releaseReadiness.storageTopology, bundle.storageTopology);
   assert.equal(bundle.managedDatabaseTopology.phase, "45");
   assert.equal(bundle.managedDatabaseRuntimeGuard.phase, "46");
+  assert.equal(bundle.managedDatabaseRuntimeBoundary.phase, "48");
   assert.equal(bundle.evidence.config.storageMode, "json");
   assert.equal(bundle.evidence.config.backupConfigured, false);
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_STORE").configured, false);
@@ -127,6 +137,7 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-43-release-readiness"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-45-managed-database-topology"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-46-runtime-guard"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-48-managed-database-runtime-boundary"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-44-release-evidence"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_STORE=sqlite")));
 });
@@ -200,6 +211,10 @@ test("injected reports are embedded without calling report builders", () => {
   const releaseReadiness = injectedReleaseReadiness(storageTopology);
   const managedDatabaseTopology = injectedManagedDatabaseTopology();
   const managedDatabaseRuntimeGuard = injectedManagedDatabaseRuntimeGuard();
+  const managedDatabaseRuntimeBoundary = buildManagedDatabaseRuntimeBoundaryReport(
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  );
   const bundle = assessReleaseEvidence({
     env: {
       NODE_ENV: "production",
@@ -209,6 +224,7 @@ test("injected reports are embedded without calling report builders", () => {
     releaseReadiness,
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
+    managedDatabaseRuntimeBoundary,
     buildStorageTopologyReport: () => {
       throw new Error("storage builder should not be called");
     },
@@ -227,8 +243,10 @@ test("injected reports are embedded without calling report builders", () => {
   assert.equal(bundle.releaseReadiness.storageTopology, releaseReadiness.storageTopology);
   assert.equal(bundle.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(bundle.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+  assert.equal(bundle.managedDatabaseRuntimeBoundary, managedDatabaseRuntimeBoundary);
   assert.equal(bundle.releaseReadiness.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(bundle.releaseReadiness.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+  assert.equal(bundle.releaseReadiness.managedDatabaseRuntimeBoundary, managedDatabaseRuntimeBoundary);
   assert.equal(bundle.readyForRelease, true);
   assert.deepEqual(bundle.nextSteps, [
     "Injected release next step.",
@@ -259,19 +277,29 @@ test("strict evidence reflects managed database blockers in summary config and n
   assert.equal(bundle.evidence.config.managedDatabaseTopologyStatus, "fail");
   assert.equal(bundle.evidence.config.managedDatabaseRuntimeGuardStatus, "fail");
   assert.equal(bundle.evidence.config.managedDatabaseRuntimeAllowed, false);
+  assert.equal(bundle.evidence.config.managedDatabaseRuntimeBoundaryStatus, "fail");
+  assert.equal(bundle.evidence.config.managedDatabaseRuntimeBoundaryAllowed, false);
+  assert.equal(bundle.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
   assert.match(bundle.summary, /Managed DB blockers/);
-  assert.ok(bundle.summary.includes("does not implement a managed database runtime yet"));
-  assert.ok(bundle.summary.includes("does not support managed database storage yet"));
-  assert.ok(bundle.nextSteps.some((step) => step.includes("DATABASE_URL")));
+  assert.match(bundle.summary, /synchronous adapter gap/);
+  assert.ok(bundle.summary.includes("no executable managed database adapter yet"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("managed database URL environment variables")));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("synchronous storage adapter gap")));
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MANAGED_DATABASE_URL").value, "[redacted]");
 });
 
 test("release readiness managed reports are reused when present", () => {
   const storageTopology = injectedStorageTopology();
   const managedDatabaseTopology = injectedManagedDatabaseTopology();
   const managedDatabaseRuntimeGuard = injectedManagedDatabaseRuntimeGuard();
+  const managedDatabaseRuntimeBoundary = buildManagedDatabaseRuntimeBoundaryReport(
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  );
   const releaseReadiness = Object.assign(injectedReleaseReadiness(storageTopology), {
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
+    managedDatabaseRuntimeBoundary,
   });
   const bundle = assessReleaseEvidence({
     storageTopology,
@@ -286,6 +314,7 @@ test("release readiness managed reports are reused when present", () => {
 
   assert.equal(bundle.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(bundle.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+  assert.equal(bundle.managedDatabaseRuntimeBoundary, managedDatabaseRuntimeBoundary);
 });
 
 test("generatedAt accepts Date injection", () => {

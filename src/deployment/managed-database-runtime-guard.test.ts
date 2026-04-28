@@ -58,6 +58,7 @@ test("managed database URL is redacted and blocked", () => {
   const urlEntry = observedEnvValue(report, "DATABASE_URL");
 
   assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-database-blocked");
   assert.equal(urlEntry.configured, true);
@@ -66,6 +67,76 @@ test("managed database URL is redacted and blocked", () => {
   assert.equal(report.observed.databaseUrl, "[redacted]");
   assert.ok(report.blockers.some((blocker) => blocker.includes("Managed database runtime intent")));
   assert.ok(report.warnings.some((warning) => warning.includes("redacted")));
+  assert.ok(report.nextSteps.some((step) => step.includes("explicit Phase 48 runtime boundary")));
+});
+
+test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "postgres",
+    },
+  });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-blocked");
+  assert.equal(report.observed.store, "postgres");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 48 managed database runtime boundary")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("no executable adapter")));
+  assert.ok(report.nextSteps.some((step) => step.includes("explicit Phase 48 runtime boundary")));
+  assert.throws(
+    () =>
+      assertManagedDatabaseRuntimeSupported({
+        TASKLOOM_STORE: "postgres",
+      }),
+    ManagedDatabaseRuntimeGuardError,
+  );
+});
+
+test("TASKLOOM_STORE=managed is blocked at the managed runtime boundary", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "managed",
+    },
+  });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-blocked");
+  assert.equal(report.observed.store, "managed");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("no executable adapter")));
+});
+
+test("managed URL hints are redacted and block strict startup", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@taskloom.internal/app",
+    },
+  });
+  const managedUrl = observedEnvValue(report, "TASKLOOM_MANAGED_DATABASE_URL");
+  const taskloomDatabaseUrl = observedEnvValue(report, "TASKLOOM_DATABASE_URL");
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-blocked");
+  assert.equal(managedUrl.value, "[redacted]");
+  assert.equal(managedUrl.redacted, true);
+  assert.equal(taskloomDatabaseUrl.value, "[redacted]");
+  assert.equal(taskloomDatabaseUrl.redacted, true);
+  assert.ok(report.warnings.some((warning) => warning.includes("explicit managed database runtime boundary")));
+  assert.throws(
+    () =>
+      assertManagedDatabaseRuntimeSupported({
+        TASKLOOM_STORE: "sqlite",
+        TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@taskloom.internal/app",
+      }),
+    ManagedDatabaseRuntimeGuardError,
+  );
 });
 
 test("multi-writer topology is blocked", () => {
@@ -77,6 +148,7 @@ test("multi-writer topology is blocked", () => {
   });
 
   assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "multi-writer-blocked");
   assert.equal(report.observed.databaseTopology, "multi-writer");

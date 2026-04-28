@@ -37,6 +37,26 @@ export interface ReleaseReadinessCheck {
   summary: string;
 }
 
+export type ManagedDatabaseRuntimeBoundaryClassification =
+  | "local-json"
+  | "single-node-sqlite"
+  | "managed-database-blocked"
+  | "multi-writer-blocked"
+  | "unsupported-store"
+  | "bypassed"
+  | "inherited-blocker";
+
+export interface ManagedDatabaseRuntimeBoundaryReport {
+  phase: "48";
+  status: ReleaseReadinessStatus;
+  allowed: boolean;
+  classification: ManagedDatabaseRuntimeBoundaryClassification;
+  summary: string;
+  blockers: string[];
+  warnings: string[];
+  nextSteps: string[];
+}
+
 export interface ReleaseReadinessReport {
   phase: "43";
   readyForRelease: boolean;
@@ -48,6 +68,7 @@ export interface ReleaseReadinessReport {
   storageTopology: StorageTopologyReport;
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
+  managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport;
 }
 
 export interface ReleaseReadinessDeps {
@@ -55,6 +76,7 @@ export interface ReleaseReadinessDeps {
   storageTopology?: StorageTopologyReport;
   managedDatabaseTopology?: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+  managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryReport;
   buildStorageTopologyReport?: (
     env?: StorageTopologyEnv,
     probes?: StorageTopologyProbeDeps,
@@ -163,11 +185,107 @@ function runtimeGuardCheckStatus(
   return managedDatabaseRuntimeGuard.status === "warn" ? "warn" : "pass";
 }
 
+function boundaryCheckStatus(
+  managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
+  isGated: boolean,
+): ReleaseReadinessStatus {
+  if (!managedDatabaseRuntimeBoundary.allowed) return chooseBlockingStatus(isGated);
+  return managedDatabaseRuntimeBoundary.status === "warn" ? "warn" : "pass";
+}
+
+export function buildManagedDatabaseRuntimeBoundaryReport(
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): ManagedDatabaseRuntimeBoundaryReport {
+  const managedDatabaseBlocked =
+    managedDatabaseTopology.classification === "managed-database-requested" ||
+    managedDatabaseRuntimeGuard.classification === "managed-database-blocked";
+  const multiWriterBlocked =
+    managedDatabaseTopology.classification === "production-blocked" ||
+    managedDatabaseRuntimeGuard.classification === "multi-writer-blocked";
+  const unsupportedStore =
+    managedDatabaseTopology.classification === "unsupported-store" ||
+    managedDatabaseRuntimeGuard.classification === "unsupported-store";
+  const bypassed = managedDatabaseRuntimeGuard.classification === "bypassed";
+  const blockers = Array.from(new Set([
+    ...managedDatabaseTopology.blockers,
+    ...managedDatabaseRuntimeGuard.blockers,
+  ]));
+  const warnings = Array.from(new Set([
+    ...managedDatabaseTopology.warnings,
+    ...managedDatabaseRuntimeGuard.warnings,
+  ]));
+  const nextSteps = new Set([
+    ...managedDatabaseTopology.nextSteps,
+    ...managedDatabaseRuntimeGuard.nextSteps,
+  ]);
+
+  let classification: ManagedDatabaseRuntimeBoundaryClassification;
+  if (bypassed) {
+    classification = "bypassed";
+  } else if (managedDatabaseBlocked) {
+    classification = "managed-database-blocked";
+  } else if (multiWriterBlocked) {
+    classification = "multi-writer-blocked";
+  } else if (unsupportedStore) {
+    classification = "unsupported-store";
+  } else if (blockers.length > 0) {
+    classification = "inherited-blocker";
+  } else {
+    classification = managedDatabaseRuntimeGuard.classification === "single-node-sqlite"
+      ? "single-node-sqlite"
+      : "local-json";
+  }
+
+  if (managedDatabaseBlocked || unsupportedStore) {
+    nextSteps.add("Keep managed database rollout blocked until the synchronous storage adapter gap is closed by an implemented managed database adapter.");
+  }
+  if (multiWriterBlocked) {
+    nextSteps.add("Keep multi-writer or managed database topology out of strict release until the runtime boundary supports it.");
+  }
+  if (nextSteps.size === 0) {
+    nextSteps.add("Continue using local JSON for contributor workflows or SQLite for single-node persistence.");
+  }
+
+  const allowed = managedDatabaseTopology.ready && managedDatabaseRuntimeGuard.allowed;
+  const status: ReleaseReadinessStatus = allowed
+    ? bypassed || warnings.length > 0
+      ? "warn"
+      : "pass"
+    : "fail";
+  let summary: string;
+  if (managedDatabaseBlocked || unsupportedStore) {
+    summary = "Phase 48 managed database runtime boundary is blocked by the synchronous adapter gap; managed database storage is intentionally unsupported for release.";
+  } else if (multiWriterBlocked) {
+    summary = "Phase 48 managed database runtime boundary blocks multi-writer or managed topology until runtime support exists.";
+  } else if (bypassed) {
+    summary = "Phase 48 managed database runtime boundary is bypassed; unsupported runtime configuration remains present.";
+  } else if (allowed) {
+    summary = managedDatabaseRuntimeGuard.classification === "single-node-sqlite"
+      ? "Phase 48 managed database runtime boundary allows supported single-node SQLite release posture."
+      : "Phase 48 managed database runtime boundary allows supported local JSON release posture.";
+  } else {
+    summary = "Phase 48 managed database runtime boundary inherits unresolved topology or runtime blockers.";
+  }
+
+  return {
+    phase: "48",
+    status,
+    allowed,
+    classification,
+    summary,
+    blockers,
+    warnings,
+    nextSteps: Array.from(nextSteps),
+  };
+}
+
 function buildNextSteps(
   checks: ReleaseReadinessCheck[],
   storageTopology: StorageTopologyReport,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
 ): string[] {
   const steps = new Set<string>();
 
@@ -181,6 +299,9 @@ function buildNextSteps(
     }
     if (check.id === "managed-database-runtime-guard") {
       for (const step of managedDatabaseRuntimeGuard.nextSteps) steps.add(step);
+    }
+    if (check.id === "managed-database-runtime-boundary") {
+      for (const step of managedDatabaseRuntimeBoundary.nextSteps) steps.add(step);
     }
     if (check.id === "backup-dir") {
       steps.add("Set TASKLOOM_BACKUP_DIR to a backed-up directory and verify it exists before release handoff.");
@@ -218,6 +339,12 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
   const managedDatabaseRuntimeGuard =
     input.managedDatabaseRuntimeGuard ??
     (input.buildManagedDatabaseRuntimeGuardReport ?? defaultBuildManagedDatabaseRuntimeGuardReport)(env);
+  const managedDatabaseRuntimeBoundary =
+    input.managedDatabaseRuntimeBoundary ??
+    buildManagedDatabaseRuntimeBoundaryReport(
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+    );
   const checks: ReleaseReadinessCheck[] = [];
 
   pushCheck(
@@ -245,6 +372,15 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
     managedDatabaseRuntimeGuard.allowed
       ? `Managed database runtime guard allows startup: ${managedDatabaseRuntimeGuard.summary}`
       : `Managed database runtime guard blocks startup: ${managedDatabaseRuntimeGuard.summary}`,
+  );
+
+  pushCheck(
+    checks,
+    "managed-database-runtime-boundary",
+    boundaryCheckStatus(managedDatabaseRuntimeBoundary, isGated),
+    managedDatabaseRuntimeBoundary.allowed
+      ? `Managed database runtime boundary allows release: ${managedDatabaseRuntimeBoundary.summary}`
+      : `Managed database runtime boundary blocks release: ${managedDatabaseRuntimeBoundary.summary}`,
   );
 
   const dbPath = clean(env.TASKLOOM_DB_PATH);
@@ -349,12 +485,13 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
   }
 
   const blockers = checks.filter((check) => check.status === "fail").map((check) => check.summary);
-  const warnings = [
+  const warnings = Array.from(new Set([
     ...checks.filter((check) => check.status === "warn").map((check) => check.summary),
     ...storageTopology.warnings,
     ...managedDatabaseTopology.warnings,
     ...managedDatabaseRuntimeGuard.warnings,
-  ];
+    ...managedDatabaseRuntimeBoundary.warnings,
+  ]));
   const readyForRelease = blockers.length === 0;
   const summary = readyForRelease
     ? isGated
@@ -374,10 +511,12 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
       storageTopology,
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
+      managedDatabaseRuntimeBoundary,
     ),
     storageTopology,
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
+    managedDatabaseRuntimeBoundary,
   };
 }
 

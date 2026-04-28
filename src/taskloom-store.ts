@@ -543,6 +543,69 @@ const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "db", "m
 let cache: TaskloomData | null = null;
 let cacheBackendKey: string | null = null;
 
+export type TaskloomStoreMode = "json" | "sqlite" | "managed" | "postgres";
+
+export interface ResolvedTaskloomStoreMode {
+  mode: TaskloomStoreMode;
+  requestedStore: string;
+  managedDatabaseUrlKeys: string[];
+}
+
+export const MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE =
+  "Managed database storage is not supported by Taskloom's synchronous store API yet. Use TASKLOOM_STORE=json or TASKLOOM_STORE=sqlite until an async managed database adapter is implemented.";
+
+const MANAGED_DATABASE_URL_ENV_KEYS = [
+  "DATABASE_URL",
+  "TASKLOOM_DATABASE_URL",
+  "TASKLOOM_MANAGED_DATABASE_URL",
+] as const;
+const MANAGED_STORE_MODES = new Set(["managed", "managed-db", "managed-database", "postgres", "postgresql"]);
+
+export class ManagedDatabaseStoreBoundaryError extends Error {
+  readonly code = "TASKLOOM_MANAGED_DATABASE_SYNC_ADAPTER_GAP";
+  readonly storeMode: string;
+  readonly managedDatabaseUrlKeys: string[];
+
+  constructor(resolution: ResolvedTaskloomStoreMode) {
+    const hints = [
+      resolution.requestedStore ? `TASKLOOM_STORE=${resolution.requestedStore}` : null,
+      ...resolution.managedDatabaseUrlKeys,
+    ].filter(Boolean).join(", ");
+    super(hints ? `${MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE} Unsupported managed database hint(s): ${hints}.` : MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE);
+    this.name = "ManagedDatabaseStoreBoundaryError";
+    this.storeMode = resolution.requestedStore;
+    this.managedDatabaseUrlKeys = resolution.managedDatabaseUrlKeys;
+  }
+}
+
+function cleanStoreEnvValue(value: string | undefined): string {
+  return (value ?? "").trim();
+}
+
+export function resolveTaskloomStoreMode(env: NodeJS.ProcessEnv = process.env): ResolvedTaskloomStoreMode {
+  const requestedStore = cleanStoreEnvValue(env.TASKLOOM_STORE).toLowerCase();
+  const managedDatabaseUrlKeys = MANAGED_DATABASE_URL_ENV_KEYS.filter((key) => cleanStoreEnvValue(env[key]).length > 0);
+  const mode: TaskloomStoreMode = requestedStore === "sqlite"
+    ? "sqlite"
+    : requestedStore === "json" || requestedStore === ""
+      ? managedDatabaseUrlKeys.length > 0 ? "managed" : "json"
+      : MANAGED_STORE_MODES.has(requestedStore)
+        ? requestedStore === "postgres" || requestedStore === "postgresql" ? "postgres" : "managed"
+        : "json";
+
+  return {
+    mode,
+    requestedStore,
+    managedDatabaseUrlKeys,
+  };
+}
+
+function assertSupportedSyncStoreMode(resolution: ResolvedTaskloomStoreMode): void {
+  if (resolution.mode === "managed" || resolution.mode === "postgres" || resolution.managedDatabaseUrlKeys.length > 0) {
+    throw new ManagedDatabaseStoreBoundaryError(resolution);
+  }
+}
+
 export function loadStore(): TaskloomData {
   const backend = currentStoreBackend();
   if (cache && cacheBackendKey === backend.key) return cache;
@@ -553,7 +616,10 @@ export function loadStore(): TaskloomData {
 }
 
 export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
-  if (process.env.TASKLOOM_STORE === "sqlite") {
+  const resolution = resolveTaskloomStoreMode();
+  assertSupportedSyncStoreMode(resolution);
+
+  if (resolution.mode === "sqlite") {
     return mutateSqliteStore(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE), mutator);
   }
 
@@ -739,7 +805,9 @@ function persistJsonStore(data: TaskloomData): void {
 }
 
 function currentStoreBackend(): StoreBackend {
-  if (process.env.TASKLOOM_STORE === "sqlite") return sqliteStoreBackend(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  const resolution = resolveTaskloomStoreMode();
+  assertSupportedSyncStoreMode(resolution);
+  if (resolution.mode === "sqlite") return sqliteStoreBackend(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
   return jsonStoreBackend();
 }
 

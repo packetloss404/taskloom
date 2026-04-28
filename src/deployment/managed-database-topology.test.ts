@@ -69,8 +69,65 @@ test("managed database URL is redacted and blocked as unimplemented runtime", ()
   assert.equal(urlEntry.redacted, true);
   assert.equal(urlEntry.value, "[redacted]");
   assert.equal(report.observed.managedDatabaseUrl, "[redacted]");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("does not implement a managed database runtime")));
-  assert.ok(report.warnings.some((warning) => warning.includes("redacted advisory evidence")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("explicit Phase 48 runtime boundary")));
+  assert.ok(report.warnings.some((warning) => warning.includes("redacted boundary evidence")));
+  assert.ok(report.summary.includes("explicit Phase 48 managed database runtime boundary"));
+});
+
+test("TASKLOOM_STORE=postgres reports managed runtime boundary without claiming support", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "postgres",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.requested, true);
+  assert.equal(report.managedDatabase.configured, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.observed.store, "postgres");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 48 managed database runtime boundary")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("no executable adapter")));
+  assert.ok(report.nextSteps.some((step) => step.includes("explicit Phase 48 runtime boundary")));
+});
+
+test("TASKLOOM_STORE=managed reports managed runtime boundary without claiming support", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "managed",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.requested, true);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.observed.store, "managed");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("no executable adapter")));
+});
+
+test("managed URL hints are redacted and treated as boundary evidence", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@taskloom.internal/app",
+    },
+  });
+  const databaseUrl = observedEnvValue(report, "DATABASE_URL");
+  const taskloomDatabaseUrl = observedEnvValue(report, "TASKLOOM_DATABASE_URL");
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.managedDatabase.configured, true);
+  assert.equal(databaseUrl.value, "[redacted]");
+  assert.equal(databaseUrl.redacted, true);
+  assert.equal(taskloomDatabaseUrl.value, "[redacted]");
+  assert.equal(taskloomDatabaseUrl.redacted, true);
+  assert.ok(report.warnings.some((warning) => warning.includes("boundary evidence")));
 });
 
 test("managed topology intent is blocked without claiming database support", () => {

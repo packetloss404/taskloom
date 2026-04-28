@@ -264,6 +264,50 @@ test("managedDatabaseRuntimeGuard is built from the injected environment", () =>
   assert.deepEqual(status.managedDatabaseRuntimeGuard, fixture);
 });
 
+test("managedDatabaseRuntimeBoundary passes through when a managed runtime report exposes it", () => {
+  const runtimeGuard = {
+    phase: "48",
+    allowed: false,
+    status: "fail",
+    classification: "managed-database-blocked",
+    summary: "managed database runtime intent is blocked at the runtime boundary",
+    runtimeBoundary: {
+      status: "blocked",
+      classification: "runtime-boundary",
+      summary: "Managed database runtime boundary is enforced; managed DB runtime remains unsupported.",
+      enforced: true,
+    },
+    checks: [],
+    blockers: [],
+    warnings: [],
+    nextSteps: [],
+    observed: {
+      nodeEnv: "production",
+      store: "sqlite",
+      dbPath: "/srv/taskloom/taskloom.sqlite",
+      databaseTopology: "managed-database",
+      bypassEnabled: false,
+      managedDatabaseUrl: "[redacted]",
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+  } as unknown as ManagedDatabaseRuntimeGuardReport;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_DATABASE_TOPOLOGY: "managed-database" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildManagedDatabaseRuntimeGuardReport: () => runtimeGuard,
+  });
+
+  assert.equal(status.managedDatabaseRuntimeBoundary?.source, "managedDatabaseRuntimeGuard");
+  assert.equal(status.managedDatabaseRuntimeBoundary?.status, "blocked");
+  assert.equal(status.managedDatabaseRuntimeBoundary?.classification, "runtime-boundary");
+  assert.equal(status.managedDatabaseRuntimeBoundary?.enforced, true);
+  assert.match(String(status.managedDatabaseRuntimeBoundary?.summary), /managed DB runtime remains unsupported/i);
+});
+
 test("releaseReadiness is built from the injected environment", () => {
   const fixture = {
     readyForRelease: false,

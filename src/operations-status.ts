@@ -24,6 +24,18 @@ export interface JobQueueStatusSummary {
   canceled: number;
 }
 
+export interface ManagedDatabaseRuntimeBoundaryStatus {
+  source: "managedDatabaseRuntimeGuard" | "releaseReadiness" | "releaseEvidence";
+  status?: string;
+  classification?: string;
+  summary?: string;
+  detail?: string;
+  label?: string;
+  allowed?: boolean;
+  enforced?: boolean;
+  [key: string]: unknown;
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -43,6 +55,7 @@ export interface OperationsStatus {
   storageTopology: StorageTopologyReport;
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
+  managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryStatus | null;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -195,6 +208,55 @@ function summarizeJobs(data: TaskloomData): JobQueueStatusSummary[] {
   return Array.from(byType.values()).sort((a, b) => a.type.localeCompare(b.type));
 }
 
+const MANAGED_DATABASE_RUNTIME_BOUNDARY_KEYS = [
+  "managedDatabaseRuntimeBoundary",
+  "runtimeBoundary",
+  "runtimeBoundaryStatus",
+  "managedDatabaseBoundary",
+  "managedDatabaseBoundaryStatus",
+  "boundaryStatus",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeManagedDatabaseRuntimeBoundary(
+  value: unknown,
+  source: ManagedDatabaseRuntimeBoundaryStatus["source"],
+): ManagedDatabaseRuntimeBoundaryStatus | null {
+  if (typeof value === "string") {
+    const status = value.trim();
+    return status ? { source, status } : null;
+  }
+  if (typeof value === "boolean") {
+    return { source, enforced: value, status: value ? "enforced" : "not-enforced" };
+  }
+  if (!isRecord(value)) return null;
+  return { source, ...value };
+}
+
+function findManagedDatabaseRuntimeBoundary(
+  reports: Array<{ source: ManagedDatabaseRuntimeBoundaryStatus["source"]; report: unknown }>,
+): ManagedDatabaseRuntimeBoundaryStatus | null {
+  for (const { source, report } of reports) {
+    if (!isRecord(report)) continue;
+    for (const key of MANAGED_DATABASE_RUNTIME_BOUNDARY_KEYS) {
+      const boundary = normalizeManagedDatabaseRuntimeBoundary(report[key], source);
+      if (boundary) return boundary;
+    }
+    for (const nestedKey of ["observed", "config"] as const) {
+      const nested = report[nestedKey];
+      if (!isRecord(nested)) continue;
+      for (const key of MANAGED_DATABASE_RUNTIME_BOUNDARY_KEYS) {
+        const boundary = normalizeManagedDatabaseRuntimeBoundary(nested[key], source);
+        if (boundary) return boundary;
+      }
+    }
+  }
+  return null;
+}
+
 export function getOperationsStatus(deps: OperationsStatusDeps = {}): OperationsStatus {
   const loadStore = deps.loadStore ?? defaultLoadStore;
   const env = deps.env ?? process.env;
@@ -222,6 +284,11 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedDatabaseRuntimeGuard,
     releaseReadiness,
   });
+  const managedDatabaseRuntimeBoundary = findManagedDatabaseRuntimeBoundary([
+    { source: "managedDatabaseRuntimeGuard", report: managedDatabaseRuntimeGuard },
+    { source: "releaseReadiness", report: releaseReadiness },
+    { source: "releaseEvidence", report: releaseEvidence },
+  ]);
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -256,6 +323,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     storageTopology,
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
+    managedDatabaseRuntimeBoundary,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

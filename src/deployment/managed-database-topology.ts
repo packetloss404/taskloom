@@ -186,8 +186,8 @@ function buildNextSteps(checks: ManagedDatabaseTopologyCheck[]): string[] {
   for (const check of checks) {
     if (check.status === "pass") continue;
     if (check.id === "managed-database-runtime") {
-      steps.add("Keep TASKLOOM_STORE set to json or sqlite until a managed database adapter is implemented.");
-      steps.add("Track managed database runtime work separately before wiring DATABASE_URL into production startup.");
+      steps.add("Keep TASKLOOM_STORE set to json or sqlite until an executable managed database adapter is implemented.");
+      steps.add("Treat managed database settings as an explicit Phase 48 runtime boundary, not as startup configuration.");
     }
     if (check.id === "production-topology") {
       steps.add("Use this Phase 45 report as advisory evidence only; do not treat local JSON or SQLite as a managed production database topology.");
@@ -237,7 +237,9 @@ export function assessManagedDatabaseTopology(
       checks,
       "supported-local-mode",
       "fail",
-      `TASKLOOM_STORE=${store} is not a supported Phase 45 runtime storage mode.`,
+      MANAGED_TOPOLOGY_HINTS.has(store)
+        ? `TASKLOOM_STORE=${store} crosses the Phase 48 managed database runtime boundary and has no executable adapter in this branch.`
+        : `TASKLOOM_STORE=${store} is not a supported Phase 45 runtime storage mode.`,
     );
   }
 
@@ -246,7 +248,7 @@ export function assessManagedDatabaseTopology(
     "managed-database-runtime",
     hasManagedIntent ? "fail" : "pass",
     hasManagedIntent
-      ? "A managed database topology is requested or configured, but Taskloom does not implement a managed database runtime yet."
+      ? "A managed database topology is requested or configured, but Taskloom has an explicit Phase 48 runtime boundary and no executable managed database adapter yet."
       : "No managed database URL or managed database topology hint was detected.",
   );
 
@@ -277,7 +279,7 @@ export function assessManagedDatabaseTopology(
     warnings.push(`TASKLOOM_DB_PATH is not set; SQLite will use the default local path ${DEFAULT_SQLITE_PATH}.`);
   }
   if (hasManagedDatabaseUrl) {
-    warnings.push("Managed database URLs are captured only as redacted advisory evidence and are not used by runtime storage.");
+    warnings.push("Managed database URLs are captured only as redacted boundary evidence and are not used by runtime storage.");
   }
 
   const status = statusFromChecks(checks);
@@ -298,7 +300,9 @@ export function assessManagedDatabaseTopology(
     ? store === "sqlite"
       ? "Phase 45 managed database topology report found supported single-node SQLite posture and no managed database request."
       : "Phase 45 managed database topology report found supported local JSON posture and no managed database request."
-    : "Phase 45 managed database topology report found blockers for managed production database readiness.";
+    : hasManagedIntent
+      ? "Phase 45 managed database topology report found an explicit Phase 48 managed database runtime boundary; managed database startup is not implemented."
+      : "Phase 45 managed database topology report found blockers for managed production database readiness.";
   const observedEnv = buildObservedEnv(env);
 
   return {

@@ -46,15 +46,22 @@ test("Phase 47 default local JSON handoff includes managed database reports with
   assert.equal(readiness.managedDatabaseRuntimeGuard.allowed, true);
   assert.equal(readiness.managedDatabaseRuntimeGuard.classification, "local-json");
   assert.equal(checkStatus(readiness, "managed-database-runtime-guard"), "pass");
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.phase, "48");
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.allowed, true);
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.classification, "local-json");
+  assert.equal(checkStatus(readiness, "managed-database-runtime-boundary"), "pass");
   assert.ok(!readiness.blockers.some((blocker) => /managed database/i.test(blocker)));
 
   assert.equal(evidence.readyForRelease, true);
   assert.equal(evidence.releaseReadiness.managedDatabaseTopology.phase, "45");
   assert.equal(evidence.releaseReadiness.managedDatabaseRuntimeGuard.phase, "46");
+  assert.equal(evidence.releaseReadiness.managedDatabaseRuntimeBoundary.phase, "48");
   assert.deepEqual(evidenceContract.managedDatabaseTopology, evidence.releaseReadiness.managedDatabaseTopology);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeGuard, evidence.releaseReadiness.managedDatabaseRuntimeGuard);
+  assert.deepEqual(evidenceContract.managedDatabaseRuntimeBoundary, evidence.releaseReadiness.managedDatabaseRuntimeBoundary);
   assert.ok(attachmentIds(evidence).includes("phase-45-managed-database-topology"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 46 managed database runtime guard report"));
+  assert.ok(attachmentIds(evidence).includes("phase-48-managed-database-runtime-boundary"));
 });
 
 test("Phase 47 strict managed DATABASE_URL handoff blocks readiness and redacts managed DB evidence", () => {
@@ -92,16 +99,24 @@ test("Phase 47 strict managed DATABASE_URL handoff blocks readiness and redacts 
   assert.equal(readiness.managedDatabaseRuntimeGuard.allowed, false);
   assert.equal(readiness.managedDatabaseRuntimeGuard.classification, "managed-database-blocked");
   assert.equal(readiness.managedDatabaseRuntimeGuard.observed.databaseUrl, "[redacted]");
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.phase, "48");
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.allowed, false);
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
+  assert.equal(checkStatus(readiness, "managed-database-runtime-boundary"), "fail");
+  assert.ok(readiness.blockers.some((blocker) => blocker.includes("synchronous adapter gap")));
   assert.ok(readiness.blockers.some((blocker) => /managed database/i.test(blocker)));
 
   assert.equal(evidence.readyForRelease, false);
   assert.equal(evidence.releaseReadiness.readyForRelease, false);
   assert.deepEqual(evidenceContract.managedDatabaseTopology, evidence.releaseReadiness.managedDatabaseTopology);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeGuard, evidence.releaseReadiness.managedDatabaseRuntimeGuard);
+  assert.deepEqual(evidenceContract.managedDatabaseRuntimeBoundary, evidence.releaseReadiness.managedDatabaseRuntimeBoundary);
   assert.ok(attachmentIds(evidence).includes("phase-45-managed-database-topology"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 46 managed database runtime guard report"));
+  assert.ok(hasAttachmentLabel(evidence, "Phase 48 managed database runtime boundary report"));
   assert.equal(evidenceEntry(evidence, "DATABASE_URL").value, "[redacted]");
   assert.equal(evidenceEntry(evidence, "DATABASE_URL").redacted, true);
+  assert.match(evidence.summary, /synchronous adapter gap/);
 });
 
 test("Phase 47 production SQLite handoff stays ready with Phase 45/46 reports and no managed hints", () => {
@@ -145,6 +160,9 @@ test("Phase 47 production SQLite handoff stays ready with Phase 45/46 reports an
   assert.equal(readiness.managedDatabaseRuntimeGuard.allowed, true);
   assert.equal(readiness.managedDatabaseRuntimeGuard.classification, "single-node-sqlite");
   assert.equal(readiness.managedDatabaseRuntimeGuard.observed.databaseTopology, null);
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.phase, "48");
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.allowed, true);
+  assert.equal(readiness.managedDatabaseRuntimeBoundary.classification, "single-node-sqlite");
   assert.ok(!readiness.warnings.some((warning) => /managed database|multi-writer/i.test(warning)));
 
   assert.equal(evidence.readyForRelease, true);
@@ -153,6 +171,8 @@ test("Phase 47 production SQLite handoff stays ready with Phase 45/46 reports an
   assert.equal(evidence.evidence.config.artifactPathConfigured, true);
   assert.deepEqual(evidenceContract.managedDatabaseTopology, evidence.releaseReadiness.managedDatabaseTopology);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeGuard, evidence.releaseReadiness.managedDatabaseRuntimeGuard);
+  assert.deepEqual(evidenceContract.managedDatabaseRuntimeBoundary, evidence.releaseReadiness.managedDatabaseRuntimeBoundary);
   assert.ok(attachmentIds(evidence).includes("phase-45-managed-database-topology"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 46 managed database runtime guard report"));
+  assert.ok(hasAttachmentLabel(evidence, "Phase 48 managed database runtime boundary report"));
 });

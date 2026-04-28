@@ -27,9 +27,11 @@ test("local JSON development produces warnings instead of release blockers", () 
   assert.equal(report.storageTopology.mode, "json");
   assert.equal(report.managedDatabaseTopology.classification, "local-json");
   assert.equal(report.managedDatabaseRuntimeGuard.classification, "local-json");
+  assert.equal(report.managedDatabaseRuntimeBoundary.classification, "local-json");
   assert.equal(checkStatus(report, "storage-topology"), "warn");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
+  assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "pass");
   assert.equal(checkStatus(report, "backup-dir"), "warn");
   assert.equal(checkStatus(report, "restore-drill"), "warn");
   assert.equal(report.blockers.length, 0);
@@ -62,6 +64,7 @@ test("production SQLite with backup directory and restore drill passes release r
   assert.equal(checkStatus(report, "storage-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
+  assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "pass");
   assert.equal(checkStatus(report, "database-path"), "pass");
   assert.equal(checkStatus(report, "backup-dir"), "pass");
   assert.equal(checkStatus(report, "restore-drill"), "pass");
@@ -90,11 +93,39 @@ test("strict release with a managed database URL fails managed topology and runt
   assert.equal(report.readyForRelease, false);
   assert.equal(checkStatus(report, "managed-database-topology"), "fail");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "fail");
+  assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "fail");
   assert.equal(report.managedDatabaseTopology.ready, false);
   assert.equal(report.managedDatabaseRuntimeGuard.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBoundary.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
   assert.ok(report.blockers.some((blocker) => /managed database topology/i.test(blocker)));
   assert.ok(report.blockers.some((blocker) => blocker.includes("runtime guard blocks startup")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous adapter gap")));
   assert.ok(report.nextSteps.some((step) => step.includes("Remove managed database URL")));
+  assert.ok(report.nextSteps.some((step) => step.includes("synchronous storage adapter gap")));
+});
+
+test("strict release with TASKLOOM_STORE=postgres fails the managed database runtime boundary", () => {
+  const report = assessReleaseReadiness({
+    env: {
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+      TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+      TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.managedDatabaseTopology.classification, "managed-database-requested");
+  assert.equal(report.managedDatabaseRuntimeGuard.classification, "managed-database-blocked");
+  assert.equal(report.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
+  assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "fail");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous adapter gap")));
+  assert.ok(report.nextSteps.some((step) => step.includes("managed database adapter")));
 });
 
 test("runtime guard bypass warns without blocking release when the managed topology is already accepted", () => {
@@ -127,6 +158,7 @@ test("runtime guard bypass warns without blocking release when the managed topol
   assert.equal(report.managedDatabaseRuntimeGuard.allowed, true);
   assert.equal(report.managedDatabaseRuntimeGuard.classification, "bypassed");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "warn");
+  assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "warn");
   assert.equal(report.readyForRelease, true);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.warnings.some((warning) => warning.includes("bypassed")));
@@ -237,8 +269,10 @@ test("injected storage report is embedded and used without calling the report bu
   assert.equal(report.storageTopology, storageTopology);
   assert.equal(report.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(report.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+  assert.equal(report.managedDatabaseRuntimeBoundary.classification, "single-node-sqlite");
   assert.equal(checkStatus(report, "storage-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
+  assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "pass");
   assert.ok(report.warnings.includes("Injected topology warning."));
 });

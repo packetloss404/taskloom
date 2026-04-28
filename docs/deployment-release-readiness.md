@@ -1,6 +1,6 @@
 # Deployment Release Readiness
 
-Phase 43 layers deployment release-readiness gates on top of the Phase 42 storage topology report. Phase 47 extends that handoff story by carrying Phase 45 managed database advisory findings and Phase 46 runtime-guard findings into the same release-readiness decision. The gate is meant for release automation and pre-production handoff checks that need one command to confirm the deployment plan has covered the local-store and unsupported-managed-database risks that Taskloom can inspect.
+Phase 43 layers deployment release-readiness gates on top of the Phase 42 storage topology report. Phase 47 extends that handoff story by carrying Phase 45 managed database advisory findings and Phase 46 runtime-guard findings into the same release-readiness decision. Phase 48 adds the managed database runtime boundary/foundation in the synchronous app-store path, so the release story now has both handoff evidence and a fail-closed runtime boundary. The gate is meant for release automation and pre-production handoff checks that need one command to confirm the deployment plan has covered the local-store and unsupported-managed-database risks that Taskloom can inspect.
 
 Run the default advisory check before handoff:
 
@@ -24,8 +24,9 @@ The Phase 43 release-readiness gate checks that the deployment plan has accounte
 - Phase 42 storage topology posture, including JSON-local limits, SQLite single-node limits, and managed database requirements for horizontal writers, failover, PITR, or active/active needs.
 - Phase 45 managed database topology advisory findings and attachments, including any managed database intent or implementation gaps surfaced by `TASKLOOM_MANAGED_DATABASE_URL`, `DATABASE_URL`, `TASKLOOM_DATABASE_URL`, `TASKLOOM_DATABASE_TOPOLOGY`, or `TASKLOOM_STORE`.
 - Phase 46 runtime-guard findings and attachments, including unsupported store values, managed database URL hints, managed/multi-writer topology hints, and any break-glass bypass posture that must not be treated as production support.
+- Phase 48 runtime-boundary context for the synchronous store path, where managed/Postgres store modes and managed database URL hints fail closed until an async managed database adapter exists.
 
-The release gate is intentionally a readiness check. It does not perform backups, restore data, provision managed databases, add managed database repositories, add managed database runtime support, or make SQLite distributed. Local JSON/default storage and supported single-node SQLite remain allowed. Managed database requests, managed database URL hints, and multi-writer topology hints are blocked or advisory until a managed database runtime is implemented. SQLite remains a single-node storage posture, and any managed Postgres, regional failover, or multi-writer database implementation remains deployment-owned work.
+The release gate is intentionally a readiness check. It does not perform backups, restore data, provision managed databases, add managed database repositories, add managed database runtime support, or make SQLite distributed. Local JSON/default storage and supported single-node SQLite remain allowed. Managed database requests, managed database URL hints, and multi-writer topology hints are blocked or advisory until a managed database runtime is implemented. Phase 48 adds a runtime boundary/foundation that makes the synchronous store path reject managed/Postgres hints, but it does not turn those hints into working managed Postgres support. SQLite remains a single-node storage posture, and the async store migration, actual managed Postgres adapter, regional failover, PITR, active/active writes, and multi-writer database implementation remain future work.
 
 ## Relationship To Phase 42
 
@@ -35,7 +36,7 @@ Use `docs/deployment-storage-topology.md` for the underlying topology boundaries
 
 ## Relationship To Phases 45-46
 
-Phase 45 answers whether operators have signaled managed database intent and whether that intent matches Taskloom's current implementation. Phase 46 answers whether the runtime should be allowed to start with the provided database hints. Phase 47 makes those findings part of the release-readiness record so release automation can hand off a complete storage story without claiming managed database support.
+Phase 45 answers whether operators have signaled managed database intent and whether that intent matches Taskloom's current implementation. Phase 46 answers whether the runtime should be allowed to start with the provided database hints. Phase 47 makes those findings part of the release-readiness record so release automation can hand off a complete storage story without claiming managed database support. Phase 48 adds the corresponding in-runtime boundary to the synchronous store path, which fails closed on managed/Postgres hints until an async managed database adapter exists.
 
 Use `docs/deployment-managed-database-topology.md` for the managed database advisory and `docs/deployment-managed-database-runtime-guard.md` for the runtime guard and bypass policy.
 

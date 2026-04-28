@@ -45,6 +45,7 @@ export interface ManagedDatabaseRuntimeGuardCheck {
 export interface ManagedDatabaseRuntimeGuardReport {
   phase: "46";
   allowed: boolean;
+  managedDatabaseRuntimeBlocked?: boolean;
   status: ManagedDatabaseRuntimeGuardStatus;
   classification: ManagedDatabaseRuntimeGuardClassification;
   summary: string;
@@ -189,8 +190,8 @@ function buildNextSteps(checks: ManagedDatabaseRuntimeGuardCheck[], bypassEnable
       steps.add("Set TASKLOOM_STORE=json for local JSON storage or TASKLOOM_STORE=sqlite for single-node SQLite storage.");
     }
     if (check.id === "managed-database-runtime") {
-      steps.add("Remove managed database URL environment variables until a managed database runtime is implemented.");
-      steps.add("Do not wire DATABASE_URL into startup or release automation as supported storage.");
+      steps.add("Remove managed database URL environment variables until an executable managed database runtime is implemented.");
+      steps.add("Treat managed database settings as an explicit Phase 48 runtime boundary, not as startup configuration.");
     }
     if (check.id === "single-writer-runtime") {
       steps.add("Keep Taskloom on local JSON or single-node SQLite until multi-writer runtime support exists.");
@@ -237,7 +238,9 @@ export function assessManagedDatabaseRuntimeGuard(
       checks,
       "supported-runtime-store",
       "fail",
-      `TASKLOOM_STORE=${store} is not a supported Phase 46 runtime storage mode.`,
+      MANAGED_TOPOLOGY_HINTS.has(store)
+        ? `TASKLOOM_STORE=${store} crosses the Phase 48 managed database runtime boundary and has no executable adapter in this branch.`
+        : `TASKLOOM_STORE=${store} is not a supported Phase 46 runtime storage mode.`,
     );
   }
 
@@ -246,7 +249,7 @@ export function assessManagedDatabaseRuntimeGuard(
     "managed-database-runtime",
     hasManagedIntent ? "fail" : "pass",
     hasManagedIntent
-      ? "Managed database runtime intent was detected, but Taskloom does not support managed database storage yet."
+      ? "Managed database runtime intent was detected, but Taskloom has an explicit Phase 48 runtime boundary and no executable managed database adapter yet."
       : "No managed database URL or managed database runtime hint was detected.",
   );
 
@@ -266,13 +269,14 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(`TASKLOOM_DB_PATH is not set; SQLite will use the default local path ${DEFAULT_SQLITE_PATH}.`);
   }
   if (hasManagedDatabaseUrl) {
-    warnings.push("Managed database URL values were redacted and are blocked as unsupported runtime configuration.");
+    warnings.push("Managed database URL values were redacted and are blocked at the explicit managed database runtime boundary.");
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
   }
 
   const blockers = checks.filter((check) => check.status === "fail").map((check) => check.summary);
+  const managedDatabaseRuntimeBlocked = hasManagedIntent || hasMultiWriterIntent;
   const allowed = blockers.length === 0 || bypassEnabled;
   const status = statusFromChecks(checks, bypassEnabled);
   let classification: ManagedDatabaseRuntimeGuardClassification;
@@ -300,6 +304,7 @@ export function assessManagedDatabaseRuntimeGuard(
   return {
     phase: "46",
     allowed,
+    managedDatabaseRuntimeBlocked,
     status,
     classification,
     summary,
