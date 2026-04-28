@@ -604,7 +604,212 @@ interface ProductionStatus {
     lastCapturedAt: string | null;
   };
   accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
+  storageTopology: StorageTopologyReport;
+  managedDatabaseTopology: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+  releaseReadiness: ReleaseReadinessReport;
+  releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
+}
+
+type StorageTopologyTone = "danger" | "good" | "muted" | "warn";
+
+interface StorageTopologyCheck {
+  name?: string;
+  label?: string;
+  id?: string;
+  status?: string;
+  ready?: boolean;
+  detail?: string;
+  message?: string;
+  reason?: string;
+  path?: string;
+  target?: string;
+  [key: string]: unknown;
+}
+
+interface StorageTopologyRequirement {
+  id: string;
+  met: boolean;
+  summary: string;
+}
+
+interface StorageTopologyReport {
+  readyForProduction?: boolean;
+  ready?: boolean;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  mode?: string;
+  storeMode?: string;
+  dataDir?: string;
+  dataPath?: string;
+  jsonPath?: string;
+  sqlitePath?: string;
+  backupDir?: string;
+  artifactDir?: string;
+  requirements?: StorageTopologyRequirement[];
+  warnings?: string[];
+  nextSteps?: string[];
+  observed?: {
+    nodeEnv?: string;
+    store?: string;
+    dbPath?: string | null;
+    schedulerLeaderMode?: string;
+    accessLogMode?: string;
+    accessLogPath?: string | null;
+    distributedRateLimitUrl?: string | null;
+  };
+  checks?: StorageTopologyCheck[];
+  [key: string]: unknown;
+}
+
+interface ManagedDatabaseTopologyCheck {
+  id?: string;
+  name?: string;
+  label?: string;
+  status?: string;
+  ready?: boolean;
+  passed?: boolean;
+  met?: boolean;
+  detail?: string;
+  message?: string;
+  reason?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+interface ManagedDatabaseTopologyReport {
+  readyForManagedDatabase?: boolean;
+  readyForProductionManagedDatabase?: boolean;
+  ready?: boolean;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  requested?: boolean;
+  configured?: boolean;
+  supported?: boolean;
+  managedDatabase?: {
+    requested?: boolean;
+    configured?: boolean;
+    supported?: boolean;
+  };
+  topology?: string;
+  provider?: string;
+  currentStore?: string;
+  store?: string;
+  observed?: Record<string, unknown> & {
+    databaseTopology?: unknown;
+    store?: unknown;
+  };
+  config?: Record<string, unknown>;
+  checks?: ManagedDatabaseTopologyCheck[];
+  blockers?: ReleaseReadinessIssue[];
+  warnings?: ReleaseReadinessIssue[];
+  nextSteps?: ReleaseReadinessIssue[];
+  [key: string]: unknown;
+}
+
+interface ManagedDatabaseRuntimeGuardCheck {
+  id?: string;
+  name?: string;
+  label?: string;
+  status?: string;
+  classification?: string;
+  allowed?: boolean;
+  ready?: boolean;
+  passed?: boolean;
+  detail?: string;
+  message?: string;
+  reason?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+interface ManagedDatabaseRuntimeGuardReport {
+  allowed?: boolean;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  checks?: ManagedDatabaseRuntimeGuardCheck[];
+  blockers?: ReleaseReadinessIssue[];
+  warnings?: ReleaseReadinessIssue[];
+  nextSteps?: ReleaseReadinessIssue[];
+  observed?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+type ReleaseReadinessTone = "danger" | "good" | "muted" | "warn";
+
+interface ReleaseReadinessCheck {
+  id?: string;
+  name?: string;
+  label?: string;
+  status?: string;
+  ready?: boolean;
+  passed?: boolean;
+  met?: boolean;
+  required?: boolean;
+  severity?: string;
+  detail?: string;
+  message?: string;
+  reason?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+interface ReleaseReadinessRequirement {
+  id: string;
+  met: boolean;
+  summary: string;
+}
+
+type ReleaseReadinessIssue = string | {
+  id?: string;
+  title?: string;
+  summary?: string;
+  detail?: string;
+  message?: string;
+  severity?: string;
+  status?: string;
+};
+
+interface ReleaseReadinessReport {
+  readyForRelease?: boolean;
+  ready?: boolean;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  phase?: string;
+  version?: string;
+  generatedAt?: string;
+  checks?: ReleaseReadinessCheck[];
+  requirements?: ReleaseReadinessRequirement[];
+  blockers?: ReleaseReadinessIssue[];
+  warnings?: ReleaseReadinessIssue[];
+  nextSteps?: ReleaseReadinessIssue[];
+  [key: string]: unknown;
+}
+
+interface ReleaseEvidenceBundle {
+  generatedAt?: string;
+  readyForRelease?: boolean;
+  ready?: boolean;
+  readiness?: string;
+  readinessStatus?: string;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  includedEvidenceCount?: number;
+  evidenceCount?: number;
+  attachmentCount?: number;
+  includedAttachmentCount?: number;
+  includedEvidence?: unknown[] | Record<string, unknown>;
+  evidence?: unknown[] | Record<string, unknown>;
+  attachments?: unknown[];
+  includedAttachments?: unknown[];
+  [key: string]: unknown;
 }
 
 interface JobMetricSnapshot {
@@ -784,6 +989,26 @@ function ProductionStatusPanel() {
           </div>
 
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <StorageTopologySection report={status.storageTopology} />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <ManagedDatabaseTopologySection report={status.managedDatabaseTopology} />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <ManagedDatabaseRuntimeGuardSection report={status.managedDatabaseRuntimeGuard} />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <ReleaseReadinessSection report={status.releaseReadiness} />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <ReleaseEvidenceSection bundle={status.releaseEvidence} />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
             <div className="kicker mb-3">JOBS</div>
             {status.jobs.length === 0 ? (
               <EmptyState>No queued jobs.</EmptyState>
@@ -935,6 +1160,669 @@ function formatDurationMs(ms: number | null): string {
   if (ms === null || ms === undefined) return "—";
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
   return `${Math.round(ms)} ms`;
+}
+
+function StorageTopologySection({ report }: { report: StorageTopologyReport | null | undefined }) {
+  if (!report) {
+    return (
+      <div>
+        <div className="kicker mb-1">STORAGE TOPOLOGY</div>
+        <h3 className="font-serif text-base text-ink-100">Storage topology</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting topology report
+        </p>
+      </div>
+    );
+  }
+
+  const readiness = storageTopologyReadiness(report);
+  const fields = storageTopologyFields(report);
+  const checks = storageTopologyChecks(report);
+  const followUps = [...(report.warnings ?? []), ...(report.nextSteps ?? [])];
+
+  return (
+    <div>
+      <div className="kicker mb-1">STORAGE TOPOLOGY</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Storage topology</h3>
+        <StatusBadge value={readiness.label} tone={readiness.tone} />
+      </div>
+      {report.summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{report.summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+      {checks.length === 0 ? (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          No topology checks reported.
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-800">
+          {checks.map((check, index) => {
+            const checkReadiness = storageTopologyCheckReadiness(check);
+            const detail = storageTopologyCheckDetail(check);
+            return (
+              <li key={String(check.id ?? check.name ?? check.label ?? index)} className="py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm text-ink-200">
+                    {String(check.label ?? check.name ?? check.id ?? `check ${index + 1}`)}
+                  </span>
+                  <StatusBadge value={checkReadiness.label} tone={checkReadiness.tone} />
+                </div>
+                {detail && <p className="mt-1 font-mono text-[11px] text-ink-500">{detail}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {followUps.length > 0 && (
+        <ul className="mt-3 space-y-1 font-mono text-[11px] text-ink-500">
+          {followUps.slice(0, 4).map((item, index) => (
+            <li key={`${index}-${item}`}>- {item}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function storageTopologyReadiness(report: StorageTopologyReport): { label: string; tone: StorageTopologyTone } {
+  if (typeof report.readyForProduction === "boolean") {
+    if (report.readyForProduction) {
+      return { label: report.classification ?? "production ready", tone: "good" };
+    }
+    return storageTopologyStatus(report.classification ?? report.status ?? "not ready");
+  }
+  if (typeof report.ready === "boolean") {
+    return report.ready ? { label: "ready", tone: "good" } : { label: "not ready", tone: "danger" };
+  }
+  return storageTopologyStatus(report.status ?? report.classification);
+}
+
+function storageTopologyCheckReadiness(check: StorageTopologyCheck): { label: string; tone: StorageTopologyTone } {
+  if (typeof check.ready === "boolean") {
+    return check.ready ? { label: "ready", tone: "good" } : { label: "not ready", tone: "danger" };
+  }
+  return storageTopologyStatus(check.status);
+}
+
+function storageTopologyStatus(status: unknown): { label: string; tone: StorageTopologyTone } {
+  const label = typeof status === "string" && status.trim() ? status.trim() : "unknown";
+  const normalized = label.toLowerCase().replaceAll(" ", "_");
+  if (["ready", "ok", "healthy", "configured", "available", "pass", "passed", "single-node"].includes(normalized)) {
+    return { label, tone: "good" };
+  }
+  if (["warn", "warning", "degraded", "partial", "pending", "local-dev"].includes(normalized)) {
+    return { label, tone: "warn" };
+  }
+  if (["blocked", "error", "down", "missing", "not_ready", "invalid", "fail", "failed", "production-blocked", "unsupported"].includes(normalized)) {
+    return { label, tone: "danger" };
+  }
+  return { label, tone: "muted" };
+}
+
+function storageTopologyFields(report: StorageTopologyReport) {
+  const entries: Array<[string, unknown]> = [
+    ["Mode", report.mode],
+    ["Classification", report.classification],
+    ["Node env", report.observed?.nodeEnv],
+    ["Store", report.observed?.store ?? report.storeMode],
+    ["DB path", report.observed?.dbPath ?? report.dataPath ?? report.sqlitePath ?? report.jsonPath],
+    ["Leader mode", report.observed?.schedulerLeaderMode],
+    ["Access log", report.observed?.accessLogMode],
+    ["Access log path", report.observed?.accessLogPath],
+    ["Rate limit", report.observed?.distributedRateLimitUrl],
+    ["Data dir", report.dataDir],
+    ["Backup dir", report.backupDir],
+    ["Artifact dir", report.artifactDir],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
+}
+
+function storageTopologyChecks(report: StorageTopologyReport): StorageTopologyCheck[] {
+  const requirements = (report.requirements ?? []).map((requirement) => ({
+    id: requirement.id,
+    label: requirement.id,
+    ready: requirement.met,
+    detail: requirement.summary,
+  }));
+  const checks = Array.isArray(report.checks) ? report.checks.filter(isStorageTopologyCheck) : [];
+  return [...requirements, ...checks];
+}
+
+function storageTopologyCheckDetail(check: StorageTopologyCheck): string {
+  const detail = check.detail ?? check.message ?? check.reason ?? check.path ?? check.target;
+  return typeof detail === "string" ? detail : "";
+}
+
+function formatStorageTopologyValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  return "";
+}
+
+function isStorageTopologyCheck(value: unknown): value is StorageTopologyCheck {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function ManagedDatabaseTopologySection({ report }: { report: ManagedDatabaseTopologyReport | null | undefined }) {
+  if (!report) {
+    return (
+      <div>
+        <div className="kicker mb-1">MANAGED DATABASE TOPOLOGY</div>
+        <h3 className="font-serif text-base text-ink-100">Managed database topology</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting managed database topology report
+        </p>
+      </div>
+    );
+  }
+
+  const readiness = managedDatabaseTopologyReadiness(report);
+  const fields = managedDatabaseTopologyFields(report);
+  const checks = managedDatabaseTopologyChecks(report);
+  const blockers = releaseReadinessIssues(report.blockers);
+  const warnings = releaseReadinessIssues(report.warnings);
+  const nextSteps = releaseReadinessIssues(report.nextSteps);
+
+  return (
+    <div>
+      <div className="kicker mb-1">MANAGED DATABASE TOPOLOGY</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Managed database topology</h3>
+        <StatusBadge value={readiness.label} tone={readiness.tone} />
+      </div>
+      {report.summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{report.summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+      {checks.length > 0 && (
+        <ul className="divide-y divide-ink-800">
+          {checks.slice(0, 6).map((check, index) => {
+            const checkReadiness = managedDatabaseTopologyCheckStatus(check);
+            const detail = managedDatabaseTopologyCheckDetail(check);
+            return (
+              <li key={String(check.id ?? check.name ?? check.label ?? index)} className="py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm text-ink-200">
+                    {String(check.label ?? check.name ?? check.id ?? `check ${index + 1}`)}
+                  </span>
+                  <StatusBadge value={checkReadiness.label} tone={checkReadiness.tone} />
+                </div>
+                {detail && <p className="mt-1 font-mono text-[11px] text-ink-500">{detail}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {blockers.length > 0 && <ReleaseReadinessIssueList title="BLOCKERS" tone="danger" items={blockers} />}
+      {warnings.length > 0 && <ReleaseReadinessIssueList title="WARNINGS" tone="warn" items={warnings} />}
+      {nextSteps.length > 0 && <ReleaseReadinessIssueList title="NEXT STEPS" tone="muted" items={nextSteps} />}
+      {fields.length === 0 && checks.length === 0 && blockers.length === 0 && warnings.length === 0 && nextSteps.length === 0 && (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          No managed database topology details reported.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function managedDatabaseTopologyReadiness(report: ManagedDatabaseTopologyReport): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof report.readyForProductionManagedDatabase === "boolean") {
+    if (report.readyForProductionManagedDatabase) return { label: report.classification ?? report.status ?? "ready", tone: "good" };
+    return releaseReadinessTone(report.classification ?? report.status ?? "blocked");
+  }
+  if (typeof report.readyForManagedDatabase === "boolean") {
+    if (report.readyForManagedDatabase) return { label: report.classification ?? report.status ?? "ready", tone: "good" };
+    return releaseReadinessTone(report.classification ?? report.status ?? "blocked");
+  }
+  if (typeof report.ready === "boolean") {
+    return report.ready ? { label: "ready", tone: "good" } : releaseReadinessTone(report.status ?? "blocked");
+  }
+  return releaseReadinessTone(report.status ?? report.classification);
+}
+
+function managedDatabaseTopologyCheckStatus(check: ManagedDatabaseTopologyCheck): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof check.ready === "boolean") {
+    return check.ready ? { label: "ready", tone: "good" } : releaseReadinessTone(check.status ?? "blocked");
+  }
+  if (typeof check.passed === "boolean") {
+    return check.passed ? { label: "passed", tone: "good" } : releaseReadinessTone(check.status ?? "failed");
+  }
+  if (typeof check.met === "boolean") {
+    return check.met ? { label: "met", tone: "good" } : releaseReadinessTone(check.status ?? "missing");
+  }
+  return releaseReadinessTone(check.status);
+}
+
+function managedDatabaseTopologyFields(report: ManagedDatabaseTopologyReport) {
+  const observed = report.observed ?? {};
+  const config = report.config ?? {};
+  const managedDatabase = report.managedDatabase ?? {};
+  const entries: Array<[string, unknown]> = [
+    ["Requested", report.requested ?? managedDatabase.requested ?? observed.requested ?? config.requested],
+    ["Configured", report.configured ?? managedDatabase.configured ?? observed.configured ?? config.configured],
+    ["Supported", report.supported ?? managedDatabase.supported ?? observed.supported ?? config.supported],
+    ["Topology", report.topology ?? observed.topology ?? observed.databaseTopology ?? config.topology],
+    ["Provider", report.provider ?? observed.provider ?? config.provider],
+    ["Current store", report.currentStore ?? report.store ?? observed.currentStore ?? observed.store ?? config.currentStore],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
+}
+
+function managedDatabaseTopologyChecks(report: ManagedDatabaseTopologyReport): ManagedDatabaseTopologyCheck[] {
+  return Array.isArray(report.checks) ? report.checks.filter(isManagedDatabaseTopologyCheck) : [];
+}
+
+function managedDatabaseTopologyCheckDetail(check: ManagedDatabaseTopologyCheck): string {
+  const detail = check.detail ?? check.message ?? check.reason ?? check.summary;
+  return typeof detail === "string" ? detail : "";
+}
+
+function isManagedDatabaseTopologyCheck(value: unknown): value is ManagedDatabaseTopologyCheck {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function ManagedDatabaseRuntimeGuardSection({ report }: { report: ManagedDatabaseRuntimeGuardReport | null | undefined }) {
+  if (!report) {
+    return (
+      <div>
+        <div className="kicker mb-1">RUNTIME GUARD</div>
+        <h3 className="font-serif text-base text-ink-100">Runtime guard</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting managed database runtime guard report
+        </p>
+      </div>
+    );
+  }
+
+  const readiness = managedDatabaseRuntimeGuardReadiness(report);
+  const fields = managedDatabaseRuntimeGuardFields(report);
+  const checks = managedDatabaseRuntimeGuardChecks(report);
+  const blockers = releaseReadinessIssues(report.blockers);
+  const warnings = releaseReadinessIssues(report.warnings);
+  const nextSteps = releaseReadinessIssues(report.nextSteps);
+
+  return (
+    <div>
+      <div className="kicker mb-1">RUNTIME GUARD</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Runtime guard</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge value={readiness.allowedLabel} tone={readiness.allowedTone} />
+          <StatusBadge value={readiness.label} tone={readiness.tone} />
+        </div>
+      </div>
+      {report.summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{report.summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+      {checks.length > 0 && (
+        <ul className="divide-y divide-ink-800">
+          {checks.slice(0, 6).map((check, index) => {
+            const checkReadiness = managedDatabaseRuntimeGuardCheckStatus(check);
+            const detail = managedDatabaseRuntimeGuardCheckDetail(check);
+            return (
+              <li key={String(check.id ?? check.name ?? check.label ?? index)} className="py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm text-ink-200">
+                    {String(check.label ?? check.name ?? check.id ?? `check ${index + 1}`)}
+                  </span>
+                  <StatusBadge value={checkReadiness.label} tone={checkReadiness.tone} />
+                </div>
+                {detail && <p className="mt-1 font-mono text-[11px] text-ink-500">{detail}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {blockers.length > 0 && <ReleaseReadinessIssueList title="BLOCKERS" tone="danger" items={blockers} />}
+      {warnings.length > 0 && <ReleaseReadinessIssueList title="WARNINGS" tone="warn" items={warnings} />}
+      {nextSteps.length > 0 && <ReleaseReadinessIssueList title="NEXT STEPS" tone="muted" items={nextSteps} />}
+      {fields.length === 0 && checks.length === 0 && blockers.length === 0 && warnings.length === 0 && nextSteps.length === 0 && (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          No runtime guard details reported.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function managedDatabaseRuntimeGuardReadiness(report: ManagedDatabaseRuntimeGuardReport): {
+  label: string;
+  tone: ReleaseReadinessTone;
+  allowedLabel: string;
+  allowedTone: ReleaseReadinessTone;
+} {
+  const allowed = typeof report.allowed === "boolean" ? report.allowed : undefined;
+  const status = releaseReadinessTone(report.status ?? report.classification ?? (allowed === false ? "blocked" : "unknown"));
+  return {
+    ...status,
+    allowedLabel: allowed === undefined ? "allowed unknown" : allowed ? "allowed" : "blocking",
+    allowedTone: allowed === undefined ? "muted" : allowed ? "good" : "danger",
+  };
+}
+
+function managedDatabaseRuntimeGuardCheckStatus(check: ManagedDatabaseRuntimeGuardCheck): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof check.allowed === "boolean") {
+    return check.allowed ? { label: "allowed", tone: "good" } : releaseReadinessTone(check.status ?? check.classification ?? "blocking");
+  }
+  if (typeof check.ready === "boolean") {
+    return check.ready ? { label: "ready", tone: "good" } : releaseReadinessTone(check.status ?? check.classification ?? "blocked");
+  }
+  if (typeof check.passed === "boolean") {
+    return check.passed ? { label: "passed", tone: "good" } : releaseReadinessTone(check.status ?? check.classification ?? "failed");
+  }
+  return releaseReadinessTone(check.status ?? check.classification);
+}
+
+function managedDatabaseRuntimeGuardFields(report: ManagedDatabaseRuntimeGuardReport) {
+  const observed = report.observed ?? {};
+  const config = report.config ?? {};
+  const entries: Array<[string, unknown]> = [
+    ["Allowed", report.allowed],
+    ["Classification", report.classification],
+    ["Topology", observed.topology ?? observed.databaseTopology ?? config.topology],
+    ["Provider", observed.provider ?? config.provider],
+    ["Store", observed.currentStore ?? observed.store ?? config.currentStore ?? config.store],
+    ["Managed intent", observed.managedDatabaseRequested ?? observed.managedIntent ?? config.managedDatabaseRequested],
+    ["Multi-writer", observed.multiWriterRequested ?? observed.multiWriterIntent ?? config.multiWriterRequested],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
+}
+
+function managedDatabaseRuntimeGuardChecks(report: ManagedDatabaseRuntimeGuardReport): ManagedDatabaseRuntimeGuardCheck[] {
+  return Array.isArray(report.checks) ? report.checks.filter(isManagedDatabaseRuntimeGuardCheck) : [];
+}
+
+function managedDatabaseRuntimeGuardCheckDetail(check: ManagedDatabaseRuntimeGuardCheck): string {
+  const detail = check.detail ?? check.message ?? check.reason ?? check.summary;
+  return typeof detail === "string" ? detail : "";
+}
+
+function isManagedDatabaseRuntimeGuardCheck(value: unknown): value is ManagedDatabaseRuntimeGuardCheck {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function ReleaseReadinessSection({ report }: { report: ReleaseReadinessReport | null | undefined }) {
+  if (!report) {
+    return (
+      <div>
+        <div className="kicker mb-1">RELEASE READINESS</div>
+        <h3 className="font-serif text-base text-ink-100">Release readiness</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting readiness report
+        </p>
+      </div>
+    );
+  }
+
+  const readiness = releaseReadinessStatus(report);
+  const fields = releaseReadinessFields(report);
+  const checks = releaseReadinessChecks(report);
+  const blockers = releaseReadinessIssues(report.blockers);
+  const warnings = releaseReadinessIssues(report.warnings);
+  const nextSteps = releaseReadinessIssues(report.nextSteps);
+
+  return (
+    <div>
+      <div className="kicker mb-1">RELEASE READINESS</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Release readiness</h3>
+        <StatusBadge value={readiness.label} tone={readiness.tone} />
+      </div>
+      {report.summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{report.summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+      {checks.length > 0 && (
+        <ul className="divide-y divide-ink-800">
+          {checks.slice(0, 8).map((check, index) => {
+            const checkReadiness = releaseReadinessCheckStatus(check);
+            const detail = releaseReadinessCheckDetail(check);
+            return (
+              <li key={String(check.id ?? check.name ?? check.label ?? index)} className="py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm text-ink-200">
+                    {String(check.label ?? check.name ?? check.id ?? `check ${index + 1}`)}
+                  </span>
+                  <StatusBadge value={checkReadiness.label} tone={checkReadiness.tone} />
+                </div>
+                {detail && <p className="mt-1 font-mono text-[11px] text-ink-500">{detail}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {blockers.length > 0 && (
+        <ReleaseReadinessIssueList title="BLOCKERS" tone="danger" items={blockers} />
+      )}
+      {warnings.length > 0 && (
+        <ReleaseReadinessIssueList title="WARNINGS" tone="warn" items={warnings} />
+      )}
+      {nextSteps.length > 0 && (
+        <ReleaseReadinessIssueList title="NEXT STEPS" tone="muted" items={nextSteps} />
+      )}
+      {checks.length === 0 && blockers.length === 0 && warnings.length === 0 && nextSteps.length === 0 && (
+        <div className="border border-dashed border-ink-700 px-4 py-6 text-center font-mono text-xs text-ink-500">
+          No release readiness checks reported.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReleaseEvidenceSection({ bundle }: { bundle: ReleaseEvidenceBundle | null | undefined }) {
+  if (!bundle) {
+    return (
+      <div>
+        <div className="kicker mb-1">RELEASE EVIDENCE</div>
+        <h3 className="font-serif text-base text-ink-100">Release evidence</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting evidence bundle
+        </p>
+      </div>
+    );
+  }
+
+  const readiness = releaseEvidenceReadiness(bundle);
+  const evidenceCount = releaseEvidenceCount(bundle, ["includedEvidenceCount", "evidenceCount"], ["includedEvidence", "evidence"]);
+  const attachmentCount = releaseEvidenceCount(
+    bundle,
+    ["attachmentCount", "includedAttachmentCount"],
+    ["attachments", "includedAttachments"],
+  );
+
+  return (
+    <div>
+      <div className="kicker mb-1">RELEASE EVIDENCE</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Release evidence</h3>
+        <StatusBadge value={readiness.label} tone={readiness.tone} />
+      </div>
+      {bundle.summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{bundle.summary}</p>
+      )}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <KeyValue label="Generated" value={bundle.generatedAt ? relative(bundle.generatedAt) : "unknown"} />
+        <KeyValue label="Included evidence" value={String(evidenceCount)} />
+        <KeyValue label="Attachments" value={String(attachmentCount)} />
+      </div>
+    </div>
+  );
+}
+
+function releaseEvidenceReadiness(bundle: ReleaseEvidenceBundle): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof bundle.readyForRelease === "boolean") {
+    return bundle.readyForRelease ? { label: "ready", tone: "good" } : releaseReadinessTone(bundle.status ?? "blocked");
+  }
+  if (typeof bundle.ready === "boolean") {
+    return bundle.ready ? { label: "ready", tone: "good" } : releaseReadinessTone(bundle.status ?? "blocked");
+  }
+  return releaseReadinessTone(bundle.readinessStatus ?? bundle.readiness ?? bundle.status ?? bundle.classification);
+}
+
+function releaseEvidenceCount(
+  bundle: ReleaseEvidenceBundle,
+  countKeys: Array<keyof ReleaseEvidenceBundle>,
+  listKeys: Array<keyof ReleaseEvidenceBundle>,
+): number {
+  for (const key of countKeys) {
+    const value = bundle[key];
+    if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  }
+  for (const key of listKeys) {
+    const value = bundle[key];
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === "object") return Object.keys(value).length;
+  }
+  return 0;
+}
+
+function ReleaseReadinessIssueList({
+  title,
+  tone,
+  items,
+}: {
+  title: string;
+  tone: ReleaseReadinessTone;
+  items: string[];
+}) {
+  const color = tone === "danger" ? "text-signal-red" : tone === "warn" ? "text-signal-amber" : "text-ink-500";
+  return (
+    <div className="mt-3">
+      <div className={`kicker mb-1 ${color}`}>{title}</div>
+      <ul className="space-y-1 font-mono text-[11px] text-ink-500">
+        {items.slice(0, 4).map((item, index) => (
+          <li key={`${index}-${item}`}>- {item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function releaseReadinessStatus(report: ReleaseReadinessReport): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof report.readyForRelease === "boolean") {
+    if (report.readyForRelease) {
+      return { label: report.classification ?? report.status ?? "ready", tone: "good" };
+    }
+    return releaseReadinessTone(report.classification ?? report.status ?? "blocked");
+  }
+  if (typeof report.ready === "boolean") {
+    return report.ready ? { label: "ready", tone: "good" } : releaseReadinessTone(report.status ?? "blocked");
+  }
+  return releaseReadinessTone(report.status ?? report.classification);
+}
+
+function releaseReadinessCheckStatus(check: ReleaseReadinessCheck): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof check.ready === "boolean") {
+    return check.ready ? { label: "ready", tone: "good" } : releaseReadinessTone(check.status ?? "blocked");
+  }
+  if (typeof check.passed === "boolean") {
+    return check.passed ? { label: "passed", tone: "good" } : releaseReadinessTone(check.status ?? "failed");
+  }
+  if (typeof check.met === "boolean") {
+    return check.met ? { label: "met", tone: "good" } : releaseReadinessTone(check.status ?? "missing");
+  }
+  return releaseReadinessTone(check.status);
+}
+
+function releaseReadinessTone(status: unknown): { label: string; tone: ReleaseReadinessTone } {
+  const label = typeof status === "string" && status.trim() ? status.trim() : "unknown";
+  const normalized = label.toLowerCase().replaceAll(" ", "_");
+  if (["ready", "ok", "healthy", "configured", "available", "pass", "passed", "met", "go"].includes(normalized)) {
+    return { label, tone: "good" };
+  }
+  if (["warn", "warning", "degraded", "partial", "pending", "review", "needs_review"].includes(normalized)) {
+    return { label, tone: "warn" };
+  }
+  if (["blocked", "error", "down", "missing", "not_ready", "invalid", "fail", "failed", "no_go"].includes(normalized)) {
+    return { label, tone: "danger" };
+  }
+  return { label, tone: "muted" };
+}
+
+function releaseReadinessFields(report: ReleaseReadinessReport) {
+  const entries: Array<[string, unknown]> = [
+    ["Phase", report.phase],
+    ["Version", report.version],
+    ["Generated", report.generatedAt ? relative(report.generatedAt) : null],
+    ["Classification", report.classification],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
+}
+
+function releaseReadinessChecks(report: ReleaseReadinessReport): ReleaseReadinessCheck[] {
+  const requirements = (report.requirements ?? []).map((requirement) => ({
+    id: requirement.id,
+    label: requirement.id,
+    met: requirement.met,
+    detail: requirement.summary,
+  }));
+  const checks = Array.isArray(report.checks) ? report.checks.filter(isReleaseReadinessCheck) : [];
+  return [...requirements, ...checks];
+}
+
+function releaseReadinessCheckDetail(check: ReleaseReadinessCheck): string {
+  const detail = check.detail ?? check.message ?? check.reason ?? check.summary;
+  const severity = typeof check.severity === "string" && check.severity ? `${check.severity} · ` : "";
+  const required = check.required === false ? "optional · " : "";
+  return typeof detail === "string" ? `${required}${severity}${detail}` : `${required}${severity}`.trim();
+}
+
+function releaseReadinessIssues(items: ReleaseReadinessIssue[] | undefined): string[] {
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => {
+    if (typeof item === "string") return item.trim() ? [item.trim()] : [];
+    if (!item || typeof item !== "object") return [];
+    const value = item.title ?? item.summary ?? item.detail ?? item.message ?? item.id;
+    const prefix = item.severity ? `${item.severity}: ` : "";
+    return typeof value === "string" && value.trim() ? [`${prefix}${value.trim()}`] : [];
+  });
+}
+
+function isReleaseReadinessCheck(value: unknown): value is ReleaseReadinessCheck {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function Sparkline({ values, width = 80, height = 20 }: { values: number[]; width?: number; height?: number }) {

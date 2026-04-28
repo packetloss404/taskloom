@@ -155,6 +155,19 @@ test("Operations surface renders the Production Status tile for admin sessions",
   assert.match(operations, /Recent alerts/);
   assert.match(operations, /deadLettered/);
   assert.match(operations, /RETRYING \(attempt /);
+  assert.match(operations, /storageTopology/);
+  assert.match(operations, /Storage topology/);
+  assert.match(operations, /managedDatabaseTopology/);
+  assert.match(operations, /Managed database topology/);
+  assert.match(operations, /MANAGED DATABASE TOPOLOGY/);
+  assert.match(operations, /managedDatabaseRuntimeGuard/);
+  assert.match(operations, /Runtime guard/);
+  assert.match(operations, /RUNTIME GUARD/);
+  assert.match(operations, /releaseReadiness/);
+  assert.match(operations, /Release readiness/);
+  assert.match(operations, /releaseEvidence/);
+  assert.match(operations, /Release evidence/);
+  assert.match(operations, /Included evidence/);
 });
 
 test("Operations surface hides the Production Status tile for viewer sessions", () => {

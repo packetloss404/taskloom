@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JobRecord, TaskloomData } from "./taskloom-store.js";
-import { getOperationsStatus, type JobTypeMetrics } from "./operations-status.js";
+import { getOperationsStatus, type JobTypeMetrics, type ManagedDatabaseRuntimeGuardReport } from "./operations-status.js";
 
 function emptyStore(): TaskloomData {
   return { jobs: [] } as unknown as TaskloomData;
@@ -150,6 +150,167 @@ test("access log reads max bytes, clamps max files to >= 1, and exposes file pat
   assert.equal(stdoutMode.accessLog.mode, "stdout");
   assert.equal(stdoutMode.accessLog.path, null);
   assert.equal(stdoutMode.accessLog.maxFiles, 10);
+});
+
+test("storageTopology is built from the injected environment", () => {
+  const fixture = {
+    ready: true,
+    status: "ready",
+    summary: "sqlite database and backup path configured",
+    checks: [
+      { name: "database", status: "ready", detail: "TASKLOOM_STORE=sqlite" },
+      { name: "backup", status: "ready", detail: "TASKLOOM_BACKUP_DIR configured" },
+    ],
+  };
+  let observedBackupDir: string | undefined;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_STORE: "sqlite", TASKLOOM_BACKUP_DIR: "backups" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildStorageTopologyReport: (env) => {
+      observedBackupDir = env.TASKLOOM_BACKUP_DIR;
+      return fixture as never;
+    },
+  });
+
+  assert.equal(observedBackupDir, "backups");
+  assert.deepEqual(status.storageTopology, fixture);
+});
+
+test("managedDatabaseTopology is built from the injected environment", () => {
+  const fixture = {
+    readyForManagedDatabase: true,
+    status: "ready",
+    summary: "managed postgres topology configured",
+    observed: {
+      requested: true,
+      configured: true,
+      supported: true,
+      topology: "managed",
+      provider: "postgres",
+      currentStore: "sqlite",
+    },
+    checks: [
+      { id: "requested", status: "ready", detail: "Managed database requested" },
+      { id: "provider", status: "ready", detail: "Provider configured" },
+    ],
+  };
+  let observedProvider: string | undefined;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_MANAGED_DATABASE_PROVIDER: "postgres" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildManagedDatabaseTopologyReport: (env) => {
+      observedProvider = env.TASKLOOM_MANAGED_DATABASE_PROVIDER;
+      return fixture as never;
+    },
+  });
+
+  assert.equal(observedProvider, "postgres");
+  assert.deepEqual(status.managedDatabaseTopology, fixture);
+});
+
+test("managedDatabaseRuntimeGuard is built from the injected environment", () => {
+  const fixture: ManagedDatabaseRuntimeGuardReport = {
+    phase: "46",
+    allowed: false,
+    status: "fail",
+    classification: "managed-database-blocked",
+    summary: "managed database runtime intent is blocked",
+    observed: {
+      nodeEnv: "development",
+      store: "sqlite",
+      dbPath: "/srv/taskloom/taskloom.sqlite",
+      databaseTopology: "managed-database",
+      bypassEnabled: false,
+      managedDatabaseUrl: "[redacted]",
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+    checks: [
+      { id: "managed-database-runtime", status: "fail", summary: "Managed database runtime is not enabled" },
+      { id: "multi-writer-runtime", status: "pass", summary: "No multi-writer intent detected" },
+    ],
+    blockers: ["Remove managed database runtime intent before startup"],
+    warnings: ["DATABASE_URL is advisory until runtime support lands"],
+    nextSteps: ["Use single-node SQLite until the managed database adapter is ready"],
+  };
+  let observedProvider: string | undefined;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_MANAGED_DATABASE_PROVIDER: "postgres" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildManagedDatabaseRuntimeGuardReport: (env) => {
+      observedProvider = env.TASKLOOM_MANAGED_DATABASE_PROVIDER;
+      return fixture;
+    },
+  });
+
+  assert.equal(observedProvider, "postgres");
+  assert.deepEqual(status.managedDatabaseRuntimeGuard, fixture);
+});
+
+test("releaseReadiness is built from the injected environment", () => {
+  const fixture = {
+    readyForRelease: false,
+    status: "blocked",
+    summary: "release readiness blocked by missing confirmation",
+    checks: [
+      { id: "release-confirmed", status: "blocked", detail: "Release confirmation is missing" },
+      { id: "storage-topology", status: "ready", detail: "Storage topology classified" },
+    ],
+    blockers: ["Confirm release owner sign-off"],
+    warnings: [],
+    nextSteps: ["Record release confirmation before handoff"],
+  };
+  let observedNodeEnv: string | undefined;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { NODE_ENV: "production" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: (env) => {
+      observedNodeEnv = env.NODE_ENV;
+      return fixture as never;
+    },
+  });
+
+  assert.equal(observedNodeEnv, "production");
+  assert.deepEqual(status.releaseReadiness, fixture);
+});
+
+test("releaseEvidence is built from the injected environment", () => {
+  const fixture = {
+    generatedAt: "2026-04-26T12:00:00.000Z",
+    readyForRelease: true,
+    status: "ready",
+    summary: "release evidence bundle includes handoff checks",
+    includedEvidence: [
+      { id: "readiness", title: "Release readiness", status: "pass" },
+      { id: "storage", title: "Storage topology", status: "pass" },
+    ],
+    attachments: [
+      { id: "handoff", name: "release-handoff.json", path: "artifacts/release-handoff.json" },
+    ],
+  };
+  let observedPhase: string | undefined;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_RELEASE_PHASE: "44" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseEvidenceBundle: (env) => {
+      observedPhase = env.TASKLOOM_RELEASE_PHASE;
+      return fixture as never;
+    },
+  });
+
+  assert.equal(observedPhase, "44");
+  assert.deepEqual(status.releaseEvidence, fixture);
 });
 
 test("generatedAt reflects the injected now", () => {

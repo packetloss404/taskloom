@@ -1,8 +1,19 @@
 import type { TaskloomData } from "./taskloom-store.js";
 import { loadStore as defaultLoadStore } from "./taskloom-store.js";
 import { getJobTypeMetrics, type JobTypeMetrics } from "./jobs/scheduler-metrics.js";
+import { buildStorageTopologyReport as defaultBuildStorageTopologyReport } from "./deployment/storage-topology.js";
+import { buildManagedDatabaseTopologyReport as defaultBuildManagedDatabaseTopologyReport } from "./deployment/managed-database-topology.js";
+import { buildManagedDatabaseRuntimeGuardReport as defaultBuildManagedDatabaseRuntimeGuardReport } from "./deployment/managed-database-runtime-guard.js";
+import { buildReleaseReadinessReport as defaultBuildReleaseReadinessReport } from "./deployment/release-readiness.js";
+import { buildReleaseEvidenceBundle as defaultBuildReleaseEvidenceBundle } from "./deployment/release-evidence.js";
 
 export type { JobTypeMetrics } from "./jobs/scheduler-metrics.js";
+
+export type StorageTopologyReport = ReturnType<typeof defaultBuildStorageTopologyReport>;
+export type ManagedDatabaseTopologyReport = ReturnType<typeof defaultBuildManagedDatabaseTopologyReport>;
+export type ManagedDatabaseRuntimeGuardReport = ReturnType<typeof defaultBuildManagedDatabaseRuntimeGuardReport>;
+export type ReleaseReadinessReport = ReturnType<typeof defaultBuildReleaseReadinessReport>;
+export type ReleaseEvidenceBundle = ReturnType<typeof defaultBuildReleaseEvidenceBundle>;
 
 export interface JobQueueStatusSummary {
   type: string;
@@ -29,6 +40,11 @@ export interface OperationsStatus {
     lastCapturedAt: string | null;
   };
   accessLog: { mode: "off" | "stdout" | "file"; path: string | null; maxBytes: number; maxFiles: number };
+  storageTopology: StorageTopologyReport;
+  managedDatabaseTopology: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
+  releaseReadiness: ReleaseReadinessReport;
+  releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
 }
 
@@ -37,6 +53,11 @@ export interface OperationsStatusDeps {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   jobTypeMetrics?: () => JobTypeMetrics[];
+  buildStorageTopologyReport?: (env: NodeJS.ProcessEnv) => StorageTopologyReport;
+  buildManagedDatabaseTopologyReport?: (env: NodeJS.ProcessEnv) => ManagedDatabaseTopologyReport;
+  buildManagedDatabaseRuntimeGuardReport?: (env: NodeJS.ProcessEnv) => ManagedDatabaseRuntimeGuardReport;
+  buildReleaseReadinessReport?: (env: NodeJS.ProcessEnv) => ReleaseReadinessReport;
+  buildReleaseEvidenceBundle?: (env: NodeJS.ProcessEnv) => ReleaseEvidenceBundle;
 }
 
 type LeaderMode = OperationsStatus["scheduler"]["leaderMode"];
@@ -162,6 +183,12 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
   const loadStore = deps.loadStore ?? defaultLoadStore;
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
+  const buildStorageTopologyReport = deps.buildStorageTopologyReport ?? defaultBuildStorageTopologyReport;
+  const buildManagedDatabaseTopologyReport = deps.buildManagedDatabaseTopologyReport ?? defaultBuildManagedDatabaseTopologyReport;
+  const buildManagedDatabaseRuntimeGuardReport =
+    deps.buildManagedDatabaseRuntimeGuardReport ?? defaultBuildManagedDatabaseRuntimeGuardReport;
+  const buildReleaseReadinessReport = deps.buildReleaseReadinessReport ?? defaultBuildReleaseReadinessReport;
+  const buildReleaseEvidenceBundle = deps.buildReleaseEvidenceBundle ?? defaultBuildReleaseEvidenceBundle;
 
   const data = loadStore();
   const leaderMode = resolveLeaderMode(env);
@@ -196,6 +223,11 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       maxBytes: resolveAccessLogMaxBytes(env),
       maxFiles: resolveAccessLogMaxFiles(env),
     },
+    storageTopology: buildStorageTopologyReport(env),
+    managedDatabaseTopology: buildManagedDatabaseTopologyReport(env),
+    managedDatabaseRuntimeGuard: buildManagedDatabaseRuntimeGuardReport(env),
+    releaseReadiness: buildReleaseReadinessReport(env),
+    releaseEvidence: buildReleaseEvidenceBundle(env),
     runtime: { nodeVersion: process.versions.node },
   };
 }

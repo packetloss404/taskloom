@@ -8,6 +8,7 @@ import type { ProviderName, ProviderStreamChunk, ProviderUsage } from "./types.j
 
 const DEFAULT_DB_FILE = "data/taskloom.sqlite";
 const PROVIDER_CALL_CAP = 5_000;
+let lastLedgerTimestampMs = 0;
 
 interface ProviderCallsWriteRepository {
   insertMany?: (records: ProviderCallRecord[]) => void;
@@ -23,7 +24,10 @@ export interface LedgerContext {
 }
 
 function nowIso(): string {
-  return new Date().toISOString();
+  const current = Date.now();
+  const timestamp = current > lastLedgerTimestampMs ? current : lastLedgerTimestampMs + 1;
+  lastLedgerTimestampMs = timestamp;
+  return new Date(timestamp).toISOString();
 }
 
 interface AppendCallResult {

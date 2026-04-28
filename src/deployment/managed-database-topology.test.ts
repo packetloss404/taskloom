@@ -1,0 +1,131 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  assessManagedDatabaseTopology,
+  buildManagedDatabaseTopologyReport,
+  type ManagedDatabaseTopologyObservedEnvValue,
+} from "./managed-database-topology.js";
+
+function observedEnvValue(
+  report: ReturnType<typeof assessManagedDatabaseTopology>,
+  name: string,
+): ManagedDatabaseTopologyObservedEnvValue {
+  const entry = report.observed.env[name];
+  assert.ok(entry, `expected observed env entry for ${name}`);
+  return entry;
+}
+
+test("local JSON reports current supported local mode", () => {
+  const report = assessManagedDatabaseTopology({ env: {} });
+
+  assert.equal(report.phase, "45");
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "local-json");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.requested, false);
+  assert.equal(report.managedDatabase.configured, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.observed.store, "json");
+  assert.equal(report.observed.dbPath, null);
+  assert.ok(report.summary.includes("supported local JSON"));
+  assert.ok(report.checks.some((check) => check.id === "supported-local-mode" && check.status === "pass"));
+  assert.equal(report.blockers.length, 0);
+});
+
+test("single-node SQLite reports current supported local persistence mode", () => {
+  const report = buildManagedDatabaseTopologyReport({
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_DATABASE_TOPOLOGY: "single-node",
+  });
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "single-node-sqlite");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.requested, false);
+  assert.equal(report.managedDatabase.configured, false);
+  assert.equal(report.observed.store, "sqlite");
+  assert.equal(report.observed.dbPath, "/srv/taskloom/taskloom.sqlite");
+  assert.equal(report.observed.databaseTopology, "single-node");
+  assert.ok(report.summary.includes("single-node SQLite"));
+});
+
+test("managed database URL is redacted and blocked as unimplemented runtime", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+  });
+  const urlEntry = observedEnvValue(report, "TASKLOOM_MANAGED_DATABASE_URL");
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.requested, true);
+  assert.equal(report.managedDatabase.configured, true);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(urlEntry.configured, true);
+  assert.equal(urlEntry.redacted, true);
+  assert.equal(urlEntry.value, "[redacted]");
+  assert.equal(report.observed.managedDatabaseUrl, "[redacted]");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("does not implement a managed database runtime")));
+  assert.ok(report.warnings.some((warning) => warning.includes("redacted advisory evidence")));
+});
+
+test("managed topology intent is blocked without claiming database support", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_DATABASE_TOPOLOGY: "managed-database",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.requested, true);
+  assert.equal(report.managedDatabase.configured, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.observed.databaseTopology, "managed-database");
+  assert.ok(
+    report.checks.some((check) => check.id === "managed-database-runtime" && check.status === "fail"),
+  );
+  assert.ok(report.nextSteps.some((step) => step.includes("managed database adapter")));
+});
+
+test("production SQLite remains single-node advisory-supported without managed database intent", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      NODE_ENV: "production",
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    },
+  });
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "single-node-sqlite");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.requested, false);
+  assert.equal(report.managedDatabase.configured, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.observed.isProductionEnv, true);
+  assert.equal(report.blockers.length, 0);
+  assert.ok(report.checks.some((check) => check.id === "production-topology" && check.status === "pass"));
+});
+
+test("production JSON surfaces blockers for production database topology readiness", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      NODE_ENV: "production",
+      TASKLOOM_STORE: "json",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "production-blocked");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.requested, false);
+  assert.ok(report.blockers.some((blocker) => blocker.includes("JSON storage")));
+  assert.ok(report.nextSteps.some((step) => step.includes("advisory evidence")));
+});

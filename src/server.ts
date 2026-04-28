@@ -68,6 +68,7 @@ import {
   handleAlertsDeliverJob,
   type AlertsDeliverJobPayload,
 } from "./alerts/alerts-deliver-handler.js";
+import { assertManagedDatabaseRuntimeSupported } from "./deployment/managed-database-runtime-guard.js";
 
 registerDefaultProviders();
 registerDefaultTools();
@@ -364,6 +365,7 @@ scheduler.register({
     return handleAlertsDeliverJob(job.payload as unknown as AlertsDeliverJobPayload);
   },
 });
+assertManagedDatabaseRuntimeSupported(process.env);
 scheduler.start();
 ensureMetricsSnapshotCronJob();
 ensureAlertsCronJob();

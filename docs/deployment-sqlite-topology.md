@@ -7,6 +7,8 @@ Taskloom supports two local persistence modes today:
 
 SQLite mode is a local runtime posture, not a distributed production database topology. It exists to exercise the same store API through SQLite migrations, query-indexed metadata, backup/restore commands, and safer local write behavior while keeping JSON as the default development path.
 
+Phase 42 adds storage topology readiness reporting around this posture. Operators can run `npm run deployment:check-storage` or `npm run deployment:check-storage -- --strict`, and the same advisory is exposed through `GET /api/app/operations/status` as `storageTopology` and rendered in the Operations UI. The report does not add managed Postgres, managed database repositories, distributed SQLite, or multi-writer SQLite support; it makes the current topology limits visible before release handoff. See `docs/deployment-storage-topology.md`.
+
 ## Supported Local SQLite Posture
 
 Supported use cases:
@@ -88,6 +90,8 @@ SQLite permits multiple readers and one writer, but Taskloom's SQLite runtime is
 For multi-process single-region deployments, introduce a managed relational database before scaling writes horizontally. For multi-region deployments, choose a database topology with explicit replication, failover, and write-leadership semantics. Keep the app runtime single-writer per logical workspace or introduce repository-level concurrency controls before active/active writes.
 
 Auth rate limits and invitation delivery have separate deployment notes in `README.md`, `docs/deployment-auth-hardening.md`, and `docs/roadmap.md`; this document only calls out that any production topology should coordinate those concerns outside one local SQLite file.
+
+The Phase 42 storage readiness report repeats these boundaries in operator-facing form. A clean report means the deployment matches the documented posture; it does not certify SQLite for horizontal write scaling or provision a managed relational database.
 
 ## When To Introduce Dedicated Relational Repositories
 
