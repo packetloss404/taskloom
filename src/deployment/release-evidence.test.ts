@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assessReleaseEvidence, buildReleaseEvidenceBundle, type ReleaseEvidenceEntry } from "./release-evidence.js";
+import type { ManagedDatabaseRuntimeGuardReport } from "./managed-database-runtime-guard.js";
+import type { ManagedDatabaseTopologyReport } from "./managed-database-topology.js";
 import type { ReleaseReadinessReport } from "./release-readiness.js";
 import type { StorageTopologyReport } from "./storage-topology.js";
 
@@ -44,6 +46,63 @@ function injectedReleaseReadiness(storageTopology: StorageTopologyReport): Relea
     warnings: [],
     nextSteps: ["Injected release next step."],
     storageTopology,
+    managedDatabaseTopology: injectedManagedDatabaseTopology(),
+    managedDatabaseRuntimeGuard: injectedManagedDatabaseRuntimeGuard(),
+  };
+}
+
+function injectedManagedDatabaseTopology(): ManagedDatabaseTopologyReport {
+  return {
+    phase: "45",
+    status: "pass",
+    classification: "single-node-sqlite",
+    ready: true,
+    summary: "Injected managed database topology.",
+    checks: [],
+    blockers: [],
+    warnings: [],
+    nextSteps: ["Injected managed topology next step."],
+    observed: {
+      nodeEnv: "production",
+      isProductionEnv: true,
+      store: "sqlite",
+      dbPath: "/data/taskloom.sqlite",
+      databaseTopology: null,
+      managedDatabaseUrl: null,
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+    managedDatabase: {
+      requested: false,
+      configured: false,
+      supported: false,
+    },
+  };
+}
+
+function injectedManagedDatabaseRuntimeGuard(): ManagedDatabaseRuntimeGuardReport {
+  return {
+    phase: "46",
+    allowed: true,
+    status: "pass",
+    classification: "single-node-sqlite",
+    summary: "Injected managed database runtime guard.",
+    checks: [],
+    blockers: [],
+    warnings: [],
+    nextSteps: ["Injected runtime guard next step."],
+    observed: {
+      nodeEnv: "production",
+      store: "sqlite",
+      dbPath: "/data/taskloom.sqlite",
+      databaseTopology: null,
+      bypassEnabled: false,
+      managedDatabaseUrl: null,
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
   };
 }
 
@@ -59,11 +118,15 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.equal(bundle.storageTopology.mode, "json");
   assert.equal(bundle.releaseReadiness.phase, "43");
   assert.equal(bundle.releaseReadiness.storageTopology, bundle.storageTopology);
+  assert.equal(bundle.managedDatabaseTopology.phase, "45");
+  assert.equal(bundle.managedDatabaseRuntimeGuard.phase, "46");
   assert.equal(bundle.evidence.config.storageMode, "json");
   assert.equal(bundle.evidence.config.backupConfigured, false);
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_STORE").configured, false);
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-42-storage-topology"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-43-release-readiness"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-45-managed-database-topology"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-46-runtime-guard"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-44-release-evidence"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_STORE=sqlite")));
 });
@@ -107,18 +170,25 @@ test("secret names and URLs with embedded credentials are redacted in evidence",
       TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
       TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
       TASKLOOM_API_TOKEN: "super-secret-token",
+      DATABASE_URL: "postgres://taskloom:visible@db.example.com/taskloom",
       TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://taskloom:secret@limits.internal/check",
     },
     generatedAt: "2026-04-28T19:00:00.000Z",
   });
 
   const token = evidenceEntry(bundle.evidence.environment, "TASKLOOM_API_TOKEN");
+  const databaseUrl = evidenceEntry(bundle.evidence.environment, "DATABASE_URL");
   const limiterUrl = evidenceEntry(bundle.evidence.environment, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL");
   const backupDir = evidenceEntry(bundle.evidence.environment, "TASKLOOM_BACKUP_DIR");
 
   assert.equal(token.configured, true);
   assert.equal(token.redacted, true);
   assert.equal(token.value, "[redacted]");
+  assert.equal(databaseUrl.configured, true);
+  assert.equal(databaseUrl.redacted, true);
+  assert.equal(databaseUrl.value, "[redacted]");
+  assert.equal(bundle.managedDatabaseTopology.observed.databaseUrl, "[redacted]");
+  assert.equal(bundle.managedDatabaseRuntimeGuard.observed.databaseUrl, "[redacted]");
   assert.equal(limiterUrl.redacted, true);
   assert.equal(limiterUrl.value, "[redacted]");
   assert.equal(backupDir.redacted, false);
@@ -128,6 +198,8 @@ test("secret names and URLs with embedded credentials are redacted in evidence",
 test("injected reports are embedded without calling report builders", () => {
   const storageTopology = injectedStorageTopology();
   const releaseReadiness = injectedReleaseReadiness(storageTopology);
+  const managedDatabaseTopology = injectedManagedDatabaseTopology();
+  const managedDatabaseRuntimeGuard = injectedManagedDatabaseRuntimeGuard();
   const bundle = assessReleaseEvidence({
     env: {
       NODE_ENV: "production",
@@ -135,18 +207,85 @@ test("injected reports are embedded without calling report builders", () => {
     },
     storageTopology,
     releaseReadiness,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
     buildStorageTopologyReport: () => {
       throw new Error("storage builder should not be called");
     },
     buildReleaseReadinessReport: () => {
       throw new Error("release builder should not be called");
     },
+    buildManagedDatabaseTopologyReport: () => {
+      throw new Error("managed topology builder should not be called");
+    },
+    buildManagedDatabaseRuntimeGuardReport: () => {
+      throw new Error("runtime guard builder should not be called");
+    },
   });
 
   assert.equal(bundle.storageTopology, storageTopology);
-  assert.equal(bundle.releaseReadiness, releaseReadiness);
+  assert.equal(bundle.releaseReadiness.storageTopology, releaseReadiness.storageTopology);
+  assert.equal(bundle.managedDatabaseTopology, managedDatabaseTopology);
+  assert.equal(bundle.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+  assert.equal(bundle.releaseReadiness.managedDatabaseTopology, managedDatabaseTopology);
+  assert.equal(bundle.releaseReadiness.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
   assert.equal(bundle.readyForRelease, true);
-  assert.deepEqual(bundle.nextSteps, ["Injected release next step."]);
+  assert.deepEqual(bundle.nextSteps, [
+    "Injected release next step.",
+    "Injected managed topology next step.",
+    "Injected runtime guard next step.",
+  ]);
+});
+
+test("strict evidence reflects managed database blockers in summary config and next steps", () => {
+  const bundle = assessReleaseEvidence({
+    env: {
+      NODE_ENV: "production",
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+      TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+      TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.managedDatabaseTopology.ready, false);
+  assert.equal(bundle.managedDatabaseRuntimeGuard.allowed, false);
+  assert.equal(bundle.evidence.config.managedDatabaseTopologyStatus, "fail");
+  assert.equal(bundle.evidence.config.managedDatabaseRuntimeGuardStatus, "fail");
+  assert.equal(bundle.evidence.config.managedDatabaseRuntimeAllowed, false);
+  assert.match(bundle.summary, /Managed DB blockers/);
+  assert.ok(bundle.summary.includes("does not implement a managed database runtime yet"));
+  assert.ok(bundle.summary.includes("does not support managed database storage yet"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("DATABASE_URL")));
+});
+
+test("release readiness managed reports are reused when present", () => {
+  const storageTopology = injectedStorageTopology();
+  const managedDatabaseTopology = injectedManagedDatabaseTopology();
+  const managedDatabaseRuntimeGuard = injectedManagedDatabaseRuntimeGuard();
+  const releaseReadiness = Object.assign(injectedReleaseReadiness(storageTopology), {
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  });
+  const bundle = assessReleaseEvidence({
+    storageTopology,
+    releaseReadiness,
+    buildManagedDatabaseTopologyReport: () => {
+      throw new Error("managed topology builder should not be called");
+    },
+    buildManagedDatabaseRuntimeGuardReport: () => {
+      throw new Error("runtime guard builder should not be called");
+    },
+  });
+
+  assert.equal(bundle.managedDatabaseTopology, managedDatabaseTopology);
+  assert.equal(bundle.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
 });
 
 test("generatedAt accepts Date injection", () => {

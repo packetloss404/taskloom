@@ -5,6 +5,14 @@ import {
   buildReleaseReadinessReport,
   type ReleaseReadinessEnv,
 } from "./release-readiness.js";
+import {
+  buildManagedDatabaseRuntimeGuardReport,
+  type ManagedDatabaseRuntimeGuardReport,
+} from "./managed-database-runtime-guard.js";
+import {
+  buildManagedDatabaseTopologyReport,
+  type ManagedDatabaseTopologyReport,
+} from "./managed-database-topology.js";
 import type { StorageTopologyReport } from "./storage-topology.js";
 
 function checkStatus(report: ReturnType<typeof assessReleaseReadiness>, id: string): string | undefined {
@@ -17,7 +25,11 @@ test("local JSON development produces warnings instead of release blockers", () 
   assert.equal(report.phase, "43");
   assert.equal(report.readyForRelease, true);
   assert.equal(report.storageTopology.mode, "json");
+  assert.equal(report.managedDatabaseTopology.classification, "local-json");
+  assert.equal(report.managedDatabaseRuntimeGuard.classification, "local-json");
   assert.equal(checkStatus(report, "storage-topology"), "warn");
+  assert.equal(checkStatus(report, "managed-database-topology"), "pass");
+  assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
   assert.equal(checkStatus(report, "backup-dir"), "warn");
   assert.equal(checkStatus(report, "restore-drill"), "warn");
   assert.equal(report.blockers.length, 0);
@@ -48,12 +60,77 @@ test("production SQLite with backup directory and restore drill passes release r
   assert.equal(report.readyForRelease, true);
   assert.equal(report.blockers.length, 0);
   assert.equal(checkStatus(report, "storage-topology"), "pass");
+  assert.equal(checkStatus(report, "managed-database-topology"), "pass");
+  assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
   assert.equal(checkStatus(report, "database-path"), "pass");
   assert.equal(checkStatus(report, "backup-dir"), "pass");
   assert.equal(checkStatus(report, "restore-drill"), "pass");
   assert.equal(checkStatus(report, "artifact-path"), "pass");
   assert.equal(checkStatus(report, "access-log-path"), "pass");
   assert.match(report.summary, /passed strict/);
+});
+
+test("strict release with a managed database URL fails managed topology and runtime guard checks", () => {
+  const report = assessReleaseReadiness({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+      TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+      TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+      TASKLOOM_TRUST_PROXY: "true",
+      TASKLOOM_ACCESS_LOG_MODE: "stdout",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(checkStatus(report, "managed-database-topology"), "fail");
+  assert.equal(checkStatus(report, "managed-database-runtime-guard"), "fail");
+  assert.equal(report.managedDatabaseTopology.ready, false);
+  assert.equal(report.managedDatabaseRuntimeGuard.allowed, false);
+  assert.ok(report.blockers.some((blocker) => /managed database topology/i.test(blocker)));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("runtime guard blocks startup")));
+  assert.ok(report.nextSteps.some((step) => step.includes("Remove managed database URL")));
+});
+
+test("runtime guard bypass warns without blocking release when the managed topology is already accepted", () => {
+  const env: ReleaseReadinessEnv = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_TRUST_PROXY: "true",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS: "true",
+  };
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport({
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+  });
+
+  const report = assessReleaseReadiness({
+    env,
+    managedDatabaseTopology,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+
+  assert.equal(report.managedDatabaseRuntimeGuard.allowed, true);
+  assert.equal(report.managedDatabaseRuntimeGuard.classification, "bypassed");
+  assert.equal(checkStatus(report, "managed-database-runtime-guard"), "warn");
+  assert.equal(report.readyForRelease, true);
+  assert.equal(report.blockers.length, 0);
+  assert.ok(report.warnings.some((warning) => warning.includes("bypassed")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS")));
 });
 
 test("production SQLite missing backup directory fails release readiness", () => {
@@ -122,6 +199,16 @@ test("injected storage report is embedded and used without calling the report bu
       probes: {},
     },
   };
+  const managedDatabaseTopology: ManagedDatabaseTopologyReport = buildManagedDatabaseTopologyReport({
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/data/taskloom.sqlite",
+  });
+  const managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport = buildManagedDatabaseRuntimeGuardReport({
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/data/taskloom.sqlite",
+  });
 
   const report = assessReleaseReadiness({
     env: {
@@ -133,13 +220,25 @@ test("injected storage report is embedded and used without calling the report bu
       TASKLOOM_ACCESS_LOG_MODE: "stdout",
     },
     storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
     buildStorageTopologyReport: () => {
       throw new Error("builder should not be called when storageTopology is injected");
+    },
+    buildManagedDatabaseTopologyReport: () => {
+      throw new Error("builder should not be called when managedDatabaseTopology is injected");
+    },
+    buildManagedDatabaseRuntimeGuardReport: () => {
+      throw new Error("builder should not be called when managedDatabaseRuntimeGuard is injected");
     },
   });
 
   assert.equal(report.readyForRelease, true);
   assert.equal(report.storageTopology, storageTopology);
+  assert.equal(report.managedDatabaseTopology, managedDatabaseTopology);
+  assert.equal(report.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
   assert.equal(checkStatus(report, "storage-topology"), "pass");
+  assert.equal(checkStatus(report, "managed-database-topology"), "pass");
+  assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
   assert.ok(report.warnings.includes("Injected topology warning."));
 });

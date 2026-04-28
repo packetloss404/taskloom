@@ -789,6 +789,9 @@ interface ReleaseReadinessReport {
   blockers?: ReleaseReadinessIssue[];
   warnings?: ReleaseReadinessIssue[];
   nextSteps?: ReleaseReadinessIssue[];
+  storageTopology?: StorageTopologyReport;
+  managedDatabaseTopology?: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   [key: string]: unknown;
 }
 
@@ -809,6 +812,10 @@ interface ReleaseEvidenceBundle {
   evidence?: unknown[] | Record<string, unknown>;
   attachments?: unknown[];
   includedAttachments?: unknown[];
+  releaseReadiness?: ReleaseReadinessReport;
+  storageTopology?: StorageTopologyReport;
+  managedDatabaseTopology?: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   [key: string]: unknown;
 }
 
@@ -1662,6 +1669,7 @@ function ReleaseEvidenceSection({ bundle }: { bundle: ReleaseEvidenceBundle | nu
   }
 
   const readiness = releaseEvidenceReadiness(bundle);
+  const handoffFields = releaseEvidenceHandoffFields(bundle);
   const evidenceCount = releaseEvidenceCount(bundle, ["includedEvidenceCount", "evidenceCount"], ["includedEvidence", "evidence"]);
   const attachmentCount = releaseEvidenceCount(
     bundle,
@@ -1683,6 +1691,9 @@ function ReleaseEvidenceSection({ bundle }: { bundle: ReleaseEvidenceBundle | nu
         <KeyValue label="Generated" value={bundle.generatedAt ? relative(bundle.generatedAt) : "unknown"} />
         <KeyValue label="Included evidence" value={String(evidenceCount)} />
         <KeyValue label="Attachments" value={String(attachmentCount)} />
+        {handoffFields.map((field) => (
+          <KeyValue key={field.label} label={field.label} value={field.value} />
+        ))}
       </div>
     </div>
   );
@@ -1784,12 +1795,47 @@ function releaseReadinessFields(report: ReleaseReadinessReport) {
     ["Version", report.version],
     ["Generated", report.generatedAt ? relative(report.generatedAt) : null],
     ["Classification", report.classification],
+    ["Storage topology", embeddedReportStatus(report.storageTopology)],
+    ["Managed topology", embeddedReportStatus(report.managedDatabaseTopology)],
+    ["Runtime guard", embeddedReportStatus(report.managedDatabaseRuntimeGuard)],
   ];
 
   return entries.flatMap(([label, raw]) => {
     const value = formatStorageTopologyValue(raw);
     return value ? [{ label, value }] : [];
   });
+}
+
+function releaseEvidenceHandoffFields(bundle: ReleaseEvidenceBundle) {
+  const entries: Array<[string, unknown]> = [
+    ["Readiness report", embeddedReportStatus(bundle.releaseReadiness)],
+    ["Managed topology", embeddedReportStatus(bundle.managedDatabaseTopology)],
+    ["Runtime guard", embeddedReportStatus(bundle.managedDatabaseRuntimeGuard)],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
+}
+
+function embeddedReportStatus(
+  report: {
+    status?: string;
+    classification?: string;
+    phase?: string;
+    ready?: boolean;
+    allowed?: boolean;
+    readyForProduction?: boolean;
+  } | null | undefined,
+): string | null {
+  if (!report) return null;
+  const status = report.classification ?? report.status;
+  if (typeof status === "string" && status.trim()) return status.trim();
+  if (typeof report.ready === "boolean") return report.ready ? "included" : "blocked";
+  if (typeof report.allowed === "boolean") return report.allowed ? "included" : "blocked";
+  if (typeof report.readyForProduction === "boolean") return report.readyForProduction ? "included" : "blocked";
+  return typeof report.phase === "string" ? `phase ${report.phase}` : "included";
 }
 
 function releaseReadinessChecks(report: ReleaseReadinessReport): ReleaseReadinessCheck[] {

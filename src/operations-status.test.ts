@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JobRecord, TaskloomData } from "./taskloom-store.js";
-import { getOperationsStatus, type JobTypeMetrics, type ManagedDatabaseRuntimeGuardReport } from "./operations-status.js";
+import {
+  getOperationsStatus,
+  type JobTypeMetrics,
+  type ManagedDatabaseRuntimeGuardReport,
+  type ManagedDatabaseTopologyReport,
+  type StorageTopologyReport,
+} from "./operations-status.js";
 
 function emptyStore(): TaskloomData {
   return { jobs: [] } as unknown as TaskloomData;
@@ -172,6 +178,8 @@ test("storageTopology is built from the injected environment", () => {
       observedBackupDir = env.TASKLOOM_BACKUP_DIR;
       return fixture as never;
     },
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
   });
 
   assert.equal(observedBackupDir, "backups");
@@ -206,6 +214,8 @@ test("managedDatabaseTopology is built from the injected environment", () => {
       observedProvider = env.TASKLOOM_MANAGED_DATABASE_PROVIDER;
       return fixture as never;
     },
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
   });
 
   assert.equal(observedProvider, "postgres");
@@ -311,6 +321,111 @@ test("releaseEvidence is built from the injected environment", () => {
 
   assert.equal(observedPhase, "44");
   assert.deepEqual(status.releaseEvidence, fixture);
+});
+
+test("release readiness and evidence receive the already-built managed reports", () => {
+  const storageTopology = {
+    readyForProduction: true,
+    status: "ready",
+    summary: "single-node sqlite storage ready",
+  } as unknown as StorageTopologyReport;
+  const managedDatabaseTopology: ManagedDatabaseTopologyReport = {
+    phase: "45",
+    status: "pass",
+    classification: "single-node-sqlite",
+    ready: true,
+    summary: "managed database topology handoff captured",
+    checks: [],
+    blockers: [],
+    warnings: [],
+    nextSteps: [],
+    observed: {
+      nodeEnv: "production",
+      isProductionEnv: true,
+      store: "sqlite",
+      dbPath: "/srv/taskloom/taskloom.sqlite",
+      databaseTopology: null,
+      managedDatabaseUrl: null,
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+    managedDatabase: { requested: false, configured: false, supported: false },
+  };
+  const managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport = {
+    phase: "46",
+    allowed: true,
+    status: "pass",
+    classification: "single-node-sqlite",
+    summary: "runtime guard allows single-node sqlite",
+    checks: [],
+    blockers: [],
+    warnings: [],
+    nextSteps: [],
+    observed: {
+      nodeEnv: "production",
+      store: "sqlite",
+      dbPath: "/srv/taskloom/taskloom.sqlite",
+      databaseTopology: null,
+      bypassEnabled: false,
+      managedDatabaseUrl: null,
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+  };
+  const releaseReadiness = {
+    readyForRelease: true,
+    status: "ready",
+    summary: "release readiness includes managed handoff",
+    checks: [],
+    blockers: [],
+    warnings: [],
+    nextSteps: [],
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  };
+  const releaseEvidence = {
+    generatedAt: "2026-04-26T12:00:00.000Z",
+    readyForRelease: true,
+    status: "ready",
+    summary: "release evidence includes managed handoff",
+    includedEvidence: [],
+    attachments: [],
+    storageTopology,
+    releaseReadiness,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  };
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_STORE: "sqlite" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildStorageTopologyReport: () => storageTopology,
+    buildManagedDatabaseTopologyReport: () => managedDatabaseTopology,
+    buildManagedDatabaseRuntimeGuardReport: () => managedDatabaseRuntimeGuard,
+    buildReleaseReadinessReport: (_env, deps) => {
+      assert.equal(deps?.storageTopology, storageTopology);
+      assert.equal(deps?.managedDatabaseTopology, managedDatabaseTopology);
+      assert.equal(deps?.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+      return releaseReadiness as never;
+    },
+    buildReleaseEvidenceBundle: (_env, deps) => {
+      assert.equal(deps?.storageTopology, storageTopology);
+      assert.equal(deps?.managedDatabaseTopology, managedDatabaseTopology);
+      assert.equal(deps?.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+      assert.equal(deps?.releaseReadiness, releaseReadiness);
+      return releaseEvidence as never;
+    },
+  });
+
+  assert.equal(status.storageTopology, storageTopology);
+  assert.equal(status.managedDatabaseTopology, managedDatabaseTopology);
+  assert.equal(status.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
+  assert.equal(status.releaseReadiness, releaseReadiness);
+  assert.equal(status.releaseEvidence, releaseEvidence);
 });
 
 test("generatedAt reflects the injected now", () => {

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { runReleaseReadinessCli } from "./release-readiness-cli.js";
 
+function parseJsonOutput(output: string[]): Record<string, unknown> {
+  return JSON.parse(output[0] ?? "") as Record<string, unknown>;
+}
+
 test("runReleaseReadinessCli prints the report as JSON", async () => {
   const output: string[] = [];
   const env = { TASKLOOM_RELEASE_CHANNEL: "phase-43" } as NodeJS.ProcessEnv;
@@ -26,6 +30,23 @@ test("runReleaseReadinessCli prints the report as JSON", async () => {
   });
 });
 
+test("runReleaseReadinessCli exports local JSON readiness in non-strict mode", async () => {
+  const output: string[] = [];
+  const env = {} as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseReadinessCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+  });
+  const report = parseJsonOutput(output);
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.readyForRelease, true);
+  assert.equal(report.phase, "43");
+  assert.equal((report.storageTopology as { mode?: unknown }).mode, "json");
+});
+
 test("runReleaseReadinessCli fails strict mode when the report is not release-ready", async () => {
   let receivedStrict: boolean | undefined;
   const exitCode = await runReleaseReadinessCli({
@@ -39,6 +60,27 @@ test("runReleaseReadinessCli fails strict mode when the report is not release-re
 
   assert.equal(exitCode, 1);
   assert.equal(receivedStrict, true);
+});
+
+test("runReleaseReadinessCli strict mode blocks managed database runtime handoff", async () => {
+  const output: string[] = [];
+  const env = {
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseReadinessCli({
+    argv: ["--strict"],
+    env,
+    out: (line) => output.push(line),
+  });
+  const report = parseJsonOutput(output);
+  const serializedReport = JSON.stringify(report);
+
+  assert.equal(exitCode, 1);
+  assert.equal(report.readyForRelease, false);
+  assert.match(serializedReport, /Managed database runtime intent was detected/);
+  assert.match(serializedReport, /managed-database-blocked/);
+  assert.doesNotMatch(serializedReport, /taskloom:secret/);
 });
 
 test("runReleaseReadinessCli passes strict mode when the report is release-ready", async () => {

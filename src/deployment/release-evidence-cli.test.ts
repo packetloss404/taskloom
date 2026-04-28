@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { runReleaseEvidenceCli } from "./release-evidence-cli.js";
 
+function parseJsonOutput(output: string[]): Record<string, unknown> {
+  return JSON.parse(output[0] ?? "") as Record<string, unknown>;
+}
+
 test("runReleaseEvidenceCli prints the evidence bundle as JSON", async () => {
   const output: string[] = [];
   const env = { TASKLOOM_RELEASE_CHANNEL: "phase-44" } as NodeJS.ProcessEnv;
@@ -28,6 +32,24 @@ test("runReleaseEvidenceCli prints the evidence bundle as JSON", async () => {
   });
 });
 
+test("runReleaseEvidenceCli exports local JSON evidence in non-strict mode", async () => {
+  const output: string[] = [];
+  const env = {} as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseEvidenceCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+  });
+  const bundle = parseJsonOutput(output);
+
+  assert.equal(exitCode, 0);
+  assert.equal(bundle.readyForRelease, true);
+  assert.equal(bundle.phase, "44");
+  assert.equal((bundle.storageTopology as { mode?: unknown }).mode, "json");
+  assert.equal(((bundle.evidence as { config?: { strictRelease?: unknown } }).config)?.strictRelease, false);
+});
+
 test("runReleaseEvidenceCli fails strict mode when the bundle is not release-ready", async () => {
   let receivedStrict: boolean | undefined;
 
@@ -42,6 +64,28 @@ test("runReleaseEvidenceCli fails strict mode when the bundle is not release-rea
 
   assert.equal(exitCode, 1);
   assert.equal(receivedStrict, true);
+});
+
+test("runReleaseEvidenceCli strict mode blocks managed database runtime handoff", async () => {
+  const output: string[] = [];
+  const env = {
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseEvidenceCli({
+    argv: ["--strict"],
+    env,
+    out: (line) => output.push(line),
+  });
+  const bundle = parseJsonOutput(output);
+  const serializedBundle = JSON.stringify(bundle);
+
+  assert.equal(exitCode, 1);
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(((bundle.evidence as { config?: { strictRelease?: unknown } }).config)?.strictRelease, true);
+  assert.match(serializedBundle, /Managed database runtime intent was detected/);
+  assert.match(serializedBundle, /managed-database-blocked/);
+  assert.doesNotMatch(serializedBundle, /taskloom:secret/);
 });
 
 test("runReleaseEvidenceCli passes strict mode when the bundle is release-ready", async () => {

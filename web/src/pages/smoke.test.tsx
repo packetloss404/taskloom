@@ -168,6 +168,8 @@ test("Operations surface renders the Production Status tile for admin sessions",
   assert.match(operations, /releaseEvidence/);
   assert.match(operations, /Release evidence/);
   assert.match(operations, /Included evidence/);
+  assert.match(operations, /Readiness report/);
+  assert.match(operations, /embeddedReportStatus/);
 });
 
 test("Operations surface hides the Production Status tile for viewer sessions", () => {

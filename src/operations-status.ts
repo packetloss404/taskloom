@@ -56,13 +56,29 @@ export interface OperationsStatusDeps {
   buildStorageTopologyReport?: (env: NodeJS.ProcessEnv) => StorageTopologyReport;
   buildManagedDatabaseTopologyReport?: (env: NodeJS.ProcessEnv) => ManagedDatabaseTopologyReport;
   buildManagedDatabaseRuntimeGuardReport?: (env: NodeJS.ProcessEnv) => ManagedDatabaseRuntimeGuardReport;
-  buildReleaseReadinessReport?: (env: NodeJS.ProcessEnv) => ReleaseReadinessReport;
-  buildReleaseEvidenceBundle?: (env: NodeJS.ProcessEnv) => ReleaseEvidenceBundle;
+  buildReleaseReadinessReport?: (
+    env: NodeJS.ProcessEnv,
+    deps?: IntegratedReleaseReadinessDeps,
+  ) => ReleaseReadinessReport;
+  buildReleaseEvidenceBundle?: (
+    env: NodeJS.ProcessEnv,
+    deps?: IntegratedReleaseEvidenceDeps,
+  ) => ReleaseEvidenceBundle;
 }
 
 type LeaderMode = OperationsStatus["scheduler"]["leaderMode"];
 type AccessLogMode = OperationsStatus["accessLog"]["mode"];
 type StoreMode = OperationsStatus["store"]["mode"];
+
+interface IntegratedReleaseReadinessDeps {
+  storageTopology: StorageTopologyReport;
+  managedDatabaseTopology: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
+}
+
+interface IntegratedReleaseEvidenceDeps extends IntegratedReleaseReadinessDeps {
+  releaseReadiness: ReleaseReadinessReport;
+}
 
 const VALID_LEADER_MODES: ReadonlySet<LeaderMode> = new Set(["off", "file", "http"]);
 const VALID_ACCESS_LOG_MODES: ReadonlySet<AccessLogMode> = new Set(["off", "stdout", "file"]);
@@ -192,6 +208,20 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
 
   const data = loadStore();
   const leaderMode = resolveLeaderMode(env);
+  const storageTopology = buildStorageTopologyReport(env);
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);
+  const managedDatabaseRuntimeGuard = buildManagedDatabaseRuntimeGuardReport(env);
+  const releaseReadiness = buildReleaseReadinessReport(env, {
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  });
+  const releaseEvidence = buildReleaseEvidenceBundle(env, {
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    releaseReadiness,
+  });
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -223,11 +253,11 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       maxBytes: resolveAccessLogMaxBytes(env),
       maxFiles: resolveAccessLogMaxFiles(env),
     },
-    storageTopology: buildStorageTopologyReport(env),
-    managedDatabaseTopology: buildManagedDatabaseTopologyReport(env),
-    managedDatabaseRuntimeGuard: buildManagedDatabaseRuntimeGuardReport(env),
-    releaseReadiness: buildReleaseReadinessReport(env),
-    releaseEvidence: buildReleaseEvidenceBundle(env),
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    releaseReadiness,
+    releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
   };
 }

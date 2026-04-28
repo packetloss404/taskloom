@@ -10,9 +10,24 @@ import {
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
 } from "./release-readiness.js";
+import {
+  buildManagedDatabaseTopologyReport as defaultBuildManagedDatabaseTopologyReport,
+  type ManagedDatabaseTopologyDeps,
+  type ManagedDatabaseTopologyEnv,
+  type ManagedDatabaseTopologyReport,
+} from "./managed-database-topology.js";
+import {
+  buildManagedDatabaseRuntimeGuardReport as defaultBuildManagedDatabaseRuntimeGuardReport,
+  type ManagedDatabaseRuntimeGuardDeps,
+  type ManagedDatabaseRuntimeGuardEnv,
+  type ManagedDatabaseRuntimeGuardReport,
+} from "./managed-database-runtime-guard.js";
 
 export type ReleaseEvidenceEnvValue = string | number | boolean | null | undefined;
-export type ReleaseEvidenceEnv = ReleaseReadinessEnv & Record<string, ReleaseEvidenceEnvValue>;
+export type ReleaseEvidenceEnv = ReleaseReadinessEnv &
+  ManagedDatabaseTopologyEnv &
+  ManagedDatabaseRuntimeGuardEnv &
+  Record<string, ReleaseEvidenceEnvValue>;
 
 export interface ReleaseEvidenceEntry {
   name: string;
@@ -35,13 +50,20 @@ export interface ReleaseEvidenceBundle {
   summary: string;
   readyForRelease: boolean;
   storageTopology: StorageTopologyReport;
-  releaseReadiness: ReleaseReadinessReport;
+  releaseReadiness: ReleaseEvidenceReleaseReadinessReport;
+  managedDatabaseTopology: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
   evidence: {
     environment: ReleaseEvidenceEntry[];
     config: {
       nodeEnv: string;
       storageMode: StorageTopologyReport["mode"];
       storageClassification: StorageTopologyReport["classification"];
+      managedDatabaseTopologyStatus: ManagedDatabaseTopologyReport["status"];
+      managedDatabaseTopologyClassification: ManagedDatabaseTopologyReport["classification"];
+      managedDatabaseRuntimeGuardStatus: ManagedDatabaseRuntimeGuardReport["status"];
+      managedDatabaseRuntimeGuardClassification: ManagedDatabaseRuntimeGuardReport["classification"];
+      managedDatabaseRuntimeAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -57,6 +79,10 @@ export interface ReleaseEvidenceDeps {
   probes?: StorageTopologyProbeDeps;
   storageTopology?: StorageTopologyReport;
   releaseReadiness?: ReleaseReadinessReport;
+  managedDatabaseTopology?: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+  managedDatabaseTopologyDeps?: ManagedDatabaseTopologyDeps;
+  managedDatabaseRuntimeGuardDeps?: ManagedDatabaseRuntimeGuardDeps;
   buildStorageTopologyReport?: (
     env?: StorageTopologyEnv,
     probes?: StorageTopologyProbeDeps,
@@ -65,8 +91,26 @@ export interface ReleaseEvidenceDeps {
     env?: ReleaseReadinessEnv,
     deps?: ReleaseReadinessDeps,
   ) => ReleaseReadinessReport;
+  buildManagedDatabaseTopologyReport?: (
+    env?: ManagedDatabaseTopologyEnv,
+    deps?: ManagedDatabaseTopologyDeps,
+  ) => ManagedDatabaseTopologyReport;
+  buildManagedDatabaseRuntimeGuardReport?: (
+    env?: ManagedDatabaseRuntimeGuardEnv,
+    deps?: ManagedDatabaseRuntimeGuardDeps,
+  ) => ManagedDatabaseRuntimeGuardReport;
   strict?: boolean;
 }
+
+type ReleaseReadinessWithManagedReports = ReleaseReadinessReport & {
+  managedDatabaseTopology?: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+};
+
+type ReleaseEvidenceReleaseReadinessReport = ReleaseReadinessReport & {
+  managedDatabaseTopology: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
+};
 
 export interface ReleaseEvidenceInput extends ReleaseEvidenceDeps {
   env?: ReleaseEvidenceEnv;
@@ -90,10 +134,16 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_ACCESS_LOG_PATH",
   "TASKLOOM_RELEASE_STRICT",
   "TASKLOOM_STRICT_RELEASE",
+  "TASKLOOM_MANAGED_DATABASE_URL",
+  "DATABASE_URL",
+  "TASKLOOM_DATABASE_URL",
+  "TASKLOOM_DATABASE_TOPOLOGY",
+  "TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
-const SECRET_URL_PATTERN = /^https?:\/\/[^/\s:@]+:[^/\s@]+@/i;
+const SECRET_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
+const DATABASE_URL_NAME_PATTERN = /(^|_)DATABASE_URL$/i;
 
 function stringValue(value: ReleaseEvidenceEnvValue): string {
   if (value === null || value === undefined) return "";
@@ -118,7 +168,7 @@ function hasUrlSecret(value: string): boolean {
 }
 
 function shouldRedact(name: string, value: string): boolean {
-  return configured(value) && (SENSITIVE_NAME_PATTERN.test(name) || hasUrlSecret(value));
+  return configured(value) && (DATABASE_URL_NAME_PATTERN.test(name) || SENSITIVE_NAME_PATTERN.test(name) || hasUrlSecret(value));
 }
 
 function redactValue(name: string, value: ReleaseEvidenceEnvValue): Pick<ReleaseEvidenceEntry, "value" | "redacted"> {
@@ -133,6 +183,14 @@ function releaseEnv(env: ReleaseEvidenceEnv): ReleaseReadinessEnv {
 }
 
 function storageEnv(env: ReleaseEvidenceEnv): StorageTopologyEnv {
+  return env;
+}
+
+function managedDatabaseTopologyEnv(env: ReleaseEvidenceEnv): ManagedDatabaseTopologyEnv {
+  return env;
+}
+
+function managedDatabaseRuntimeGuardEnv(env: ReleaseEvidenceEnv): ManagedDatabaseRuntimeGuardEnv {
   return env;
 }
 
@@ -169,6 +227,8 @@ function artifactPathConfigured(env: ReleaseEvidenceEnv): boolean {
 function buildAttachments(
   storageTopology: StorageTopologyReport,
   releaseReadiness: ReleaseReadinessReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   bundleReady: boolean,
 ): ReleaseEvidenceAttachment[] {
   return [
@@ -187,6 +247,20 @@ function buildAttachments(
       summary: releaseReadiness.summary,
     },
     {
+      id: "phase-45-managed-database-topology",
+      label: "Phase 45 managed database topology report",
+      format: "json",
+      required: true,
+      summary: managedDatabaseTopology.summary,
+    },
+    {
+      id: "phase-46-runtime-guard",
+      label: "Phase 46 managed database runtime guard report",
+      format: "json",
+      required: true,
+      summary: managedDatabaseRuntimeGuard.summary,
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -198,10 +272,36 @@ function buildAttachments(
   ];
 }
 
-function buildSummary(releaseReadiness: ReleaseReadinessReport): string {
-  return releaseReadiness.readyForRelease
-    ? `Phase 44 release evidence is ready for handoff. ${releaseReadiness.summary}`
-    : `Phase 44 release evidence is blocked. ${releaseReadiness.summary}`;
+function buildSummary(
+  releaseReadiness: ReleaseReadinessReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  readyForRelease: boolean,
+): string {
+  if (readyForRelease) {
+    return `Phase 44 release evidence is ready for handoff. ${releaseReadiness.summary} ${managedDatabaseTopology.summary} ${managedDatabaseRuntimeGuard.summary}`;
+  }
+
+  const managedBlockers = [
+    ...managedDatabaseTopology.blockers,
+    ...managedDatabaseRuntimeGuard.blockers,
+  ];
+  const managedDetail = managedBlockers.length > 0
+    ? ` Managed DB blockers: ${managedBlockers.join(" ")}`
+    : "";
+  return `Phase 44 release evidence is blocked. ${releaseReadiness.summary} ${managedDatabaseTopology.summary} ${managedDatabaseRuntimeGuard.summary}${managedDetail}`;
+}
+
+function buildNextSteps(
+  releaseReadiness: ReleaseReadinessReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): string[] {
+  return Array.from(new Set([
+    ...releaseReadiness.nextSteps,
+    ...managedDatabaseTopology.nextSteps,
+    ...managedDatabaseRuntimeGuard.nextSteps,
+  ]));
 }
 
 export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): ReleaseEvidenceBundle {
@@ -218,24 +318,63 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
     (input.buildReleaseReadinessReport ?? defaultBuildReleaseReadinessReport)(releaseEnv(env), {
       probes: input.probes,
       storageTopology,
+      managedDatabaseTopology: input.managedDatabaseTopology,
+      managedDatabaseRuntimeGuard: input.managedDatabaseRuntimeGuard,
       strict: input.strict,
       buildStorageTopologyReport,
+      buildManagedDatabaseTopologyReport: input.buildManagedDatabaseTopologyReport,
+      buildManagedDatabaseRuntimeGuardReport: input.buildManagedDatabaseRuntimeGuardReport,
     });
-  const readyForRelease = releaseReadiness.readyForRelease;
+  const releaseReadinessWithManagedReports = releaseReadiness as ReleaseReadinessWithManagedReports;
+  const managedDatabaseTopology =
+    input.managedDatabaseTopology ??
+    releaseReadinessWithManagedReports.managedDatabaseTopology ??
+    (input.buildManagedDatabaseTopologyReport ?? defaultBuildManagedDatabaseTopologyReport)(
+      managedDatabaseTopologyEnv(env),
+      input.managedDatabaseTopologyDeps,
+    );
+  const managedDatabaseRuntimeGuard =
+    input.managedDatabaseRuntimeGuard ??
+    releaseReadinessWithManagedReports.managedDatabaseRuntimeGuard ??
+    (input.buildManagedDatabaseRuntimeGuardReport ?? defaultBuildManagedDatabaseRuntimeGuardReport)(
+      managedDatabaseRuntimeGuardEnv(env),
+      input.managedDatabaseRuntimeGuardDeps,
+    );
+  const readyForRelease =
+    releaseReadiness.readyForRelease &&
+    managedDatabaseTopology.ready &&
+    managedDatabaseRuntimeGuard.allowed;
+  const releaseReadinessEvidence: ReleaseEvidenceReleaseReadinessReport = {
+    ...releaseReadiness,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  };
 
   return {
     phase: "44",
     generatedAt,
-    summary: buildSummary(releaseReadiness),
+    summary: buildSummary(
+      releaseReadiness,
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+      readyForRelease,
+    ),
     readyForRelease,
     storageTopology,
-    releaseReadiness,
+    releaseReadiness: releaseReadinessEvidence,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
     evidence: {
       environment: buildEnvironmentEvidence(env),
       config: {
         nodeEnv: storageTopology.observed.nodeEnv,
         storageMode: storageTopology.mode,
         storageClassification: storageTopology.classification,
+        managedDatabaseTopologyStatus: managedDatabaseTopology.status,
+        managedDatabaseTopologyClassification: managedDatabaseTopology.classification,
+        managedDatabaseRuntimeGuardStatus: managedDatabaseRuntimeGuard.status,
+        managedDatabaseRuntimeGuardClassification: managedDatabaseRuntimeGuard.classification,
+        managedDatabaseRuntimeAllowed: managedDatabaseRuntimeGuard.allowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),
@@ -243,8 +382,14 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         accessLogMode: storageTopology.observed.accessLogMode,
       },
     },
-    attachments: buildAttachments(storageTopology, releaseReadiness, readyForRelease),
-    nextSteps: releaseReadiness.nextSteps,
+    attachments: buildAttachments(
+      storageTopology,
+      releaseReadiness,
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+      readyForRelease,
+    ),
+    nextSteps: buildNextSteps(releaseReadiness, managedDatabaseTopology, managedDatabaseRuntimeGuard),
   };
 }
 

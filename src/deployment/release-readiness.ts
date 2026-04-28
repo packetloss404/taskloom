@@ -4,10 +4,23 @@ import {
   type StorageTopologyProbeDeps,
   type StorageTopologyReport,
 } from "./storage-topology.js";
+import {
+  buildManagedDatabaseTopologyReport as defaultBuildManagedDatabaseTopologyReport,
+  type ManagedDatabaseTopologyEnv,
+  type ManagedDatabaseTopologyReport,
+} from "./managed-database-topology.js";
+import {
+  buildManagedDatabaseRuntimeGuardReport as defaultBuildManagedDatabaseRuntimeGuardReport,
+  type ManagedDatabaseRuntimeGuardEnv,
+  type ManagedDatabaseRuntimeGuardReport,
+} from "./managed-database-runtime-guard.js";
 
 export type ReleaseReadinessStatus = "pass" | "warn" | "fail";
 
-export interface ReleaseReadinessEnv extends StorageTopologyEnv {
+export interface ReleaseReadinessEnv
+  extends StorageTopologyEnv,
+    ManagedDatabaseTopologyEnv,
+    ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_BACKUP_DIR?: string;
   TASKLOOM_ARTIFACTS_PATH?: string;
   TASKLOOM_ARTIFACT_DIR?: string;
@@ -33,15 +46,25 @@ export interface ReleaseReadinessReport {
   warnings: string[];
   nextSteps: string[];
   storageTopology: StorageTopologyReport;
+  managedDatabaseTopology: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
 }
 
 export interface ReleaseReadinessDeps {
   probes?: StorageTopologyProbeDeps;
   storageTopology?: StorageTopologyReport;
+  managedDatabaseTopology?: ManagedDatabaseTopologyReport;
+  managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   buildStorageTopologyReport?: (
     env?: StorageTopologyEnv,
     probes?: StorageTopologyProbeDeps,
   ) => StorageTopologyReport;
+  buildManagedDatabaseTopologyReport?: (
+    env?: ManagedDatabaseTopologyEnv,
+  ) => ManagedDatabaseTopologyReport;
+  buildManagedDatabaseRuntimeGuardReport?: (
+    env?: ManagedDatabaseRuntimeGuardEnv,
+  ) => ManagedDatabaseRuntimeGuardReport;
   strict?: boolean;
 }
 
@@ -124,13 +147,40 @@ function storageCheckStatus(
   return chooseBlockingStatus(isGated);
 }
 
-function buildNextSteps(checks: ReleaseReadinessCheck[], storageTopology: StorageTopologyReport): string[] {
+function managedTopologyCheckStatus(
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  isGated: boolean,
+): ReleaseReadinessStatus {
+  if (managedDatabaseTopology.ready) return "pass";
+  return chooseBlockingStatus(isGated);
+}
+
+function runtimeGuardCheckStatus(
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  isGated: boolean,
+): ReleaseReadinessStatus {
+  if (!managedDatabaseRuntimeGuard.allowed) return chooseBlockingStatus(isGated);
+  return managedDatabaseRuntimeGuard.status === "warn" ? "warn" : "pass";
+}
+
+function buildNextSteps(
+  checks: ReleaseReadinessCheck[],
+  storageTopology: StorageTopologyReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): string[] {
   const steps = new Set<string>();
 
   for (const check of checks) {
     if (check.status === "pass") continue;
     if (check.id === "storage-topology") {
       for (const step of storageTopology.nextSteps) steps.add(step);
+    }
+    if (check.id === "managed-database-topology") {
+      for (const step of managedDatabaseTopology.nextSteps) steps.add(step);
+    }
+    if (check.id === "managed-database-runtime-guard") {
+      for (const step of managedDatabaseRuntimeGuard.nextSteps) steps.add(step);
     }
     if (check.id === "backup-dir") {
       steps.add("Set TASKLOOM_BACKUP_DIR to a backed-up directory and verify it exists before release handoff.");
@@ -162,6 +212,12 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
   const storageTopology =
     input.storageTopology ??
     (input.buildStorageTopologyReport ?? defaultBuildStorageTopologyReport)(env, input.probes);
+  const managedDatabaseTopology =
+    input.managedDatabaseTopology ??
+    (input.buildManagedDatabaseTopologyReport ?? defaultBuildManagedDatabaseTopologyReport)(env);
+  const managedDatabaseRuntimeGuard =
+    input.managedDatabaseRuntimeGuard ??
+    (input.buildManagedDatabaseRuntimeGuardReport ?? defaultBuildManagedDatabaseRuntimeGuardReport)(env);
   const checks: ReleaseReadinessCheck[] = [];
 
   pushCheck(
@@ -171,6 +227,24 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
     storageTopology.readyForProduction
       ? `Storage topology is release-ready: ${storageTopology.summary}`
       : `Storage topology is not production-ready: ${storageTopology.summary}`,
+  );
+
+  pushCheck(
+    checks,
+    "managed-database-topology",
+    managedTopologyCheckStatus(managedDatabaseTopology, isGated),
+    managedDatabaseTopology.ready
+      ? `Managed database topology is release-ready: ${managedDatabaseTopology.summary}`
+      : `Managed database topology is not release-ready: ${managedDatabaseTopology.summary}`,
+  );
+
+  pushCheck(
+    checks,
+    "managed-database-runtime-guard",
+    runtimeGuardCheckStatus(managedDatabaseRuntimeGuard, isGated),
+    managedDatabaseRuntimeGuard.allowed
+      ? `Managed database runtime guard allows startup: ${managedDatabaseRuntimeGuard.summary}`
+      : `Managed database runtime guard blocks startup: ${managedDatabaseRuntimeGuard.summary}`,
   );
 
   const dbPath = clean(env.TASKLOOM_DB_PATH);
@@ -278,6 +352,8 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
   const warnings = [
     ...checks.filter((check) => check.status === "warn").map((check) => check.summary),
     ...storageTopology.warnings,
+    ...managedDatabaseTopology.warnings,
+    ...managedDatabaseRuntimeGuard.warnings,
   ];
   const readyForRelease = blockers.length === 0;
   const summary = readyForRelease
@@ -293,8 +369,15 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, storageTopology),
+    nextSteps: buildNextSteps(
+      checks,
+      storageTopology,
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+    ),
     storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
   };
 }
 
