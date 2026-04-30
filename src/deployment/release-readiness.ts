@@ -35,6 +35,8 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN?: string;
   TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN?: string;
   TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW?: string;
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -89,6 +91,7 @@ export interface AsyncStoreBoundaryReport {
   managedDatabaseRuntimeCallSitesMigrated: boolean;
   managedDatabaseRemainingSyncCallSiteGroups: string[];
   phase53MultiWriterTopologyGate?: Phase53MultiWriterTopologyGateReport;
+  phase55MultiWriterImplementationAuthorizationGate?: Phase55MultiWriterImplementationAuthorizationGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -118,6 +121,21 @@ export interface Phase53MultiWriterTopologyGateReport {
   rollbackPlanEvidenceRequired: boolean;
   rollbackPlanEvidenceAttached: boolean;
   designPackageEvidence: Phase53MultiWriterTopologyEvidenceItem[];
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
+export interface Phase55MultiWriterImplementationAuthorizationGateReport {
+  phase: "55";
+  required: boolean;
+  designPackageReviewEvidenceRequired: boolean;
+  designPackageReviewEvidenceAttached: boolean;
+  implementationAuthorizationEvidenceRequired: boolean;
+  implementationAuthorizationEvidenceAttached: boolean;
+  implementationAuthorized: boolean;
+  runtimeSupportBlocked: boolean;
   releaseAllowed: boolean;
   summary: string;
   blockers: string[];
@@ -189,6 +207,13 @@ function normalize(value: string | undefined): string {
 function truthy(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes(normalize(value));
 }
+
+const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
+  "approved",
+  "authorized",
+  "implementation-approved",
+  "implementation-authorized",
+]);
 
 function parentPath(path: string): string | null {
   const normalized = path.replace(/\\/g, "/");
@@ -491,6 +516,94 @@ function buildPhase53MultiWriterTopologyGate(
   };
 }
 
+function buildPhase55MultiWriterImplementationAuthorizationGate(
+  multiWriterIntent: boolean,
+  phase53Gate: Phase53MultiWriterTopologyGateReport,
+  env: ReleaseReadinessEnv,
+): Phase55MultiWriterImplementationAuthorizationGateReport {
+  const designPackageReviewReferenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW).length > 0;
+  const designReviewerAttached = clean(env.TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER).length > 0;
+  const reviewStatusApproved = PHASE_55_APPROVED_REVIEW_STATUSES.has(
+    normalize(env.TASKLOOM_MULTI_WRITER_REVIEW_STATUS),
+  );
+  const implementationAuthorizationReferenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION).length > 0;
+  const implementationApproverAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER).length > 0;
+  const approvedImplementationScopeAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE).length > 0;
+  const safetySignoffAttached = clean(env.TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF).length > 0;
+  const designPackageReviewEvidenceAttached =
+    designPackageReviewReferenceAttached || (designReviewerAttached && reviewStatusApproved);
+  const implementationAuthorizationEvidenceAttached =
+    implementationAuthorizationReferenceAttached ||
+    (implementationApproverAttached && approvedImplementationScopeAttached && safetySignoffAttached);
+  const implementationAuthorized =
+    multiWriterIntent &&
+    phase53Gate.designPackageEvidenceAttached &&
+    designPackageReviewEvidenceAttached &&
+    implementationAuthorizationEvidenceAttached;
+
+  if (!multiWriterIntent) {
+    return {
+      phase: "55",
+      required: false,
+      designPackageReviewEvidenceRequired: false,
+      designPackageReviewEvidenceAttached,
+      implementationAuthorizationEvidenceRequired: false,
+      implementationAuthorizationEvidenceAttached,
+      implementationAuthorized: false,
+      runtimeSupportBlocked: false,
+      releaseAllowed: true,
+      summary: "Phase 55 multi-writer design-package review and implementation authorization gate is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 55 review and implementation authorization evidence ready before starting multi-writer runtime implementation work."],
+    };
+  }
+
+  return {
+    phase: "55",
+    required: true,
+    designPackageReviewEvidenceRequired: true,
+    designPackageReviewEvidenceAttached,
+    implementationAuthorizationEvidenceRequired: true,
+    implementationAuthorizationEvidenceAttached,
+    implementationAuthorized,
+    runtimeSupportBlocked: true,
+    releaseAllowed: false,
+    summary: implementationAuthorized
+      ? "Phase 55 multi-writer design-package review and implementation authorization evidence is attached, but multi-writer runtime support remains blocked until a later runtime release gate explicitly allows it."
+      : phase53Gate.designPackageEvidenceAttached
+        ? "Phase 55 multi-writer design-package review and implementation authorization evidence is required before any multi-writer runtime implementation work."
+        : "Phase 55 multi-writer implementation authorization requires the Phase 54 design package before review or authorization can unblock implementation planning.",
+    blockers: [
+      ...(!phase53Gate.designPackageEvidenceAttached
+        ? ["Phase 55 multi-writer implementation authorization requires attached Phase 54 design-package evidence before review."]
+        : []),
+      ...(!designPackageReviewEvidenceAttached
+        ? ["Phase 55 multi-writer design-package review evidence is required before runtime implementation work; attach TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW or provide TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER with approved TASKLOOM_MULTI_WRITER_REVIEW_STATUS."]
+        : []),
+      ...(!implementationAuthorizationEvidenceAttached
+        ? ["Phase 55 multi-writer implementation authorization evidence is required before runtime implementation work; attach TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION or provide approver, approved scope, and safety signoff evidence."]
+        : []),
+      "Phase 55 multi-writer runtime support remains blocked; review and authorization evidence does not permit release until a later runtime implementation gate explicitly allows it.",
+    ],
+    nextSteps: [
+      ...(!phase53Gate.designPackageEvidenceAttached
+        ? ["Complete and attach the Phase 54 multi-writer design package before requesting Phase 55 review or implementation authorization."]
+        : []),
+      ...(!designPackageReviewEvidenceAttached
+        ? ["Attach Phase 55 multi-writer design-package review evidence, or set TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER plus TASKLOOM_MULTI_WRITER_REVIEW_STATUS=approved before starting runtime implementation work."]
+        : []),
+      ...(!implementationAuthorizationEvidenceAttached
+        ? ["Attach Phase 55 multi-writer implementation authorization evidence, or set TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER, TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE, and TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF before starting runtime implementation work."]
+        : []),
+      "Keep multi-writer runtime release blocked after Phase 55 authorization until implementation support and a later release gate explicitly allow it.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -627,6 +740,12 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseRuntimeGuard.classification === "multi-writer-blocked" ||
     managedDatabaseRuntimeBoundary.classification === "multi-writer-blocked";
   const phase53MultiWriterTopologyGate = buildPhase53MultiWriterTopologyGate(multiWriterIntent, env);
+  const phase55MultiWriterImplementationAuthorizationGate =
+    buildPhase55MultiWriterImplementationAuthorizationGate(
+      multiWriterIntent,
+      phase53MultiWriterTopologyGate,
+      env,
+    );
   const unsupportedStore =
     managedDatabaseTopology.classification === "unsupported-store" ||
     managedDatabaseRuntimeGuard.classification === "unsupported-store" ||
@@ -641,6 +760,7 @@ export function buildAsyncStoreBoundaryReport(
     ...managedDatabaseRuntimeGuard.blockers,
     ...managedDatabaseRuntimeBoundary.blockers,
     ...phase53MultiWriterTopologyGate.blockers,
+    ...phase55MultiWriterImplementationAuthorizationGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -652,6 +772,7 @@ export function buildAsyncStoreBoundaryReport(
     ...managedDatabaseRuntimeGuard.nextSteps,
     ...managedDatabaseRuntimeBoundary.nextSteps,
     ...phase53MultiWriterTopologyGate.nextSteps,
+    ...phase55MultiWriterImplementationAuthorizationGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -691,7 +812,9 @@ export function buildAsyncStoreBoundaryReport(
     nextSteps.add(`Finish Phase 51 runtime call-site migration for: ${phase51Capability.remainingSyncCallSiteGroups.join(", ")}.`);
   }
   if (multiWriterIntent) {
-    if (phase53MultiWriterTopologyGate.designPackageEvidenceAttached) {
+    if (phase55MultiWriterImplementationAuthorizationGate.implementationAuthorized) {
+      nextSteps.add("Keep multi-writer database topology blocked even with Phase 55 review and implementation authorization attached until implementation support and a later release gate explicitly allow the topology.");
+    } else if (phase53MultiWriterTopologyGate.designPackageEvidenceAttached) {
       nextSteps.add("Keep multi-writer database topology blocked even with the Phase 54 design package attached until implementation support and a later release gate explicitly allow the topology.");
     } else {
       nextSteps.add("Keep multi-writer database topology blocked until Phase 54 design-package evidence is attached and a later release gate explicitly allows the topology.");
@@ -703,6 +826,7 @@ export function buildAsyncStoreBoundaryReport(
     !unsupportedStore &&
     !multiWriterIntent &&
     phase53MultiWriterTopologyGate.releaseAllowed &&
+    phase55MultiWriterImplementationAuthorizationGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -713,7 +837,9 @@ export function buildAsyncStoreBoundaryReport(
   if (managedIntent && effectivePhase52ManagedStartupSupported) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
   } else if (multiWriterIntent) {
-    summary = phase53MultiWriterTopologyGate.designPackageEvidenceAttached
+    summary = phase55MultiWriterImplementationAuthorizationGate.implementationAuthorized
+      ? "Phase 49 async-store boundary exists as foundation and Phase 55 review/authorization evidence is attached, but multi-writer database runtime remains blocked."
+      : phase53MultiWriterTopologyGate.designPackageEvidenceAttached
       ? "Phase 49 async-store boundary exists as foundation and Phase 54 design-package evidence is attached, but multi-writer database runtime remains blocked."
       : "Phase 49 async-store boundary exists as foundation, but multi-writer database topology remains blocked by the Phase 54 design-package gate.";
   } else if (managedIntent && phase50Capability.adapterAvailable) {
@@ -747,6 +873,7 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseRuntimeCallSitesMigrated: phase51Capability.runtimeCallSitesMigrated,
     managedDatabaseRemainingSyncCallSiteGroups: phase51Capability.remainingSyncCallSiteGroups,
     phase53MultiWriterTopologyGate,
+    phase55MultiWriterImplementationAuthorizationGate,
     classification,
     summary,
     blockers,

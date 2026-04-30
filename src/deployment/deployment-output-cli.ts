@@ -39,6 +39,14 @@ function reportAt(report: DeploymentCliReport, path: string[]): DeploymentCliRep
   return isReport(current) ? current : null;
 }
 
+function firstReportAt(report: DeploymentCliReport, paths: string[][]): DeploymentCliReport | null {
+  for (const path of paths) {
+    const nestedReport = reportAt(report, path);
+    if (nestedReport) return nestedReport;
+  }
+  return null;
+}
+
 function redactValue(value: unknown, force = false): unknown {
   if (typeof value === "string") {
     if (!value) return value;
@@ -55,7 +63,31 @@ function redactValue(value: unknown, force = false): unknown {
     }
     return redacted;
   }
-  return force && value !== null && value !== undefined ? "[redacted]" : value;
+  return value;
+}
+
+function blockPhase55RuntimeSupport(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => blockPhase55RuntimeSupport(entry));
+  }
+  if (!isReport(value)) {
+    return value;
+  }
+
+  const blocked: DeploymentCliReport = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "phase55" && isReport(entry)) {
+      blocked[key] = {
+        ...entry,
+        runtimeSupport: false,
+        multiWriterSupported: false,
+        runtimeImplementationBlocked: true,
+      };
+    } else {
+      blocked[key] = blockPhase55RuntimeSupport(entry);
+    }
+  }
+  return blocked;
 }
 
 function withPhase53Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
@@ -106,6 +138,43 @@ function withPhase54Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   };
 }
 
+function withPhase55Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
+    return report;
+  }
+
+  const nestedPhase55 = firstReportAt(report, [
+    ["managedDatabase", "phase55"],
+    ["managedDatabaseTopology", "managedDatabase", "phase55"],
+    ["releaseReadiness", "managedDatabaseTopology", "managedDatabase", "phase55"],
+    ["asyncStoreBoundary", "phase55"],
+    ["releaseReadiness", "asyncStoreBoundary", "phase55"],
+  ]);
+  const existingPhase55 = reportAt(report, ["phase55"]) ?? nestedPhase55 ?? {};
+  const designPackageReviewPassed =
+    existingPhase55.designPackageReviewPassed ?? existingPhase55.reviewGatePassed ?? false;
+  const implementationAuthorized =
+    existingPhase55.implementationAuthorized ?? existingPhase55.implementationAuthorizationGranted ?? false;
+
+  return blockPhase55RuntimeSupport({
+    ...report,
+    phase55: {
+      ...existingPhase55,
+      phase: existingPhase55.phase ?? "55",
+      multiWriterTopologyRequested: existingPhase55.multiWriterTopologyRequested ?? true,
+      designPackageReviewPassed,
+      implementationAuthorized,
+      runtimeSupport: false,
+      multiWriterSupported: false,
+      runtimeImplementationBlocked: true,
+      strictBlocker: existingPhase55.strictBlocker ??
+        (designPackageReviewPassed !== true || implementationAuthorized !== true),
+      summary: existingPhase55.summary ??
+        "Phase 55 requires multi-writer topology design-package review and implementation authorization before runtime implementation; runtime support remains blocked.",
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
-  return JSON.stringify(redactValue(withPhase54Status(withPhase53Status(report, env), env)), null, 2);
+  return JSON.stringify(redactValue(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env)), null, 2);
 }

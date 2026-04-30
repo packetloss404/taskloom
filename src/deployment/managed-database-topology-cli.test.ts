@@ -58,6 +58,15 @@ test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 a
   const report = JSON.parse(serializedReport) as {
     phase53?: { phase?: unknown; multiWriterSupported?: unknown };
     phase54?: { phase?: unknown; designPackageGatePassed?: unknown; strictBlocker?: unknown };
+    phase55?: {
+      phase?: unknown;
+      designPackageReviewPassed?: unknown;
+      implementationAuthorized?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      strictBlocker?: unknown;
+    };
     classification?: unknown;
     managedDatabase?: { supported?: unknown; phase54?: { designPackageGatePassed?: unknown; strictBlocker?: unknown } };
   };
@@ -70,12 +79,88 @@ test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 a
   assert.equal(report.phase54?.phase, "54");
   assert.equal(report.phase54?.designPackageGatePassed, false);
   assert.equal(report.phase54?.strictBlocker, true);
+  assert.equal(report.phase55?.phase, "55");
+  assert.equal(report.phase55?.designPackageReviewPassed, false);
+  assert.equal(report.phase55?.implementationAuthorized, false);
+  assert.equal(report.phase55?.runtimeSupport, false);
+  assert.equal(report.phase55?.multiWriterSupported, false);
+  assert.equal(report.phase55?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase55?.strictBlocker, true);
   assert.equal(report.managedDatabase?.phase54?.designPackageGatePassed, false);
   assert.equal(report.managedDatabase?.phase54?.strictBlocker, true);
   assert.match(serializedReport, /Phase 53/);
   assert.match(serializedReport, /Phase 54/);
+  assert.match(serializedReport, /Phase 55/);
   assert.match(serializedReport, /multi-writer/);
   assert.doesNotMatch(serializedReport, /taskloom:secret/);
+});
+
+test("runManagedDatabaseTopologyCli preserves Phase 55 review authorization fields from the builder", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseTopologyCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseTopologyReport: () => ({
+      ready: false,
+      managedDatabase: {
+        phase55: {
+          designPackageReviewPassed: true,
+          implementationAuthorized: true,
+          reviewOwner: "architecture-council",
+          runtimeSupport: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          strictBlocker: false,
+          authorizationSecret: "phase55-cli-secret",
+          summary: "Phase 55 review passed and implementation authorization is recorded.",
+        },
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase55?: {
+      phase?: unknown;
+      designPackageReviewPassed?: unknown;
+      implementationAuthorized?: unknown;
+      reviewOwner?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      strictBlocker?: unknown;
+      authorizationSecret?: unknown;
+      summary?: unknown;
+    };
+    managedDatabase?: {
+      phase55?: {
+        authorizationSecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+      };
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase55?.phase, "55");
+  assert.equal(report.phase55?.designPackageReviewPassed, true);
+  assert.equal(report.phase55?.implementationAuthorized, true);
+  assert.equal(report.phase55?.reviewOwner, "architecture-council");
+  assert.equal(report.phase55?.runtimeSupport, false);
+  assert.equal(report.phase55?.multiWriterSupported, false);
+  assert.equal(report.phase55?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase55?.strictBlocker, false);
+  assert.equal(report.phase55?.authorizationSecret, "[redacted]");
+  assert.equal(report.phase55?.summary, "Phase 55 review passed and implementation authorization is recorded.");
+  assert.equal(report.managedDatabase?.phase55?.authorizationSecret, "[redacted]");
+  assert.equal(report.managedDatabase?.phase55?.runtimeSupport, false);
+  assert.equal(report.managedDatabase?.phase55?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase?.phase55?.runtimeImplementationBlocked, true);
+  assert.doesNotMatch(output[0] ?? "", /phase55-cli-secret/);
 });
 
 test("runManagedDatabaseTopologyCli preserves detailed Phase 54 design-package reports from the builder", async () => {

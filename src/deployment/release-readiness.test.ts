@@ -40,6 +40,8 @@ test("local JSON development produces warnings instead of release blockers", () 
   assert.deepEqual(report.asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups, []);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, false);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.required, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.releaseAllowed, true);
   assert.equal(report.asyncStoreBoundary.classification, "foundation-ready");
   assert.equal(checkStatus(report, "storage-topology"), "warn");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
@@ -213,6 +215,8 @@ test("strict release with Phase 52 managed startup support allows managed Postgr
   assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, true);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, false);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.required, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.releaseAllowed, true);
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "warn");
@@ -291,6 +295,14 @@ test("Phase 52 managed startup support does not allow multi-writer topology", ()
     ],
   );
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.required, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.designPackageReviewEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.designPackageReviewEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.implementationAuthorizationEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.implementationAuthorizationEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.implementationAuthorized, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.runtimeSupportBlocked, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.releaseAllowed, false);
   assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "fail");
   assert.equal(checkStatus(report, "async-store-boundary"), "fail");
   assert.ok(report.blockers.some((blocker) => blocker.includes("multi-writer")));
@@ -352,9 +364,109 @@ test("Phase 54 design-package evidence attaches but still does not allow multi-w
   assert.equal(gate?.observabilityPlanEvidenceAttached, true);
   assert.equal(gate?.rollbackPlanEvidenceAttached, true);
   assert.equal(gate?.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.required, true);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.designPackageReviewEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.implementationAuthorizationEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.implementationAuthorized, false);
+  assert.equal(report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate?.releaseAllowed, false);
   assert.ok(gate?.blockers.some((blocker) => blocker.includes("runtime support remains blocked")));
+  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 55 multi-writer design-package review evidence")));
+  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 55 multi-writer implementation authorization evidence")));
   assert.ok(report.summary.includes("blocked"));
   assert.ok(report.nextSteps.some((step) => step.includes("blocked even with the Phase 54 design package attached")));
+});
+
+test("Phase 55 review and implementation authorization evidence attaches but still blocks multi-writer runtime release", () => {
+  const env: ReleaseReadinessEnv = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+  };
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);
+  const managedDatabaseRuntimeGuard = buildManagedDatabaseRuntimeGuardReport(env, {
+    phase51: {
+      managedPostgresStartupSupported: true,
+    },
+  });
+  const report = assessReleaseReadiness({
+    env,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase55Gate = report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.classification, "multi-writer-unsupported");
+  assert.equal(phase55Gate?.required, true);
+  assert.equal(phase55Gate?.designPackageReviewEvidenceAttached, true);
+  assert.equal(phase55Gate?.implementationAuthorizationEvidenceAttached, true);
+  assert.equal(phase55Gate?.implementationAuthorized, true);
+  assert.equal(phase55Gate?.runtimeSupportBlocked, true);
+  assert.equal(phase55Gate?.releaseAllowed, false);
+  assert.ok(phase55Gate?.blockers.some((blocker) => blocker.includes("runtime support remains blocked")));
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 55 review/authorization evidence is attached"));
+  assert.ok(report.nextSteps.some((step) => step.includes("blocked even with Phase 55 review and implementation authorization attached")));
+});
+
+test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {
+  const env: ReleaseReadinessEnv = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "release-owner",
+    TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+    TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "phase-55-design-package-review-only",
+    TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety-signoff.md",
+  };
+  const report = assessReleaseReadiness({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase55Gate = report.asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate;
+
+  assert.equal(phase55Gate?.designPackageReviewEvidenceAttached, true);
+  assert.equal(phase55Gate?.implementationAuthorizationEvidenceAttached, true);
+  assert.equal(phase55Gate?.implementationAuthorized, true);
+  assert.equal(phase55Gate?.releaseAllowed, false);
 });
 
 test("strict release with TASKLOOM_STORE=postgres fails the managed database runtime boundary", () => {

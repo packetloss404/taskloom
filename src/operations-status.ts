@@ -149,6 +149,48 @@ export interface MultiWriterTopologyDesignPackageGateStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type MultiWriterTopologyImplementationAuthorizationEvidenceKey =
+  | "designPackageReview"
+  | "implementationAuthorization";
+
+export interface MultiWriterTopologyImplementationAuthorizationEvidenceStatus {
+  key: MultiWriterTopologyImplementationAuthorizationEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source:
+    | "env"
+    | "managedDatabaseRuntimeGuard"
+    | "managedDatabaseTopology"
+    | "releaseReadiness"
+    | "releaseEvidence"
+    | "derived";
+}
+
+export interface MultiWriterTopologyImplementationAuthorizationGateStatus {
+  phase: "55";
+  status: "authorized" | "blocked" | "not-required";
+  reviewStatus: "approved" | "missing" | "not-required";
+  implementationAuthorizationStatus: "authorized" | "missing" | "not-required";
+  summary: string;
+  required: boolean;
+  implementationAuthorized: boolean;
+  runtimeImplementationBlocked: true;
+  runtimeSupported: false;
+  releaseAllowed: false;
+  multiWriterIntentDetected: boolean;
+  topologyIntent: string | null;
+  designPackageStatus: MultiWriterTopologyDesignPackageGateStatus["designPackageStatus"];
+  designPackageComplete: boolean;
+  designPackageReview: MultiWriterTopologyImplementationAuthorizationEvidenceStatus;
+  implementationAuthorization: MultiWriterTopologyImplementationAuthorizationEvidenceStatus;
+  missingEvidence: MultiWriterTopologyImplementationAuthorizationEvidenceKey[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -174,6 +216,7 @@ export interface OperationsStatus {
   managedPostgresStartupSupport: ManagedPostgresStartupSupportStatus;
   managedPostgresTopologyGate: ManagedPostgresTopologyGateStatus;
   multiWriterTopologyDesignPackageGate: MultiWriterTopologyDesignPackageGateStatus;
+  multiWriterTopologyImplementationAuthorizationGate: MultiWriterTopologyImplementationAuthorizationGateStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -301,6 +344,36 @@ const MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE = [
   envKey: string;
   reportKeys: readonly string[];
 }>;
+const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE = [
+  {
+    key: "designPackageReview",
+    label: "Design-package review",
+    envKey: "TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW",
+    reportKeys: ["designPackageReview", "reviewEvidence", "reviewSignoff", "reviewApproval"],
+  },
+  {
+    key: "implementationAuthorization",
+    label: "Implementation authorization",
+    envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION",
+    reportKeys: [
+      "implementationAuthorization",
+      "implementationAuthorizationEvidence",
+      "implementationApproval",
+      "authorization",
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  key: MultiWriterTopologyImplementationAuthorizationEvidenceKey;
+  label: string;
+  envKey: string;
+  reportKeys: readonly string[];
+}>;
+const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
+  "approved",
+  "authorized",
+  "implementation-approved",
+  "implementation-authorized",
+]);
 
 let schedulerLeaderProbe: (() => boolean) | null = null;
 
@@ -607,6 +680,37 @@ function valueFromRecord(record: Record<string, unknown>, keys: readonly string[
   return "";
 }
 
+function phase55DetailedReviewEvidenceFromEnv(env: NodeJS.ProcessEnv): string {
+  const reviewer = stringValue(env.TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER);
+  const status = stringValue(env.TASKLOOM_MULTI_WRITER_REVIEW_STATUS);
+  if (!reviewer || !PHASE_55_APPROVED_REVIEW_STATUSES.has(status.toLowerCase())) return "";
+  return `${reviewer}; status=${status}`;
+}
+
+function phase55DetailedAuthorizationEvidenceFromEnv(env: NodeJS.ProcessEnv): string {
+  const approver = stringValue(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER);
+  const scope = stringValue(env.TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE);
+  const safety = stringValue(env.TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF);
+  if (!approver || !scope || !safety) return "";
+  return `${approver}; scope=${scope}; safety=${safety}`;
+}
+
+function phase55DetailedReviewEvidenceFromRecord(record: Record<string, unknown>): string {
+  const reviewerConfigured = booleanValue(record.designReviewerConfigured);
+  const reviewStatusApproved = booleanValue(record.reviewStatusApproved);
+  const reviewStatus = stringValue(record.reviewStatus);
+  if (reviewerConfigured !== true || reviewStatusApproved !== true) return "";
+  return reviewStatus ? `review-approved; status=${reviewStatus}` : "review-approved";
+}
+
+function phase55DetailedAuthorizationEvidenceFromRecord(record: Record<string, unknown>): string {
+  const approverConfigured = booleanValue(record.implementationApproverConfigured);
+  const scopeConfigured = booleanValue(record.approvedImplementationScopeConfigured);
+  const safetyConfigured = booleanValue(record.safetySignoffConfigured);
+  if (approverConfigured !== true || scopeConfigured !== true || safetyConfigured !== true) return "";
+  return "implementation-authorized";
+}
+
 function phase53EvidenceAttached(
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -638,6 +742,23 @@ function topologyDesignPackageRecord(
     findNestedRecord(report, ["asyncStoreBoundary", "multiWriterTopologyDesignPackageGate"]) ??
     findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase54"]) ??
     findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "multiWriterTopologyDesignPackageGate"]);
+}
+
+function topologyImplementationAuthorizationRecord(
+  report: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase55"]) ??
+    findNestedRecord(report, ["multiWriterTopologyImplementationAuthorizationGate"]) ??
+    findNestedRecord(report, ["multiWriterTopologyReviewAuthorizationGate"]) ??
+    findNestedRecord(report, ["multiWriterTopologyImplementationAuthorization"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase55"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterTopologyImplementationAuthorizationGate"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase55"]) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "multiWriterTopologyImplementationAuthorizationGate"],
+    );
 }
 
 function deriveManagedPostgresCapability(
@@ -951,6 +1072,135 @@ function deriveMultiWriterTopologyDesignPackageGate(
   };
 }
 
+function deriveMultiWriterTopologyImplementationAuthorizationGate(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  multiWriterTopologyDesignPackageGate: MultiWriterTopologyDesignPackageGateStatus,
+): MultiWriterTopologyImplementationAuthorizationGateStatus {
+  const reportSources: Array<{
+    source: Exclude<MultiWriterTopologyImplementationAuthorizationGateStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = topologyImplementationAuthorizationRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase55 = reportSources[0];
+  const multiWriterIntentDetected = booleanValue(phase55?.record.multiWriterIntentDetected) ??
+    multiWriterTopologyDesignPackageGate.multiWriterIntentDetected;
+  const topologyIntent = stringValue(phase55?.record.topologyIntent) ||
+    multiWriterTopologyDesignPackageGate.topologyIntent ||
+    null;
+  const designPackageStatus = multiWriterTopologyDesignPackageGate.designPackageStatus;
+  const designPackageComplete = booleanValue(phase55?.record.designPackageComplete) ??
+    designPackageStatus === "complete";
+  const required = multiWriterIntentDetected;
+
+  const evidenceEntries = MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE.map((definition) => {
+    let value = stringValue(env[definition.envKey]);
+    let source: MultiWriterTopologyImplementationAuthorizationEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value && definition.key === "designPackageReview") {
+      value = phase55DetailedReviewEvidenceFromEnv(env);
+      if (value) source = "env";
+    }
+    if (!value && definition.key === "implementationAuthorization") {
+      value = phase55DetailedAuthorizationEvidenceFromEnv(env);
+      if (value) source = "env";
+    }
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys) ||
+          (definition.key === "designPackageReview"
+            ? phase55DetailedReviewEvidenceFromRecord(candidate.record)
+            : phase55DetailedAuthorizationEvidenceFromRecord(candidate.record));
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        value = direct || nested;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+    const configured = value.length > 0;
+    const status: MultiWriterTopologyImplementationAuthorizationEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<
+    MultiWriterTopologyImplementationAuthorizationEvidenceKey,
+    MultiWriterTopologyImplementationAuthorizationEvidenceStatus
+  >;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const reviewStatus: MultiWriterTopologyImplementationAuthorizationGateStatus["reviewStatus"] = required
+    ? evidenceByKey.designPackageReview.configured ? "approved" : "missing"
+    : "not-required";
+  const implementationAuthorizationStatus:
+    MultiWriterTopologyImplementationAuthorizationGateStatus["implementationAuthorizationStatus"] = required
+      ? evidenceByKey.implementationAuthorization.configured ? "authorized" : "missing"
+      : "not-required";
+  const implementationAuthorized = required &&
+    designPackageComplete &&
+    reviewStatus === "approved" &&
+    implementationAuthorizationStatus === "authorized";
+  const status: MultiWriterTopologyImplementationAuthorizationGateStatus["status"] = required
+    ? implementationAuthorized ? "authorized" : "blocked"
+    : "not-required";
+  const summary = required
+    ? implementationAuthorized
+      ? "Phase 55 multi-writer topology design-package review and implementation authorization are recorded; runtime implementation remains blocked until a future runtime phase; runtimeSupported=false."
+      : designPackageComplete
+        ? `Phase 55 multi-writer topology implementation authorization is blocked pending ${missingEvidence.join(", ") || "review/authorization evidence"}; runtimeSupported=false.`
+        : "Phase 55 multi-writer topology implementation authorization is blocked until the Phase 54 design package is complete and review/authorization evidence is recorded; runtimeSupported=false."
+    : "Phase 55 multi-writer topology implementation-authorization gate is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false.";
+
+  return {
+    phase: "55",
+    status,
+    reviewStatus,
+    implementationAuthorizationStatus,
+    summary,
+    required,
+    implementationAuthorized,
+    runtimeImplementationBlocked: true,
+    runtimeSupported: false,
+    releaseAllowed: false,
+    multiWriterIntentDetected,
+    topologyIntent,
+    designPackageStatus,
+    designPackageComplete,
+    designPackageReview: evidenceByKey.designPackageReview,
+    implementationAuthorization: evidenceByKey.implementationAuthorization,
+    missingEvidence,
+    source: phase55?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -1057,6 +1307,15 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     releaseEvidence,
     managedPostgresTopologyGate,
   );
+  const multiWriterTopologyImplementationAuthorizationGate =
+    deriveMultiWriterTopologyImplementationAuthorizationGate(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterTopologyDesignPackageGate,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -1097,6 +1356,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedPostgresStartupSupport,
     managedPostgresTopologyGate,
     multiWriterTopologyDesignPackageGate,
+    multiWriterTopologyImplementationAuthorizationGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -1162,6 +1422,15 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     releaseEvidence,
     managedPostgresTopologyGate,
   );
+  const multiWriterTopologyImplementationAuthorizationGate =
+    deriveMultiWriterTopologyImplementationAuthorizationGate(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterTopologyDesignPackageGate,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -1202,6 +1471,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     managedPostgresStartupSupport,
     managedPostgresTopologyGate,
     multiWriterTopologyDesignPackageGate,
+    multiWriterTopologyImplementationAuthorizationGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

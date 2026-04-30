@@ -24,6 +24,11 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN?: string;
   TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN?: string;
   TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER?: string;
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER?: string;
+  TASKLOOM_MULTI_WRITER_REVIEW_STATUS?: string;
+  TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE?: string;
+  TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF?: string;
 }
 
 export interface ManagedDatabaseTopologyObservedEnvValue {
@@ -100,6 +105,20 @@ export interface ManagedDatabaseTopologyReport {
       strictBlocker: boolean;
       summary: string;
     };
+    phase55?: {
+      multiWriterTopologyRequested: boolean;
+      designReviewerConfigured: boolean;
+      implementationApproverConfigured: boolean;
+      reviewStatus: string | null;
+      reviewStatusConfigured: boolean;
+      reviewStatusApproved: boolean;
+      approvedImplementationScopeConfigured: boolean;
+      safetySignoffConfigured: boolean;
+      implementationAuthorizationGatePassed: boolean;
+      runtimeSupport: false;
+      strictBlocker: boolean;
+      summary: string;
+    };
   };
 }
 
@@ -129,6 +148,11 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN",
   "TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN",
   "TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN",
+  "TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER",
+  "TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
+  "TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE",
+  "TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
 const MANAGED_TOPOLOGY_HINTS = new Set([
@@ -158,6 +182,12 @@ const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
   "managed-postgresql",
 ]);
 const PHASE_52_MANAGED_POSTGRES_STORES = new Set(["managed", "postgres", "postgresql"]);
+const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
+  "approved",
+  "authorized",
+  "implementation-approved",
+  "implementation-authorized",
+]);
 const SECRET_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 
 function clean(value: string | undefined): string {
@@ -332,6 +362,51 @@ function phase54MultiWriterTopologyDesignPackageGate(
   };
 }
 
+function phase55MultiWriterImplementationAuthorizationGate(
+  env: ManagedDatabaseTopologyEnv,
+  hasMultiWriterIntent: boolean,
+  designPackageGatePassed: boolean,
+) {
+  const designReviewerConfigured = configured(env.TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER);
+  const implementationApproverConfigured = configured(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER);
+  const reviewStatus = normalize(env.TASKLOOM_MULTI_WRITER_REVIEW_STATUS);
+  const reviewStatusConfigured = reviewStatus.length > 0;
+  const reviewStatusApproved = PHASE_55_APPROVED_REVIEW_STATUSES.has(reviewStatus);
+  const approvedImplementationScopeConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE,
+  );
+  const safetySignoffConfigured = configured(env.TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF);
+  const implementationAuthorizationGatePassed =
+    !hasMultiWriterIntent ||
+    (designPackageGatePassed &&
+      designReviewerConfigured &&
+      implementationApproverConfigured &&
+      reviewStatusApproved &&
+      approvedImplementationScopeConfigured &&
+      safetySignoffConfigured);
+  const strictBlocker = hasMultiWriterIntent && !implementationAuthorizationGatePassed;
+  const summary = hasMultiWriterIntent
+    ? implementationAuthorizationGatePassed
+      ? "Phase 55 multi-writer design-package review and implementation authorization evidence are configured; runtime support remains blocked."
+      : "Phase 55 requires a complete Phase 54 design package plus design reviewer, implementation approver, approved review status, approved implementation scope, and safety signoff before multi-writer runtime implementation can be authorized."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 55.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    designReviewerConfigured,
+    implementationApproverConfigured,
+    reviewStatus: reviewStatus || null,
+    reviewStatusConfigured,
+    reviewStatusApproved,
+    approvedImplementationScopeConfigured,
+    safetySignoffConfigured,
+    implementationAuthorizationGatePassed,
+    runtimeSupport: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -344,6 +419,7 @@ function buildNextSteps(
   checks: ManagedDatabaseTopologyCheck[],
   phase53: ReturnType<typeof phase53MultiWriterTopologyGate>,
   phase54: ReturnType<typeof phase54MultiWriterTopologyDesignPackageGate>,
+  phase55: ReturnType<typeof phase55MultiWriterImplementationAuthorizationGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -389,6 +465,26 @@ function buildNextSteps(
         steps.add("Configure TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN with the rollback plan evidence.");
       }
     }
+    if (check.id === "phase55-multi-writer-implementation-authorization") {
+      if (!phase54.designPackageGatePassed) {
+        steps.add("Complete the Phase 54 multi-writer topology design package before requesting implementation authorization.");
+      }
+      if (!phase55.designReviewerConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER with the design-package reviewer.");
+      }
+      if (!phase55.implementationApproverConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER with the implementation authorizer.");
+      }
+      if (!phase55.reviewStatusApproved) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_REVIEW_STATUS=approved after the design-package review is complete.");
+      }
+      if (!phase55.approvedImplementationScopeConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE with the approved implementation scope.");
+      }
+      if (!phase55.safetySignoffConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF with the explicit safety signoff evidence.");
+      }
+    }
   }
 
   if (steps.size === 0) {
@@ -414,6 +510,11 @@ export function assessManagedDatabaseTopology(
   const phase52 = phase52ManagedPostgresStartupSupport(phase50, hasMultiWriterIntent);
   const phase53 = phase53MultiWriterTopologyGate(env, hasMultiWriterIntent);
   const phase54 = phase54MultiWriterTopologyDesignPackageGate(env, hasMultiWriterIntent);
+  const phase55 = phase55MultiWriterImplementationAuthorizationGate(
+    env,
+    hasMultiWriterIntent,
+    phase54.designPackageGatePassed,
+  );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseTopologyCheck[] = [];
@@ -477,6 +578,13 @@ export function assessManagedDatabaseTopology(
 
   pushCheck(
     checks,
+    "phase55-multi-writer-implementation-authorization",
+    phase55.strictBlocker ? "fail" : "pass",
+    phase55.summary,
+  );
+
+  pushCheck(
+    checks,
     "production-topology",
     isProductionEnv && store === "json" ? "fail" : "pass",
     isProductionEnv && store === "json"
@@ -510,6 +618,7 @@ export function assessManagedDatabaseTopology(
   if (hasMultiWriterIntent) {
     warnings.push(phase53.summary);
     warnings.push(phase54.summary);
+    warnings.push(phase55.summary);
   }
 
   const status = statusFromChecks(checks);
@@ -548,7 +657,7 @@ export function assessManagedDatabaseTopology(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, phase53, phase54),
+    nextSteps: buildNextSteps(checks, phase53, phase54, phase55),
     observed: {
       nodeEnv,
       isProductionEnv,
@@ -570,6 +679,7 @@ export function assessManagedDatabaseTopology(
       phase52,
       phase53,
       phase54,
+      phase55,
     },
   };
 }

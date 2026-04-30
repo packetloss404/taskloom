@@ -61,6 +61,14 @@ const MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE = [
   { key: "observability", label: "observability evidence", envKey: "TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE" },
   { key: "rollback", label: "rollback evidence", envKey: "TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE" },
 ] as const;
+const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE = [
+  { key: "designPackageReview", label: "design-package review", envKey: "TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW" },
+  {
+    key: "implementationAuthorization",
+    label: "implementation authorization",
+    envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION",
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -254,6 +262,50 @@ function checkMultiWriterTopologyDesignPackageGate(env: NodeJS.ProcessEnv, check
   };
 }
 
+function checkMultiWriterTopologyImplementationAuthorizationGate(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+): SubsystemHealth {
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  const hasMultiWriterIntent = MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+  if (!hasMultiWriterIntent) {
+    return {
+      name: "multiWriterTopologyImplementationAuthorizationGate",
+      status: "disabled",
+      detail: "Phase 55 implementation-authorization gate is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false",
+      checkedAt,
+    };
+  }
+
+  const phase53RequirementsAttached = cleanEnvValue(env.TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE).length > 0;
+  const phase53DesignAttached = cleanEnvValue(env.TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE).length > 0;
+  const phase54MissingEvidence: string[] = MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+  if (!phase53RequirementsAttached) phase54MissingEvidence.unshift("Phase 53 requirements evidence");
+  if (!phase53DesignAttached) phase54MissingEvidence.unshift("Phase 53 design evidence");
+  const designPackageComplete = phase54MissingEvidence.length === 0;
+  const missingAuthorizationEvidence = MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+
+  let detail: string;
+  if (!designPackageComplete) {
+    detail = `Phase 55 implementation authorization is blocked for ${topology} intent until the Phase 54 design package is complete and review/authorization evidence is recorded; runtimeSupported=false`;
+  } else if (missingAuthorizationEvidence.length > 0) {
+    detail = `Phase 55 implementation authorization is blocked for ${topology} intent; missing ${missingAuthorizationEvidence.join(", ")}; runtimeSupported=false`;
+  } else {
+    detail = `Phase 55 design-package review and implementation authorization are recorded for ${topology} intent; runtime implementation remains blocked until a future runtime phase; runtimeSupported=false`;
+  }
+
+  return {
+    name: "multiWriterTopologyImplementationAuthorizationGate",
+    status: "degraded",
+    detail,
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -278,6 +330,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkAccessLog(env, fileExists, checkedAt),
     checkManagedPostgresTopologyGate(env, checkedAt),
     checkMultiWriterTopologyDesignPackageGate(env, checkedAt),
+    checkMultiWriterTopologyImplementationAuthorizationGate(env, checkedAt),
   ];
 
   return {
@@ -302,6 +355,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkAccessLog(env, fileExists, checkedAt),
     checkManagedPostgresTopologyGate(env, checkedAt),
     checkMultiWriterTopologyDesignPackageGate(env, checkedAt),
+    checkMultiWriterTopologyImplementationAuthorizationGate(env, checkedAt),
   ];
 
   return {

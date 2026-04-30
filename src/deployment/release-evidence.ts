@@ -12,6 +12,7 @@ import {
   type ManagedDatabaseRuntimeBoundaryReport,
   type Phase53MultiWriterTopologyEvidenceItem,
   type Phase53MultiWriterTopologyGateReport,
+  type Phase55MultiWriterImplementationAuthorizationGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -48,6 +49,10 @@ export interface ReleaseEvidenceAttachment {
   format: "json";
   required: boolean;
   summary: string;
+  envKey?: string;
+  configured?: boolean;
+  value?: string | null;
+  redacted?: boolean;
 }
 
 export interface ReleaseEvidenceBundle {
@@ -124,6 +129,14 @@ export interface ReleaseEvidenceBundle {
       phase54MultiWriterRollbackPlanEvidenceRequired: boolean;
       phase54MultiWriterRollbackPlanEvidenceAttached: boolean;
       phase54MultiWriterTopologyReleaseAllowed: boolean;
+      phase55MultiWriterImplementationAuthorizationGateRequired: boolean;
+      phase55MultiWriterDesignPackageReviewEvidenceRequired: boolean;
+      phase55MultiWriterDesignPackageReviewEvidenceAttached: boolean;
+      phase55MultiWriterImplementationAuthorizationEvidenceRequired: boolean;
+      phase55MultiWriterImplementationAuthorizationEvidenceAttached: boolean;
+      phase55MultiWriterImplementationAuthorized: boolean;
+      phase55MultiWriterRuntimeSupportBlocked: boolean;
+      phase55MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -212,6 +225,13 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN",
   "TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN",
   "TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN",
+  "TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER",
+  "TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
+  "TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE",
+  "TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -398,7 +418,99 @@ function phase53MultiWriterTopologyGate(
   };
 }
 
+function phase55MultiWriterImplementationAuthorizationGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase53Gate: Phase53MultiWriterTopologyGateReport,
+): Phase55MultiWriterImplementationAuthorizationGateReport {
+  const fallbackRequired = asyncStoreBoundary.classification === "multi-writer-unsupported";
+  return asyncStoreBoundary.phase55MultiWriterImplementationAuthorizationGate ?? {
+    phase: "55",
+    required: fallbackRequired,
+    designPackageReviewEvidenceRequired: fallbackRequired,
+    designPackageReviewEvidenceAttached: false,
+    implementationAuthorizationEvidenceRequired: fallbackRequired,
+    implementationAuthorizationEvidenceAttached: false,
+    implementationAuthorized: false,
+    runtimeSupportBlocked: fallbackRequired,
+    releaseAllowed: !fallbackRequired,
+    summary: fallbackRequired
+      ? phase53Gate.designPackageEvidenceAttached
+        ? "Phase 55 multi-writer design-package review and implementation authorization evidence is required before any multi-writer runtime implementation work."
+        : "Phase 55 multi-writer implementation authorization requires the Phase 54 design package before review or authorization can unblock implementation planning."
+      : "Phase 55 multi-writer design-package review and implementation authorization gate is not required for this release posture.",
+    blockers: fallbackRequired
+      ? [
+        ...(!phase53Gate.designPackageEvidenceAttached
+          ? ["Phase 55 multi-writer implementation authorization requires attached Phase 54 design-package evidence before review."]
+          : []),
+        "Phase 55 multi-writer design-package review evidence is required before runtime implementation work.",
+        "Phase 55 multi-writer implementation authorization evidence is required before runtime implementation work.",
+        "Phase 55 multi-writer runtime support remains blocked; review and authorization evidence does not permit release until a later runtime implementation gate explicitly allows it.",
+      ]
+      : [],
+    nextSteps: fallbackRequired
+      ? [
+        ...(!phase53Gate.designPackageEvidenceAttached
+          ? ["Complete and attach the Phase 54 multi-writer design package before requesting Phase 55 review or implementation authorization."]
+          : []),
+        "Attach Phase 55 multi-writer design-package review evidence before starting runtime implementation work.",
+        "Attach Phase 55 multi-writer implementation authorization evidence before starting runtime implementation work.",
+        "Keep multi-writer runtime release blocked after Phase 55 authorization until implementation support and a later release gate explicitly allow it.",
+      ]
+      : ["Keep Phase 55 review and implementation authorization evidence ready before starting multi-writer runtime implementation work."],
+  };
+}
+
+function attachmentEvidence(
+  env: ReleaseEvidenceEnv,
+  envKey: keyof ReleaseReadinessEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return {
+    envKey,
+    configured: configured(env[envKey]),
+    ...redactValue(envKey, env[envKey]),
+  };
+}
+
+function phase55ReviewAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  if (configured(env.TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW)) {
+    return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW");
+  }
+
+  const reviewer = stringValue(env.TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER);
+  const status = stringValue(env.TASKLOOM_MULTI_WRITER_REVIEW_STATUS);
+  const configuredFromDetails = reviewer.length > 0 && status.length > 0;
+  return {
+    envKey: "TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER,TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
+    configured: configuredFromDetails,
+    value: configuredFromDetails ? `${reviewer}; status=${status}` : null,
+    redacted: false,
+  };
+}
+
+function phase55AuthorizationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  if (configured(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION)) {
+    return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION");
+  }
+
+  const approver = stringValue(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER);
+  const scope = stringValue(env.TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE);
+  const safety = stringValue(env.TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF);
+  const configuredFromDetails = approver.length > 0 && scope.length > 0 && safety.length > 0;
+  return {
+    envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER,TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE,TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
+    configured: configuredFromDetails,
+    value: configuredFromDetails ? `${approver}; scope=${scope}; safety=${safety}` : null,
+    redacted: false,
+  };
+}
+
 function buildAttachments(
+  env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
   releaseReadiness: ReleaseReadinessReport,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -408,6 +520,7 @@ function buildAttachments(
   bundleReady: boolean,
 ): ReleaseEvidenceAttachment[] {
   const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
+  const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -505,6 +618,26 @@ function buildAttachments(
       required: item.required,
       summary: item.summary,
     })),
+    {
+      id: "phase-55-multi-writer-topology-design-package-review",
+      label: "Phase 55 multi-writer design-package review evidence",
+      format: "json",
+      required: phase55Gate.designPackageReviewEvidenceRequired,
+      summary: phase55Gate.designPackageReviewEvidenceAttached
+        ? "Phase 55 multi-writer design-package review evidence is attached."
+        : "Phase 55 multi-writer design-package review evidence is required before runtime implementation work.",
+      ...phase55ReviewAttachmentEvidence(env),
+    },
+    {
+      id: "phase-55-multi-writer-topology-implementation-authorization",
+      label: "Phase 55 multi-writer implementation authorization evidence",
+      format: "json",
+      required: phase55Gate.implementationAuthorizationEvidenceRequired,
+      summary: phase55Gate.implementationAuthorizationEvidenceAttached
+        ? "Phase 55 multi-writer implementation authorization evidence is attached; runtime release remains blocked."
+        : "Phase 55 multi-writer implementation authorization evidence is required before runtime implementation work.",
+      ...phase55AuthorizationAttachmentEvidence(env),
+    },
     {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
@@ -609,6 +742,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
       managedDatabaseRuntimeBoundary,
+      releaseEnv(env),
     );
   const readyForRelease =
     releaseReadiness.readyForRelease &&
@@ -622,6 +756,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
     asyncStoreBoundary,
   };
   const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
+  const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
 
   return {
     phase: "44",
@@ -704,6 +839,14 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase54MultiWriterRollbackPlanEvidenceRequired: phase53Gate.rollbackPlanEvidenceRequired,
         phase54MultiWriterRollbackPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "rollback-plan"),
         phase54MultiWriterTopologyReleaseAllowed: phase53Gate.releaseAllowed,
+        phase55MultiWriterImplementationAuthorizationGateRequired: phase55Gate.required,
+        phase55MultiWriterDesignPackageReviewEvidenceRequired: phase55Gate.designPackageReviewEvidenceRequired,
+        phase55MultiWriterDesignPackageReviewEvidenceAttached: phase55Gate.designPackageReviewEvidenceAttached,
+        phase55MultiWriterImplementationAuthorizationEvidenceRequired: phase55Gate.implementationAuthorizationEvidenceRequired,
+        phase55MultiWriterImplementationAuthorizationEvidenceAttached: phase55Gate.implementationAuthorizationEvidenceAttached,
+        phase55MultiWriterImplementationAuthorized: phase55Gate.implementationAuthorized,
+        phase55MultiWriterRuntimeSupportBlocked: phase55Gate.runtimeSupportBlocked,
+        phase55MultiWriterTopologyReleaseAllowed: phase55Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),
@@ -712,6 +855,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       },
     },
     attachments: buildAttachments(
+      env,
       storageTopology,
       releaseReadiness,
       managedDatabaseTopology,

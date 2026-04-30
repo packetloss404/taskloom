@@ -150,3 +150,92 @@ test("formatDeploymentCliJson annotates Phase 54 without overwriting an existing
   assert.equal(report.phase54?.extraEvidence?.owner, "platform");
   assert.equal(report.phase54?.summary, "Existing Phase 54 report stays authoritative.");
 });
+
+test("formatDeploymentCliJson annotates Phase 55 review and implementation authorization gate", () => {
+  const output = formatDeploymentCliJson({
+    implementationAuthorizationToken: "phase55-secret",
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "production" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    implementationAuthorizationToken?: unknown;
+    phase55?: {
+      phase?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      designPackageReviewPassed?: unknown;
+      implementationAuthorized?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.implementationAuthorizationToken, "[redacted]");
+  assert.equal(report.phase55?.phase, "55");
+  assert.equal(report.phase55?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase55?.designPackageReviewPassed, false);
+  assert.equal(report.phase55?.implementationAuthorized, false);
+  assert.equal(report.phase55?.runtimeSupport, false);
+  assert.equal(report.phase55?.multiWriterSupported, false);
+  assert.equal(report.phase55?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase55?.strictBlocker, true);
+  assert.match(String(report.phase55?.summary), /Phase 55/);
+  assert.doesNotMatch(output, /phase55-secret/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 55 review reports while keeping runtime support blocked", () => {
+  const output = formatDeploymentCliJson({
+    managedDatabase: {
+      phase55: {
+        phase: "55",
+        designPackageReviewPassed: true,
+        implementationAuthorized: true,
+        reviewBoard: "architecture-council",
+        runtimeSupport: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        strictBlocker: false,
+        authorizationSecret: "phase55-authorization-secret",
+        summary: "Phase 55 review and implementation authorization are recorded.",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "active-active" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    managedDatabase?: {
+      phase55?: {
+        authorizationSecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+      };
+    };
+    phase55?: {
+      phase?: unknown;
+      designPackageReviewPassed?: unknown;
+      implementationAuthorized?: unknown;
+      reviewBoard?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      strictBlocker?: unknown;
+      authorizationSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase55?.phase, "55");
+  assert.equal(report.phase55?.designPackageReviewPassed, true);
+  assert.equal(report.phase55?.implementationAuthorized, true);
+  assert.equal(report.phase55?.reviewBoard, "architecture-council");
+  assert.equal(report.phase55?.runtimeSupport, false);
+  assert.equal(report.phase55?.multiWriterSupported, false);
+  assert.equal(report.phase55?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase55?.strictBlocker, false);
+  assert.equal(report.phase55?.authorizationSecret, "[redacted]");
+  assert.equal(report.phase55?.summary, "Phase 55 review and implementation authorization are recorded.");
+  assert.equal(report.managedDatabase?.phase55?.authorizationSecret, "[redacted]");
+  assert.equal(report.managedDatabase?.phase55?.runtimeSupport, false);
+  assert.equal(report.managedDatabase?.phase55?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase?.phase55?.runtimeImplementationBlocked, true);
+  assert.doesNotMatch(output, /phase55-authorization-secret/);
+});

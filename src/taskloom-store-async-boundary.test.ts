@@ -29,6 +29,17 @@ const STORE_ENV_KEYS = [
   "TASKLOOM_DATABASE_TOPOLOGY",
   "TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER",
+  "TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL",
+  "TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN",
+  "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN",
+  "TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN",
+  "TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER",
+  "TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
+  "TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE",
+  "TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -184,7 +195,7 @@ test("synchronous APIs stay guarded when managed database hints are configured",
   });
 });
 
-test("synchronous APIs stay guarded when multi-writer design evidence is configured", async () => {
+test("synchronous APIs stay guarded when multi-writer Phase 55 review and authorization evidence is configured", async () => {
   const blockedTopologies = ["multi-writer", "distributed", "active-active"] as const;
 
   for (const topology of blockedTopologies) {
@@ -194,6 +205,17 @@ test("synchronous APIs stay guarded when multi-writer design evidence is configu
       TASKLOOM_DATABASE_TOPOLOGY: topology,
       TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-54/multi-writer-requirements.md",
       TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-54/multi-writer-design-package.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes with explicit conflict handling review",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "release-owner",
+      TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+      TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "phase-55-design-package-review-only",
+      TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety-signoff.md",
     }, () => {
       assert.throws(
         () => loadStore(),
