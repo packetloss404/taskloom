@@ -465,10 +465,48 @@ test("managedPostgresCapability reports configured adapter/backfill and Phase 52
   assert.equal(status.managedPostgresStartupSupport.status, "supported");
   assert.equal(status.managedPostgresStartupSupport.startupSupported, true);
   assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.phase, "53");
+  assert.equal(status.managedPostgresTopologyGate.status, "supported");
+  assert.equal(status.managedPostgresTopologyGate.singleWriterManagedPostgresSupported, true);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterIntentDetected, false);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.requirementsOnly, false);
+  assert.equal(status.managedPostgresTopologyGate.implementationScope, "single-writer-managed-postgres");
   assert.equal(status.asyncStoreBoundary?.phase, "49");
   assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, true);
   assert.equal(status.asyncStoreBoundary?.phase52ManagedStartupSupported, true);
   assert.equal(status.managedDatabaseRuntimeGuard.allowed, true);
+});
+
+test("managedPostgresTopologyGate blocks multi-writer intent without changing Phase 52 startup support semantics", () => {
+  const env = {
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  };
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env,
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.managedPostgresStartupSupport.phase, "52");
+  assert.equal(status.managedPostgresStartupSupport.status, "multi-writer-unsupported");
+  assert.equal(status.managedPostgresStartupSupport.startupSupported, false);
+  assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.phase, "53");
+  assert.equal(status.managedPostgresTopologyGate.status, "blocked");
+  assert.equal(status.managedPostgresTopologyGate.topologyIntent, "active-active");
+  assert.equal(status.managedPostgresTopologyGate.managedIntentDetected, true);
+  assert.equal(status.managedPostgresTopologyGate.singleWriterManagedPostgresSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterIntentDetected, true);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.requirementsOnly, true);
+  assert.equal(status.managedPostgresTopologyGate.implementationScope, "none");
+  assert.match(status.managedPostgresTopologyGate.summary, /design intent only, not implementation support/i);
+  assert.match(status.managedPostgresTopologyGate.summary, /multiWriterSupported=false/);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

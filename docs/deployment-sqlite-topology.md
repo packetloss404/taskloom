@@ -7,7 +7,7 @@ Taskloom supports two local persistence modes today:
 
 SQLite mode is a local runtime posture, not a distributed production database topology. It exists to exercise the same store API through SQLite migrations, query-indexed metadata, backup/restore commands, and safer local write behavior while keeping JSON as the default development path.
 
-Phase 42 adds storage topology readiness reporting around this posture. Operators can run `npm run deployment:check-storage` or `npm run deployment:check-storage -- --strict`, and the same advisory is exposed through `GET /api/app/operations/status` as `storageTopology` and rendered in the Operations UI. The report does not add managed Postgres, managed database repositories, distributed SQLite, or multi-writer SQLite support; it makes the current topology limits visible before release handoff. See `docs/deployment-storage-topology.md`.
+Phase 42 adds storage topology readiness reporting around this posture. Operators can run `npm run deployment:check-storage` or `npm run deployment:check-storage -- --strict`, and the same advisory is exposed through `GET /api/app/operations/status` as `storageTopology` and rendered in the Operations UI. The report does not add managed Postgres, managed database repositories, distributed SQLite, or multi-writer SQLite support; it makes the current topology limits visible before release handoff. Phase 53 later makes horizontal writers, regional failover, PITR, and active-active writes explicit requirements/design blockers until a real topology is designed and owned. See `docs/deployment-storage-topology.md`.
 
 ## Supported Local SQLite Posture
 
@@ -20,7 +20,9 @@ Supported use cases:
 Not supported as a production topology:
 
 - Multiple active app instances writing the same SQLite file as the primary coordination mechanism.
+- Horizontal database writers before a real managed topology design is owned.
 - Multi-region active/active writes.
+- Regional failover or PITR claims backed only by the current app runtime.
 - SQLite files placed on network filesystems as a way to share one database across hosts.
 - Treating indexed `app_records` metadata as a substitute for a purpose-built relational schema when query volume, reporting, or migration needs grow.
 
@@ -91,7 +93,7 @@ For multi-process single-region deployments, introduce a managed relational data
 
 Auth rate limits and invitation delivery have separate deployment notes in `README.md`, `docs/deployment-auth-hardening.md`, and `docs/roadmap.md`; this document only calls out that any production topology should coordinate those concerns outside one local SQLite file.
 
-The Phase 42 storage readiness report repeats these boundaries in operator-facing form. A clean report means the deployment matches the documented posture; it does not certify SQLite for horizontal write scaling or provision a managed relational database.
+The Phase 42 storage readiness report repeats these boundaries in operator-facing form. A clean report means the deployment matches the documented posture; it does not certify SQLite for horizontal write scaling or provision a managed relational database. Phase 53 carries the same boundary forward as a requirements/design gate: if a production plan needs horizontal writers, regional failover, PITR, or active-active writes, the release should stop until the database topology has an owner, consistency model, validation plan, and implementation path.
 
 ## When To Introduce Dedicated Relational Repositories
 
@@ -158,7 +160,7 @@ The `--check-orphans` flag additionally counts agent runs whose `agentId` refere
 
 Phase 35 originally shipped the dedicated `jobs` table, repository, and dual-write conservatively. After Phase 38 retired the legacy JSON-side mirrors, the scheduler hot-path follow-up landed: in SQLite mode, `claimNextJob` and `sweepStaleRunningJobs` now use the repository's transactional `claimNext`/`sweepStaleRunning` primitives against the dedicated `jobs` table. JSON mode keeps the existing load-store-loop pattern with the in-process `claimMutex`.
 
-This cutover improves the local SQLite scheduler claim/sweep path, but it does not make SQLite a distributed scheduler or multi-writer production topology. The supported posture remains one local SQLite writer at a time; use a deployment-owned coordinator and a managed relational database before scaling writers across processes, hosts, or regions.
+This cutover improves the local SQLite scheduler claim/sweep path, but it does not make SQLite a distributed scheduler or multi-writer production topology. The supported posture remains one local SQLite writer at a time; use a deployment-owned coordinator and a managed relational database before scaling writers across processes, hosts, or regions. Phase 53 documents that such scaling is blocked requirements/design work, not implemented distributed runtime support.
 
 ### Phase 36 commands
 

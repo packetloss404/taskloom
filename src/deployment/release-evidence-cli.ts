@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatDeploymentCliJson } from "./deployment-output-cli.js";
 
 export interface ReleaseEvidenceBundle {
   readyForRelease?: unknown;
@@ -27,7 +28,7 @@ export async function runReleaseEvidenceCli(options: RunReleaseEvidenceCliOption
 
   try {
     const bundle = await buildReleaseEvidenceBundle(env, { strict });
-    out(JSON.stringify(bundle, null, 2));
+    out(formatDeploymentCliJson(bundle, env));
 
     if (strict && bundle.readyForRelease !== true) {
       return 1;

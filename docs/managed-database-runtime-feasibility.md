@@ -1,6 +1,6 @@
 # Managed Database Runtime Feasibility
 
-Phase 48 should not add a managed Postgres runtime dependency. Phase 49 lands the async store boundary foundation after that fail-closed boundary. Phase 50 adds the managed Postgres document-store adapter/backfill foundation. Phase 51 tracks the runtime call-site migration needed to use that foundation from the app startup path and now reports no remaining tracked sync call-site groups. Phase 52 asserts and validates managed Postgres startup support after that migration. Managed/Postgres hints can be accepted only when a recognized Postgres adapter value is paired with a managed database URL and the startup support assertion is present.
+Phase 48 should not add a managed Postgres runtime dependency. Phase 49 lands the async store boundary foundation after that fail-closed boundary. Phase 50 adds the managed Postgres document-store adapter/backfill foundation. Phase 51 tracks the runtime call-site migration needed to use that foundation from the app startup path and now reports no remaining tracked sync call-site groups. Phase 52 asserts and validates managed Postgres startup support after that migration. Phase 53 adds the multi-writer topology requirements/design gate after Phase 52. Managed/Postgres hints can be accepted only when a recognized Postgres adapter value is paired with a managed database URL and the startup support assertion is present; horizontal writers, regional failover, PITR, and active-active writes remain blocked until a real topology is designed and owned.
 
 ## Current Package State
 
@@ -20,11 +20,11 @@ The SQLite implementation fits that contract because it uses Node's synchronous 
 
 Managed Postgres does not fit this surface with the common Node driver ecosystem. Drivers such as `pg` and `postgres` use asynchronous network I/O and return promises or callback-driven results. A managed database connection also needs async connection setup, query execution, transaction handling, error handling, and pool lifecycle management. Wrapping those calls in the current synchronous `loadStore` / `mutateStore` API would either block the event loop through unsupported bridging or hide async failure modes outside the caller's control.
 
-Phase 49 addresses the boundary direction by landing async store foundation work: `loadStoreAsync()` and `mutateStoreAsync()` provide Promise-capable store entry points, JSON/default and SQLite are adapted behind that surface. Phase 50 follows with the managed Postgres document-store adapter behind the async boundary and a repeatable backfill/verify foundation. Phase 51 tracks the runtime call-site migration to that async path and now reports no remaining tracked sync call-site groups. Phase 52 is the startup assertion/validation milestone that lets the runtime guard accept only the recognized Postgres adapter + managed database URL posture.
+Phase 49 addresses the boundary direction by landing async store foundation work: `loadStoreAsync()` and `mutateStoreAsync()` provide Promise-capable store entry points, JSON/default and SQLite are adapted behind that surface. Phase 50 follows with the managed Postgres document-store adapter behind the async boundary and a repeatable backfill/verify foundation. Phase 51 tracks the runtime call-site migration to that async path and now reports no remaining tracked sync call-site groups. Phase 52 is the startup assertion/validation milestone that lets the runtime guard accept only the recognized Postgres adapter + managed database URL posture. Phase 53 keeps multi-writer/distributed database needs as topology requirements, not runtime feasibility already solved by the managed Postgres adapter.
 
 ## Decision
 
-Do not add a Postgres dependency in Phase 48 or Phase 49. Phase 50 intentionally adds `pg` with the first managed Postgres document-store backend and backfill/verify commands. Phase 51 makes runtime integration visible in deployment reports and now reports no remaining tracked sync call-site groups. Phase 52 asserts/validates startup support; the app can treat managed/Postgres hints as supported startup configuration only for recognized Postgres adapter + managed database URL configurations.
+Do not add a Postgres dependency in Phase 48 or Phase 49. Phase 50 intentionally adds `pg` with the first managed Postgres document-store backend and backfill/verify commands. Phase 51 makes runtime integration visible in deployment reports and now reports no remaining tracked sync call-site groups. Phase 52 asserts/validates startup support; the app can treat managed/Postgres hints as supported startup configuration only for recognized Postgres adapter + managed database URL configurations. Phase 53 does not add another runtime dependency or implementation path; it blocks multi-writer/distributed requirements until topology ownership and design are explicit.
 
 ## Smallest Safe Path
 
@@ -32,6 +32,7 @@ Do not add a Postgres dependency in Phase 48 or Phase 49. Phase 50 intentionally
 2. Treat Phase 50 as the managed Postgres adapter/backfill foundation.
 3. Use Phase 51 evidence to confirm tracked runtime call sites have moved to the async/managed database path.
 4. Treat Phase 52 as the startup assertion/validation step for the guarded managed Postgres path.
-5. Keep unsupported managed database hints, missing adapter/URL pairs, multi-writer/distributed topology, regional failover, PITR, and active-active writes blocked or deployment-owned.
+5. Treat Phase 53 as the multi-writer topology requirements/design gate after Phase 52.
+6. Keep unsupported managed database hints, missing adapter/URL pairs, multi-writer/distributed topology, regional failover, PITR, and active-active writes blocked until a real topology is designed, assigned an owner, validated, and implemented.
 
 Managed Postgres startup support is now documented as a narrow asserted posture, not a blanket managed database topology claim.

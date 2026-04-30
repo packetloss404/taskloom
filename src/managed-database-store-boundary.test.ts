@@ -99,11 +99,27 @@ test("managed database store modes fail at the synchronous store boundary", () =
           return true;
         },
       );
+
+      let mutatorRan = false;
+      assert.throws(
+        () => mutateStore(() => {
+          mutatorRan = true;
+          return "should-not-run";
+        }),
+        (error) => {
+          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
+          assert.equal(error.storeMode, storeMode);
+          assert.deepEqual(error.managedDatabaseUrlKeys, []);
+          assert.match(error.message, /TASKLOOM_STORE=/);
+          return true;
+        },
+      );
+      assert.equal(mutatorRan, false);
     });
   }
 });
 
-test("managed database URL hints fail instead of falling back to JSON or SQLite", () => {
+test("managed database URL hints guard synchronous load and mutate instead of falling back to JSON or SQLite", () => {
   const url = "postgres://taskloom:secret@db.example.com/taskloom";
   const cases: Array<Partial<Record<StoreEnvKey, string>>> = [
     { DATABASE_URL: url },
@@ -117,7 +133,7 @@ test("managed database URL hints fail instead of falling back to JSON or SQLite"
       const expectedUrlKeys = STORE_ENV_KEYS.filter((key) => key.endsWith("DATABASE_URL") && env[key]);
 
       assert.throws(
-        () => mutateStore(() => "should-not-run"),
+        () => loadStore(),
         (error) => {
           assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
           assert.deepEqual(error.managedDatabaseUrlKeys, expectedUrlKeys);
@@ -125,6 +141,21 @@ test("managed database URL hints fail instead of falling back to JSON or SQLite"
           return true;
         },
       );
+
+      let mutatorRan = false;
+      assert.throws(
+        () => mutateStore(() => {
+          mutatorRan = true;
+          return "should-not-run";
+        }),
+        (error) => {
+          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
+          assert.deepEqual(error.managedDatabaseUrlKeys, expectedUrlKeys);
+          assert.ok(error.message.startsWith(MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE));
+          return true;
+        },
+      );
+      assert.equal(mutatorRan, false);
     });
   }
 });

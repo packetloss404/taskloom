@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatDeploymentCliJson } from "./deployment-output-cli.js";
 
 export interface ReleaseReadinessReport {
   readyForRelease?: unknown;
@@ -27,7 +28,7 @@ export async function runReleaseReadinessCli(options: RunReleaseReadinessCliOpti
 
   try {
     const report = await buildReleaseReadinessReport(env, { strict });
-    out(JSON.stringify(report, null, 2));
+    out(formatDeploymentCliJson(report, env));
 
     if (strict && report.readyForRelease !== true) {
       return 1;

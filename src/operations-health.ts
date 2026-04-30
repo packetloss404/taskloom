@@ -34,6 +34,29 @@ export interface OperationsHealthAsyncDeps extends Omit<OperationsHealthDeps, "l
 }
 
 const DEFAULT_SCHEDULER_STALE_AFTER_MS = 60_000;
+const MANAGED_POSTGRES_URL_HINT_KEYS = [
+  "TASKLOOM_MANAGED_DATABASE_URL",
+  "DATABASE_URL",
+  "TASKLOOM_DATABASE_URL",
+] as const;
+const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
+  "active-active",
+  "distributed",
+  "multi-region",
+  "multi-writer",
+]);
+const MANAGED_POSTGRES_TOPOLOGY_HINTS = new Set([
+  "managed",
+  "managed-db",
+  "managed-database",
+  "postgres",
+  "postgresql",
+  "single-writer",
+]);
+
+function cleanEnvValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function checkStore(loadStore: () => unknown, checkedAt: string): SubsystemHealth {
   try {
@@ -157,6 +180,41 @@ function checkAccessLog(
   return { name: "accessLog", status: "disabled", detail: "access log is off", checkedAt };
 }
 
+function checkManagedPostgresTopologyGate(env: NodeJS.ProcessEnv, checkedAt: string): SubsystemHealth {
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  const adapter = cleanEnvValue(env.TASKLOOM_MANAGED_DATABASE_ADAPTER).toLowerCase();
+  const hasManagedUrl = MANAGED_POSTGRES_URL_HINT_KEYS.some((key) => cleanEnvValue(env[key]).length > 0);
+  const hasManagedIntent =
+    hasManagedUrl ||
+    adapter === "postgres" ||
+    adapter === "postgresql" ||
+    MANAGED_POSTGRES_TOPOLOGY_HINTS.has(topology);
+  const hasMultiWriterIntent = MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+
+  if (hasMultiWriterIntent) {
+    return {
+      name: "managedPostgresTopologyGate",
+      status: "degraded",
+      detail: `Phase 53 blocks ${topology} intent; multi-writer, distributed, and active-active requirements are design intent only, not implementation support; multiWriterSupported=false`,
+      checkedAt,
+    };
+  }
+  if (hasManagedIntent) {
+    return {
+      name: "managedPostgresTopologyGate",
+      status: "ok",
+      detail: "Phase 53 allows supported single-writer managed Postgres; multi-writer, distributed, and active-active runtime support remains unavailable",
+      checkedAt,
+    };
+  }
+  return {
+    name: "managedPostgresTopologyGate",
+    status: "disabled",
+    detail: "Phase 53 has no managed Postgres topology intent to evaluate",
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -179,6 +237,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkStore(loadStore, checkedAt),
     checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
     checkAccessLog(env, fileExists, checkedAt),
+    checkManagedPostgresTopologyGate(env, checkedAt),
   ];
 
   return {
@@ -201,6 +260,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     await checkStoreAsync(loadStore, checkedAt),
     checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
     checkAccessLog(env, fileExists, checkedAt),
+    checkManagedPostgresTopologyGate(env, checkedAt),
   ];
 
   return {

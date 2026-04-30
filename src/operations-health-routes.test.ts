@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
+import { getOperationsHealth, type OperationsHealthReport } from "./operations-health.js";
 import { operationsHealthRoutes } from "./operations-health-routes.js";
 import { login } from "./taskloom-services.js";
 import { mutateStore, resetStoreForTests } from "./taskloom-store.js";
@@ -14,6 +15,12 @@ function createApp() {
 
 function authHeaders(cookieValue: string) {
   return { Cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
+}
+
+function findSubsystem(report: OperationsHealthReport, name: string) {
+  const subsystem = report.subsystems.find((entry) => entry.name === name);
+  assert.ok(subsystem, `expected subsystem ${name} to be present`);
+  return subsystem;
 }
 
 test("operations health route rejects unauthenticated requests", async () => {
@@ -68,4 +75,59 @@ test("operations health route returns the report shape for an admin-equivalent o
     assert.ok(typeof subsystem.detail === "string");
     assert.ok(typeof subsystem.checkedAt === "string");
   }
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "managedPostgresTopologyGate"));
+});
+
+test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const gate = findSubsystem(report, "managedPostgresTopologyGate");
+  assert.equal(gate.status, "ok");
+  assert.match(gate.detail, /single-writer managed Postgres/i);
+  assert.match(gate.detail, /active-active runtime support remains unavailable/i);
+  assert.equal(report.overall, "ok");
+});
+
+test("operations health degrades for blocked multi-writer topology intent", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const gate = findSubsystem(report, "managedPostgresTopologyGate");
+  assert.equal(gate.status, "degraded");
+  assert.match(gate.detail, /Phase 53 blocks active-active intent/i);
+  assert.match(gate.detail, /design intent only, not implementation support/i);
+  assert.match(gate.detail, /multiWriterSupported=false/);
+  assert.equal(report.overall, "degraded");
 });

@@ -34,6 +34,12 @@ test("local JSON runtime is allowed by default", () => {
   assert.equal(report.phase51?.managedPostgresStartupSupported, false);
   assert.deepEqual(report.phase51?.remainingSyncCallSiteGroups, []);
   assert.equal(report.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.phase53?.multiWriterTopologyRequested, false);
+  assert.equal(report.phase53?.requirementsEvidenceConfigured, false);
+  assert.equal(report.phase53?.designEvidenceConfigured, false);
+  assert.equal(report.phase53?.requirementsDesignGatePassed, true);
+  assert.equal(report.phase53?.runtimeSupport, false);
+  assert.equal(report.phase53?.strictBlocker, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("local JSON"));
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
@@ -102,6 +108,8 @@ test("Phase 50 postgres adapter and managed URL allow Phase 52 managed Postgres 
   assert.equal(report.phase51?.strictBlocker, false);
   assert.equal(report.phase52?.managedPostgresStartupSupported, true);
   assert.equal(report.phase52?.strictBlocker, false);
+  assert.equal(report.phase53?.multiWriterTopologyRequested, false);
+  assert.equal(report.phase53?.runtimeSupport, false);
   assert.ok(report.phase51?.summary.includes("Phase 52 separately decides"));
   assert.equal(report.observed.managedDatabaseAdapter, "postgres");
   assert.ok(report.summary.includes("Phase 52"));
@@ -253,8 +261,17 @@ test("multi-writer topology is blocked", () => {
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "multi-writer-blocked");
   assert.equal(report.observed.databaseTopology, "multi-writer");
+  assert.equal(report.phase53?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase53?.requirementsEvidenceConfigured, false);
+  assert.equal(report.phase53?.designEvidenceConfigured, false);
+  assert.equal(report.phase53?.requirementsDesignGatePassed, false);
+  assert.equal(report.phase53?.runtimeSupport, false);
+  assert.equal(report.phase53?.strictBlocker, true);
   assert.ok(report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"));
+  assert.ok(report.checks.some((check) => check.id === "phase53-multi-writer-design" && check.status === "fail"));
   assert.ok(report.nextSteps.some((step) => step.includes("multi-writer runtime support")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE")));
 });
 
 test("active-active topology is blocked even with managed Postgres startup support", () => {
@@ -272,7 +289,37 @@ test("active-active topology is blocked even with managed Postgres startup suppo
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "multi-writer-blocked");
   assert.equal(report.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.phase53?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase53?.runtimeSupport, false);
   assert.ok(report.blockers.some((blocker) => blocker.includes("active-active")));
+});
+
+test("distributed topology with Phase 53 evidence remains blocked for runtime support", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
+    },
+  });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "multi-writer-blocked");
+  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.phase53?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase53?.requirementsEvidenceConfigured, true);
+  assert.equal(report.phase53?.designEvidenceConfigured, true);
+  assert.equal(report.phase53?.requirementsDesignGatePassed, true);
+  assert.equal(report.phase53?.runtimeSupport, false);
+  assert.equal(report.phase53?.strictBlocker, false);
+  assert.ok(report.checks.some((check) => check.id === "phase53-multi-writer-design" && check.status === "pass"));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
 });
 
 test("unsupported store is blocked", () => {

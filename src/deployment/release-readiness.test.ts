@@ -38,6 +38,8 @@ test("local JSON development produces warnings instead of release blockers", () 
   assert.equal(report.asyncStoreBoundary.managedDatabaseRuntimeCallSiteMigrationTracked, true);
   assert.equal(report.asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated, true);
   assert.deepEqual(report.asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups, []);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, true);
   assert.equal(report.asyncStoreBoundary.classification, "foundation-ready");
   assert.equal(checkStatus(report, "storage-topology"), "warn");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
@@ -209,6 +211,8 @@ test("strict release with Phase 52 managed startup support allows managed Postgr
   assert.equal(report.asyncStoreBoundary.managedPostgresSupported, true);
   assert.equal(report.asyncStoreBoundary.phase52ManagedStartupSupported, true);
   assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, true);
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "pass");
   assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "warn");
@@ -252,9 +256,19 @@ test("Phase 52 managed startup support does not allow multi-writer topology", ()
   assert.equal(report.asyncStoreBoundary.classification, "multi-writer-unsupported");
   assert.equal(report.asyncStoreBoundary.phase52ManagedStartupSupported, false);
   assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.requirementsEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.requirementsEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, false);
   assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "fail");
   assert.equal(checkStatus(report, "async-store-boundary"), "fail");
   assert.ok(report.blockers.some((blocker) => blocker.includes("multi-writer")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 53 requirements/design gate")));
+  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 53 multi-writer topology requirements evidence")));
+  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 53 multi-writer topology design evidence")));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 53 requirements/design evidence")));
 });
 
 test("strict release with TASKLOOM_STORE=postgres fails the managed database runtime boundary", () => {

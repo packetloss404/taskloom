@@ -17,6 +17,8 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_DATABASE_URL?: string;
   TASKLOOM_MANAGED_DATABASE_ADAPTER?: string;
   TASKLOOM_DATABASE_TOPOLOGY?: string;
+  TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -85,6 +87,15 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase53?: {
+    multiWriterTopologyRequested: boolean;
+    requirementsEvidenceConfigured: boolean;
+    designEvidenceConfigured: boolean;
+    requirementsDesignGatePassed: boolean;
+    runtimeSupport: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -114,6 +125,8 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_DATABASE_URL",
   "TASKLOOM_MANAGED_DATABASE_ADAPTER",
   "TASKLOOM_DATABASE_TOPOLOGY",
+  "TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -272,6 +285,29 @@ function phase52ManagedPostgresStartupSupport(
   };
 }
 
+function phase53MultiWriterTopologyGate(env: ManagedDatabaseRuntimeGuardEnv, hasMultiWriterIntent: boolean) {
+  const requirementsEvidenceConfigured = configured(env.TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE);
+  const designEvidenceConfigured = configured(env.TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE);
+  const requirementsDesignGatePassed =
+    !hasMultiWriterIntent || (requirementsEvidenceConfigured && designEvidenceConfigured);
+  const strictBlocker = hasMultiWriterIntent && !requirementsDesignGatePassed;
+  const summary = hasMultiWriterIntent
+    ? requirementsDesignGatePassed
+      ? "Phase 53 multi-writer topology requirements and design evidence are configured; runtime support remains blocked."
+      : "Phase 53 requires explicit multi-writer requirements and design evidence before topology design can proceed."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 53.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    requirementsEvidenceConfigured,
+    designEvidenceConfigured,
+    requirementsDesignGatePassed,
+    runtimeSupport: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -293,6 +329,7 @@ function buildNextSteps(
   bypassEnabled: boolean,
   phase51: ManagedDatabaseRuntimeCallSiteMigrationReport,
   phase52: ReturnType<typeof phase52ManagedPostgresStartupSupport>,
+  phase53: ReturnType<typeof phase53MultiWriterTopologyGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -311,6 +348,14 @@ function buildNextSteps(
     }
     if (check.id === "single-writer-runtime") {
       steps.add("Keep Taskloom on local JSON or single-node SQLite until multi-writer runtime support exists.");
+    }
+    if (check.id === "phase53-multi-writer-design") {
+      if (!phase53.requirementsEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE with the approved multi-writer topology requirements reference.");
+      }
+      if (!phase53.designEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE with the approved multi-writer topology design reference.");
+      }
     }
   }
 
@@ -339,6 +384,7 @@ export function assessManagedDatabaseRuntimeGuard(
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
   const phase52 = phase52ManagedPostgresStartupSupport(phase50, phase51, hasMultiWriterIntent);
+  const phase53 = phase53MultiWriterTopologyGate(env, hasMultiWriterIntent);
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseRuntimeGuardCheck[] = [];
@@ -386,6 +432,13 @@ export function assessManagedDatabaseRuntimeGuard(
       : "No multi-writer, multi-region, active-active, or distributed runtime hint was detected.",
   );
 
+  pushCheck(
+    checks,
+    "phase53-multi-writer-design",
+    phase53.strictBlocker ? "fail" : "pass",
+    phase53.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -413,6 +466,9 @@ export function assessManagedDatabaseRuntimeGuard(
   }
   if (hasManagedIntent) {
     warnings.push(phase52.summary);
+  }
+  if (hasMultiWriterIntent) {
+    warnings.push(phase53.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -458,7 +514,7 @@ export function assessManagedDatabaseRuntimeGuard(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, bypassEnabled, phase51, phase52),
+    nextSteps: buildNextSteps(checks, bypassEnabled, phase51, phase52, phase53),
     observed: {
       nodeEnv,
       store,
@@ -474,6 +530,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase50,
     phase51,
     phase52,
+    phase53,
   };
 }
 

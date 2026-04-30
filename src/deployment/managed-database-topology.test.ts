@@ -29,6 +29,12 @@ test("local JSON reports current supported local mode", () => {
   assert.equal(report.managedDatabase.phase50?.asyncAdapterAvailable, false);
   assert.equal(report.managedDatabase.phase50?.backfillAvailable, false);
   assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.managedDatabase.phase53?.multiWriterTopologyRequested, false);
+  assert.equal(report.managedDatabase.phase53?.requirementsEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase53?.designEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase53?.requirementsDesignGatePassed, true);
+  assert.equal(report.managedDatabase.phase53?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase53?.strictBlocker, false);
   assert.equal(report.observed.store, "json");
   assert.equal(report.observed.dbPath, null);
   assert.ok(report.summary.includes("supported local JSON"));
@@ -102,6 +108,8 @@ test("Phase 50 postgres adapter and managed URL report Phase 52 startup support"
   assert.equal(report.managedDatabase.phase50?.backfillAvailable, true);
   assert.equal(report.managedDatabase.phase50?.adapter, "postgres");
   assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, true);
+  assert.equal(report.managedDatabase.phase53?.multiWriterTopologyRequested, false);
+  assert.equal(report.managedDatabase.phase53?.runtimeSupport, false);
   assert.equal(report.observed.managedDatabaseAdapter, "postgres");
   assert.ok(report.summary.includes("Phase 52"));
   assert.equal(report.blockers.length, 0);
@@ -236,7 +244,43 @@ test("active-active topology remains blocked with managed Postgres adapter and U
   assert.equal(report.managedDatabase.requested, true);
   assert.equal(report.managedDatabase.supported, false);
   assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.managedDatabase.phase53?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase53?.requirementsEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase53?.designEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase53?.requirementsDesignGatePassed, false);
+  assert.equal(report.managedDatabase.phase53?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase53?.strictBlocker, true);
   assert.ok(report.blockers.some((blocker) => blocker.includes("active-active")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 53 requires")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE")));
+});
+
+test("distributed topology with Phase 53 evidence remains blocked for runtime support", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.managedDatabase.phase53?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase53?.requirementsEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase53?.designEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase53?.requirementsDesignGatePassed, true);
+  assert.equal(report.managedDatabase.phase53?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase53?.strictBlocker, false);
+  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
 });
 
 test("production SQLite remains single-node advisory-supported without managed database intent", () => {

@@ -10,6 +10,7 @@ import {
   type AsyncStoreBoundaryReport,
   buildReleaseReadinessReport as defaultBuildReleaseReadinessReport,
   type ManagedDatabaseRuntimeBoundaryReport,
+  type Phase53MultiWriterTopologyGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -86,6 +87,12 @@ export interface ReleaseEvidenceBundle {
       managedDatabaseRuntimeCallSiteMigrationTracked: boolean;
       managedDatabaseRuntimeCallSitesMigrated: boolean;
       managedDatabaseRemainingSyncCallSiteGroups: string[];
+      phase53MultiWriterTopologyGateRequired: boolean;
+      phase53MultiWriterRequirementsEvidenceRequired: boolean;
+      phase53MultiWriterDesignEvidenceRequired: boolean;
+      phase53MultiWriterRequirementsEvidenceAttached: false;
+      phase53MultiWriterDesignEvidenceAttached: false;
+      phase53MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -253,6 +260,35 @@ function artifactPathConfigured(env: ReleaseEvidenceEnv): boolean {
   return configured(env.TASKLOOM_ARTIFACTS_PATH) || configured(env.TASKLOOM_ARTIFACT_DIR);
 }
 
+function phase53MultiWriterTopologyGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+): Phase53MultiWriterTopologyGateReport {
+  return asyncStoreBoundary.phase53MultiWriterTopologyGate ?? {
+    phase: "53",
+    required: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    requirementsEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    designEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    requirementsEvidenceAttached: false,
+    designEvidenceAttached: false,
+    releaseAllowed: asyncStoreBoundary.classification !== "multi-writer-unsupported",
+    summary: asyncStoreBoundary.classification === "multi-writer-unsupported"
+      ? "Phase 53 multi-writer topology requirements/design evidence is required before distributed, active-active, or multi-writer database release."
+      : "Phase 53 multi-writer topology requirements/design gate is not required for this release posture.",
+    blockers: asyncStoreBoundary.classification === "multi-writer-unsupported"
+      ? [
+        "Phase 53 multi-writer topology requirements evidence is required before release.",
+        "Phase 53 multi-writer topology design evidence is required before release.",
+      ]
+      : [],
+    nextSteps: asyncStoreBoundary.classification === "multi-writer-unsupported"
+      ? [
+        "Attach Phase 53 multi-writer topology requirements evidence before considering distributed, active-active, or multi-writer release.",
+        "Attach Phase 53 multi-writer topology design evidence before considering distributed, active-active, or multi-writer release.",
+      ]
+      : ["Keep Phase 53 requirements/design evidence ready before enabling distributed, active-active, or multi-writer database topology."],
+  };
+}
+
 function buildAttachments(
   storageTopology: StorageTopologyReport,
   releaseReadiness: ReleaseReadinessReport,
@@ -262,6 +298,7 @@ function buildAttachments(
   asyncStoreBoundary: AsyncStoreBoundaryReport,
   bundleReady: boolean,
 ): ReleaseEvidenceAttachment[] {
+  const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
   return [
     {
       id: "phase-42-storage-topology",
@@ -333,6 +370,13 @@ function buildAttachments(
       summary: asyncStoreBoundary.phase52ManagedStartupSupported
         ? "Phase 52 managed Postgres startup support is asserted with adapter/backfill and migrated call-site evidence."
         : "Phase 52 managed Postgres startup support is not asserted.",
+    },
+    {
+      id: "phase-53-multi-writer-topology-requirements-design",
+      label: "Phase 53 multi-writer topology requirements/design evidence",
+      format: "json",
+      required: phase53Gate.required,
+      summary: phase53Gate.summary,
     },
     {
       id: "phase-44-release-evidence",
@@ -450,6 +494,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
     managedDatabaseRuntimeBoundary,
     asyncStoreBoundary,
   };
+  const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
 
   return {
     phase: "44",
@@ -496,6 +541,12 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         managedDatabaseRuntimeCallSiteMigrationTracked: asyncStoreBoundary.managedDatabaseRuntimeCallSiteMigrationTracked,
         managedDatabaseRuntimeCallSitesMigrated: asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated,
         managedDatabaseRemainingSyncCallSiteGroups: asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups,
+        phase53MultiWriterTopologyGateRequired: phase53Gate.required,
+        phase53MultiWriterRequirementsEvidenceRequired: phase53Gate.requirementsEvidenceRequired,
+        phase53MultiWriterDesignEvidenceRequired: phase53Gate.designEvidenceRequired,
+        phase53MultiWriterRequirementsEvidenceAttached: phase53Gate.requirementsEvidenceAttached,
+        phase53MultiWriterDesignEvidenceAttached: phase53Gate.designEvidenceAttached,
+        phase53MultiWriterTopologyReleaseAllowed: phase53Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

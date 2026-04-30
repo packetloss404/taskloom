@@ -82,10 +82,24 @@ export interface AsyncStoreBoundaryReport {
   managedDatabaseRuntimeCallSiteMigrationTracked: boolean;
   managedDatabaseRuntimeCallSitesMigrated: boolean;
   managedDatabaseRemainingSyncCallSiteGroups: string[];
+  phase53MultiWriterTopologyGate?: Phase53MultiWriterTopologyGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
   warnings: string[];
+  nextSteps: string[];
+}
+
+export interface Phase53MultiWriterTopologyGateReport {
+  phase: "53";
+  required: boolean;
+  requirementsEvidenceRequired: boolean;
+  designEvidenceRequired: boolean;
+  requirementsEvidenceAttached: false;
+  designEvidenceAttached: false;
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
   nextSteps: string[];
 }
 
@@ -291,6 +305,44 @@ function phase52ManagedStartupSupported(
   );
 }
 
+function buildPhase53MultiWriterTopologyGate(
+  multiWriterIntent: boolean,
+): Phase53MultiWriterTopologyGateReport {
+  if (!multiWriterIntent) {
+    return {
+      phase: "53",
+      required: false,
+      requirementsEvidenceRequired: false,
+      designEvidenceRequired: false,
+      requirementsEvidenceAttached: false,
+      designEvidenceAttached: false,
+      releaseAllowed: true,
+      summary: "Phase 53 multi-writer topology requirements/design gate is not required for single-writer managed Postgres or local storage posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 53 requirements/design evidence ready before enabling distributed, active-active, or multi-writer database topology."],
+    };
+  }
+
+  return {
+    phase: "53",
+    required: true,
+    requirementsEvidenceRequired: true,
+    designEvidenceRequired: true,
+    requirementsEvidenceAttached: false,
+    designEvidenceAttached: false,
+    releaseAllowed: false,
+    summary: "Phase 53 multi-writer topology requirements/design evidence is required before distributed, active-active, or multi-writer database release.",
+    blockers: [
+      "Phase 53 multi-writer topology requirements evidence is required before release.",
+      "Phase 53 multi-writer topology design evidence is required before release.",
+    ],
+    nextSteps: [
+      "Attach Phase 53 multi-writer topology requirements evidence before considering distributed, active-active, or multi-writer release.",
+      "Attach Phase 53 multi-writer topology design evidence before considering distributed, active-active, or multi-writer release.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -356,7 +408,7 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
     }
   }
   if (multiWriterBlocked) {
-    nextSteps.add("Keep multi-writer or managed database topology out of strict release until the runtime boundary supports it.");
+    nextSteps.add("Keep multi-writer, distributed, or active-active database topology out of strict release until Phase 53 requirements/design evidence is attached and a later release gate explicitly allows it.");
   }
   if (nextSteps.size === 0) {
     nextSteps.add("Continue using local JSON for contributor workflows or SQLite for single-node persistence.");
@@ -374,7 +426,7 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
   if (managedStartupSupported && !multiWriterBlocked && !unsupportedStore) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
   } else if (multiWriterBlocked) {
-    summary = "Phase 48 managed database runtime boundary blocks multi-writer or managed topology until runtime support exists.";
+    summary = "Phase 48 managed database runtime boundary blocks multi-writer, distributed, or active-active topology and points release handoff to Phase 53 requirements/design evidence.";
   } else if (managedDatabaseBlocked || unsupportedStore) {
     summary = phase50Capability.adapterAvailable
       ? "Phase 48 managed database runtime boundary still blocks synchronous managed startup even though Phase 50 async adapter/backfill capability is available."
@@ -425,6 +477,7 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseTopology.classification === "production-blocked" ||
     managedDatabaseRuntimeGuard.classification === "multi-writer-blocked" ||
     managedDatabaseRuntimeBoundary.classification === "multi-writer-blocked";
+  const phase53MultiWriterTopologyGate = buildPhase53MultiWriterTopologyGate(multiWriterIntent);
   const unsupportedStore =
     managedDatabaseTopology.classification === "unsupported-store" ||
     managedDatabaseRuntimeGuard.classification === "unsupported-store" ||
@@ -438,6 +491,7 @@ export function buildAsyncStoreBoundaryReport(
     ...managedDatabaseTopology.blockers,
     ...managedDatabaseRuntimeGuard.blockers,
     ...managedDatabaseRuntimeBoundary.blockers,
+    ...phase53MultiWriterTopologyGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -448,6 +502,7 @@ export function buildAsyncStoreBoundaryReport(
     ...managedDatabaseTopology.nextSteps,
     ...managedDatabaseRuntimeGuard.nextSteps,
     ...managedDatabaseRuntimeBoundary.nextSteps,
+    ...phase53MultiWriterTopologyGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -487,13 +542,14 @@ export function buildAsyncStoreBoundaryReport(
     nextSteps.add(`Finish Phase 51 runtime call-site migration for: ${phase51Capability.remainingSyncCallSiteGroups.join(", ")}.`);
   }
   if (multiWriterIntent) {
-    nextSteps.add("Keep multi-writer database topology blocked until managed runtime coordination exists.");
+    nextSteps.add("Keep multi-writer database topology blocked until Phase 53 requirements/design evidence is attached and a later release gate explicitly allows the topology.");
   }
 
   const releaseAllowed =
     managedDatabaseRuntimeBoundary.allowed &&
     !unsupportedStore &&
     !multiWriterIntent &&
+    phase53MultiWriterTopologyGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -504,7 +560,7 @@ export function buildAsyncStoreBoundaryReport(
   if (managedIntent && effectivePhase52ManagedStartupSupported) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
   } else if (multiWriterIntent) {
-    summary = "Phase 49 async-store boundary exists as foundation, but multi-writer database topology remains unsupported until managed runtime coordination lands.";
+    summary = "Phase 49 async-store boundary exists as foundation, but multi-writer database topology remains blocked by the Phase 53 requirements/design gate.";
   } else if (managedIntent && phase50Capability.adapterAvailable) {
     summary = phase51Capability.runtimeCallSitesMigrated
       ? "Phase 50 async managed adapter/backfill capability is available and Phase 51 reports migrated call sites, but managed Postgres startup support is not asserted."
@@ -535,6 +591,7 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseRuntimeCallSiteMigrationTracked: phase51Capability.tracked,
     managedDatabaseRuntimeCallSitesMigrated: phase51Capability.runtimeCallSitesMigrated,
     managedDatabaseRemainingSyncCallSiteGroups: phase51Capability.remainingSyncCallSiteGroups,
+    phase53MultiWriterTopologyGate,
     classification,
     summary,
     blockers,

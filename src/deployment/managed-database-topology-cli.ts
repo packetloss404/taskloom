@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatDeploymentCliJson } from "./deployment-output-cli.js";
 
 export interface ManagedDatabaseTopologyReport {
   readyForManagedDatabase?: unknown;
@@ -33,7 +34,7 @@ export async function runManagedDatabaseTopologyCli(
 
   try {
     const report = await buildManagedDatabaseTopologyReport(env, { strict });
-    out(JSON.stringify(report, null, 2));
+    out(formatDeploymentCliJson(report, env));
 
     if (strict && !isReadyForProductionManagedDatabase(report)) {
       return 1;

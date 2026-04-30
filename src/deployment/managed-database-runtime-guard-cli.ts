@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatDeploymentCliJson } from "./deployment-output-cli.js";
 
 export interface ManagedDatabaseRuntimeGuardReport {
   allowed?: unknown;
@@ -33,7 +34,7 @@ export async function runManagedDatabaseRuntimeGuardCli(
 
   try {
     const report = await buildManagedDatabaseRuntimeGuardReport(env, { strict });
-    out(JSON.stringify(report, null, 2));
+    out(formatDeploymentCliJson(report, env));
 
     if (strict && isRuntimeGuardBlocked(report)) {
       return 1;

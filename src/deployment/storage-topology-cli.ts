@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatDeploymentCliJson } from "./deployment-output-cli.js";
 
 export interface StorageTopologyReport {
   readyForProduction?: unknown;
@@ -23,7 +24,7 @@ export async function runStorageTopologyCli(options: RunStorageTopologyCliOption
 
   try {
     const report = await buildStorageTopologyReport(env);
-    out(JSON.stringify(report, null, 2));
+    out(formatDeploymentCliJson(report, env));
 
     if (argv.includes("--strict") && report.readyForProduction !== true) {
       return 1;

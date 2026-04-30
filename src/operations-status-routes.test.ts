@@ -87,6 +87,10 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(managedPostgresStartupSupport.phase, "52");
   assert.equal(managedPostgresStartupSupport.startupSupported, false);
   assert.equal(managedPostgresStartupSupport.multiWriterSupported, false);
+  assert.ok(body.managedPostgresTopologyGate && typeof body.managedPostgresTopologyGate === "object");
+  const managedPostgresTopologyGate = body.managedPostgresTopologyGate as Record<string, unknown>;
+  assert.equal(managedPostgresTopologyGate.phase, "53");
+  assert.equal(managedPostgresTopologyGate.multiWriterSupported, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -112,6 +116,11 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
   assert.equal(status.managedPostgresStartupSupport.runtimeCallSitesMigrated, true);
   assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
   assert.equal(status.managedPostgresStartupSupport.multiWriterIntentDetected, false);
+  assert.equal(status.managedPostgresTopologyGate.phase, "53");
+  assert.equal(status.managedPostgresTopologyGate.status, "supported");
+  assert.equal(status.managedPostgresTopologyGate.singleWriterManagedPostgresSupported, true);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterIntentDetected, false);
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
@@ -132,4 +141,11 @@ test("operations status report keeps multi-writer managed Postgres startup unsup
   assert.equal(status.managedPostgresStartupSupport.startupSupported, false);
   assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
   assert.equal(status.managedPostgresStartupSupport.multiWriterIntentDetected, true);
+  assert.equal(status.managedPostgresTopologyGate.phase, "53");
+  assert.equal(status.managedPostgresTopologyGate.status, "blocked");
+  assert.equal(status.managedPostgresTopologyGate.topologyIntent, "distributed");
+  assert.equal(status.managedPostgresTopologyGate.multiWriterIntentDetected, true);
+  assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
+  assert.equal(status.managedPostgresTopologyGate.requirementsOnly, true);
+  assert.match(status.managedPostgresTopologyGate.summary, /not implementation support/i);
 });

@@ -88,6 +88,20 @@ export interface ManagedPostgresStartupSupportStatus {
   source: "managedDatabaseRuntimeGuard" | "derived";
 }
 
+export interface ManagedPostgresTopologyGateStatus {
+  phase: "53";
+  status: "supported" | "blocked" | "not-configured";
+  summary: string;
+  managedIntentDetected: boolean;
+  singleWriterManagedPostgresSupported: boolean;
+  multiWriterIntentDetected: boolean;
+  multiWriterSupported: false;
+  topologyIntent: string | null;
+  requirementsOnly: boolean;
+  implementationScope: "single-writer-managed-postgres" | "none";
+  source: "managedDatabaseRuntimeGuard" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -111,6 +125,7 @@ export interface OperationsStatus {
   asyncStoreBoundary: AsyncStoreBoundaryStatus | null;
   managedPostgresCapability: ManagedPostgresCapabilityStatus;
   managedPostgresStartupSupport: ManagedPostgresStartupSupportStatus;
+  managedPostgresTopologyGate: ManagedPostgresTopologyGateStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -177,6 +192,14 @@ const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
   "distributed",
   "multi-region",
   "multi-writer",
+]);
+const SINGLE_WRITER_TOPOLOGY_HINTS = new Set([
+  "managed",
+  "managed-db",
+  "managed-database",
+  "postgres",
+  "postgresql",
+  "single-writer",
 ]);
 const MANAGED_POSTGRES_BACKFILL_COMMANDS = [
   "npm run db:backfill",
@@ -592,6 +615,86 @@ function deriveManagedPostgresStartupSupport(
   };
 }
 
+function deriveManagedPostgresTopologyGate(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedPostgresCapability: ManagedPostgresCapabilityStatus,
+  managedPostgresStartupSupport: ManagedPostgresStartupSupportStatus,
+): ManagedPostgresTopologyGateStatus {
+  const runtimeGuardRecord: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard)
+    ? managedDatabaseRuntimeGuard as unknown as Record<string, unknown>
+    : {};
+  const phase53: Record<string, unknown> = isRecord(runtimeGuardRecord.phase53)
+    ? runtimeGuardRecord.phase53
+    : {};
+  const guardObserved: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.observed)
+    ? managedDatabaseRuntimeGuard.observed
+    : {};
+  const topologyObserved: Record<string, unknown> = isRecord(managedDatabaseTopology.observed)
+    ? managedDatabaseTopology.observed
+    : {};
+  const topologyIntent = (
+    stringValue(phase53.topologyIntent) ||
+    stringValue(phase53.topology) ||
+    stringValue(guardObserved.databaseTopology) ||
+    stringValue(topologyObserved.databaseTopology) ||
+    stringValue(env.TASKLOOM_DATABASE_TOPOLOGY) ||
+    null
+  );
+  const normalizedTopology = topologyIntent?.toLowerCase() ?? "";
+  const classification = stringValue(managedDatabaseRuntimeGuard.classification) ||
+    stringValue(managedDatabaseTopology.classification);
+  const multiWriterIntentDetected = booleanValue(phase53.multiWriterIntentDetected) ??
+    (
+      managedPostgresStartupSupport.multiWriterIntentDetected ||
+      MULTI_WRITER_TOPOLOGY_HINTS.has(normalizedTopology) ||
+      classification === "multi-writer-blocked"
+    );
+  const managedIntentDetected = booleanValue(phase53.managedIntentDetected) ??
+    (
+      managedPostgresStartupSupport.managedIntentDetected ||
+      managedPostgresCapability.managedIntentDetected ||
+      SINGLE_WRITER_TOPOLOGY_HINTS.has(normalizedTopology)
+    );
+  const singleWriterManagedPostgresSupported = booleanValue(phase53.singleWriterManagedPostgresSupported) ??
+    (managedIntentDetected && managedPostgresStartupSupport.startupSupported && !multiWriterIntentDetected);
+  const status: ManagedPostgresTopologyGateStatus["status"] = multiWriterIntentDetected
+    ? "blocked"
+    : singleWriterManagedPostgresSupported
+      ? "supported"
+      : managedIntentDetected
+        ? "blocked"
+        : "not-configured";
+  const requirementsOnly = multiWriterIntentDetected;
+  const phase53Summary = stringValue(phase53.summary);
+  const summary = multiWriterIntentDetected
+    ? phase53Summary && /implementation support/i.test(phase53Summary)
+      ? phase53Summary
+      : `${phase53Summary ? `${phase53Summary} ` : ""}Multi-writer, distributed, and active-active requirements are design intent only, not implementation support; multiWriterSupported=false.`
+    : phase53Summary || (
+      singleWriterManagedPostgresSupported
+        ? "Phase 53 topology gate allows supported single-writer managed Postgres; multi-writer, distributed, and active-active runtime support remains unavailable."
+        : managedIntentDetected
+          ? "Phase 53 topology gate sees managed Postgres intent, but single-writer startup support is not complete."
+          : "Phase 53 topology gate has no managed Postgres topology intent to evaluate."
+    );
+
+  return {
+    phase: "53",
+    status,
+    summary,
+    managedIntentDetected,
+    singleWriterManagedPostgresSupported,
+    multiWriterIntentDetected,
+    multiWriterSupported: false,
+    topologyIntent,
+    requirementsOnly,
+    implementationScope: singleWriterManagedPostgresSupported ? "single-writer-managed-postgres" : "none",
+    source: isRecord(runtimeGuardRecord.phase53) ? "managedDatabaseRuntimeGuard" : "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -683,6 +786,13 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedDatabaseRuntimeGuard,
     managedPostgresCapability,
   );
+  const managedPostgresTopologyGate = deriveManagedPostgresTopologyGate(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    managedPostgresCapability,
+    managedPostgresStartupSupport,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -721,6 +831,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     asyncStoreBoundary,
     managedPostgresCapability,
     managedPostgresStartupSupport,
+    managedPostgresTopologyGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -771,6 +882,13 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     managedDatabaseRuntimeGuard,
     managedPostgresCapability,
   );
+  const managedPostgresTopologyGate = deriveManagedPostgresTopologyGate(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    managedPostgresCapability,
+    managedPostgresStartupSupport,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -809,6 +927,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     asyncStoreBoundary,
     managedPostgresCapability,
     managedPostgresStartupSupport,
+    managedPostgresTopologyGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
