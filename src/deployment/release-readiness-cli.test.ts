@@ -80,7 +80,7 @@ test("runReleaseReadinessCli strict mode blocks managed database runtime handoff
 
   assert.equal(exitCode, 1);
   assert.equal(report.readyForRelease, false);
-  assert.match(serializedReport, /Managed database runtime intent was detected/);
+  assert.match(serializedReport, /Phase 52 managed Postgres startup support requires/);
   assert.match(serializedReport, /managed-database-blocked/);
   assert.match(serializedReport, /Phase 49 async-store boundary exists as foundation/);
   assert.match(serializedReport, /managed Postgres remains unsupported/);

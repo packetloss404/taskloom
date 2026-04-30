@@ -2,6 +2,7 @@ export type ManagedDatabaseTopologyStatus = "pass" | "warn" | "fail";
 export type ManagedDatabaseTopologyClassification =
   | "local-json"
   | "single-node-sqlite"
+  | "managed-postgres"
   | "managed-database-requested"
   | "production-blocked"
   | "unsupported-store";
@@ -56,13 +57,18 @@ export interface ManagedDatabaseTopologyReport {
   managedDatabase: {
     requested: boolean;
     configured: boolean;
-    supported: false;
-    syncStartupSupported?: false;
+    supported: boolean;
+    syncStartupSupported?: boolean;
     phase50?: {
       asyncAdapterConfigured: boolean;
       asyncAdapterAvailable: boolean;
       backfillAvailable: boolean;
       adapter: string | null;
+    };
+    phase52?: {
+      managedPostgresStartupSupported: boolean;
+      strictBlocker: boolean;
+      summary: string;
     };
   };
 }
@@ -98,6 +104,7 @@ const MANAGED_TOPOLOGY_HINTS = new Set([
   "database",
 ]);
 const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
+  "active-active",
   "distributed",
   "multi-host",
   "multi-node",
@@ -112,6 +119,7 @@ const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
   "managed-postgres",
   "managed-postgresql",
 ]);
+const PHASE_52_MANAGED_POSTGRES_STORES = new Set(["managed", "postgres", "postgresql"]);
 const SECRET_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 
 function clean(value: string | undefined): string {
@@ -180,6 +188,10 @@ function supportedStore(store: string, supportedLocalModes: readonly string[]): 
   return supportedLocalModes.includes(store);
 }
 
+function managedStoreRequested(store: string): boolean {
+  return PHASE_52_MANAGED_POSTGRES_STORES.has(store);
+}
+
 function managedDatabaseUrlConfigured(env: ManagedDatabaseTopologyEnv): boolean {
   return (
     configured(env.TASKLOOM_MANAGED_DATABASE_URL) ||
@@ -200,6 +212,25 @@ function phase50AsyncAdapter(env: ManagedDatabaseTopologyEnv, urlConfigured: boo
   };
 }
 
+function phase52ManagedPostgresStartupSupport(
+  phase50: ReturnType<typeof phase50AsyncAdapter>,
+  hasMultiWriterIntent: boolean,
+) {
+  const managedPostgresStartupSupported = phase50.asyncAdapterAvailable && !hasMultiWriterIntent;
+  const strictBlocker = !managedPostgresStartupSupported;
+  const summary = hasMultiWriterIntent
+    ? "Phase 52 managed Postgres startup support is not asserted for multi-writer, distributed, or active-active topology."
+    : managedPostgresStartupSupported
+      ? "Phase 52 managed Postgres startup support is asserted separately from Phase 50 adapter/backfill evidence; Phase 51 call-site migration is complete for startup."
+      : "Phase 52 managed Postgres startup support requires a managed database URL and recognized Phase 50 Postgres adapter.";
+
+  return {
+    managedPostgresStartupSupported,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -214,8 +245,7 @@ function buildNextSteps(checks: ManagedDatabaseTopologyCheck[]): string[] {
   for (const check of checks) {
     if (check.status === "pass") continue;
     if (check.id === "managed-database-runtime") {
-      steps.add("Keep TASKLOOM_STORE set to json or sqlite for the synchronous app runtime until managed startup is explicitly supported.");
-      steps.add("Treat Phase 50 async adapter/backfill evidence separately from synchronous startup support.");
+      steps.add("Configure TASKLOOM_MANAGED_DATABASE_ADAPTER=postgres with a managed database URL before enabling managed Postgres startup.");
     }
     if (check.id === "production-topology") {
       steps.add("Use this Phase 45 report as advisory evidence only; do not treat local JSON or SQLite as a managed production database topology.");
@@ -224,7 +254,7 @@ function buildNextSteps(checks: ManagedDatabaseTopologyCheck[]): string[] {
       steps.add("Set TASKLOOM_STORE=json for local JSON storage or TASKLOOM_STORE=sqlite for single-node SQLite storage.");
     }
     if (check.id === "single-writer-topology") {
-      steps.add("Keep SQLite deployments to a single writer node until Taskloom has an implemented managed database runtime.");
+      steps.add("Keep managed Postgres, JSON, or SQLite deployments to a single writer node until multi-writer runtime support exists.");
     }
   }
 
@@ -248,16 +278,20 @@ export function assessManagedDatabaseTopology(
   const phase50 = phase50AsyncAdapter(env, hasManagedDatabaseUrl);
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
+  const phase52 = phase52ManagedPostgresStartupSupport(phase50, hasMultiWriterIntent);
+  const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseTopologyCheck[] = [];
   const warnings: string[] = [];
 
-  if (supportedStore(store, supportedLocalModes)) {
+  if (supportedStore(store, supportedLocalModes) || (managedStoreRequested(store) && hasManagedPostgresStartupSupport)) {
     pushCheck(
       checks,
       "supported-local-mode",
       "pass",
-      store === "sqlite"
+      managedStoreRequested(store)
+        ? `TASKLOOM_STORE=${store} is allowed by Phase 52 managed Postgres startup support.`
+        : store === "sqlite"
         ? "TASKLOOM_STORE=sqlite is a supported single-node local storage mode."
         : "TASKLOOM_STORE is using the supported local JSON storage mode.",
     );
@@ -275,11 +309,11 @@ export function assessManagedDatabaseTopology(
   pushCheck(
     checks,
     "managed-database-runtime",
-    hasManagedIntent ? "fail" : "pass",
+    hasManagedIntent && !hasManagedPostgresStartupSupport ? "fail" : "pass",
     hasManagedIntent
-      ? phase50.asyncAdapterAvailable
-        ? "Managed database topology is requested and Phase 50 async adapter/backfill capability is configured, but synchronous app startup remains unsupported."
-        : "Managed database topology is requested or configured, but Taskloom's synchronous app runtime still has no supported managed database startup path."
+      ? hasManagedPostgresStartupSupport
+        ? "Managed database topology is allowed by Phase 52 startup support; Phase 50 Postgres adapter is configured and Phase 51 migration is complete."
+        : phase52.summary
       : "No managed database URL or managed database topology hint was detected.",
   );
 
@@ -288,8 +322,8 @@ export function assessManagedDatabaseTopology(
     "single-writer-topology",
     hasMultiWriterIntent ? "fail" : "pass",
     hasMultiWriterIntent
-      ? "TASKLOOM_DATABASE_TOPOLOGY requests a production, distributed, or multi-writer posture that local JSON/SQLite cannot provide."
-      : "No production, distributed, or multi-writer database topology hint was detected.",
+      ? "TASKLOOM_DATABASE_TOPOLOGY requests a production, distributed, active-active, or multi-writer posture that is not supported."
+      : "No production, distributed, active-active, or multi-writer database topology hint was detected.",
   );
 
   pushCheck(
@@ -310,18 +344,27 @@ export function assessManagedDatabaseTopology(
     warnings.push(`TASKLOOM_DB_PATH is not set; SQLite will use the default local path ${DEFAULT_SQLITE_PATH}.`);
   }
   if (hasManagedDatabaseUrl) {
-    warnings.push("Managed database URLs are captured as redacted evidence; they do not enable the synchronous app runtime.");
+    warnings.push(
+      hasManagedPostgresStartupSupport
+        ? "Managed database URLs are captured as redacted evidence; Phase 52 allows them only for single-writer managed Postgres startup."
+        : "Managed database URLs are captured as redacted evidence and require Phase 52 managed Postgres startup support.",
+    );
   }
   if (phase50.asyncAdapterAvailable) {
-    warnings.push("Phase 50 async managed adapter/backfill capability is available for handoff evidence, but synchronous startup support remains false.");
+    warnings.push("Phase 50 async managed adapter/backfill capability is available; Phase 52 separately reports startup support.");
   } else if (phase50.asyncAdapterConfigured) {
     warnings.push("TASKLOOM_MANAGED_DATABASE_ADAPTER is configured, but Phase 50 adapter availability also requires a recognized postgres adapter value and managed database URL.");
+  }
+  if (hasManagedIntent) {
+    warnings.push(phase52.summary);
   }
 
   const status = statusFromChecks(checks);
   const blockers = checks.filter((check) => check.status === "fail").map((check) => check.summary);
   let classification: ManagedDatabaseTopologyClassification;
-  if (hasManagedIntent) {
+  if (hasManagedIntent && hasManagedPostgresStartupSupport) {
+    classification = "managed-postgres";
+  } else if (hasManagedIntent) {
     classification = "managed-database-requested";
   } else if ((isProductionEnv && store === "json") || hasMultiWriterIntent) {
     classification = "production-blocked";
@@ -333,13 +376,13 @@ export function assessManagedDatabaseTopology(
 
   const ready = blockers.length === 0;
   const summary = ready
-    ? store === "sqlite"
+    ? hasManagedIntent && hasManagedPostgresStartupSupport
+      ? "Phase 52 managed database topology report found single-writer managed Postgres startup support."
+      : store === "sqlite"
       ? "Phase 45 managed database topology report found supported single-node SQLite posture and no managed database request."
       : "Phase 45 managed database topology report found supported local JSON posture and no managed database request."
     : hasManagedIntent
-      ? phase50.asyncAdapterAvailable
-        ? "Phase 45 managed database topology report found Phase 50 async adapter/backfill availability, while synchronous managed database startup remains unsupported."
-        : "Phase 45 managed database topology report found a managed database runtime boundary; synchronous managed database startup is not supported."
+      ? "Phase 45 managed database topology report found a managed database runtime boundary; Phase 52 managed Postgres startup support is not available."
       : "Phase 45 managed database topology report found blockers for managed production database readiness.";
   const observedEnv = buildObservedEnv(env);
 
@@ -368,9 +411,10 @@ export function assessManagedDatabaseTopology(
     managedDatabase: {
       requested: hasManagedIntent || hasMultiWriterIntent,
       configured: hasManagedDatabaseUrl,
-      supported: false,
-      syncStartupSupported: false,
+      supported: hasManagedPostgresStartupSupport,
+      syncStartupSupported: hasManagedPostgresStartupSupport,
       phase50,
+      phase52,
     },
   };
 }

@@ -432,7 +432,7 @@ test("asyncStoreBoundary derives managed database runtime as blocked from runtim
   assert.match(String(status.asyncStoreBoundary?.summary), /managed database runtime remains blocked/i);
 });
 
-test("managedPostgresCapability reports configured adapter/backfill capability while sync runtime remains guarded", () => {
+test("managedPostgresCapability reports configured adapter/backfill and Phase 52 startup support", () => {
   const env = {
     TASKLOOM_STORE: "sqlite",
     TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
@@ -452,8 +452,8 @@ test("managedPostgresCapability reports configured adapter/backfill capability w
   assert.equal(status.managedPostgresCapability.adapterAvailable, true);
   assert.equal(status.managedPostgresCapability.backfillAvailable, true);
   assert.equal(status.managedPostgresCapability.managedIntentDetected, true);
-  assert.equal(status.managedPostgresCapability.syncRuntimeGuarded, true);
-  assert.equal(status.managedPostgresCapability.runtimeAllowed, false);
+  assert.equal(status.managedPostgresCapability.syncRuntimeGuarded, false);
+  assert.equal(status.managedPostgresCapability.runtimeAllowed, true);
   assert.equal(status.managedPostgresCapability.adapter, "postgres");
   assert.deepEqual(status.managedPostgresCapability.configuredHintKeys, [
     "DATABASE_URL",
@@ -461,10 +461,14 @@ test("managedPostgresCapability reports configured adapter/backfill capability w
   ]);
   assert.ok(status.managedPostgresCapability.backfillCommands.includes("npm run db:backfill-activation-signals"));
   assert.match(status.managedPostgresCapability.summary, /configured and available/i);
-  assert.match(status.managedPostgresCapability.summary, /synchronous app runtime remains guarded/i);
+  assert.equal(status.managedPostgresStartupSupport.phase, "52");
+  assert.equal(status.managedPostgresStartupSupport.status, "supported");
+  assert.equal(status.managedPostgresStartupSupport.startupSupported, true);
+  assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
   assert.equal(status.asyncStoreBoundary?.phase, "49");
-  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
-  assert.equal(status.managedDatabaseRuntimeGuard.allowed, false);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, true);
+  assert.equal(status.asyncStoreBoundary?.phase52ManagedStartupSupported, true);
+  assert.equal(status.managedDatabaseRuntimeGuard.allowed, true);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

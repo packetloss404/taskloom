@@ -2,6 +2,7 @@ export type ManagedDatabaseRuntimeGuardStatus = "pass" | "warn" | "fail";
 export type ManagedDatabaseRuntimeGuardClassification =
   | "local-json"
   | "single-node-sqlite"
+  | "managed-postgres"
   | "managed-database-blocked"
   | "multi-writer-blocked"
   | "unsupported-store"
@@ -79,6 +80,11 @@ export interface ManagedDatabaseRuntimeGuardReport {
     syncStartupSupported: false;
   };
   phase51?: ManagedDatabaseRuntimeCallSiteMigrationReport;
+  phase52?: {
+    managedPostgresStartupSupported: boolean;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -225,11 +231,11 @@ function phase51RuntimeCallSiteMigration(
   const runtimeCallSitesMigrated = remainingSyncCallSiteGroups.length === 0;
   const managedPostgresStartupSupported =
     runtimeCallSitesMigrated && input?.managedPostgresStartupSupported === true;
-  const strictBlocker = !managedPostgresStartupSupported;
+  const strictBlocker = !runtimeCallSitesMigrated;
   const summary = managedPostgresStartupSupported
-    ? "Phase 51 runtime call-site migration evidence reports managed Postgres startup support."
+    ? "Phase 51 runtime call-site migration is complete and includes legacy managed Postgres startup support evidence; Phase 52 separately asserts current startup support."
     : runtimeCallSitesMigrated
-      ? "Phase 51 runtime call-site migration has no remaining sync call-site groups, but managed Postgres startup support is not asserted."
+      ? "Phase 51 runtime call-site migration is complete; Phase 52 separately decides managed Postgres startup support."
       : `Phase 51 runtime call-site migration is incomplete; ${remainingSyncCallSiteGroups.length} sync call-site group(s) still block managed Postgres startup.`;
 
   return {
@@ -237,6 +243,29 @@ function phase51RuntimeCallSiteMigration(
     tracked: true,
     runtimeCallSitesMigrated,
     remainingSyncCallSiteGroups,
+    managedPostgresStartupSupported,
+    strictBlocker,
+    summary,
+  };
+}
+
+function phase52ManagedPostgresStartupSupport(
+  phase50: ReturnType<typeof phase50AsyncAdapter>,
+  phase51: ManagedDatabaseRuntimeCallSiteMigrationReport,
+  hasMultiWriterIntent: boolean,
+) {
+  const managedPostgresStartupSupported =
+    phase50.asyncAdapterAvailable && phase51.runtimeCallSitesMigrated && !hasMultiWriterIntent;
+  const strictBlocker = !managedPostgresStartupSupported;
+  const summary = hasMultiWriterIntent
+    ? "Phase 52 managed Postgres startup support is not asserted for multi-writer, distributed, or active-active topology."
+    : managedPostgresStartupSupported
+      ? "Phase 52 managed Postgres startup support is asserted because the Phase 50 Postgres adapter is configured and Phase 51 runtime call-site migration is complete."
+      : phase50.asyncAdapterAvailable
+        ? "Phase 52 managed Postgres startup support is blocked until Phase 51 runtime call-site migration is complete."
+        : "Phase 52 managed Postgres startup support requires a managed database URL and recognized Phase 50 Postgres adapter.";
+
+  return {
     managedPostgresStartupSupported,
     strictBlocker,
     summary,
@@ -255,10 +284,15 @@ function supportedStore(store: string, supportedLocalModes: readonly string[]): 
   return supportedLocalModes.includes(store);
 }
 
+function managedStoreRequested(store: string): boolean {
+  return MANAGED_TOPOLOGY_HINTS.has(store);
+}
+
 function buildNextSteps(
   checks: ManagedDatabaseRuntimeGuardCheck[],
   bypassEnabled: boolean,
   phase51: ManagedDatabaseRuntimeCallSiteMigrationReport,
+  phase52: ReturnType<typeof phase52ManagedPostgresStartupSupport>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -268,11 +302,10 @@ function buildNextSteps(
       steps.add("Set TASKLOOM_STORE=json for local JSON storage or TASKLOOM_STORE=sqlite for single-node SQLite storage.");
     }
     if (check.id === "managed-database-runtime") {
-      steps.add("Do not use managed database URL environment variables as synchronous app startup configuration.");
-      steps.add("Treat Phase 50 async adapter/backfill evidence separately from synchronous startup support.");
-      if (phase51.runtimeCallSitesMigrated) {
-        steps.add("Keep managed/Postgres hints blocked until managed Postgres startup support is explicitly asserted and covered.");
-      } else {
+      if (!phase52.managedPostgresStartupSupported) {
+        steps.add("Configure TASKLOOM_MANAGED_DATABASE_ADAPTER=postgres with a managed database URL before enabling managed Postgres startup.");
+      }
+      if (!phase51.runtimeCallSitesMigrated) {
         steps.add("Finish Phase 51 runtime call-site migration before managed/Postgres hints become startup configuration.");
       }
     }
@@ -305,16 +338,20 @@ export function assessManagedDatabaseRuntimeGuard(
   const phase51 = phase51RuntimeCallSiteMigration(input.phase51);
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
+  const phase52 = phase52ManagedPostgresStartupSupport(phase50, phase51, hasMultiWriterIntent);
+  const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseRuntimeGuardCheck[] = [];
   const warnings: string[] = [];
 
-  if (supportedStore(store, supportedLocalModes)) {
+  if (supportedStore(store, supportedLocalModes) || (managedStoreRequested(store) && hasManagedPostgresStartupSupport)) {
     pushCheck(
       checks,
       "supported-runtime-store",
       "pass",
-      store === "sqlite"
+      managedStoreRequested(store)
+        ? `TASKLOOM_STORE=${store} is allowed by Phase 52 managed Postgres startup support.`
+        : store === "sqlite"
         ? "TASKLOOM_STORE=sqlite is supported only for single-node SQLite runtime."
         : "TASKLOOM_STORE is using the supported local JSON runtime.",
     );
@@ -332,13 +369,11 @@ export function assessManagedDatabaseRuntimeGuard(
   pushCheck(
     checks,
     "managed-database-runtime",
-    hasManagedIntent ? "fail" : "pass",
+    hasManagedIntent && !hasManagedPostgresStartupSupport ? "fail" : "pass",
     hasManagedIntent
-      ? phase50.asyncAdapterAvailable
-        ? phase51.runtimeCallSitesMigrated
-          ? "Managed database runtime intent was detected and Phase 50 async adapter/backfill capability is configured, but managed Postgres startup support is not asserted."
-          : "Managed database runtime intent was detected and Phase 50 async adapter/backfill capability is configured, but Phase 51 runtime call-site migration is incomplete."
-        : "Managed database runtime intent was detected, but Taskloom's synchronous app runtime still has no supported managed database startup path."
+      ? hasManagedPostgresStartupSupport
+        ? "Managed database runtime intent is allowed by Phase 52 startup support; Phase 50 Postgres adapter is configured and Phase 51 call-site migration is complete."
+        : phase52.summary
       : "No managed database URL or managed database runtime hint was detected.",
   );
 
@@ -358,10 +393,14 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(`TASKLOOM_DB_PATH is not set; SQLite will use the default local path ${DEFAULT_SQLITE_PATH}.`);
   }
   if (hasManagedDatabaseUrl) {
-    warnings.push("Managed database URL values were redacted and are blocked as synchronous app startup configuration.");
+    warnings.push(
+      hasManagedPostgresStartupSupport
+        ? "Managed database URL values were redacted; Phase 52 allows them only for single-writer managed Postgres startup."
+        : "Managed database URL values were redacted and require Phase 52 managed Postgres startup support.",
+    );
   }
   if (phase50.asyncAdapterAvailable) {
-    warnings.push("Phase 50 async managed adapter/backfill capability is available for evidence, but the synchronous app runtime remains blocked for managed startup.");
+    warnings.push("Phase 50 async managed adapter/backfill capability is available; Phase 52 separately decides startup support.");
   } else if (phase50.asyncAdapterConfigured) {
     warnings.push("TASKLOOM_MANAGED_DATABASE_ADAPTER is configured, but Phase 50 adapter availability also requires a recognized postgres adapter value and managed database URL.");
   }
@@ -372,12 +411,15 @@ export function assessManagedDatabaseRuntimeGuard(
         : phase51.summary,
     );
   }
+  if (hasManagedIntent) {
+    warnings.push(phase52.summary);
+  }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
   }
 
   const blockers = checks.filter((check) => check.status === "fail").map((check) => check.summary);
-  const managedDatabaseRuntimeBlocked = hasManagedIntent || hasMultiWriterIntent;
+  const managedDatabaseRuntimeBlocked = (hasManagedIntent && !hasManagedPostgresStartupSupport) || hasMultiWriterIntent;
   const allowed = blockers.length === 0 || bypassEnabled;
   const status = statusFromChecks(checks, bypassEnabled);
   let classification: ManagedDatabaseRuntimeGuardClassification;
@@ -385,6 +427,8 @@ export function assessManagedDatabaseRuntimeGuard(
     classification = "bypassed";
   } else if (hasMultiWriterIntent) {
     classification = "multi-writer-blocked";
+  } else if (hasManagedIntent && hasManagedPostgresStartupSupport) {
+    classification = "managed-postgres";
   } else if (hasManagedIntent) {
     classification = "managed-database-blocked";
   } else if (!supportedStore(store, supportedLocalModes)) {
@@ -396,7 +440,9 @@ export function assessManagedDatabaseRuntimeGuard(
   const summary = allowed
     ? bypassEnabled
       ? "Phase 46 managed database runtime guard was bypassed; unsupported runtime configuration remains present."
-      : store === "sqlite"
+      : hasManagedIntent && hasManagedPostgresStartupSupport
+        ? "Phase 52 managed database runtime guard allows single-writer managed Postgres startup."
+        : store === "sqlite"
         ? "Phase 46 managed database runtime guard allows supported single-node SQLite runtime."
         : "Phase 46 managed database runtime guard allows supported local JSON runtime."
     : "Phase 46 managed database runtime guard blocked unsupported managed database or multi-writer runtime configuration.";
@@ -412,7 +458,7 @@ export function assessManagedDatabaseRuntimeGuard(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, bypassEnabled, phase51),
+    nextSteps: buildNextSteps(checks, bypassEnabled, phase51, phase52),
     observed: {
       nodeEnv,
       store,
@@ -427,6 +473,7 @@ export function assessManagedDatabaseRuntimeGuard(
     },
     phase50,
     phase51,
+    phase52,
   };
 }
 

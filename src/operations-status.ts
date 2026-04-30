@@ -75,6 +75,19 @@ export interface ManagedPostgresCapabilityStatus {
   backfillCommands: string[];
 }
 
+export interface ManagedPostgresStartupSupportStatus {
+  phase: "52";
+  status: "supported" | "blocked" | "not-configured" | "multi-writer-unsupported";
+  summary: string;
+  startupSupported: boolean;
+  managedIntentDetected: boolean;
+  adapterAvailable: boolean;
+  runtimeCallSitesMigrated: boolean;
+  multiWriterSupported: false;
+  multiWriterIntentDetected: boolean;
+  source: "managedDatabaseRuntimeGuard" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -97,6 +110,7 @@ export interface OperationsStatus {
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryStatus | null;
   asyncStoreBoundary: AsyncStoreBoundaryStatus | null;
   managedPostgresCapability: ManagedPostgresCapabilityStatus;
+  managedPostgresStartupSupport: ManagedPostgresStartupSupportStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -158,6 +172,12 @@ const MANAGED_POSTGRES_TOPOLOGY_HINTS = new Set([
   "postgresql",
 ]);
 const MANAGED_POSTGRES_ADAPTERS = new Set(["postgres", "postgresql"]);
+const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
+  "active-active",
+  "distributed",
+  "multi-region",
+  "multi-writer",
+]);
 const MANAGED_POSTGRES_BACKFILL_COMMANDS = [
   "npm run db:backfill",
   "npm run db:backfill-agent-runs",
@@ -513,6 +533,65 @@ function deriveManagedPostgresCapability(
   };
 }
 
+function deriveManagedPostgresStartupSupport(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedPostgresCapability: ManagedPostgresCapabilityStatus,
+): ManagedPostgresStartupSupportStatus {
+  const phase51: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.phase51)
+    ? managedDatabaseRuntimeGuard.phase51
+    : {};
+  const phase52: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.phase52)
+    ? managedDatabaseRuntimeGuard.phase52
+    : {};
+  const observed: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.observed)
+    ? managedDatabaseRuntimeGuard.observed
+    : {};
+  const topology = (
+    stringValue(observed.databaseTopology) ||
+    stringValue(env.TASKLOOM_DATABASE_TOPOLOGY)
+  ).toLowerCase();
+  const multiWriterIntentDetected =
+    MULTI_WRITER_TOPOLOGY_HINTS.has(topology) ||
+    managedDatabaseRuntimeGuard.classification === "multi-writer-blocked";
+  const runtimeCallSitesMigrated = booleanValue(phase51.runtimeCallSitesMigrated) ??
+    (Array.isArray(phase51.remainingSyncCallSiteGroups) && phase51.remainingSyncCallSiteGroups.length === 0);
+  const startupSupported = booleanValue(phase52.managedPostgresStartupSupported) ??
+    (managedPostgresCapability.adapterAvailable && runtimeCallSitesMigrated === true && !multiWriterIntentDetected);
+  const managedIntentDetected = managedPostgresCapability.managedIntentDetected ||
+    managedDatabaseRuntimeGuard.classification === "managed-postgres" ||
+    managedDatabaseRuntimeGuard.classification === "managed-database-blocked";
+  const status: ManagedPostgresStartupSupportStatus["status"] = multiWriterIntentDetected
+    ? "multi-writer-unsupported"
+    : startupSupported
+      ? "supported"
+      : managedIntentDetected || managedPostgresCapability.adapterConfigured
+        ? "blocked"
+        : "not-configured";
+  const summary = stringValue(phase52.summary) || (
+    multiWriterIntentDetected
+      ? "Phase 52 managed Postgres startup support is not asserted for multi-writer, distributed, or active-active topology."
+      : startupSupported
+        ? "Phase 52 managed Postgres startup support is asserted for single-writer managed Postgres startup."
+        : managedPostgresCapability.adapterAvailable
+          ? "Phase 52 managed Postgres startup support is blocked until runtime call-site migration evidence is complete."
+          : "Phase 52 managed Postgres startup support is not configured; Phase 50 adapter/backfill evidence remains separate from startup support."
+  );
+
+  return {
+    phase: "52",
+    status,
+    summary,
+    startupSupported,
+    managedIntentDetected,
+    adapterAvailable: managedPostgresCapability.adapterAvailable,
+    runtimeCallSitesMigrated: runtimeCallSitesMigrated === true,
+    multiWriterSupported: false,
+    multiWriterIntentDetected,
+    source: isRecord(managedDatabaseRuntimeGuard.phase52) ? "managedDatabaseRuntimeGuard" : "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -599,6 +678,11 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     { source: "releaseEvidence", report: releaseEvidence },
   ]) ?? deriveAsyncStoreBoundary(storeMode, managedDatabaseTopology, managedDatabaseRuntimeGuard);
   const managedPostgresCapability = deriveManagedPostgresCapability(env, managedDatabaseRuntimeGuard);
+  const managedPostgresStartupSupport = deriveManagedPostgresStartupSupport(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedPostgresCapability,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -636,6 +720,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedDatabaseRuntimeBoundary,
     asyncStoreBoundary,
     managedPostgresCapability,
+    managedPostgresStartupSupport,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -681,6 +766,11 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     { source: "releaseEvidence", report: releaseEvidence },
   ]) ?? deriveAsyncStoreBoundary(storeMode, managedDatabaseTopology, managedDatabaseRuntimeGuard);
   const managedPostgresCapability = deriveManagedPostgresCapability(env, managedDatabaseRuntimeGuard);
+  const managedPostgresStartupSupport = deriveManagedPostgresStartupSupport(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedPostgresCapability,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -718,6 +808,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     managedDatabaseRuntimeBoundary,
     asyncStoreBoundary,
     managedPostgresCapability,
+    managedPostgresStartupSupport,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

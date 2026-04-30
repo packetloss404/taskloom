@@ -12,6 +12,7 @@ import {
   listRequirementsForWorkspaceIndexedAsync,
   loadStore,
   loadStoreAsync,
+  ManagedDatabaseStoreBoundaryError,
   ManagedPostgresStoreConfigurationError,
   mutateStore,
   mutateStoreAsync,
@@ -151,4 +152,31 @@ test("synchronous JSON and SQLite APIs still return direct values", async () => 
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("synchronous APIs stay guarded when managed database hints are configured", async () => {
+  await withStoreEnv({
+    TASKLOOM_STORE: "json",
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  }, () => {
+    assert.throws(
+      () => loadStore(),
+      (error) => {
+        assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
+        assert.equal(error.code, "TASKLOOM_MANAGED_DATABASE_SYNC_ADAPTER_GAP");
+        assert.match(error.message, /DATABASE_URL/);
+        return true;
+      },
+    );
+
+    let mutatorRan = false;
+    assert.throws(
+      () => mutateStore(() => {
+        mutatorRan = true;
+        return "should-not-run";
+      }),
+      ManagedDatabaseStoreBoundaryError,
+    );
+    assert.equal(mutatorRan, false);
+  });
 });

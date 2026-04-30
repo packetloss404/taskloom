@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
@@ -73,7 +75,7 @@ import { assertManagedDatabaseRuntimeSupported } from "./deployment/managed-data
 registerDefaultProviders();
 registerDefaultTools();
 
-const app = new Hono();
+export const app = new Hono();
 
 app.use("*", accessLogMiddleware());
 
@@ -314,7 +316,7 @@ app.route("/api/app/operations/health", operationsHealthRoutes);
 app.route("/api/app/operations/job-metrics", operationsJobMetricsRoutes);
 app.route("/api/app/operations/alerts", operationsAlertsRoutes);
 
-const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
+export const scheduler = new JobScheduler({ leaderLock: selectSchedulerLeaderLock() });
 scheduler.register({
   type: "agent.run",
   async handle(job) {
@@ -364,21 +366,6 @@ scheduler.register({
     return handleAlertsDeliverJob(job.payload as unknown as AlertsDeliverJobPayload);
   },
 });
-assertManagedDatabaseRuntimeSupported(process.env);
-scheduler.start();
-await ensureMetricsSnapshotCronJobAsync();
-await ensureAlertsCronJobAsync();
-const shutdown = async () => {
-  await scheduler.stop();
-  try {
-    const { shutdownAllBrowserSessions } = await import("./tools/browser-runtime.js");
-    await shutdownAllBrowserSessions();
-  } catch { /* ignore */ }
-  process.exit(0);
-};
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-
 app.use("/data/artifacts/*", serveStatic({ root: "./" }));
 
 if (existsSync("./web/dist/index.html")) {
@@ -386,10 +373,45 @@ if (existsSync("./web/dist/index.html")) {
   app.get("*", serveStatic({ path: "./web/dist/index.html" }));
 }
 
-const port = Number(process.env.PORT ?? 8484);
-serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
-  console.log(`taskloom listening on http://localhost:${info.port}`);
-});
+export function assertServerStartupRuntimeSupported(env: NodeJS.ProcessEnv = process.env) {
+  return assertManagedDatabaseRuntimeSupported(env, {
+    phase51: {
+      remainingSyncCallSiteGroups: [],
+      managedPostgresStartupSupported: true,
+    },
+  });
+}
+
+export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  assertServerStartupRuntimeSupported(env);
+  scheduler.start();
+  await ensureMetricsSnapshotCronJobAsync();
+  await ensureAlertsCronJobAsync();
+  const shutdown = async () => {
+    await scheduler.stop();
+    try {
+      const { shutdownAllBrowserSessions } = await import("./tools/browser-runtime.js");
+      await shutdownAllBrowserSessions();
+    } catch { /* ignore */ }
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  const port = Number(env.PORT ?? 8484);
+  serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
+    console.log(`taskloom listening on http://localhost:${info.port}`);
+  });
+}
+
+function isExecutedDirectly(): boolean {
+  const entrypoint = process.argv[1];
+  return entrypoint ? resolve(fileURLToPath(import.meta.url)) === resolve(entrypoint) : false;
+}
+
+if (isExecutedDirectly()) {
+  await startServer();
+}
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);

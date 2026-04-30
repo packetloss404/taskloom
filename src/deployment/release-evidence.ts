@@ -77,11 +77,12 @@ export interface ReleaseEvidenceBundle {
       asyncStoreBoundaryClassification: AsyncStoreBoundaryReport["classification"];
       asyncStoreBoundaryFoundationAvailable: true;
       asyncStoreBoundaryReleaseAllowed: boolean;
-      managedPostgresSupported: false;
+      managedPostgresSupported: boolean;
+      phase52ManagedStartupSupported: boolean;
       managedDatabaseAdapterImplemented: boolean;
       managedDatabaseRepositoriesImplemented: false;
       managedDatabaseBackfillAvailable: boolean;
-      managedDatabaseSyncStartupSupported: false;
+      managedDatabaseSyncStartupSupported: boolean;
       managedDatabaseRuntimeCallSiteMigrationTracked: boolean;
       managedDatabaseRuntimeCallSitesMigrated: boolean;
       managedDatabaseRemainingSyncCallSiteGroups: string[];
@@ -317,10 +318,21 @@ function buildAttachments(
       id: "phase-51-runtime-call-site-migration",
       label: "Phase 51 runtime call-site migration evidence",
       format: "json",
-      required: !asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated,
-      summary: asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated
-        ? "Phase 51 runtime call-site migration reports no remaining sync call-site groups; startup support still requires an explicit runtime support claim."
+      required: !asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated || !asyncStoreBoundary.phase52ManagedStartupSupported,
+      summary: asyncStoreBoundary.phase52ManagedStartupSupported
+        ? "Phase 51 runtime call-site migration reports no remaining sync call-site groups and contributes to Phase 52 managed startup support."
+        : asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated
+        ? "Phase 51 runtime call-site migration reports no remaining sync call-site groups; startup support still requires an explicit Phase 52 runtime support claim."
         : `Phase 51 runtime call-site migration remains incomplete; ${asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups.length} sync call-site group(s) still block managed Postgres startup.`,
+    },
+    {
+      id: "phase-52-managed-postgres-startup-support",
+      label: "Phase 52 managed Postgres startup support evidence",
+      format: "json",
+      required: asyncStoreBoundary.phase52ManagedStartupSupported,
+      summary: asyncStoreBoundary.phase52ManagedStartupSupported
+        ? "Phase 52 managed Postgres startup support is asserted with adapter/backfill and migrated call-site evidence."
+        : "Phase 52 managed Postgres startup support is not asserted.",
     },
     {
       id: "phase-44-release-evidence",
@@ -429,8 +441,6 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
     );
   const readyForRelease =
     releaseReadiness.readyForRelease &&
-    managedDatabaseTopology.ready &&
-    managedDatabaseRuntimeGuard.allowed &&
     managedDatabaseRuntimeBoundary.allowed &&
     asyncStoreBoundary.releaseAllowed;
   const releaseReadinessEvidence: ReleaseEvidenceReleaseReadinessReport = {
@@ -478,6 +488,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         asyncStoreBoundaryFoundationAvailable: asyncStoreBoundary.foundationAvailable,
         asyncStoreBoundaryReleaseAllowed: asyncStoreBoundary.releaseAllowed,
         managedPostgresSupported: asyncStoreBoundary.managedPostgresSupported,
+        phase52ManagedStartupSupported: asyncStoreBoundary.phase52ManagedStartupSupported,
         managedDatabaseAdapterImplemented: asyncStoreBoundary.managedDatabaseAdapterImplemented,
         managedDatabaseRepositoriesImplemented: asyncStoreBoundary.managedDatabaseRepositoriesImplemented,
         managedDatabaseBackfillAvailable: asyncStoreBoundary.managedDatabaseBackfillAvailable,

@@ -3,6 +3,7 @@ import test from "node:test";
 import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils.js";
 import { operationsStatusRoutes } from "./operations-status-routes.js";
+import { getOperationsStatus } from "./operations-status.js";
 import { login } from "./taskloom-services.js";
 import { mutateStore, resetStoreForTests } from "./taskloom-store.js";
 
@@ -81,7 +82,54 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(managedPostgresCapability.provider, "postgres");
   assert.equal(managedPostgresCapability.adapterAvailable, false);
   assert.equal(managedPostgresCapability.backfillAvailable, false);
+  assert.ok(body.managedPostgresStartupSupport && typeof body.managedPostgresStartupSupport === "object");
+  const managedPostgresStartupSupport = body.managedPostgresStartupSupport as Record<string, unknown>;
+  assert.equal(managedPostgresStartupSupport.phase, "52");
+  assert.equal(managedPostgresStartupSupport.startupSupported, false);
+  assert.equal(managedPostgresStartupSupport.multiWriterSupported, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
+});
+
+test("operations status report surfaces Phase 52 managed Postgres startup support", () => {
+  const status = getOperationsStatus({
+    loadStore: () => ({ jobs: [] }) as never,
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+  });
+
+  assert.equal(status.managedPostgresCapability.phase, "50");
+  assert.equal(status.managedPostgresCapability.adapterAvailable, true);
+  assert.equal(status.managedPostgresCapability.backfillAvailable, true);
+  assert.equal(status.managedPostgresStartupSupport.phase, "52");
+  assert.equal(status.managedPostgresStartupSupport.status, "supported");
+  assert.equal(status.managedPostgresStartupSupport.startupSupported, true);
+  assert.equal(status.managedPostgresStartupSupport.adapterAvailable, true);
+  assert.equal(status.managedPostgresStartupSupport.runtimeCallSitesMigrated, true);
+  assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
+  assert.equal(status.managedPostgresStartupSupport.multiWriterIntentDetected, false);
+});
+
+test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
+  const status = getOperationsStatus({
+    loadStore: () => ({ jobs: [] }) as never,
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    },
+  });
+
+  assert.equal(status.managedPostgresCapability.phase, "50");
+  assert.equal(status.managedPostgresCapability.adapterAvailable, true);
+  assert.equal(status.managedPostgresStartupSupport.phase, "52");
+  assert.equal(status.managedPostgresStartupSupport.status, "multi-writer-unsupported");
+  assert.equal(status.managedPostgresStartupSupport.startupSupported, false);
+  assert.equal(status.managedPostgresStartupSupport.multiWriterSupported, false);
+  assert.equal(status.managedPostgresStartupSupport.multiWriterIntentDetected, true);
 });

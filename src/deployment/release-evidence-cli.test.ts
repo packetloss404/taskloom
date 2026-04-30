@@ -85,7 +85,7 @@ test("runReleaseEvidenceCli strict mode blocks managed database runtime handoff"
   assert.equal(exitCode, 1);
   assert.equal(bundle.readyForRelease, false);
   assert.equal(((bundle.evidence as { config?: { strictRelease?: unknown } }).config)?.strictRelease, true);
-  assert.match(serializedBundle, /Managed database runtime intent was detected/);
+  assert.match(serializedBundle, /Phase 52 managed Postgres startup support requires/);
   assert.match(serializedBundle, /managed-database-blocked/);
   assert.match(serializedBundle, /Phase 49 async-store boundary exists as foundation/);
   assert.match(serializedBundle, /managed Postgres remains unsupported/);

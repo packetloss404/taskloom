@@ -28,6 +28,7 @@ test("local JSON reports current supported local mode", () => {
   assert.equal(report.managedDatabase.syncStartupSupported, false);
   assert.equal(report.managedDatabase.phase50?.asyncAdapterAvailable, false);
   assert.equal(report.managedDatabase.phase50?.backfillAvailable, false);
+  assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
   assert.equal(report.observed.store, "json");
   assert.equal(report.observed.dbPath, null);
   assert.ok(report.summary.includes("supported local JSON"));
@@ -75,12 +76,12 @@ test("managed database URL is redacted and blocked as unimplemented runtime", ()
   assert.equal(urlEntry.redacted, true);
   assert.equal(urlEntry.value, "[redacted]");
   assert.equal(report.observed.managedDatabaseUrl, "[redacted]");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("no supported managed database startup path")));
-  assert.ok(report.warnings.some((warning) => warning.includes("do not enable the synchronous app runtime")));
-  assert.ok(report.summary.includes("synchronous managed database startup is not supported"));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 52 managed Postgres startup support requires")));
+  assert.ok(report.warnings.some((warning) => warning.includes("require Phase 52 managed Postgres startup support")));
+  assert.ok(report.summary.includes("Phase 52 managed Postgres startup support is not available"));
 });
 
-test("Phase 50 async postgres adapter and managed URL report capability without sync startup support", () => {
+test("Phase 50 postgres adapter and managed URL report Phase 52 startup support", () => {
   const report = assessManagedDatabaseTopology({
     env: {
       TASKLOOM_STORE: "sqlite",
@@ -89,20 +90,22 @@ test("Phase 50 async postgres adapter and managed URL report capability without 
     },
   });
 
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "managed-database-requested");
-  assert.equal(report.ready, false);
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.ready, true);
   assert.equal(report.managedDatabase.requested, true);
   assert.equal(report.managedDatabase.configured, true);
-  assert.equal(report.managedDatabase.supported, false);
-  assert.equal(report.managedDatabase.syncStartupSupported, false);
+  assert.equal(report.managedDatabase.supported, true);
+  assert.equal(report.managedDatabase.syncStartupSupported, true);
   assert.equal(report.managedDatabase.phase50?.asyncAdapterConfigured, true);
   assert.equal(report.managedDatabase.phase50?.asyncAdapterAvailable, true);
   assert.equal(report.managedDatabase.phase50?.backfillAvailable, true);
   assert.equal(report.managedDatabase.phase50?.adapter, "postgres");
+  assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, true);
   assert.equal(report.observed.managedDatabaseAdapter, "postgres");
-  assert.ok(report.summary.includes("Phase 50 async adapter/backfill availability"));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous app startup remains unsupported")));
+  assert.ok(report.summary.includes("Phase 52"));
+  assert.equal(report.blockers.length, 0);
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 52 managed Postgres startup support is asserted")));
 });
 
 test("TASKLOOM_STORE=postgres reports managed runtime boundary without claiming support", () => {
@@ -121,7 +124,26 @@ test("TASKLOOM_STORE=postgres reports managed runtime boundary without claiming 
   assert.equal(report.observed.store, "postgres");
   assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous managed database runtime boundary")));
   assert.ok(report.blockers.some((blocker) => blocker.includes("sync app startup path supported")));
-  assert.ok(report.nextSteps.some((step) => step.includes("Phase 50 async adapter/backfill evidence")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MANAGED_DATABASE_ADAPTER=postgres")));
+});
+
+test("TASKLOOM_STORE=postgres reports Phase 52 support when managed adapter and URL are configured", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+  });
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.requested, true);
+  assert.equal(report.managedDatabase.configured, true);
+  assert.equal(report.managedDatabase.supported, true);
+  assert.equal(report.observed.store, "postgres");
+  assert.ok(report.checks.some((check) => check.id === "supported-local-mode" && check.status === "pass"));
 });
 
 test("TASKLOOM_STORE=managed reports managed runtime boundary without claiming support", () => {
@@ -138,6 +160,22 @@ test("TASKLOOM_STORE=managed reports managed runtime boundary without claiming s
   assert.equal(report.managedDatabase.supported, false);
   assert.equal(report.observed.store, "managed");
   assert.ok(report.blockers.some((blocker) => blocker.includes("sync app startup path supported")));
+});
+
+test("TASKLOOM_STORE=managed reports Phase 52 support when managed adapter and URL are configured", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "managed",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@taskloom.internal/app",
+    },
+  });
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.supported, true);
+  assert.equal(report.observed.store, "managed");
 });
 
 test("managed URL hints are redacted and treated as boundary evidence", () => {
@@ -158,7 +196,7 @@ test("managed URL hints are redacted and treated as boundary evidence", () => {
   assert.equal(databaseUrl.redacted, true);
   assert.equal(taskloomDatabaseUrl.value, "[redacted]");
   assert.equal(taskloomDatabaseUrl.redacted, true);
-  assert.ok(report.warnings.some((warning) => warning.includes("do not enable the synchronous app runtime")));
+  assert.ok(report.warnings.some((warning) => warning.includes("require Phase 52 managed Postgres startup support")));
 });
 
 test("managed topology intent is blocked without claiming database support", () => {
@@ -179,7 +217,26 @@ test("managed topology intent is blocked without claiming database support", () 
   assert.ok(
     report.checks.some((check) => check.id === "managed-database-runtime" && check.status === "fail"),
   );
-  assert.ok(report.nextSteps.some((step) => step.includes("Phase 50 async adapter/backfill evidence")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MANAGED_DATABASE_ADAPTER=postgres")));
+});
+
+test("active-active topology remains blocked with managed Postgres adapter and URL", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.requested, true);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
+  assert.ok(report.blockers.some((blocker) => blocker.includes("active-active")));
 });
 
 test("production SQLite remains single-node advisory-supported without managed database intent", () => {

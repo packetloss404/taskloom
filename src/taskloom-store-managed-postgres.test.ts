@@ -220,3 +220,38 @@ test("async indexed helpers read through the managed Postgres document store", a
     assert.equal(queries.some((query) => query.startsWith("select payload from taskloom_document_store")), true);
   });
 });
+
+test("managed URL alone supports startup load, mutate, and async reread through Postgres", async () => {
+  const client = new FakeManagedPostgresClient();
+
+  await withManagedStoreEnv({
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@managed.example.com/taskloom",
+  }, client, async (configs) => {
+    const loaded = await loadStoreAsync();
+    assert.equal(loaded.workspaces.some((entry) => entry.id === "alpha"), true);
+
+    const requirementId = await mutateStoreAsync((data) => upsertRequirement(data, {
+      id: "req_managed_url_only_runtime_surface",
+      workspaceId: "alpha",
+      title: "Managed URL only runtime surface",
+      priority: "must",
+      status: "approved",
+      createdByUserId: "user_alpha",
+    }, "2026-04-30T11:00:00.000Z").id);
+
+    clearStoreCacheForTests();
+    const requirements = await listRequirementsForWorkspaceIndexedAsync("alpha");
+
+    assert.equal(requirementId, "req_managed_url_only_runtime_surface");
+    assert.equal(requirements.some((entry) => entry.id === requirementId), true);
+    assert.equal(configs[0]?.envKey, "TASKLOOM_MANAGED_DATABASE_URL");
+    assert.equal(configs[0]?.resolution.mode, "managed");
+    assert.equal(configs[0]?.resolution.requestedStore, "");
+
+    const queries = client.normalizedQueries();
+    assert.equal(queries.some((query) => query.startsWith("create table if not exists taskloom_document_store")), true);
+    assert.equal(queries.some((query) => query.startsWith("insert into taskloom_document_store")), true);
+    assert.equal(queries.some((query) => query.includes("for update")), true);
+    assert.equal(queries.filter((query) => query.startsWith("select payload from taskloom_document_store")).length >= 2, true);
+  });
+});
