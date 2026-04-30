@@ -10,6 +10,7 @@ import {
   type AsyncStoreBoundaryReport,
   buildReleaseReadinessReport as defaultBuildReleaseReadinessReport,
   type ManagedDatabaseRuntimeBoundaryReport,
+  type Phase53MultiWriterTopologyEvidenceItem,
   type Phase53MultiWriterTopologyGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
@@ -90,9 +91,39 @@ export interface ReleaseEvidenceBundle {
       phase53MultiWriterTopologyGateRequired: boolean;
       phase53MultiWriterRequirementsEvidenceRequired: boolean;
       phase53MultiWriterDesignEvidenceRequired: boolean;
-      phase53MultiWriterRequirementsEvidenceAttached: false;
-      phase53MultiWriterDesignEvidenceAttached: false;
+      phase53MultiWriterDesignPackageEvidenceRequired: boolean;
+      phase53MultiWriterRequirementsEvidenceAttached: boolean;
+      phase53MultiWriterDesignEvidenceAttached: boolean;
+      phase53MultiWriterDesignPackageEvidenceAttached: boolean;
+      phase53MultiWriterTopologyOwnerEvidenceRequired: boolean;
+      phase53MultiWriterTopologyOwnerEvidenceAttached: boolean;
+      phase53MultiWriterConsistencyModelEvidenceRequired: boolean;
+      phase53MultiWriterConsistencyModelEvidenceAttached: boolean;
+      phase53MultiWriterFailoverPitrPlanEvidenceRequired: boolean;
+      phase53MultiWriterFailoverPitrPlanEvidenceAttached: boolean;
+      phase53MultiWriterMigrationBackfillPlanEvidenceRequired: boolean;
+      phase53MultiWriterMigrationBackfillPlanEvidenceAttached: boolean;
+      phase53MultiWriterObservabilityPlanEvidenceRequired: boolean;
+      phase53MultiWriterObservabilityPlanEvidenceAttached: boolean;
+      phase53MultiWriterRollbackPlanEvidenceRequired: boolean;
+      phase53MultiWriterRollbackPlanEvidenceAttached: boolean;
       phase53MultiWriterTopologyReleaseAllowed: boolean;
+      phase54MultiWriterTopologyDesignPackageGateRequired: boolean;
+      phase54MultiWriterDesignPackageEvidenceRequired: boolean;
+      phase54MultiWriterDesignPackageEvidenceAttached: boolean;
+      phase54MultiWriterTopologyOwnerEvidenceRequired: boolean;
+      phase54MultiWriterTopologyOwnerEvidenceAttached: boolean;
+      phase54MultiWriterConsistencyModelEvidenceRequired: boolean;
+      phase54MultiWriterConsistencyModelEvidenceAttached: boolean;
+      phase54MultiWriterFailoverPitrPlanEvidenceRequired: boolean;
+      phase54MultiWriterFailoverPitrPlanEvidenceAttached: boolean;
+      phase54MultiWriterMigrationBackfillPlanEvidenceRequired: boolean;
+      phase54MultiWriterMigrationBackfillPlanEvidenceAttached: boolean;
+      phase54MultiWriterObservabilityPlanEvidenceRequired: boolean;
+      phase54MultiWriterObservabilityPlanEvidenceAttached: boolean;
+      phase54MultiWriterRollbackPlanEvidenceRequired: boolean;
+      phase54MultiWriterRollbackPlanEvidenceAttached: boolean;
+      phase54MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -175,6 +206,12 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MANAGED_DATABASE_ADAPTER",
   "TASKLOOM_DATABASE_TOPOLOGY",
   "TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS",
+  "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER",
+  "TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL",
+  "TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN",
+  "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN",
+  "TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -260,30 +297,102 @@ function artifactPathConfigured(env: ReleaseEvidenceEnv): boolean {
   return configured(env.TASKLOOM_ARTIFACTS_PATH) || configured(env.TASKLOOM_ARTIFACT_DIR);
 }
 
+const PHASE53_MULTI_WRITER_DESIGN_PACKAGE_EVIDENCE = [
+  {
+    id: "topology-owner",
+    label: "Topology owner",
+    envKey: "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER",
+  },
+  {
+    id: "consistency-model",
+    label: "Consistency model",
+    envKey: "TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL",
+  },
+  {
+    id: "failover-pitr-plan",
+    label: "Failover/PITR plan",
+    envKey: "TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN",
+  },
+  {
+    id: "migration-backfill-plan",
+    label: "Migration/backfill plan",
+    envKey: "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN",
+  },
+  {
+    id: "observability-plan",
+    label: "Observability plan",
+    envKey: "TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN",
+  },
+  {
+    id: "rollback-plan",
+    label: "Rollback plan",
+    envKey: "TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN",
+  },
+] as const satisfies ReadonlyArray<{
+  id: Phase53MultiWriterTopologyEvidenceItem["id"];
+  label: string;
+  envKey: keyof ReleaseReadinessEnv;
+}>;
+
+function phase53FallbackDesignPackageEvidence(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+): Phase53MultiWriterTopologyEvidenceItem[] {
+  const required = asyncStoreBoundary.classification === "multi-writer-unsupported";
+  return PHASE53_MULTI_WRITER_DESIGN_PACKAGE_EVIDENCE.map((item) => ({
+    ...item,
+    required,
+    attached: false,
+    summary: `${item.label} evidence is missing; set ${item.envKey} before treating multi-writer topology design as complete.`,
+  }));
+}
+
+function phase53EvidenceAttached(
+  phase53Gate: Phase53MultiWriterTopologyGateReport,
+  id: Phase53MultiWriterTopologyEvidenceItem["id"],
+): boolean {
+  return phase53Gate.designPackageEvidence.some((item) => item.id === id && item.attached);
+}
+
 function phase53MultiWriterTopologyGate(
   asyncStoreBoundary: AsyncStoreBoundaryReport,
 ): Phase53MultiWriterTopologyGateReport {
+  const fallbackDesignPackageEvidence = phase53FallbackDesignPackageEvidence(asyncStoreBoundary);
   return asyncStoreBoundary.phase53MultiWriterTopologyGate ?? {
     phase: "53",
     required: asyncStoreBoundary.classification === "multi-writer-unsupported",
     requirementsEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
     designEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    designPackageEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
     requirementsEvidenceAttached: false,
     designEvidenceAttached: false,
+    designPackageEvidenceAttached: false,
+    topologyOwnerEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    topologyOwnerEvidenceAttached: false,
+    consistencyModelEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    consistencyModelEvidenceAttached: false,
+    failoverPitrPlanEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    failoverPitrPlanEvidenceAttached: false,
+    migrationBackfillPlanEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    migrationBackfillPlanEvidenceAttached: false,
+    observabilityPlanEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    observabilityPlanEvidenceAttached: false,
+    rollbackPlanEvidenceRequired: asyncStoreBoundary.classification === "multi-writer-unsupported",
+    rollbackPlanEvidenceAttached: false,
+    designPackageEvidence: fallbackDesignPackageEvidence,
     releaseAllowed: asyncStoreBoundary.classification !== "multi-writer-unsupported",
     summary: asyncStoreBoundary.classification === "multi-writer-unsupported"
-      ? "Phase 53 multi-writer topology requirements/design evidence is required before distributed, active-active, or multi-writer database release."
+      ? "Phase 54 multi-writer topology design-package evidence is required before distributed, active-active, or multi-writer database release."
       : "Phase 53 multi-writer topology requirements/design gate is not required for this release posture.",
     blockers: asyncStoreBoundary.classification === "multi-writer-unsupported"
       ? [
-        "Phase 53 multi-writer topology requirements evidence is required before release.",
-        "Phase 53 multi-writer topology design evidence is required before release.",
+        ...fallbackDesignPackageEvidence.map((item) => `Phase 54 multi-writer ${item.label.toLowerCase()} evidence is required before release.`),
+        "Phase 54 multi-writer, distributed, or active-active runtime support remains blocked even when design-package evidence is attached.",
       ]
       : [],
     nextSteps: asyncStoreBoundary.classification === "multi-writer-unsupported"
       ? [
-        "Attach Phase 53 multi-writer topology requirements evidence before considering distributed, active-active, or multi-writer release.",
-        "Attach Phase 53 multi-writer topology design evidence before considering distributed, active-active, or multi-writer release.",
+        ...fallbackDesignPackageEvidence.map((item) => `Attach Phase 54 multi-writer ${item.label.toLowerCase()} evidence before considering distributed, active-active, or multi-writer release.`),
+        "Keep multi-writer, distributed, and active-active runtime release blocked until implementation support and a later release gate explicitly allow it.",
       ]
       : ["Keep Phase 53 requirements/design evidence ready before enabling distributed, active-active, or multi-writer database topology."],
   };
@@ -376,8 +485,26 @@ function buildAttachments(
       label: "Phase 53 multi-writer topology requirements/design evidence",
       format: "json",
       required: phase53Gate.required,
-      summary: phase53Gate.summary,
+      summary: phase53Gate.required
+        ? "Phase 53 multi-writer topology requirements/design evidence is required before Phase 54 design-package review."
+        : phase53Gate.summary,
     },
+    {
+      id: "phase-54-multi-writer-topology-design-package",
+      label: "Phase 54 multi-writer topology design package",
+      format: "json",
+      required: phase53Gate.designPackageEvidenceRequired,
+      summary: phase53Gate.designPackageEvidenceAttached
+        ? "Phase 54 multi-writer topology design-package evidence is attached; runtime support remains blocked until a later implementation gate explicitly allows it."
+        : "Phase 54 multi-writer topology design-package evidence is required before distributed, active-active, or multi-writer database release.",
+    },
+    ...phase53Gate.designPackageEvidence.map((item): ReleaseEvidenceAttachment => ({
+      id: `phase-54-multi-writer-topology-${item.id}`,
+      label: `Phase 54 multi-writer ${item.label.toLowerCase()} evidence`,
+      format: "json",
+      required: item.required,
+      summary: item.summary,
+    })),
     {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
@@ -544,9 +671,39 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase53MultiWriterTopologyGateRequired: phase53Gate.required,
         phase53MultiWriterRequirementsEvidenceRequired: phase53Gate.requirementsEvidenceRequired,
         phase53MultiWriterDesignEvidenceRequired: phase53Gate.designEvidenceRequired,
+        phase53MultiWriterDesignPackageEvidenceRequired: phase53Gate.designPackageEvidenceRequired,
         phase53MultiWriterRequirementsEvidenceAttached: phase53Gate.requirementsEvidenceAttached,
         phase53MultiWriterDesignEvidenceAttached: phase53Gate.designEvidenceAttached,
+        phase53MultiWriterDesignPackageEvidenceAttached: phase53Gate.designPackageEvidenceAttached,
+        phase53MultiWriterTopologyOwnerEvidenceRequired: phase53Gate.topologyOwnerEvidenceRequired,
+        phase53MultiWriterTopologyOwnerEvidenceAttached: phase53EvidenceAttached(phase53Gate, "topology-owner"),
+        phase53MultiWriterConsistencyModelEvidenceRequired: phase53Gate.consistencyModelEvidenceRequired,
+        phase53MultiWriterConsistencyModelEvidenceAttached: phase53EvidenceAttached(phase53Gate, "consistency-model"),
+        phase53MultiWriterFailoverPitrPlanEvidenceRequired: phase53Gate.failoverPitrPlanEvidenceRequired,
+        phase53MultiWriterFailoverPitrPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "failover-pitr-plan"),
+        phase53MultiWriterMigrationBackfillPlanEvidenceRequired: phase53Gate.migrationBackfillPlanEvidenceRequired,
+        phase53MultiWriterMigrationBackfillPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "migration-backfill-plan"),
+        phase53MultiWriterObservabilityPlanEvidenceRequired: phase53Gate.observabilityPlanEvidenceRequired,
+        phase53MultiWriterObservabilityPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "observability-plan"),
+        phase53MultiWriterRollbackPlanEvidenceRequired: phase53Gate.rollbackPlanEvidenceRequired,
+        phase53MultiWriterRollbackPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "rollback-plan"),
         phase53MultiWriterTopologyReleaseAllowed: phase53Gate.releaseAllowed,
+        phase54MultiWriterTopologyDesignPackageGateRequired: phase53Gate.designPackageEvidenceRequired,
+        phase54MultiWriterDesignPackageEvidenceRequired: phase53Gate.designPackageEvidenceRequired,
+        phase54MultiWriterDesignPackageEvidenceAttached: phase53Gate.designPackageEvidenceAttached,
+        phase54MultiWriterTopologyOwnerEvidenceRequired: phase53Gate.topologyOwnerEvidenceRequired,
+        phase54MultiWriterTopologyOwnerEvidenceAttached: phase53EvidenceAttached(phase53Gate, "topology-owner"),
+        phase54MultiWriterConsistencyModelEvidenceRequired: phase53Gate.consistencyModelEvidenceRequired,
+        phase54MultiWriterConsistencyModelEvidenceAttached: phase53EvidenceAttached(phase53Gate, "consistency-model"),
+        phase54MultiWriterFailoverPitrPlanEvidenceRequired: phase53Gate.failoverPitrPlanEvidenceRequired,
+        phase54MultiWriterFailoverPitrPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "failover-pitr-plan"),
+        phase54MultiWriterMigrationBackfillPlanEvidenceRequired: phase53Gate.migrationBackfillPlanEvidenceRequired,
+        phase54MultiWriterMigrationBackfillPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "migration-backfill-plan"),
+        phase54MultiWriterObservabilityPlanEvidenceRequired: phase53Gate.observabilityPlanEvidenceRequired,
+        phase54MultiWriterObservabilityPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "observability-plan"),
+        phase54MultiWriterRollbackPlanEvidenceRequired: phase53Gate.rollbackPlanEvidenceRequired,
+        phase54MultiWriterRollbackPlanEvidenceAttached: phase53EvidenceAttached(phase53Gate, "rollback-plan"),
+        phase54MultiWriterTopologyReleaseAllowed: phase53Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

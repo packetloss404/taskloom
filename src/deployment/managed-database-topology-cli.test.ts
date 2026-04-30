@@ -42,7 +42,7 @@ test("runManagedDatabaseTopologyCli fails strict mode when the report is not rea
   assert.equal(receivedStrict, true);
 });
 
-test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 status and redacted URLs", async () => {
+test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 and Phase 54 status and redacted URLs", async () => {
   const output: string[] = [];
   const env = {
     TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
@@ -57,8 +57,9 @@ test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 s
   const serializedReport = output[0] ?? "";
   const report = JSON.parse(serializedReport) as {
     phase53?: { phase?: unknown; multiWriterSupported?: unknown };
+    phase54?: { phase?: unknown; designPackageGatePassed?: unknown; strictBlocker?: unknown };
     classification?: unknown;
-    managedDatabase?: { supported?: unknown };
+    managedDatabase?: { supported?: unknown; phase54?: { designPackageGatePassed?: unknown; strictBlocker?: unknown } };
   };
 
   assert.equal(exitCode, 1);
@@ -66,9 +67,66 @@ test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 s
   assert.equal(report.managedDatabase?.supported, false);
   assert.equal(report.phase53?.phase, "53");
   assert.equal(report.phase53?.multiWriterSupported, false);
+  assert.equal(report.phase54?.phase, "54");
+  assert.equal(report.phase54?.designPackageGatePassed, false);
+  assert.equal(report.phase54?.strictBlocker, true);
+  assert.equal(report.managedDatabase?.phase54?.designPackageGatePassed, false);
+  assert.equal(report.managedDatabase?.phase54?.strictBlocker, true);
   assert.match(serializedReport, /Phase 53/);
+  assert.match(serializedReport, /Phase 54/);
   assert.match(serializedReport, /multi-writer/);
   assert.doesNotMatch(serializedReport, /taskloom:secret/);
+});
+
+test("runManagedDatabaseTopologyCli preserves detailed Phase 54 design-package reports from the builder", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseTopologyCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseTopologyReport: () => ({
+      ready: false,
+      managedDatabase: {
+        phase54: {
+          multiWriterTopologyRequested: true,
+          topologyOwnerConfigured: true,
+          consistencyModelConfigured: true,
+          failoverPitrPlanConfigured: true,
+          migrationBackfillPlanConfigured: true,
+          observabilityPlanConfigured: true,
+          rollbackPlanConfigured: true,
+          designPackageGatePassed: true,
+          runtimeSupport: false,
+          strictBlocker: false,
+          summary: "Phase 54 design package evidence is complete.",
+        },
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase54?: {
+      phase?: unknown;
+      topologyOwnerConfigured?: unknown;
+      designPackageGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+    managedDatabase?: { phase54?: { designPackageGatePassed?: unknown } };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase54?.phase, "54");
+  assert.equal(report.phase54?.topologyOwnerConfigured, true);
+  assert.equal(report.phase54?.designPackageGatePassed, true);
+  assert.equal(report.phase54?.runtimeSupport, false);
+  assert.equal(report.phase54?.strictBlocker, false);
+  assert.equal(report.phase54?.summary, "Phase 54 design package evidence is complete.");
+  assert.equal(report.managedDatabase?.phase54?.designPackageGatePassed, true);
 });
 
 test("runManagedDatabaseTopologyCli passes strict mode when the report is ready for managed DB production", async () => {

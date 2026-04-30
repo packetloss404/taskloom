@@ -53,6 +53,14 @@ const MANAGED_POSTGRES_TOPOLOGY_HINTS = new Set([
   "postgresql",
   "single-writer",
 ]);
+const MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE = [
+  { key: "topologyOwner", label: "topology owner", envKey: "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER" },
+  { key: "consistencyModel", label: "consistency model", envKey: "TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL" },
+  { key: "failoverPitr", label: "failover/PITR evidence", envKey: "TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE" },
+  { key: "migrationBackfill", label: "migration/backfill evidence", envKey: "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE" },
+  { key: "observability", label: "observability evidence", envKey: "TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE" },
+  { key: "rollback", label: "rollback evidence", envKey: "TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE" },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -215,6 +223,37 @@ function checkManagedPostgresTopologyGate(env: NodeJS.ProcessEnv, checkedAt: str
   };
 }
 
+function checkMultiWriterTopologyDesignPackageGate(env: NodeJS.ProcessEnv, checkedAt: string): SubsystemHealth {
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  const hasMultiWriterIntent = MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+  if (!hasMultiWriterIntent) {
+    return {
+      name: "multiWriterTopologyDesignPackageGate",
+      status: "disabled",
+      detail: "Phase 54 design-package gate is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false",
+      checkedAt,
+    };
+  }
+
+  const phase53RequirementsAttached = cleanEnvValue(env.TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE).length > 0;
+  const phase53DesignAttached = cleanEnvValue(env.TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE).length > 0;
+  const missingEvidence: string[] = MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+  if (!phase53RequirementsAttached) missingEvidence.unshift("Phase 53 requirements evidence");
+  if (!phase53DesignAttached) missingEvidence.unshift("Phase 53 design evidence");
+  const designPackageComplete = missingEvidence.length === 0;
+
+  return {
+    name: "multiWriterTopologyDesignPackageGate",
+    status: "degraded",
+    detail: designPackageComplete
+      ? `Phase 54 design package is complete for ${topology} intent, including topology owner, consistency model, failover/PITR, migration/backfill, observability, and rollback evidence; multi-writer runtime remains unsupported; runtimeSupported=false`
+      : `Phase 54 design package is incomplete for ${topology} intent; missing ${missingEvidence.join(", ")}; multi-writer runtime remains unsupported; runtimeSupported=false`,
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -238,6 +277,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
     checkAccessLog(env, fileExists, checkedAt),
     checkManagedPostgresTopologyGate(env, checkedAt),
+    checkMultiWriterTopologyDesignPackageGate(env, checkedAt),
   ];
 
   return {
@@ -261,6 +301,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
     checkAccessLog(env, fileExists, checkedAt),
     checkManagedPostgresTopologyGate(env, checkedAt),
+    checkMultiWriterTopologyDesignPackageGate(env, checkedAt),
   ];
 
   return {

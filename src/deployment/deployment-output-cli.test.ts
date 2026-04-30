@@ -73,3 +73,80 @@ test("formatDeploymentCliJson preserves detailed Phase 53 report fields", () => 
   assert.equal(report.phase53?.multiWriterSupported, false);
   assert.equal(report.phase53?.summary, "Phase 53 evidence is present; runtime support remains blocked.");
 });
+
+test("formatDeploymentCliJson preserves nested Phase 54 design-package reports for multi-writer intent", () => {
+  const output = formatDeploymentCliJson({
+    managedDatabase: {
+      phase54: {
+        multiWriterTopologyRequested: true,
+        topologyOwnerConfigured: true,
+        consistencyModelConfigured: true,
+        failoverPitrPlanConfigured: true,
+        migrationBackfillPlanConfigured: true,
+        observabilityPlanConfigured: true,
+        rollbackPlanConfigured: false,
+        designPackageGatePassed: false,
+        runtimeSupport: false,
+        strictBlocker: true,
+        summary: "Phase 54 design package is almost complete.",
+        approvalToken: "phase54-secret",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "active-active" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    managedDatabase?: { phase54?: { approvalToken?: unknown; rollbackPlanConfigured?: unknown } };
+    phase54?: {
+      phase?: unknown;
+      topologyOwnerConfigured?: unknown;
+      rollbackPlanConfigured?: unknown;
+      designPackageGatePassed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+      approvalToken?: unknown;
+    };
+  };
+
+  assert.equal(report.phase54?.phase, "54");
+  assert.equal(report.phase54?.topologyOwnerConfigured, true);
+  assert.equal(report.phase54?.rollbackPlanConfigured, false);
+  assert.equal(report.phase54?.designPackageGatePassed, false);
+  assert.equal(report.phase54?.strictBlocker, true);
+  assert.equal(report.phase54?.summary, "Phase 54 design package is almost complete.");
+  assert.equal(report.phase54?.approvalToken, "[redacted]");
+  assert.equal(report.managedDatabase?.phase54?.rollbackPlanConfigured, false);
+  assert.equal(report.managedDatabase?.phase54?.approvalToken, "[redacted]");
+  assert.doesNotMatch(output, /phase54-secret/);
+});
+
+test("formatDeploymentCliJson annotates Phase 54 without overwriting an existing design-package report", () => {
+  const output = formatDeploymentCliJson({
+    phase54: {
+      phase: "54-custom",
+      multiWriterTopologyRequested: "already-recorded",
+      designPackageGatePassed: true,
+      runtimeSupport: "pending-runtime-review",
+      strictBlocker: false,
+      extraEvidence: { owner: "platform" },
+      summary: "Existing Phase 54 report stays authoritative.",
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "multi-region" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase54?: {
+      phase?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      designPackageGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      strictBlocker?: unknown;
+      extraEvidence?: { owner?: unknown };
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase54?.phase, "54-custom");
+  assert.equal(report.phase54?.multiWriterTopologyRequested, "already-recorded");
+  assert.equal(report.phase54?.designPackageGatePassed, true);
+  assert.equal(report.phase54?.runtimeSupport, "pending-runtime-review");
+  assert.equal(report.phase54?.strictBlocker, false);
+  assert.equal(report.phase54?.extraEvidence?.owner, "platform");
+  assert.equal(report.phase54?.summary, "Existing Phase 54 report stays authoritative.");
+});

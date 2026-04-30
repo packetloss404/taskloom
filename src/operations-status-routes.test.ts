@@ -91,6 +91,12 @@ test("operations status route returns the report shape for an admin-equivalent o
   const managedPostgresTopologyGate = body.managedPostgresTopologyGate as Record<string, unknown>;
   assert.equal(managedPostgresTopologyGate.phase, "53");
   assert.equal(managedPostgresTopologyGate.multiWriterSupported, false);
+  assert.ok(body.multiWriterTopologyDesignPackageGate && typeof body.multiWriterTopologyDesignPackageGate === "object");
+  const multiWriterTopologyDesignPackageGate = body.multiWriterTopologyDesignPackageGate as Record<string, unknown>;
+  assert.equal(multiWriterTopologyDesignPackageGate.phase, "54");
+  assert.equal(multiWriterTopologyDesignPackageGate.runtimeSupported, false);
+  assert.equal(multiWriterTopologyDesignPackageGate.releaseAllowed, false);
+  assert.ok(multiWriterTopologyDesignPackageGate.topologyOwner && typeof multiWriterTopologyDesignPackageGate.topologyOwner === "object");
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -121,6 +127,11 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
   assert.equal(status.managedPostgresTopologyGate.singleWriterManagedPostgresSupported, true);
   assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
   assert.equal(status.managedPostgresTopologyGate.multiWriterIntentDetected, false);
+  assert.equal(status.multiWriterTopologyDesignPackageGate.phase, "54");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.status, "not-required");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.designPackageStatus, "not-required");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyDesignPackageGate.topologyOwner.status, "not-required");
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
@@ -148,4 +159,14 @@ test("operations status report keeps multi-writer managed Postgres startup unsup
   assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
   assert.equal(status.managedPostgresTopologyGate.requirementsOnly, true);
   assert.match(status.managedPostgresTopologyGate.summary, /not implementation support/i);
+  assert.equal(status.multiWriterTopologyDesignPackageGate.phase, "54");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.status, "blocked");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.designPackageStatus, "incomplete");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyDesignPackageGate.topologyOwner.status, "missing");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.consistencyModel.status, "missing");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.failoverPitr.status, "missing");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.migrationBackfill.status, "missing");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.observability.status, "missing");
+  assert.equal(status.multiWriterTopologyDesignPackageGate.rollback.status, "missing");
 });

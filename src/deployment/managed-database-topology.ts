@@ -18,6 +18,12 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_DATABASE_TOPOLOGY?: string;
   TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE?: string;
   TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER?: string;
+  TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL?: string;
+  TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN?: string;
 }
 
 export interface ManagedDatabaseTopologyObservedEnvValue {
@@ -81,6 +87,19 @@ export interface ManagedDatabaseTopologyReport {
       strictBlocker: boolean;
       summary: string;
     };
+    phase54?: {
+      multiWriterTopologyRequested: boolean;
+      topologyOwnerConfigured: boolean;
+      consistencyModelConfigured: boolean;
+      failoverPitrPlanConfigured: boolean;
+      migrationBackfillPlanConfigured: boolean;
+      observabilityPlanConfigured: boolean;
+      rollbackPlanConfigured: boolean;
+      designPackageGatePassed: boolean;
+      runtimeSupport: false;
+      strictBlocker: boolean;
+      summary: string;
+    };
   };
 }
 
@@ -104,6 +123,12 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_DATABASE_TOPOLOGY",
   "TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER",
+  "TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL",
+  "TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN",
+  "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN",
+  "TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
 const MANAGED_TOPOLOGY_HINTS = new Set([
@@ -267,6 +292,46 @@ function phase53MultiWriterTopologyGate(env: ManagedDatabaseTopologyEnv, hasMult
   };
 }
 
+function phase54MultiWriterTopologyDesignPackageGate(
+  env: ManagedDatabaseTopologyEnv,
+  hasMultiWriterIntent: boolean,
+) {
+  const topologyOwnerConfigured = configured(env.TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER);
+  const consistencyModelConfigured = configured(env.TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL);
+  const failoverPitrPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN);
+  const migrationBackfillPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN);
+  const observabilityPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN);
+  const rollbackPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN);
+  const designPackageGatePassed =
+    !hasMultiWriterIntent ||
+    (topologyOwnerConfigured &&
+      consistencyModelConfigured &&
+      failoverPitrPlanConfigured &&
+      migrationBackfillPlanConfigured &&
+      observabilityPlanConfigured &&
+      rollbackPlanConfigured);
+  const strictBlocker = hasMultiWriterIntent && !designPackageGatePassed;
+  const summary = hasMultiWriterIntent
+    ? designPackageGatePassed
+      ? "Phase 54 multi-writer topology design package is complete; runtime support remains blocked."
+      : "Phase 54 requires topology owner, consistency model, failover/PITR plan, migration/backfill plan, observability plan, and rollback plan evidence before multi-writer topology can proceed."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 54.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    topologyOwnerConfigured,
+    consistencyModelConfigured,
+    failoverPitrPlanConfigured,
+    migrationBackfillPlanConfigured,
+    observabilityPlanConfigured,
+    rollbackPlanConfigured,
+    designPackageGatePassed,
+    runtimeSupport: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -278,6 +343,7 @@ function multiWriterTopologyRequested(topology: string): boolean {
 function buildNextSteps(
   checks: ManagedDatabaseTopologyCheck[],
   phase53: ReturnType<typeof phase53MultiWriterTopologyGate>,
+  phase54: ReturnType<typeof phase54MultiWriterTopologyDesignPackageGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -301,6 +367,26 @@ function buildNextSteps(
       }
       if (!phase53.designEvidenceConfigured) {
         steps.add("Configure TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE with the approved multi-writer topology design reference.");
+      }
+    }
+    if (check.id === "phase54-multi-writer-design-package") {
+      if (!phase54.topologyOwnerConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER with the accountable multi-writer topology owner.");
+      }
+      if (!phase54.consistencyModelConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL with the approved consistency model evidence.");
+      }
+      if (!phase54.failoverPitrPlanConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN with the failover and PITR plan evidence.");
+      }
+      if (!phase54.migrationBackfillPlanConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN with the migration and backfill plan evidence.");
+      }
+      if (!phase54.observabilityPlanConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN with the observability plan evidence.");
+      }
+      if (!phase54.rollbackPlanConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN with the rollback plan evidence.");
       }
     }
   }
@@ -327,6 +413,7 @@ export function assessManagedDatabaseTopology(
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
   const phase52 = phase52ManagedPostgresStartupSupport(phase50, hasMultiWriterIntent);
   const phase53 = phase53MultiWriterTopologyGate(env, hasMultiWriterIntent);
+  const phase54 = phase54MultiWriterTopologyDesignPackageGate(env, hasMultiWriterIntent);
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseTopologyCheck[] = [];
@@ -383,6 +470,13 @@ export function assessManagedDatabaseTopology(
 
   pushCheck(
     checks,
+    "phase54-multi-writer-design-package",
+    phase54.strictBlocker ? "fail" : "pass",
+    phase54.summary,
+  );
+
+  pushCheck(
+    checks,
     "production-topology",
     isProductionEnv && store === "json" ? "fail" : "pass",
     isProductionEnv && store === "json"
@@ -415,6 +509,7 @@ export function assessManagedDatabaseTopology(
   }
   if (hasMultiWriterIntent) {
     warnings.push(phase53.summary);
+    warnings.push(phase54.summary);
   }
 
   const status = statusFromChecks(checks);
@@ -453,7 +548,7 @@ export function assessManagedDatabaseTopology(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, phase53),
+    nextSteps: buildNextSteps(checks, phase53, phase54),
     observed: {
       nodeEnv,
       isProductionEnv,
@@ -474,6 +569,7 @@ export function assessManagedDatabaseTopology(
       phase50,
       phase52,
       phase53,
+      phase54,
     },
   };
 }

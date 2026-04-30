@@ -102,6 +102,53 @@ export interface ManagedPostgresTopologyGateStatus {
   source: "managedDatabaseRuntimeGuard" | "derived";
 }
 
+export type MultiWriterTopologyDesignPackageEvidenceKey =
+  | "topologyOwner"
+  | "consistencyModel"
+  | "failoverPitr"
+  | "migrationBackfill"
+  | "observability"
+  | "rollback";
+
+export interface MultiWriterTopologyDesignPackageEvidenceStatus {
+  key: MultiWriterTopologyDesignPackageEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source:
+    | "env"
+    | "managedDatabaseRuntimeGuard"
+    | "managedDatabaseTopology"
+    | "releaseReadiness"
+    | "releaseEvidence"
+    | "derived";
+}
+
+export interface MultiWriterTopologyDesignPackageGateStatus {
+  phase: "54";
+  status: "blocked" | "not-required";
+  designPackageStatus: "complete" | "incomplete" | "not-required";
+  summary: string;
+  required: boolean;
+  releaseAllowed: false;
+  runtimeSupported: false;
+  multiWriterIntentDetected: boolean;
+  topologyIntent: string | null;
+  phase53RequirementsEvidenceAttached: boolean;
+  phase53DesignEvidenceAttached: boolean;
+  topologyOwner: MultiWriterTopologyDesignPackageEvidenceStatus;
+  consistencyModel: MultiWriterTopologyDesignPackageEvidenceStatus;
+  failoverPitr: MultiWriterTopologyDesignPackageEvidenceStatus;
+  migrationBackfill: MultiWriterTopologyDesignPackageEvidenceStatus;
+  observability: MultiWriterTopologyDesignPackageEvidenceStatus;
+  rollback: MultiWriterTopologyDesignPackageEvidenceStatus;
+  missingEvidence: MultiWriterTopologyDesignPackageEvidenceKey[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -126,6 +173,7 @@ export interface OperationsStatus {
   managedPostgresCapability: ManagedPostgresCapabilityStatus;
   managedPostgresStartupSupport: ManagedPostgresStartupSupportStatus;
   managedPostgresTopologyGate: ManagedPostgresTopologyGateStatus;
+  multiWriterTopologyDesignPackageGate: MultiWriterTopologyDesignPackageGateStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -210,6 +258,49 @@ const MANAGED_POSTGRES_BACKFILL_COMMANDS = [
   "npm run db:backfill-provider-calls",
   "npm run db:backfill-activation-signals",
 ] as const;
+const MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE = [
+  {
+    key: "topologyOwner",
+    label: "Topology owner",
+    envKey: "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER",
+    reportKeys: ["topologyOwner", "owner"],
+  },
+  {
+    key: "consistencyModel",
+    label: "Consistency model",
+    envKey: "TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL",
+    reportKeys: ["consistencyModel"],
+  },
+  {
+    key: "failoverPitr",
+    label: "Failover/PITR evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE",
+    reportKeys: ["failoverPitrEvidence", "failoverPITREvidence", "failoverAndPitrEvidence", "pitrEvidence"],
+  },
+  {
+    key: "migrationBackfill",
+    label: "Migration/backfill evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE",
+    reportKeys: ["migrationBackfillEvidence", "migrationAndBackfillEvidence", "backfillEvidence"],
+  },
+  {
+    key: "observability",
+    label: "Observability evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE",
+    reportKeys: ["observabilityEvidence"],
+  },
+  {
+    key: "rollback",
+    label: "Rollback evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE",
+    reportKeys: ["rollbackEvidence"],
+  },
+] as const satisfies ReadonlyArray<{
+  key: MultiWriterTopologyDesignPackageEvidenceKey;
+  label: string;
+  envKey: string;
+  reportKeys: readonly string[];
+}>;
 
 let schedulerLeaderProbe: (() => boolean) | null = null;
 
@@ -499,6 +590,56 @@ function booleanValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function findNestedRecord(record: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> | null {
+  let current: unknown = record;
+  for (const key of keys) {
+    if (!isRecord(current)) return null;
+    current = current[key];
+  }
+  return isRecord(current) ? current : null;
+}
+
+function valueFromRecord(record: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = stringValue(record[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function phase53EvidenceAttached(
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  evidenceKey: "requirementsEvidenceConfigured" | "designEvidenceConfigured",
+): boolean {
+  const runtimePhase53: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.phase53)
+    ? managedDatabaseRuntimeGuard.phase53
+    : {};
+  const topologyManagedDatabase: Record<string, unknown> = isRecord(managedDatabaseTopology.managedDatabase)
+    ? managedDatabaseTopology.managedDatabase
+    : {};
+  const topologyPhase53: Record<string, unknown> = isRecord(topologyManagedDatabase.phase53)
+    ? topologyManagedDatabase.phase53
+    : {};
+
+  return booleanValue(runtimePhase53[evidenceKey]) ??
+    booleanValue(topologyPhase53[evidenceKey]) ??
+    false;
+}
+
+function topologyDesignPackageRecord(
+  report: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase54"]) ??
+    findNestedRecord(report, ["multiWriterTopologyDesignPackageGate"]) ??
+    findNestedRecord(report, ["multiWriterTopologyDesignPackage"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase54"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterTopologyDesignPackageGate"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase54"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "multiWriterTopologyDesignPackageGate"]);
+}
+
 function deriveManagedPostgresCapability(
   env: NodeJS.ProcessEnv,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -695,6 +836,121 @@ function deriveManagedPostgresTopologyGate(
   };
 }
 
+function deriveMultiWriterTopologyDesignPackageGate(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  managedPostgresTopologyGate: ManagedPostgresTopologyGateStatus,
+): MultiWriterTopologyDesignPackageGateStatus {
+  const reportSources: Array<{
+    source: Exclude<MultiWriterTopologyDesignPackageGateStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = topologyDesignPackageRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase54 = reportSources[0];
+  const multiWriterIntentDetected = booleanValue(phase54?.record.multiWriterIntentDetected) ??
+    booleanValue(phase54?.record.multiWriterTopologyRequested) ??
+    managedPostgresTopologyGate.multiWriterIntentDetected;
+  const topologyIntent = stringValue(phase54?.record.topologyIntent) ||
+    managedPostgresTopologyGate.topologyIntent ||
+    null;
+  const phase53RequirementsEvidenceAttached = booleanValue(phase54?.record.phase53RequirementsEvidenceAttached) ??
+    phase53EvidenceAttached(
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      "requirementsEvidenceConfigured",
+    );
+  const phase53DesignEvidenceAttached = booleanValue(phase54?.record.phase53DesignEvidenceAttached) ??
+    phase53EvidenceAttached(
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      "designEvidenceConfigured",
+    );
+  const required = multiWriterIntentDetected;
+
+  const evidenceEntries = MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE.map((definition) => {
+    let value = stringValue(env[definition.envKey]);
+    let source: MultiWriterTopologyDesignPackageEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys);
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        value = direct || nested;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+    const configured = value.length > 0;
+    const status: MultiWriterTopologyDesignPackageEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<MultiWriterTopologyDesignPackageEvidenceKey, MultiWriterTopologyDesignPackageEvidenceStatus>;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const designPackageStatus: MultiWriterTopologyDesignPackageGateStatus["designPackageStatus"] = required
+    ? missingEvidence.length === 0 && phase53RequirementsEvidenceAttached && phase53DesignEvidenceAttached
+      ? "complete"
+      : "incomplete"
+    : "not-required";
+  const summary = required
+    ? designPackageStatus === "complete"
+      ? "Phase 54 multi-writer topology design package evidence is complete, but multi-writer runtime support remains unavailable; runtimeSupported=false."
+      : "Phase 54 multi-writer topology design package evidence is incomplete and multi-writer runtime support remains unavailable; runtimeSupported=false."
+    : "Phase 54 multi-writer topology design package gate is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false.";
+
+  return {
+    phase: "54",
+    status: required ? "blocked" : "not-required",
+    designPackageStatus,
+    summary,
+    required,
+    releaseAllowed: false,
+    runtimeSupported: false,
+    multiWriterIntentDetected,
+    topologyIntent,
+    phase53RequirementsEvidenceAttached,
+    phase53DesignEvidenceAttached,
+    topologyOwner: evidenceByKey.topologyOwner,
+    consistencyModel: evidenceByKey.consistencyModel,
+    failoverPitr: evidenceByKey.failoverPitr,
+    migrationBackfill: evidenceByKey.migrationBackfill,
+    observability: evidenceByKey.observability,
+    rollback: evidenceByKey.rollback,
+    missingEvidence,
+    source: phase54?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -793,6 +1049,14 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedPostgresCapability,
     managedPostgresStartupSupport,
   );
+  const multiWriterTopologyDesignPackageGate = deriveMultiWriterTopologyDesignPackageGate(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+    managedPostgresTopologyGate,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -832,6 +1096,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedPostgresCapability,
     managedPostgresStartupSupport,
     managedPostgresTopologyGate,
+    multiWriterTopologyDesignPackageGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -889,6 +1154,14 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     managedPostgresCapability,
     managedPostgresStartupSupport,
   );
+  const multiWriterTopologyDesignPackageGate = deriveMultiWriterTopologyDesignPackageGate(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+    managedPostgresTopologyGate,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -928,6 +1201,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     managedPostgresCapability,
     managedPostgresStartupSupport,
     managedPostgresTopologyGate,
+    multiWriterTopologyDesignPackageGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

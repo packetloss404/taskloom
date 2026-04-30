@@ -23,6 +23,9 @@ const STORE_ENV_KEYS = [
   "DATABASE_URL",
   "TASKLOOM_DATABASE_URL",
   "TASKLOOM_MANAGED_DATABASE_URL",
+  "TASKLOOM_DATABASE_TOPOLOGY",
+  "TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -253,5 +256,36 @@ test("managed URL alone supports startup load, mutate, and async reread through 
     assert.equal(queries.some((query) => query.startsWith("insert into taskloom_document_store")), true);
     assert.equal(queries.some((query) => query.includes("for update")), true);
     assert.equal(queries.filter((query) => query.startsWith("select payload from taskloom_document_store")).length >= 2, true);
+  });
+});
+
+test("single-writer managed Postgres remains supported when multi-writer design evidence is configured", async () => {
+  const client = new FakeManagedPostgresClient();
+
+  await withManagedStoreEnv({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "single-writer",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-54/multi-writer-requirements.md",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-54/multi-writer-design-package.md",
+  }, client, async (configs) => {
+    const requirementId = await mutateStoreAsync((data) => upsertRequirement(data, {
+      id: "req_single_writer_with_design_evidence",
+      workspaceId: "alpha",
+      title: "Single-writer with design evidence",
+      priority: "must",
+      status: "approved",
+      createdByUserId: "user_alpha",
+    }, "2026-04-30T17:00:00.000Z").id);
+
+    assert.equal(requirementId, "req_single_writer_with_design_evidence");
+    assert.equal(client.storedData().requirements.some((entry) => entry.id === requirementId), true);
+    assert.equal(configs[0]?.envKey, "TASKLOOM_DATABASE_URL");
+    assert.equal(configs[0]?.resolution.mode, "postgres");
+
+    const queries = client.normalizedQueries();
+    assert.equal(queries.some((query) => query.startsWith("select pg_advisory_xact_lock")), true);
+    assert.equal(queries.some((query) => query.includes("for update")), true);
+    assert.equal(queries.includes("commit"), true);
   });
 });

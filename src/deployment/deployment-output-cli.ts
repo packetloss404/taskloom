@@ -26,6 +26,19 @@ function hasMultiWriterTopologyIntent(env: NodeJS.ProcessEnv): boolean {
   return MULTI_WRITER_TOPOLOGY_HINTS.has(normalize(env.TASKLOOM_DATABASE_TOPOLOGY));
 }
 
+function isReport(value: unknown): value is DeploymentCliReport {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function reportAt(report: DeploymentCliReport, path: string[]): DeploymentCliReport | null {
+  let current: unknown = report;
+  for (const key of path) {
+    if (!isReport(current)) return null;
+    current = current[key];
+  }
+  return isReport(current) ? current : null;
+}
+
 function redactValue(value: unknown, force = false): unknown {
   if (typeof value === "string") {
     if (!value) return value;
@@ -46,14 +59,12 @@ function redactValue(value: unknown, force = false): unknown {
 }
 
 function withPhase53Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
-  if (!hasMultiWriterTopologyIntent(env) || !report || typeof report !== "object" || Array.isArray(report)) {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
     return report;
   }
 
-  const existingReport = report as DeploymentCliReport;
-  const existingPhase53 = existingReport.phase53 && typeof existingReport.phase53 === "object" && !Array.isArray(existingReport.phase53)
-    ? existingReport.phase53 as DeploymentCliReport
-    : {};
+  const existingReport = report;
+  const existingPhase53 = reportAt(existingReport, ["phase53"]) ?? {};
 
   return {
     ...existingReport,
@@ -68,6 +79,33 @@ function withPhase53Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   };
 }
 
+function withPhase54Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
+    return report;
+  }
+
+  const nestedPhase54 =
+    reportAt(report, ["managedDatabase", "phase54"]) ??
+    reportAt(report, ["managedDatabaseTopology", "managedDatabase", "phase54"]) ??
+    reportAt(report, ["releaseReadiness", "managedDatabaseTopology", "managedDatabase", "phase54"]);
+  const existingPhase54 = reportAt(report, ["phase54"]) ?? nestedPhase54 ?? {};
+  const designPackageGatePassed = existingPhase54.designPackageGatePassed ?? existingPhase54.designPackageReady ?? false;
+
+  return {
+    ...report,
+    phase54: {
+      ...existingPhase54,
+      phase: existingPhase54.phase ?? "54",
+      multiWriterTopologyRequested: existingPhase54.multiWriterTopologyRequested ?? true,
+      designPackageGatePassed,
+      runtimeSupport: existingPhase54.runtimeSupport ?? false,
+      strictBlocker: existingPhase54.strictBlocker ?? designPackageGatePassed !== true,
+      summary: existingPhase54.summary ??
+        "Phase 54 requires a multi-writer topology design package before distributed or active-active deployment can proceed.",
+    },
+  };
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
-  return JSON.stringify(redactValue(withPhase53Status(report, env)), null, 2);
+  return JSON.stringify(redactValue(withPhase54Status(withPhase53Status(report, env), env)), null, 2);
 }

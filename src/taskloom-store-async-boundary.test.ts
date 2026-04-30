@@ -26,6 +26,9 @@ const STORE_ENV_KEYS = [
   "DATABASE_URL",
   "TASKLOOM_DATABASE_URL",
   "TASKLOOM_MANAGED_DATABASE_URL",
+  "TASKLOOM_DATABASE_TOPOLOGY",
+  "TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -179,4 +182,39 @@ test("synchronous APIs stay guarded when managed database hints are configured",
     );
     assert.equal(mutatorRan, false);
   });
+});
+
+test("synchronous APIs stay guarded when multi-writer design evidence is configured", async () => {
+  const blockedTopologies = ["multi-writer", "distributed", "active-active"] as const;
+
+  for (const topology of blockedTopologies) {
+    await withStoreEnv({
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: topology,
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-54/multi-writer-requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-54/multi-writer-design-package.md",
+    }, () => {
+      assert.throws(
+        () => loadStore(),
+        (error) => {
+          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
+          assert.equal(error.code, "TASKLOOM_MANAGED_DATABASE_SYNC_ADAPTER_GAP");
+          assert.equal(error.storeMode, "postgres");
+          assert.deepEqual(error.managedDatabaseUrlKeys, ["TASKLOOM_MANAGED_DATABASE_URL"]);
+          return true;
+        },
+      );
+
+      let mutatorRan = false;
+      assert.throws(
+        () => mutateStore(() => {
+          mutatorRan = true;
+          return "should-not-run";
+        }),
+        ManagedDatabaseStoreBoundaryError,
+      );
+      assert.equal(mutatorRan, false);
+    });
+  }
 });

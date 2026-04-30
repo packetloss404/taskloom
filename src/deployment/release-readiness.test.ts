@@ -259,16 +259,102 @@ test("Phase 52 managed startup support does not allow multi-writer topology", ()
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, true);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.requirementsEvidenceRequired, true);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designPackageEvidenceRequired, true);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.requirementsEvidenceAttached, false);
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designPackageEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.topologyOwnerEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.topologyOwnerEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.consistencyModelEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.consistencyModelEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.failoverPitrPlanEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.failoverPitrPlanEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.migrationBackfillPlanEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.migrationBackfillPlanEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.observabilityPlanEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.observabilityPlanEvidenceAttached, false);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.rollbackPlanEvidenceRequired, true);
+  assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.rollbackPlanEvidenceAttached, false);
+  assert.deepEqual(
+    report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.designPackageEvidence.map((item) => ({
+      id: item.id,
+      required: item.required,
+      attached: item.attached,
+    })),
+    [
+      { id: "topology-owner", required: true, attached: false },
+      { id: "consistency-model", required: true, attached: false },
+      { id: "failover-pitr-plan", required: true, attached: false },
+      { id: "migration-backfill-plan", required: true, attached: false },
+      { id: "observability-plan", required: true, attached: false },
+      { id: "rollback-plan", required: true, attached: false },
+    ],
+  );
   assert.equal(report.asyncStoreBoundary.phase53MultiWriterTopologyGate?.releaseAllowed, false);
   assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "fail");
   assert.equal(checkStatus(report, "async-store-boundary"), "fail");
   assert.ok(report.blockers.some((blocker) => blocker.includes("multi-writer")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 53 requirements/design gate")));
-  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 53 multi-writer topology requirements evidence")));
-  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 53 multi-writer topology design evidence")));
-  assert.ok(report.nextSteps.some((step) => step.includes("Phase 53 requirements/design evidence")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 54 design-package gate")));
+  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 54 multi-writer topology owner evidence")));
+  assert.ok(report.asyncStoreBoundary.blockers.some((blocker) => blocker.includes("Phase 54 multi-writer rollback plan evidence")));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 54 design-package evidence")));
+});
+
+test("Phase 54 design-package evidence attaches but still does not allow multi-writer runtime release", () => {
+  const env: ReleaseReadinessEnv = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "single logical writer per workspace with conflict policy RFC-53",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "runbook failover-pitr-53",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "runbook migration-backfill-53",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "dashboard topology-53",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "runbook rollback-53",
+  };
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);
+  const managedDatabaseRuntimeGuard = buildManagedDatabaseRuntimeGuardReport(env, {
+    phase51: {
+      managedPostgresStartupSupported: true,
+    },
+  });
+  const report = assessReleaseReadiness({
+    env,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = report.asyncStoreBoundary.phase53MultiWriterTopologyGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.classification, "multi-writer-unsupported");
+  assert.equal(gate?.required, true);
+  assert.equal(gate?.designPackageEvidenceRequired, true);
+  assert.equal(gate?.requirementsEvidenceAttached, true);
+  assert.equal(gate?.designEvidenceAttached, true);
+  assert.equal(gate?.designPackageEvidenceAttached, true);
+  assert.equal(gate?.topologyOwnerEvidenceAttached, true);
+  assert.equal(gate?.consistencyModelEvidenceAttached, true);
+  assert.equal(gate?.failoverPitrPlanEvidenceAttached, true);
+  assert.equal(gate?.migrationBackfillPlanEvidenceAttached, true);
+  assert.equal(gate?.observabilityPlanEvidenceAttached, true);
+  assert.equal(gate?.rollbackPlanEvidenceAttached, true);
+  assert.equal(gate?.releaseAllowed, false);
+  assert.ok(gate?.blockers.some((blocker) => blocker.includes("runtime support remains blocked")));
+  assert.ok(report.summary.includes("blocked"));
+  assert.ok(report.nextSteps.some((step) => step.includes("blocked even with the Phase 54 design package attached")));
 });
 
 test("strict release with TASKLOOM_STORE=postgres fails the managed database runtime boundary", () => {

@@ -76,6 +76,7 @@ test("operations health route returns the report shape for an admin-equivalent o
     assert.ok(typeof subsystem.checkedAt === "string");
   }
   assert.ok(subsystems.some((subsystem) => subsystem.name === "managedPostgresTopologyGate"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterTopologyDesignPackageGate"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
@@ -101,6 +102,10 @@ test("operations health surfaces supported single-writer managed Postgres topolo
   assert.equal(gate.status, "ok");
   assert.match(gate.detail, /single-writer managed Postgres/i);
   assert.match(gate.detail, /active-active runtime support remains unavailable/i);
+  const designPackageGate = findSubsystem(report, "multiWriterTopologyDesignPackageGate");
+  assert.equal(designPackageGate.status, "disabled");
+  assert.match(designPackageGate.detail, /Phase 54 design-package gate is not required/i);
+  assert.match(designPackageGate.detail, /runtimeSupported=false/);
   assert.equal(report.overall, "ok");
 });
 
@@ -129,5 +134,45 @@ test("operations health degrades for blocked multi-writer topology intent", () =
   assert.match(gate.detail, /Phase 53 blocks active-active intent/i);
   assert.match(gate.detail, /design intent only, not implementation support/i);
   assert.match(gate.detail, /multiWriterSupported=false/);
+  const designPackageGate = findSubsystem(report, "multiWriterTopologyDesignPackageGate");
+  assert.equal(designPackageGate.status, "degraded");
+  assert.match(designPackageGate.detail, /Phase 54 design package is incomplete/i);
+  assert.match(designPackageGate.detail, /topology owner/i);
+  assert.match(designPackageGate.detail, /failover\/PITR/i);
+  assert.match(designPackageGate.detail, /runtimeSupported=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("operations health reports complete Phase 54 design package without enabling multi-writer runtime", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "artifacts/phase53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "artifacts/phase53/design.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes plus async reconciliation",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE: "artifacts/phase54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE: "artifacts/phase54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE: "artifacts/phase54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE: "artifacts/phase54/rollback.md",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const designPackageGate = findSubsystem(report, "multiWriterTopologyDesignPackageGate");
+  assert.equal(designPackageGate.status, "degraded");
+  assert.match(designPackageGate.detail, /Phase 54 design package is complete/i);
+  assert.match(designPackageGate.detail, /topology owner, consistency model, failover\/PITR, migration\/backfill, observability, and rollback evidence/i);
+  assert.match(designPackageGate.detail, /multi-writer runtime remains unsupported/i);
   assert.equal(report.overall, "degraded");
 });
