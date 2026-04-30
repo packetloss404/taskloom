@@ -1,14 +1,18 @@
 import { Hono, type Context } from "hono";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import { requireAuthenticatedContext } from "./taskloom-services.js";
-import { findWorkspaceMembership, loadStore } from "./taskloom-store.js";
+import { findWorkspaceMembership, loadStoreAsync } from "./taskloom-store.js";
 import {
-  applyWorkflowDraft,
-  applyWorkflowTemplate,
+  getWorkflowTemplate,
   listWorkflowTemplates,
+  type WorkflowDraft,
 } from "./workflow-prompt-service.js";
 import { llmDraftWorkflow, llmPlanMode } from "./workflow-llm-service.js";
-import { replacePlanItems } from "./workflow-service.js";
+import {
+  replacePlanItemsAsync,
+  replaceRequirementsAsync,
+  updateWorkspaceBriefAsync,
+} from "./workflow-service.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 
 type AuthenticatedContext = ReturnType<typeof requireAuthenticatedContext>;
@@ -16,33 +20,33 @@ type WorkflowServiceFunction = (context: AuthenticatedContext, input?: unknown) 
 type WorkflowServiceModule = Record<string, unknown>;
 
 const workflowServiceFunctions = {
-  getOverview: ["getWorkflowOverview", "getOverview"],
-  getBrief: ["getWorkflowBrief", "readWorkspaceBrief", "getBrief"],
-  saveBrief: ["saveWorkflowBrief", "updateWorkspaceBrief", "updateWorkflowBrief", "upsertWorkflowBrief"],
-  listBriefVersions: ["listWorkspaceBriefHistory", "listBriefVersions"],
-  restoreBriefVersion: ["restoreWorkspaceBriefVersion", "restoreBriefVersion"],
+  getOverview: ["getWorkflowOverviewAsync", "getWorkflowOverview", "getOverview"],
+  getBrief: ["getWorkflowBriefAsync", "readWorkspaceBriefAsync", "getWorkflowBrief", "readWorkspaceBrief", "getBrief"],
+  saveBrief: ["saveWorkflowBriefAsync", "updateWorkspaceBriefAsync", "saveWorkflowBrief", "updateWorkspaceBrief", "updateWorkflowBrief", "upsertWorkflowBrief"],
+  listBriefVersions: ["listWorkspaceBriefHistoryAsync", "listWorkspaceBriefHistory", "listBriefVersions"],
+  restoreBriefVersion: ["restoreWorkspaceBriefVersionAsync", "restoreWorkspaceBriefVersion", "restoreBriefVersion"],
   listBriefTemplates: ["listWorkspaceBriefTemplates", "listBriefTemplates"],
-  applyBriefTemplate: ["applyWorkspaceBriefTemplate", "applyBriefTemplate"],
-  getRequirements: ["getWorkflowRequirements", "listRequirements", "getRequirements"],
-  saveRequirements: ["saveWorkflowRequirements", "replaceRequirements", "updateWorkflowRequirements", "upsertWorkflowRequirements"],
-  listPlanItems: ["listWorkflowPlanItems", "listPlanItems", "getWorkflowPlanItems"],
-  savePlanItems: ["saveWorkflowPlanItems", "replacePlanItems", "updateWorkflowPlanItems"],
-  createPlanItem: ["createWorkflowPlanItem", "addWorkflowPlanItem"],
-  updatePlanItem: ["updateWorkflowPlanItem", "saveWorkflowPlanItem"],
-  getBlockersAndQuestions: ["getWorkflowBlockersAndQuestions", "listBlockersAndQuestions"],
-  saveBlockersAndQuestions: ["saveWorkflowBlockersAndQuestions", "replaceBlockersAndQuestions"],
-  listBlockers: ["listWorkflowBlockers", "getWorkflowBlockers"],
-  createBlocker: ["createWorkflowBlocker", "addWorkflowBlocker"],
-  updateBlocker: ["updateWorkflowBlocker", "saveWorkflowBlocker"],
-  listQuestions: ["listWorkflowQuestions", "getWorkflowQuestions"],
-  createQuestion: ["createWorkflowQuestion", "addWorkflowQuestion"],
-  updateQuestion: ["updateWorkflowQuestion", "saveWorkflowQuestion"],
-  listValidationEvidence: ["listWorkflowValidationEvidence", "listValidationEvidence", "getWorkflowValidationEvidence"],
-  saveValidationEvidence: ["saveWorkflowValidationEvidence", "replaceValidationEvidence", "updateWorkflowValidationEvidence"],
-  createValidationEvidence: ["createWorkflowValidationEvidence", "addWorkflowValidationEvidence"],
-  updateValidationEvidence: ["updateWorkflowValidationEvidence", "saveWorkflowValidationEvidence"],
-  getReleaseConfirmation: ["getWorkflowReleaseConfirmation", "readReleaseConfirmation", "getReleaseConfirmation"],
-  confirmRelease: ["confirmWorkflowRelease", "updateReleaseConfirmation", "saveWorkflowReleaseConfirmation", "confirmRelease"],
+  applyBriefTemplate: ["applyWorkspaceBriefTemplateAsync", "applyWorkspaceBriefTemplate", "applyBriefTemplate"],
+  getRequirements: ["getWorkflowRequirementsAsync", "listRequirementsAsync", "getWorkflowRequirements", "listRequirements", "getRequirements"],
+  saveRequirements: ["saveWorkflowRequirementsAsync", "replaceRequirementsAsync", "saveWorkflowRequirements", "replaceRequirements", "updateWorkflowRequirements", "upsertWorkflowRequirements"],
+  listPlanItems: ["listWorkflowPlanItemsAsync", "listPlanItemsAsync", "listWorkflowPlanItems", "listPlanItems", "getWorkflowPlanItems"],
+  savePlanItems: ["saveWorkflowPlanItemsAsync", "replacePlanItemsAsync", "saveWorkflowPlanItems", "replacePlanItems", "updateWorkflowPlanItems"],
+  createPlanItem: ["createWorkflowPlanItemAsync", "createWorkflowPlanItem", "addWorkflowPlanItem"],
+  updatePlanItem: ["updateWorkflowPlanItemAsync", "updateWorkflowPlanItem", "saveWorkflowPlanItem"],
+  getBlockersAndQuestions: ["getWorkflowBlockersAndQuestionsAsync", "listBlockersAndQuestionsAsync", "getWorkflowBlockersAndQuestions", "listBlockersAndQuestions"],
+  saveBlockersAndQuestions: ["saveWorkflowBlockersAndQuestionsAsync", "replaceBlockersAndQuestionsAsync", "saveWorkflowBlockersAndQuestions", "replaceBlockersAndQuestions"],
+  listBlockers: ["listWorkflowBlockersAsync", "listWorkflowBlockers", "getWorkflowBlockers"],
+  createBlocker: ["createWorkflowBlockerAsync", "createWorkflowBlocker", "addWorkflowBlocker"],
+  updateBlocker: ["updateWorkflowBlockerAsync", "updateWorkflowBlocker", "saveWorkflowBlocker"],
+  listQuestions: ["listWorkflowQuestionsAsync", "listWorkflowQuestions", "getWorkflowQuestions"],
+  createQuestion: ["createWorkflowQuestionAsync", "createWorkflowQuestion", "addWorkflowQuestion"],
+  updateQuestion: ["updateWorkflowQuestionAsync", "updateWorkflowQuestion", "saveWorkflowQuestion"],
+  listValidationEvidence: ["listWorkflowValidationEvidenceAsync", "listValidationEvidenceAsync", "listWorkflowValidationEvidence", "listValidationEvidence", "getWorkflowValidationEvidence"],
+  saveValidationEvidence: ["saveWorkflowValidationEvidenceAsync", "replaceValidationEvidenceAsync", "saveWorkflowValidationEvidence", "replaceValidationEvidence", "updateWorkflowValidationEvidence"],
+  createValidationEvidence: ["createWorkflowValidationEvidenceAsync", "createWorkflowValidationEvidence", "addWorkflowValidationEvidence"],
+  updateValidationEvidence: ["updateWorkflowValidationEvidenceAsync", "updateWorkflowValidationEvidence", "saveWorkflowValidationEvidence"],
+  getReleaseConfirmation: ["getWorkflowReleaseConfirmationAsync", "readReleaseConfirmationAsync", "getWorkflowReleaseConfirmation", "readReleaseConfirmation", "getReleaseConfirmation"],
+  confirmRelease: ["confirmWorkflowReleaseAsync", "updateReleaseConfirmationAsync", "confirmWorkflowRelease", "updateReleaseConfirmation", "saveWorkflowReleaseConfirmation", "confirmRelease"],
 } as const;
 
 type WorkflowOperation = keyof typeof workflowServiceFunctions;
@@ -110,10 +114,10 @@ workflowRoutes.post("/release-confirmation", (c) =>
   runWorkflowOperation(c, "confirmRelease", readJsonBody, [], "editWorkflow"),
 );
 
-workflowRoutes.get("/templates", (c) => {
+workflowRoutes.get("/templates", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
-    requireWorkflowPermission(context, "viewWorkspace");
+    await requireWorkflowPermission(context, "viewWorkspace");
     return c.json({ templates: listWorkflowTemplates() });
   } catch (error) {
     return errorResponse(c, error);
@@ -123,8 +127,8 @@ workflowRoutes.get("/templates", (c) => {
 workflowRoutes.post("/templates/:templateId/apply", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
-    requireWorkflowPermission(context, "editWorkflow");
-    const result = await applyWorkflowTemplate(context, c.req.param("templateId"));
+    await requireWorkflowPermission(context, "editWorkflow");
+    const result = await applyWorkflowTemplateAsync(context, c.req.param("templateId"));
     return c.json(result);
   } catch (error) {
     return errorResponse(c, error);
@@ -134,7 +138,7 @@ workflowRoutes.post("/templates/:templateId/apply", async (c) => {
 workflowRoutes.post("/generate-from-prompt", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
-    requireWorkflowPermission(context, "editWorkflow");
+    await requireWorkflowPermission(context, "editWorkflow");
     const body = (await readJsonBody(c)) as { prompt?: string; apply?: boolean } | undefined;
     const prompt = body?.prompt ?? "";
     const apply = Boolean(body?.apply);
@@ -142,7 +146,7 @@ workflowRoutes.post("/generate-from-prompt", async (c) => {
     if (!apply) {
       return c.json({ draft: llm.draft, applied: false, modelUsed: llm.modelUsed, costUsd: llm.costUsd });
     }
-    return c.json({ ...applyWorkflowDraft(context, llm.draft), modelUsed: llm.modelUsed, costUsd: llm.costUsd });
+    return c.json({ ...await applyWorkflowDraftAsync(context, llm.draft), modelUsed: llm.modelUsed, costUsd: llm.costUsd });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -151,7 +155,7 @@ workflowRoutes.post("/generate-from-prompt", async (c) => {
 workflowRoutes.post("/plan-mode", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
-    requireWorkflowPermission(context, "editWorkflow");
+    await requireWorkflowPermission(context, "editWorkflow");
     const result = await llmPlanMode(context);
     return c.json(result);
   } catch (error) {
@@ -162,7 +166,7 @@ workflowRoutes.post("/plan-mode", async (c) => {
 workflowRoutes.post("/plan-mode/apply", async (c) => {
   try {
     const context = requireAuthenticatedContext(c);
-    requireWorkflowPermission(context, "editWorkflow");
+    await requireWorkflowPermission(context, "editWorkflow");
     const body = (await readJsonBody(c)) as { planItems?: { summary: string; status?: string }[] } | undefined;
     const items = (body?.planItems ?? []).map((p) => {
       const raw = String(p.status ?? "todo");
@@ -170,7 +174,7 @@ workflowRoutes.post("/plan-mode/apply", async (c) => {
         raw === "in_progress" || raw === "doing" ? "in_progress" : raw === "done" ? "done" : "todo";
       return { title: p.summary, description: "", status };
     }).filter((p) => p.title.length > 0);
-    const planItems = replacePlanItems(context, items);
+    const planItems = await replacePlanItemsAsync(context, items);
     return c.json({ planItems });
   } catch (error) {
     return errorResponse(c, error);
@@ -178,6 +182,58 @@ workflowRoutes.post("/plan-mode/apply", async (c) => {
 });
 
 export default workflowRoutes;
+
+async function applyWorkflowDraftAsync(context: AuthenticatedContext, draft: WorkflowDraft) {
+  const brief = await updateWorkspaceBriefAsync(context, {
+    summary: draft.brief.summary,
+    problemStatement: draft.brief.problemStatement,
+    desiredOutcome: draft.brief.desiredOutcome,
+    targetCustomers: draft.brief.targetCustomers,
+    successMetrics: draft.brief.successMetrics,
+    goals: draft.brief.goals,
+    audience: draft.brief.audience,
+    constraints: draft.brief.constraints,
+  });
+  const requirements = await replaceRequirementsAsync(context, draft.requirements);
+  const planItems = await replacePlanItemsAsync(context, draft.planItems);
+
+  return { draft, applied: true, brief, requirements, planItems };
+}
+
+async function applyWorkflowTemplateAsync(context: AuthenticatedContext, templateId: string) {
+  const template = getWorkflowTemplate(templateId);
+  if (!template) throw httpError(404, "workflow template not found");
+
+  const brief = await updateWorkspaceBriefAsync(context, {
+    summary: template.brief.summary,
+    problemStatement: template.brief.problemStatement,
+    desiredOutcome: template.brief.desiredOutcome,
+    audience: template.brief.audience,
+    constraints: template.brief.constraints,
+    targetCustomers: template.brief.targetCustomers,
+    successMetrics: template.brief.successMetrics,
+    goals: template.brief.goals,
+  });
+  const requirements = await replaceRequirementsAsync(
+    context,
+    template.requirements.map((entry) => ({
+      title: entry.title,
+      detail: entry.detail,
+      priority: entry.priority,
+      status: "accepted",
+    })),
+  );
+  const planItems = await replacePlanItemsAsync(
+    context,
+    template.planItems.map((entry) => ({
+      title: entry.title,
+      description: entry.description,
+      status: "todo",
+    })),
+  );
+
+  return { template, brief, requirements, planItems };
+}
 
 async function runWorkflowOperation(
   c: Context,
@@ -188,7 +244,7 @@ async function runWorkflowOperation(
 ) {
   try {
     const context = requireAuthenticatedContext(c);
-    requireWorkflowPermission(context, permission);
+    await requireWorkflowPermission(context, permission);
     const service = await loadWorkflowService();
     if (!service) {
       throw httpError(501, "workflow service module is not available");
@@ -210,8 +266,8 @@ async function runWorkflowOperation(
   }
 }
 
-function requireWorkflowPermission(context: AuthenticatedContext, permission: WorkspacePermission) {
-  const membership = findWorkspaceMembership(loadStore(), context.workspace.id, context.user.id);
+async function requireWorkflowPermission(context: AuthenticatedContext, permission: WorkspacePermission) {
+  const membership = findWorkspaceMembership(await loadStoreAsync(), context.workspace.id, context.user.id);
   assertPermission(membership, permission);
 }
 

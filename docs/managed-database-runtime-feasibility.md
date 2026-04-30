@@ -1,6 +1,6 @@
 # Managed Database Runtime Feasibility
 
-Phase 48 should not add a managed Postgres runtime dependency. Phase 49 lands the async store boundary foundation after that fail-closed boundary. Phase 50 adds the managed Postgres document-store adapter/backfill foundation, but the current main app startup path still runs the managed database runtime guard and supports local JSON/default storage plus opt-in single-node SQLite only. Phase 51+ must migrate runtime call sites before managed/Postgres hints become normal app startup configuration.
+Phase 48 should not add a managed Postgres runtime dependency. Phase 49 lands the async store boundary foundation after that fail-closed boundary. Phase 50 adds the managed Postgres document-store adapter/backfill foundation. Phase 51 tracks the runtime call-site migration needed to use that foundation from the app startup path and now reports no remaining tracked sync call-site groups, but the current main app startup path still runs the managed database runtime guard and supports local JSON/default storage plus opt-in single-node SQLite only. Managed/Postgres hints become normal app startup configuration only after startup support is explicitly asserted and covered.
 
 ## Current Package State
 
@@ -20,18 +20,18 @@ The SQLite implementation fits that contract because it uses Node's synchronous 
 
 Managed Postgres does not fit this surface with the common Node driver ecosystem. Drivers such as `pg` and `postgres` use asynchronous network I/O and return promises or callback-driven results. A managed database connection also needs async connection setup, query execution, transaction handling, error handling, and pool lifecycle management. Wrapping those calls in the current synchronous `loadStore` / `mutateStore` API would either block the event loop through unsupported bridging or hide async failure modes outside the caller's control.
 
-Phase 49 addresses the boundary direction by landing async store foundation work: `loadStoreAsync()` and `mutateStoreAsync()` provide Promise-capable store entry points, JSON/default and SQLite are adapted behind that surface. Phase 50 follows with the managed Postgres document-store adapter behind the async boundary and a repeatable backfill/verify foundation. The main app server still calls the runtime guard during startup, so this remains a staged rollout rather than supported managed/Postgres startup.
+Phase 49 addresses the boundary direction by landing async store foundation work: `loadStoreAsync()` and `mutateStoreAsync()` provide Promise-capable store entry points, JSON/default and SQLite are adapted behind that surface. Phase 50 follows with the managed Postgres document-store adapter behind the async boundary and a repeatable backfill/verify foundation. Phase 51 tracks the runtime call-site migration to that async path and now reports no remaining tracked sync call-site groups. The main app server still calls the runtime guard during startup, so this remains a staged rollout rather than supported managed/Postgres startup.
 
 ## Decision
 
-Do not add a Postgres dependency in Phase 48 or Phase 49. Phase 50 intentionally adds `pg` with the first managed Postgres document-store backend and backfill/verify commands. After Phase 50, the remaining implementation gap is runtime integration: guarded synchronous startup call sites still need to move to the async/managed database path before the app can treat managed/Postgres hints as supported startup configuration.
+Do not add a Postgres dependency in Phase 48 or Phase 49. Phase 50 intentionally adds `pg` with the first managed Postgres document-store backend and backfill/verify commands. After Phase 50, the remaining implementation gap is runtime integration. Phase 51 makes that gap visible in deployment reports and now reports no remaining tracked sync call-site groups; the app can treat managed/Postgres hints as supported startup configuration only after startup support is explicitly asserted and covered.
 
 ## Smallest Safe Path
 
 1. Treat Phase 49 as the completed async store boundary foundation, while keeping JSON/default and SQLite paths intact.
 2. Treat Phase 50 as the managed Postgres adapter/backfill foundation.
-3. In Phase 51+, migrate runtime call sites to the async/managed database path before loosening the startup guard.
+3. Use Phase 51 evidence to confirm tracked runtime call sites have moved to the async/managed database path.
 4. Update runtime guard, topology advisory, release-readiness, and release-evidence checks only when managed database runtime support is executable.
 5. Keep managed database hints blocked or advisory until the guarded startup path has enough coverage to make them honest startup configuration.
 
-Until Phase 51+ makes the managed Postgres runtime executable through the app startup path, managed database support should remain documented as blocked by the existing runtime guard.
+Until the managed Postgres runtime is executable through the app startup path and covered, managed database support should remain documented as blocked by the existing runtime guard.

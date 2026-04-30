@@ -1,11 +1,11 @@
 import type { AlertEventRecord, TaskloomData } from "../taskloom-store.js";
-import { loadStore as defaultLoadStore } from "../taskloom-store.js";
+import { loadStoreAsync as defaultLoadStoreAsync } from "../taskloom-store.js";
 import {
   resolveAlertWebhookConfig,
   deliverAlertWebhook,
   type AlertWebhookConfig,
 } from "./alert-webhook.js";
-import { updateAlertDeliveryStatus } from "./alert-store.js";
+import { updateAlertDeliveryStatusAsync, type UpdateAlertDeliveryStatusInput } from "./alert-store.js";
 import { redactedErrorMessage } from "../security/redaction.js";
 import type { AlertEvent } from "./alert-engine.js";
 
@@ -28,10 +28,10 @@ export interface AlertsDeliverJobResult {
 }
 
 export interface AlertsDeliverHandlerDeps {
-  loadStore?: () => TaskloomData;
+  loadStore?: () => TaskloomData | Promise<TaskloomData>;
   webhookConfig?: () => AlertWebhookConfig | null;
   deliver?: typeof deliverAlertWebhook;
-  updateStatus?: typeof updateAlertDeliveryStatus;
+  updateStatus?: (input: UpdateAlertDeliveryStatusInput) => AlertEventRecord | null | Promise<AlertEventRecord | null>;
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
 }
@@ -63,10 +63,10 @@ export async function handleAlertsDeliverJob(
   payload: AlertsDeliverJobPayload,
   deps: AlertsDeliverHandlerDeps = {},
 ): Promise<AlertsDeliverJobResult> {
-  const loadStore = deps.loadStore ?? defaultLoadStore;
+  const loadStore = deps.loadStore ?? defaultLoadStoreAsync;
   const webhookConfigFn = deps.webhookConfig ?? (() => resolveAlertWebhookConfig());
   const deliverFn = deps.deliver ?? deliverAlertWebhook;
-  const updateStatus = deps.updateStatus ?? updateAlertDeliveryStatus;
+  const updateStatus = deps.updateStatus ?? updateAlertDeliveryStatusAsync;
   const nowFn = deps.now ?? (() => new Date());
   const env = deps.env ?? process.env;
 
@@ -75,7 +75,7 @@ export async function handleAlertsDeliverJob(
     throw new Error("alerts.deliver: payload.alertId must be a non-empty string");
   }
 
-  const data = loadStore();
+  const data = await loadStore();
   const collection: AlertEventRecord[] = Array.isArray(data.alertEvents) ? data.alertEvents : [];
   const record = collection.find((entry) => entry.id === alertId);
   if (!record) {
@@ -88,7 +88,7 @@ export async function handleAlertsDeliverJob(
   const attemptedAt = nowFn().toISOString();
 
   if (record.delivered === true) {
-    updateStatus({ alertId, delivered: true, deadLettered: false, attemptedAt });
+    await updateStatus({ alertId, delivered: true, deadLettered: false, attemptedAt });
     return {
       alertId,
       delivered: true,
@@ -99,7 +99,7 @@ export async function handleAlertsDeliverJob(
 
   const config = webhookConfigFn();
   if (config === null) {
-    updateStatus({ alertId, delivered: true, deadLettered: false, attemptedAt });
+    await updateStatus({ alertId, delivered: true, deadLettered: false, attemptedAt });
     return {
       alertId,
       delivered: true,
@@ -112,7 +112,7 @@ export async function handleAlertsDeliverJob(
   const result = await deliverFn(config, [event]);
 
   if (result.ok) {
-    updateStatus({ alertId, delivered: true, deadLettered: false, attemptedAt });
+    await updateStatus({ alertId, delivered: true, deadLettered: false, attemptedAt });
     return {
       alertId,
       delivered: true,
@@ -125,7 +125,7 @@ export async function handleAlertsDeliverJob(
   const deliveryError = redactedErrorMessage(rawError);
 
   if (attemptNumber >= maxAttempts) {
-    updateStatus({
+    await updateStatus({
       alertId,
       delivered: false,
       deliveryError,

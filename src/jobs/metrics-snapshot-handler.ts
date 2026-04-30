@@ -1,7 +1,7 @@
-import { snapshotJobMetrics, type SnapshotJobMetricsResult } from "./job-metrics-snapshot.js";
-import { enqueueJob, type EnqueueJobInput } from "./store.js";
+import { snapshotJobMetricsAsync, type SnapshotJobMetricsResult } from "./job-metrics-snapshot.js";
+import { enqueueJob, enqueueJobAsync, type EnqueueJobInput } from "./store.js";
 import { nextAfter } from "./cron.js";
-import { loadStore as defaultLoadStore, type JobRecord, type TaskloomData } from "../taskloom-store.js";
+import { loadStore as defaultLoadStore, loadStoreAsync as defaultLoadStoreAsync, type JobRecord, type TaskloomData } from "../taskloom-store.js";
 
 export const METRICS_SNAPSHOT_JOB_TYPE = "metrics.snapshot" as const;
 
@@ -20,13 +20,19 @@ export interface MetricsSnapshotJobResult {
 }
 
 export interface MetricsSnapshotHandlerDeps {
-  snapshot?: typeof snapshotJobMetrics;
+  snapshot?: (options: { retentionDays?: number }) => SnapshotJobMetricsResult | Promise<SnapshotJobMetricsResult>;
 }
 
 export interface EnsureMetricsSnapshotCronJobDeps {
   env?: NodeJS.ProcessEnv;
   loadStore?: () => TaskloomData;
   enqueue?: (input: EnqueueJobInput) => JobRecord;
+}
+
+export interface EnsureMetricsSnapshotCronJobAsyncDeps {
+  env?: NodeJS.ProcessEnv;
+  loadStore?: () => TaskloomData | Promise<TaskloomData>;
+  enqueue?: (input: EnqueueJobInput) => JobRecord | Promise<JobRecord>;
 }
 
 export interface EnsureMetricsSnapshotCronJobResult {
@@ -47,16 +53,16 @@ function parseRetentionFromEnv(raw: string | undefined): number {
   return parsed;
 }
 
-export function handleMetricsSnapshotJob(
+export async function handleMetricsSnapshotJob(
   payload: MetricsSnapshotJobPayload,
   deps: MetricsSnapshotHandlerDeps = {},
-): MetricsSnapshotJobResult {
-  const snapshot = deps.snapshot ?? snapshotJobMetrics;
+): Promise<MetricsSnapshotJobResult> {
+  const snapshot = deps.snapshot ?? snapshotJobMetricsAsync;
   const retentionDays = payload?.retentionDays ?? DEFAULT_RETENTION_DAYS;
   if (!isNonNegativeInteger(retentionDays)) {
     throw new Error("retentionDays must be a non-negative integer");
   }
-  const result: SnapshotJobMetricsResult = snapshot({ retentionDays });
+  const result: SnapshotJobMetricsResult = await snapshot({ retentionDays });
   return {
     snapshotCount: result.snapshots.length,
     removed: result.removed,
@@ -98,6 +104,50 @@ export function ensureMetricsSnapshotCronJob(
   const retentionDays = parseRetentionFromEnv(env.TASKLOOM_JOB_METRICS_SNAPSHOT_RETENTION_DAYS);
 
   const created = enqueue({
+    workspaceId,
+    type: METRICS_SNAPSHOT_JOB_TYPE,
+    payload: { retentionDays },
+    cron,
+    scheduledAt: firstRun.toISOString(),
+  });
+
+  return { action: "enqueued", jobId: created.id };
+}
+
+export async function ensureMetricsSnapshotCronJobAsync(
+  deps: EnsureMetricsSnapshotCronJobAsyncDeps = {},
+): Promise<EnsureMetricsSnapshotCronJobResult> {
+  const env = deps.env ?? process.env;
+  const loadStore = deps.loadStore ?? defaultLoadStoreAsync;
+  const enqueue = deps.enqueue ?? enqueueJobAsync;
+
+  const cron = env.TASKLOOM_JOB_METRICS_SNAPSHOT_CRON?.trim();
+  if (!cron) return { action: "skipped" };
+
+  let firstRun: Date;
+  try {
+    firstRun = nextAfter(cron, new Date());
+  } catch (error) {
+    console.warn(
+      `metrics.snapshot: invalid TASKLOOM_JOB_METRICS_SNAPSHOT_CRON expression ${JSON.stringify(cron)}; skipping bootstrap (${(error as Error).message})`,
+    );
+    return { action: "skipped" };
+  }
+
+  const data = await loadStore();
+  const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+  const existing = jobs.find(
+    (job) =>
+      job.type === METRICS_SNAPSHOT_JOB_TYPE &&
+      job.cron === cron &&
+      ACTIVE_RECURRING_STATUSES.has(job.status),
+  );
+  if (existing) return { action: "exists", jobId: existing.id };
+
+  const workspaceId = env.TASKLOOM_JOB_METRICS_SNAPSHOT_WORKSPACE_ID?.trim() || DEFAULT_WORKSPACE_ID;
+  const retentionDays = parseRetentionFromEnv(env.TASKLOOM_JOB_METRICS_SNAPSHOT_RETENTION_DAYS);
+
+  const created = await enqueue({
     workspaceId,
     type: METRICS_SNAPSHOT_JOB_TYPE,
     payload: { retentionDays },

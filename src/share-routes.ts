@@ -2,13 +2,11 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
 import {
-  loadStore,
-  mutateStore,
+  loadStoreAsync,
+  mutateStoreAsync,
   findWorkspaceBrief,
-  findShareTokenByTokenIndexed,
   listImplementationPlanItemsForWorkspace,
   listRequirementsForWorkspace,
-  listShareTokensForWorkspaceIndexed,
   type ShareTokenRecord,
   type ShareTokenScope,
 } from "./taskloom-store.js";
@@ -45,10 +43,13 @@ const VALID_SCOPES: ShareTokenScope[] = ["brief", "plan", "overview"];
 
 export const shareRoutes = new Hono();
 
-shareRoutes.get("/", (c) => {
+shareRoutes.get("/", async (c) => {
   try {
     const ctx = requirePrivateWorkspaceRole(c, "viewer");
-    const tokens = listShareTokensForWorkspaceIndexed(ctx.workspace.id)
+    const data = await loadStoreAsync();
+    const tokens = data.shareTokens
+      .filter((entry) => entry.workspaceId === ctx.workspace.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((t) => summarizeShareToken(t));
     return c.json({ tokens });
   } catch (error) {
@@ -74,18 +75,18 @@ shareRoutes.post("/", async (c) => {
       readCount: 0,
       createdAt: nowIso(),
     };
-    mutateStore((data) => { data.shareTokens.push(record); });
+    await mutateStoreAsync((data) => { data.shareTokens.push(record); });
     return c.json({ token: summarizeShareToken(record, { includeToken: true }) }, 201);
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-shareRoutes.delete("/:id", (c) => {
+shareRoutes.delete("/:id", async (c) => {
   try {
     const ctx = requirePrivateWorkspaceRole(c, "admin");
     const id = c.req.param("id");
-    const ok = mutateStore((data) => {
+    const ok = await mutateStoreAsync((data) => {
       const t = data.shareTokens.find((entry) => entry.id === id && entry.workspaceId === ctx.workspace.id);
       if (!t) return false;
       t.revokedAt = nowIso();
@@ -100,22 +101,22 @@ shareRoutes.delete("/:id", (c) => {
 
 export const publicShareRoutes = new Hono();
 
-publicShareRoutes.get("/:token", (c) => {
+publicShareRoutes.get("/:token", async (c) => {
   try {
     const tokenParam = c.req.param("token");
-    const record = findShareTokenByTokenIndexed(tokenParam);
+    const data = await loadStoreAsync();
+    const record = data.shareTokens.find((entry) => entry.token === tokenParam) ?? null;
     if (!record || record.revokedAt) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     if (record.expiresAt && Date.parse(record.expiresAt) < Date.now()) {
       return errorResponse(c, Object.assign(new Error("share token expired"), { status: 410 }));
     }
-    mutateStore((store) => {
+    await mutateStoreAsync((store) => {
       const live = store.shareTokens.find((t) => t.id === record.id);
       if (live) {
         live.lastReadAt = nowIso();
         live.readCount += 1;
       }
     });
-    const data = loadStore();
     const workspace = data.workspaces.find((w) => w.id === record.workspaceId);
     if (!workspace) return errorResponse(c, Object.assign(new Error("workspace not found"), { status: 404 }));
     const brief = findWorkspaceBrief(data, record.workspaceId);

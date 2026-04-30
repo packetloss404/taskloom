@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
-import { loadStore as defaultLoadStore } from "./taskloom-store.js";
+import { loadStore as defaultLoadStore, loadStoreAsync as defaultLoadStoreAsync } from "./taskloom-store.js";
 import { getSchedulerHeartbeat as defaultSchedulerHeartbeat, type SchedulerHeartbeat } from "./jobs/scheduler-heartbeat.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 
@@ -29,11 +29,32 @@ export interface OperationsHealthDeps {
   schedulerStaleAfterMs?: number;
 }
 
+export interface OperationsHealthAsyncDeps extends Omit<OperationsHealthDeps, "loadStore"> {
+  loadStore?: () => unknown | Promise<unknown>;
+}
+
 const DEFAULT_SCHEDULER_STALE_AFTER_MS = 60_000;
 
 function checkStore(loadStore: () => unknown, checkedAt: string): SubsystemHealth {
   try {
     const result = loadStore();
+    if (result && typeof result === "object") {
+      return { name: "store", status: "ok", detail: "loaded successfully", checkedAt };
+    }
+    return { name: "store", status: "down", detail: "store returned an unexpected shape", checkedAt };
+  } catch (error) {
+    return {
+      name: "store",
+      status: "down",
+      detail: `store load failed: ${redactedErrorMessage(error)}`,
+      checkedAt,
+    };
+  }
+}
+
+async function checkStoreAsync(loadStore: () => unknown | Promise<unknown>, checkedAt: string): Promise<SubsystemHealth> {
+  try {
+    const result = await loadStore();
     if (result && typeof result === "object") {
       return { name: "store", status: "ok", detail: "loaded successfully", checkedAt };
     }
@@ -156,6 +177,28 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
 
   const subsystems: SubsystemHealth[] = [
     checkStore(loadStore, checkedAt),
+    checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
+    checkAccessLog(env, fileExists, checkedAt),
+  ];
+
+  return {
+    generatedAt: checkedAt,
+    overall: reduceOverall(subsystems),
+    subsystems,
+  };
+}
+
+export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps = {}): Promise<OperationsHealthReport> {
+  const loadStore = deps.loadStore ?? defaultLoadStoreAsync;
+  const schedulerHeartbeat = deps.schedulerHeartbeat ?? defaultSchedulerHeartbeat;
+  const env = deps.env ?? process.env;
+  const now = (deps.now ?? (() => new Date()))();
+  const fileExists = deps.fileExists ?? existsSync;
+  const staleAfterMs = deps.schedulerStaleAfterMs ?? DEFAULT_SCHEDULER_STALE_AFTER_MS;
+  const checkedAt = now.toISOString();
+
+  const subsystems: SubsystemHealth[] = [
+    await checkStoreAsync(loadStore, checkedAt),
     checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
     checkAccessLog(env, fileExists, checkedAt),
   ];

@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
-import { cancelJob, enqueueJob, findJob, listJobs } from "./jobs/store.js";
+import { cancelJobAsync, enqueueJobAsync, findJobAsync, listJobsAsync } from "./jobs/store.js";
 import { parseCron } from "./jobs/cron.js";
-import { findAgentForWorkspaceIndexed } from "./taskloom-store.js";
+import { loadStoreAsync } from "./taskloom-store.js";
 import type { JobRecord, JobStatus } from "./taskloom-store.js";
 import { redactSensitiveString, redactSensitiveValue } from "./security/redaction.js";
 
@@ -24,7 +24,7 @@ function badRequest(message: string) {
   return Object.assign(new Error(message), { status: 400 });
 }
 
-function validateJobInput(body: Partial<{
+async function validateJobInput(body: Partial<{
   type: string;
   payload: Record<string, unknown>;
   scheduledAt: string;
@@ -47,7 +47,8 @@ function validateJobInput(body: Partial<{
   if (body.type === "agent.run") {
     const agentId = body.payload?.agentId;
     if (typeof agentId !== "string") throw badRequest("agent.run payload.agentId is required");
-    const agent = findAgentForWorkspaceIndexed(workspaceId, agentId);
+    const data = await loadStoreAsync();
+    const agent = (data.agents ?? []).find((entry) => entry.workspaceId === workspaceId && entry.id === agentId);
     if (!agent) {
       throw badRequest("agent.run payload.agentId must reference an agent in this workspace");
     }
@@ -56,12 +57,13 @@ function validateJobInput(body: Partial<{
 
 export const jobRoutes = new Hono();
 
-jobRoutes.get("/", (c) => {
+jobRoutes.get("/", async (c) => {
   try {
     const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
     const status = c.req.query("status") as JobStatus | undefined;
     const limit = Number(c.req.query("limit") ?? 50);
-    return c.json({ jobs: listJobs(workspace.id, { status, limit }).map(serializeJob) });
+    const jobs = await listJobsAsync(workspace.id, { status, limit });
+    return c.json({ jobs: jobs.map(serializeJob) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -78,8 +80,8 @@ jobRoutes.post("/", async (c) => {
       maxAttempts: number;
     }>;
     if (!body.type) return errorResponse(c, badRequest("type is required"));
-    validateJobInput(body, workspace.id);
-    const job = enqueueJob({
+    await validateJobInput(body, workspace.id);
+    const job = await enqueueJobAsync({
       workspaceId: workspace.id,
       type: body.type,
       payload: body.payload ?? {},
@@ -93,10 +95,10 @@ jobRoutes.post("/", async (c) => {
   }
 });
 
-jobRoutes.get("/:id", (c) => {
+jobRoutes.get("/:id", async (c) => {
   try {
     const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
-    const job = findJob(c.req.param("id"));
+    const job = await findJobAsync(c.req.param("id"));
     if (!job || job.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     return c.json({ job: serializeJob(job) });
   } catch (error) {
@@ -104,12 +106,12 @@ jobRoutes.get("/:id", (c) => {
   }
 });
 
-jobRoutes.post("/:id/cancel", (c) => {
+jobRoutes.post("/:id/cancel", async (c) => {
   try {
     const { workspace } = requirePrivateWorkspaceRole(c, "admin");
-    const existing = findJob(c.req.param("id"));
+    const existing = await findJobAsync(c.req.param("id"));
     if (!existing || existing.workspaceId !== workspace.id) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
-    const job = cancelJob(existing.id);
+    const job = await cancelJobAsync(existing.id);
     if (!job) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     return c.json({ ok: true, job: serializeJob(job) });
   } catch (error) {

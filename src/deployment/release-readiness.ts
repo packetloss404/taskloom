@@ -76,6 +76,9 @@ export interface AsyncStoreBoundaryReport {
   managedDatabaseRepositoriesImplemented: false;
   managedDatabaseBackfillAvailable: boolean;
   managedDatabaseSyncStartupSupported: false;
+  managedDatabaseRuntimeCallSiteMigrationTracked: boolean;
+  managedDatabaseRuntimeCallSitesMigrated: boolean;
+  managedDatabaseRemainingSyncCallSiteGroups: string[];
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -248,6 +251,23 @@ function phase50ManagedDatabaseCapability(
   };
 }
 
+function phase51CallSiteMigrationCapability(
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): {
+  tracked: boolean;
+  runtimeCallSitesMigrated: boolean;
+  remainingSyncCallSiteGroups: string[];
+  managedPostgresStartupSupported: boolean;
+} {
+  const phase51 = managedDatabaseRuntimeGuard.phase51;
+  return {
+    tracked: phase51?.tracked === true,
+    runtimeCallSitesMigrated: phase51?.runtimeCallSitesMigrated === true,
+    remainingSyncCallSiteGroups: phase51?.remainingSyncCallSiteGroups ?? [],
+    managedPostgresStartupSupported: phase51?.managedPostgresStartupSupported === true,
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -256,6 +276,7 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
   );
+  const phase51Capability = phase51CallSiteMigrationCapability(managedDatabaseRuntimeGuard);
   const managedDatabaseBlocked =
     managedDatabaseTopology.classification === "managed-database-requested" ||
     managedDatabaseRuntimeGuard.classification === "managed-database-blocked";
@@ -354,6 +375,7 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
   );
+  const phase51Capability = phase51CallSiteMigrationCapability(managedDatabaseRuntimeGuard);
   const managedIntent =
     managedDatabaseTopology.managedDatabase.requested ||
     managedDatabaseTopology.managedDatabase.configured ||
@@ -404,13 +426,20 @@ export function buildAsyncStoreBoundaryReport(
     classification = "foundation-ready";
   }
 
-  nextSteps.add("Treat Phase 49 as async-store-boundary foundation and Phase 50 adapter/backfill evidence separately from synchronous startup support.");
+  nextSteps.add("Treat Phase 49 as async-store-boundary foundation, Phase 50 as adapter/backfill evidence, and Phase 51 as runtime call-site migration evidence.");
   if (managedIntent || unsupportedStore) {
     if (phase50Capability.adapterAvailable) {
-      nextSteps.add("Keep managed Postgres synchronous startup blocked until the app runtime support claim is explicitly updated.");
+      if (phase51Capability.runtimeCallSitesMigrated) {
+        nextSteps.add("Keep managed Postgres startup blocked until the app runtime support claim is explicitly updated and covered.");
+      } else {
+        nextSteps.add("Keep managed Postgres startup blocked until Phase 51 call-site migration is complete and the app runtime support claim is explicitly updated.");
+      }
     } else {
       nextSteps.add("Keep managed Postgres rollout blocked until adapter, repositories, migrations/backfills, and parity tests are implemented.");
     }
+  }
+  if (phase51Capability.remainingSyncCallSiteGroups.length > 0) {
+    nextSteps.add(`Finish Phase 51 runtime call-site migration for: ${phase51Capability.remainingSyncCallSiteGroups.join(", ")}.`);
   }
   if (multiWriterIntent) {
     nextSteps.add("Keep multi-writer database topology blocked until managed runtime coordination exists.");
@@ -424,9 +453,13 @@ export function buildAsyncStoreBoundaryReport(
     : "fail";
   let summary: string;
   if (managedIntent && phase50Capability.adapterAvailable) {
-    summary = "Phase 50 async managed adapter/backfill capability is available, but synchronous app startup remains blocked and managed Postgres is not a full runtime support claim.";
+    summary = phase51Capability.runtimeCallSitesMigrated
+      ? "Phase 50 async managed adapter/backfill capability is available and Phase 51 reports migrated call sites, but managed Postgres startup support is not asserted."
+      : "Phase 50 async managed adapter/backfill capability is available, but Phase 51 runtime call-site migration remains incomplete and managed Postgres is not a full runtime support claim.";
   } else if (managedIntent || unsupportedStore) {
-    summary = "Phase 49 async-store boundary exists as foundation, but managed Postgres remains unsupported until real adapter and repository implementations land.";
+    summary = phase51Capability.runtimeCallSitesMigrated
+      ? "Phase 49 async-store boundary exists as foundation, but managed Postgres remains unsupported until Phase 50 adapter evidence and startup support are explicitly available."
+      : "Phase 49 async-store boundary exists as foundation, but managed Postgres remains unsupported until Phase 50 adapter evidence and Phase 51 call-site migration are both release-ready.";
   } else if (multiWriterIntent) {
     summary = "Phase 49 async-store boundary exists as foundation, but multi-writer database topology remains unsupported until managed runtime coordination lands.";
   } else if (bypassed) {
@@ -447,6 +480,9 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseRepositoriesImplemented: false,
     managedDatabaseBackfillAvailable: phase50Capability.backfillAvailable,
     managedDatabaseSyncStartupSupported: false,
+    managedDatabaseRuntimeCallSiteMigrationTracked: phase51Capability.tracked,
+    managedDatabaseRuntimeCallSitesMigrated: phase51Capability.runtimeCallSitesMigrated,
+    managedDatabaseRemainingSyncCallSiteGroups: phase51Capability.remainingSyncCallSiteGroups,
     classification,
     summary,
     blockers,

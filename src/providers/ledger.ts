@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { sqliteProviderCallsRepository } from "../repositories/provider-calls-repo.js";
-import { listProviderCallsForWorkspaceIndexed, mutateStore, type ProviderCallRecord } from "../taskloom-store.js";
+import {
+  loadStoreAsync,
+  listProviderCallsForWorkspaceIndexed,
+  mutateStoreAsync,
+  type ProviderCallRecord,
+} from "../taskloom-store.js";
 import { redactedErrorMessage, redactSensitiveString } from "../security/redaction.js";
 import type { ProviderName, ProviderStreamChunk, ProviderUsage } from "./types.js";
 
@@ -35,8 +40,8 @@ interface AppendCallResult {
   removedIds: string[];
 }
 
-function appendCall(record: ProviderCallRecord): AppendCallResult {
-  const result = mutateStore((data) => {
+async function appendCall(record: ProviderCallRecord): Promise<AppendCallResult> {
+  const result = await mutateStoreAsync((data) => {
     data.providerCalls.push(record);
     const overflow = data.providerCalls.length - PROVIDER_CALL_CAP;
     const removedIds = overflow > 0
@@ -92,7 +97,7 @@ export async function recordedCall<T extends { usage: ProviderUsage }>(
   const t0 = Date.now();
   try {
     const result = await fn();
-    appendCall({
+    await appendCall({
       id: randomUUID(),
       workspaceId: ctx.workspaceId,
       routeKey: ctx.routeKey,
@@ -108,7 +113,7 @@ export async function recordedCall<T extends { usage: ProviderUsage }>(
     });
     return result;
   } catch (error) {
-    appendCall({
+    await appendCall({
       id: randomUUID(),
       workspaceId: ctx.workspaceId,
       routeKey: ctx.routeKey,
@@ -149,7 +154,7 @@ export async function* recordedStream<T extends ProviderStreamChunk>(
     errorMessage = redactedErrorMessage(error);
     throw error;
   } finally {
-    appendCall({
+    await appendCall({
       id: randomUUID(),
       workspaceId: ctx.workspaceId,
       routeKey: ctx.routeKey,
@@ -178,8 +183,7 @@ export interface UsageSummary {
   recent: ProviderCallRecord[];
 }
 
-export function summarizeUsage(workspaceId: string): UsageSummary {
-  const entries = listProviderCallsForWorkspaceIndexed(workspaceId);
+function summarizeProviderCallEntries(entries: ProviderCallRecord[]): UsageSummary {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   let last24Calls = 0, last24Cost = 0;
   let totalCost = 0, totalPrompt = 0, totalCompletion = 0;
@@ -208,9 +212,33 @@ export function summarizeUsage(workspaceId: string): UsageSummary {
   };
 }
 
+export function summarizeUsage(workspaceId: string): UsageSummary {
+  return summarizeProviderCallEntries(listProviderCallsForWorkspaceIndexed(workspaceId));
+}
+
+export async function summarizeUsageAsync(workspaceId: string): Promise<UsageSummary> {
+  return summarizeProviderCallEntries(await listProviderCallsAsync(workspaceId));
+}
+
 export function listProviderCalls(
   workspaceId: string,
   opts: { since?: string; limit?: number } = {},
 ): ProviderCallRecord[] {
   return listProviderCallsForWorkspaceIndexed(workspaceId, opts);
+}
+
+export async function listProviderCallsAsync(
+  workspaceId: string,
+  opts: { since?: string; limit?: number } = {},
+): Promise<ProviderCallRecord[]> {
+  const data = await loadStoreAsync();
+  let entries = data.providerCalls
+    .filter((entry) => entry.workspaceId === workspaceId)
+    .sort((left, right) => right.completedAt.localeCompare(left.completedAt));
+  if (opts.since) {
+    const since = opts.since;
+    entries = entries.filter((entry) => entry.completedAt >= since);
+  }
+  if (opts.limit !== undefined) entries = entries.slice(0, opts.limit);
+  return entries;
 }

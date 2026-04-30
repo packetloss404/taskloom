@@ -1247,6 +1247,8 @@ export interface WorkspaceRecordCollectionMap {
   agents: AgentRecord;
   agentRuns: AgentRunRecord;
   providerCalls: ProviderCallRecord;
+  workspaceInvitations: WorkspaceInvitationRecord;
+  shareTokens: ShareTokenRecord;
   requirements: RequirementRecord;
   implementationPlanItems: ImplementationPlanItemRecord;
   workflowConcerns: WorkflowConcernRecord;
@@ -1276,6 +1278,16 @@ export interface ListWorkspaceRecordsOptions<TRecord> {
   orderBy?: WorkspaceRecordOrder;
   limit?: number;
   filter?: (record: TRecord) => boolean;
+}
+
+export interface ListJobsForWorkspaceIndexedOptions {
+  status?: JobStatus;
+  limit?: number;
+}
+
+export interface ListProviderCallsForWorkspaceIndexedOptions {
+  since?: string;
+  limit?: number;
 }
 
 const RECORD_COLLECTIONS = [
@@ -2062,6 +2074,31 @@ export function listWorkspaceRecordsIndexed<K extends WorkspaceRecordCollectionK
   return options.filter && options.limit && options.limit > 0 ? filtered.slice(0, options.limit) : filtered;
 }
 
+export async function listWorkspaceRecordsIndexedAsync<K extends WorkspaceRecordCollectionKey>(
+  collection: K,
+  workspaceId: string,
+  options: ListWorkspaceRecordsOptions<WorkspaceRecordCollectionMap[K]> = {},
+): Promise<WorkspaceRecordCollectionMap[K][]> {
+  const queryLimit = options.filter ? undefined : options.limit;
+  const sqliteRecords = shouldUseSqliteIndexedReads()
+    ? sqliteWorkspaceRecords(collection, workspaceId, options.orderBy ?? "id", queryLimit)
+    : null;
+  const records = sqliteRecords ?? listWorkspaceRecordsFromData(
+    await loadStoreAsync(),
+    collection,
+    workspaceId,
+    options.orderBy ?? "id",
+    queryLimit,
+  );
+  const filtered = options.filter ? records.filter(options.filter) : records;
+  return options.filter && options.limit && options.limit > 0 ? filtered.slice(0, options.limit) : filtered;
+}
+
+function shouldUseSqliteIndexedReads(): boolean {
+  const resolution = resolveTaskloomStoreMode();
+  return resolution.mode === "sqlite" && resolution.managedDatabaseUrlKeys.length === 0;
+}
+
 function sqliteWorkspaceRecords<K extends WorkspaceRecordCollectionKey>(
   collection: K,
   workspaceId: string,
@@ -2095,7 +2132,17 @@ function listWorkspaceRecordsFromStore<K extends WorkspaceRecordCollectionKey>(
   orderBy: WorkspaceRecordOrder,
   limit: number | undefined,
 ): WorkspaceRecordCollectionMap[K][] {
-  const records = (loadStore()[collection] as WorkspaceRecordCollectionMap[K][])
+  return listWorkspaceRecordsFromData(loadStore(), collection, workspaceId, orderBy, limit);
+}
+
+function listWorkspaceRecordsFromData<K extends WorkspaceRecordCollectionKey>(
+  data: TaskloomData,
+  collection: K,
+  workspaceId: string,
+  orderBy: WorkspaceRecordOrder,
+  limit: number | undefined,
+): WorkspaceRecordCollectionMap[K][] {
+  const records = (data[collection] as WorkspaceRecordCollectionMap[K][])
     .filter((entry) => entry.workspaceId === workspaceId);
   const sorted = sortWorkspaceRecords(records, orderBy);
   return limit && limit > 0 ? sorted.slice(0, limit) : sorted;
@@ -2322,6 +2369,289 @@ export function findAgentRunForWorkspaceIndexed(workspaceId: string, runId: stri
 
 export function findJobIndexed(jobId: string): JobRecord | null {
   return findJobViaRepository(jobId);
+}
+
+export async function listActivitiesForWorkspaceIndexedAsync(workspaceId: string, limit?: number): Promise<ActivityRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("activities", workspaceId, { orderBy: "occurredAtDesc", limit });
+}
+
+export async function listJobsForWorkspaceIndexedAsync(
+  workspaceId: string,
+  opts: ListJobsForWorkspaceIndexedOptions = {},
+): Promise<JobRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("jobs", workspaceId, {
+    orderBy: "createdAtDesc",
+    limit: opts.limit,
+    filter: opts.status ? (entry) => entry.status === opts.status : undefined,
+  });
+}
+
+export async function listAgentsForWorkspaceIndexedAsync(workspaceId: string, includeArchived = false): Promise<AgentRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("agents", workspaceId, {
+    orderBy: "updatedAtDesc",
+    filter: includeArchived ? undefined : (entry) => entry.status !== "archived",
+  });
+}
+
+export async function listProvidersForWorkspaceIndexedAsync(workspaceId: string): Promise<ProviderRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("providers", workspaceId, { orderBy: "nameAsc" });
+}
+
+export async function listAgentRunsForWorkspaceIndexedAsync(workspaceId: string, limit?: number): Promise<AgentRunRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("agentRuns", workspaceId, { orderBy: "createdAtDesc", limit });
+}
+
+export async function listProviderCallsForWorkspaceIndexedAsync(
+  workspaceId: string,
+  opts: ListProviderCallsForWorkspaceIndexedOptions = {},
+): Promise<ProviderCallRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("providerCalls", workspaceId, {
+    orderBy: "completedAtDesc",
+    limit: opts.limit,
+    filter: opts.since
+      ? (entry) => Date.parse(entry.completedAt) >= Date.parse(opts.since as string)
+      : undefined,
+  });
+}
+
+export async function listAgentRunsForAgentIndexedAsync(
+  workspaceId: string,
+  agentId: string,
+  limit?: number,
+): Promise<AgentRunRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("agentRuns", workspaceId, {
+    orderBy: "createdAtDesc",
+    limit,
+    filter: (entry) => entry.agentId === agentId,
+  });
+}
+
+export async function findUserByIdIndexedAsync(userId: string): Promise<UserRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<UserRecord>("users", "app_record_search.id = ?", [userId])
+    : (await loadStoreAsync()).users.find((entry) => entry.id === userId) ?? null;
+}
+
+export async function findUserByEmailIndexedAsync(email: string): Promise<UserRecord | null> {
+  const normalized = normalizeEmail(email);
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<UserRecord>("users", "app_record_search.email = ?", [normalized])
+    : (await loadStoreAsync()).users.find((entry) => normalizeEmail(entry.email) === normalized) ?? null;
+}
+
+export async function findSessionByIdIndexedAsync(sessionId: string): Promise<SessionRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<SessionRecord>("sessions", "app_record_search.id = ?", [sessionId])
+    : (await loadStoreAsync()).sessions.find((entry) => entry.id === sessionId) ?? null;
+}
+
+export async function findWorkspaceByIdIndexedAsync(workspaceId: string): Promise<WorkspaceRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<WorkspaceRecord>("workspaces", "app_record_search.id = ?", [workspaceId])
+    : (await loadStoreAsync()).workspaces.find((entry) => entry.id === workspaceId) ?? null;
+}
+
+export async function listSessionsForUserIndexedAsync(userId: string): Promise<SessionRecord[]> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecords<SessionRecord>("sessions", "app_record_search.user_id = ?", [userId]) ?? []
+    : (await loadStoreAsync()).sessions.filter((entry) => entry.userId === userId);
+}
+
+export async function findWorkspaceMembershipIndexedAsync(
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceMemberRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<WorkspaceMemberRecord>(
+      "memberships",
+      "app_record_search.workspace_id = ? and app_record_search.user_id = ?",
+      [workspaceId, userId],
+    )
+    : (await loadStoreAsync()).memberships.find((entry) => entry.workspaceId === workspaceId && entry.userId === userId) ?? null;
+}
+
+export async function listWorkspaceMembershipsIndexedAsync(workspaceId: string): Promise<WorkspaceMemberRecord[]> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecords<WorkspaceMemberRecord>("memberships", "app_record_search.workspace_id = ?", [workspaceId]) ?? []
+    : (await loadStoreAsync()).memberships.filter((entry) => entry.workspaceId === workspaceId);
+}
+
+export async function findWorkspaceInvitationByTokenIndexedAsync(token: string): Promise<WorkspaceInvitationRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<WorkspaceInvitationRecord>("workspaceInvitations", "app_record_search.token = ?", [token])
+    : (await loadStoreAsync()).workspaceInvitations.find((entry) => entry.token === token) ?? null;
+}
+
+export async function listWorkspaceInvitationsIndexedAsync(workspaceId: string): Promise<WorkspaceInvitationRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("workspaceInvitations", workspaceId, { orderBy: "createdAtDesc" });
+}
+
+export async function listInvitationEmailDeliveriesIndexedAsync(
+  workspaceId: string,
+  invitationId?: string,
+): Promise<InvitationEmailDeliveryRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("invitationEmailDeliveries", workspaceId, {
+    orderBy: "createdAtDesc",
+    filter: invitationId ? (entry) => entry.invitationId === invitationId : undefined,
+  });
+}
+
+export async function findShareTokenByTokenIndexedAsync(token: string): Promise<ShareTokenRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<ShareTokenRecord>("shareTokens", "app_record_search.token = ?", [token])
+    : (await loadStoreAsync()).shareTokens.find((entry) => entry.token === token) ?? null;
+}
+
+export async function listShareTokensForWorkspaceIndexedAsync(workspaceId: string): Promise<ShareTokenRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("shareTokens", workspaceId, { orderBy: "createdAtDesc" });
+}
+
+export async function findWorkspaceBriefIndexedAsync(workspaceId: string): Promise<WorkspaceBriefRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<WorkspaceBriefRecord>("workspaceBriefs", "app_record_search.workspace_id = ?", [workspaceId])
+    : findWorkspaceBrief(await loadStoreAsync(), workspaceId);
+}
+
+export async function listWorkspaceBriefVersionsIndexedAsync(workspaceId: string): Promise<WorkspaceBriefVersionRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("workspaceBriefVersions", workspaceId, { orderBy: "versionNumberDesc" });
+}
+
+export async function findWorkspaceBriefVersionIndexedAsync(
+  workspaceId: string,
+  versionId: string,
+): Promise<WorkspaceBriefVersionRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<WorkspaceBriefVersionRecord>(
+      "workspaceBriefVersions",
+      "app_record_search.workspace_id = ? and app_record_search.id = ?",
+      [workspaceId, versionId],
+    )
+    : findWorkspaceBriefVersion(await loadStoreAsync(), workspaceId, versionId);
+}
+
+export async function listRequirementsForWorkspaceIndexedAsync(workspaceId: string): Promise<RequirementRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("requirements", workspaceId);
+}
+
+export async function findRequirementForWorkspaceIndexedAsync(
+  workspaceId: string,
+  requirementId: string,
+): Promise<RequirementRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<RequirementRecord>(
+      "requirements",
+      "app_record_search.workspace_id = ? and app_record_search.id = ?",
+      [workspaceId, requirementId],
+    )
+    : (await loadStoreAsync()).requirements.find((entry) => entry.workspaceId === workspaceId && entry.id === requirementId) ?? null;
+}
+
+export async function listImplementationPlanItemsForWorkspaceIndexedAsync(
+  workspaceId: string,
+): Promise<ImplementationPlanItemRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("implementationPlanItems", workspaceId, { orderBy: "orderAsc" });
+}
+
+export async function findImplementationPlanItemForWorkspaceIndexedAsync(
+  workspaceId: string,
+  planItemId: string,
+): Promise<ImplementationPlanItemRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<ImplementationPlanItemRecord>(
+      "implementationPlanItems",
+      "app_record_search.workspace_id = ? and app_record_search.id = ?",
+      [workspaceId, planItemId],
+    )
+    : (await loadStoreAsync()).implementationPlanItems.find(
+      (entry) => entry.workspaceId === workspaceId && entry.id === planItemId,
+    ) ?? null;
+}
+
+export async function listWorkflowConcernsForWorkspaceIndexedAsync(
+  workspaceId: string,
+  kind?: WorkflowConcernKind,
+): Promise<WorkflowConcernRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("workflowConcerns", workspaceId, {
+    filter: kind ? (entry) => entry.kind === kind : undefined,
+  });
+}
+
+export async function findWorkflowConcernForWorkspaceIndexedAsync(
+  workspaceId: string,
+  concernId: string,
+  kind?: WorkflowConcernKind,
+): Promise<WorkflowConcernRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<WorkflowConcernRecord>(
+      "workflowConcerns",
+      `app_record_search.workspace_id = ? and app_record_search.id = ?${kind ? " and json_extract(app_records.payload, '$.kind') = ?" : ""}`,
+      kind ? [workspaceId, concernId, kind] : [workspaceId, concernId],
+    )
+    : (await loadStoreAsync()).workflowConcerns.find(
+      (entry) => entry.workspaceId === workspaceId && entry.id === concernId && (!kind || entry.kind === kind),
+    ) ?? null;
+}
+
+export async function listValidationEvidenceForWorkspaceIndexedAsync(workspaceId: string): Promise<ValidationEvidenceRecord[]> {
+  return listWorkspaceRecordsIndexedAsync("validationEvidence", workspaceId);
+}
+
+export async function findValidationEvidenceForWorkspaceIndexedAsync(
+  workspaceId: string,
+  evidenceId: string,
+): Promise<ValidationEvidenceRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<ValidationEvidenceRecord>(
+      "validationEvidence",
+      "app_record_search.workspace_id = ? and app_record_search.id = ?",
+      [workspaceId, evidenceId],
+    )
+    : (await loadStoreAsync()).validationEvidence.find(
+      (entry) => entry.workspaceId === workspaceId && entry.id === evidenceId,
+    ) ?? null;
+}
+
+export async function listReleaseConfirmationsForWorkspaceIndexedAsync(
+  workspaceId: string,
+): Promise<ReleaseConfirmationRecord[]> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecords<ReleaseConfirmationRecord>("releaseConfirmations", "app_record_search.workspace_id = ?", [workspaceId]) ?? []
+    : listReleaseConfirmationsForWorkspace(await loadStoreAsync(), workspaceId);
+}
+
+export async function findReleaseConfirmationForWorkspaceIndexedAsync(
+  workspaceId: string,
+  releaseId: string,
+): Promise<ReleaseConfirmationRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<ReleaseConfirmationRecord>(
+      "releaseConfirmations",
+      "app_record_search.workspace_id = ? and (json_extract(app_records.payload, '$.id') = ? or app_record_search.workspace_id = ?)",
+      [workspaceId, releaseId, releaseId],
+    )
+    : listReleaseConfirmationsForWorkspace(await loadStoreAsync(), workspaceId)
+      .find((entry) => entry.id === releaseId || entry.workspaceId === releaseId) ?? null;
+}
+
+export async function findAgentForWorkspaceIndexedAsync(workspaceId: string, agentId: string): Promise<AgentRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? sqliteIndexedRecord<AgentRecord>("agents", "app_record_search.workspace_id = ? and app_record_search.id = ?", [workspaceId, agentId])
+    : (await loadStoreAsync()).agents.find((entry) => entry.workspaceId === workspaceId && entry.id === agentId) ?? null;
+}
+
+export async function findAgentRunForWorkspaceIndexedAsync(
+  workspaceId: string,
+  runId: string,
+): Promise<AgentRunRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? findAgentRunForWorkspaceIndexed(workspaceId, runId)
+    : (await loadStoreAsync()).agentRuns.find((entry) => entry.workspaceId === workspaceId && entry.id === runId) ?? null;
+}
+
+export async function findJobIndexedAsync(jobId: string): Promise<JobRecord | null> {
+  return shouldUseSqliteIndexedReads()
+    ? findJobIndexed(jobId)
+    : (await loadStoreAsync()).jobs.find((entry) => entry.id === jobId) ?? null;
 }
 
 function recordsForCollection(data: TaskloomData, collection: (typeof RECORD_COLLECTIONS)[number]): unknown[] {

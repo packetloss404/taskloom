@@ -1,5 +1,5 @@
 import {
-  loadStore,
+  loadStoreAsync,
   findWorkspaceBrief,
   listRequirementsForWorkspace,
   listImplementationPlanItemsForWorkspace,
@@ -13,7 +13,7 @@ export const readWorkflowBriefTool: ToolDefinition = {
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   side: "read",
   async handle(_input, ctx) {
-    const data = loadStore();
+    const data = await loadStoreAsync();
     const brief = findWorkspaceBrief(data, ctx.workspaceId);
     return { ok: true, output: { brief } };
   },
@@ -33,7 +33,7 @@ export const listRequirementsTool: ToolDefinition = {
   side: "read",
   async handle(input, ctx) {
     const { priority, status } = (input as { priority?: string; status?: string });
-    const data = loadStore();
+    const data = await loadStoreAsync();
     let entries = listRequirementsForWorkspace(data, ctx.workspaceId);
     if (priority) entries = entries.filter((r) => r.priority === priority);
     if (status) entries = entries.filter((r) => r.status === status);
@@ -52,7 +52,7 @@ export const listPlanItemsTool: ToolDefinition = {
   side: "read",
   async handle(input, ctx) {
     const { status } = (input as { status?: string });
-    const data = loadStore();
+    const data = await loadStoreAsync();
     let entries = listImplementationPlanItemsForWorkspace(data, ctx.workspaceId);
     if (status) entries = entries.filter((p) => p.status === status);
     return { ok: true, output: { count: entries.length, planItems: entries } };
@@ -70,7 +70,7 @@ export const listBlockersTool: ToolDefinition = {
   side: "read",
   async handle(input, ctx) {
     const { kind, status } = (input as { kind?: string; status?: string });
-    const data = loadStore();
+    const data = await loadStoreAsync();
     let entries = listWorkflowConcernsForWorkspace(data, ctx.workspaceId);
     if (kind) entries = entries.filter((c) => c.kind === kind);
     if (status) entries = entries.filter((c) => c.status === status);
@@ -84,7 +84,7 @@ export const listAgentsTool: ToolDefinition = {
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   side: "read",
   async handle(_input, ctx) {
-    const data = loadStore();
+    const data = await loadStoreAsync();
     const agents = data.agents
       .filter((a) => a.workspaceId === ctx.workspaceId)
       .map((a) => ({
@@ -115,7 +115,7 @@ export const listRecentRunsTool: ToolDefinition = {
   side: "read",
   async handle(input, ctx) {
     const { limit = 10, status } = (input as { limit?: number; status?: string });
-    const data = loadStore();
+    const data = await loadStoreAsync();
     const workspaceAgents = new Set(data.agents.filter((a) => a.workspaceId === ctx.workspaceId).map((a) => a.id));
     let runs = data.agentRuns.filter((r) => r.agentId !== undefined && workspaceAgents.has(r.agentId));
     if (status) runs = runs.filter((r) => r.status === status);

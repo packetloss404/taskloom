@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  mutateStore,
+  mutateStoreAsync,
   recordActivity,
   upsertImplementationPlanItem,
   upsertWorkflowConcern,
@@ -12,8 +12,8 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function recordToolActivity(workspaceId: string, userId: string, event: string, data: Record<string, string | number | boolean | null | undefined>): void {
-  mutateStore((store) => {
+async function recordToolActivity(workspaceId: string, userId: string, event: string, data: Record<string, string | number | boolean | null | undefined>): Promise<void> {
+  await mutateStoreAsync((store) => {
     const entry: ActivityRecord = {
       id: randomUUID(),
       workspaceId,
@@ -46,7 +46,7 @@ export const createPlanItemTool: ToolDefinition = {
     const { title, description = "", status = "todo", requirementIds = [] } = input as {
       title: string; description?: string; status?: "todo" | "in_progress" | "blocked" | "done"; requirementIds?: string[];
     };
-    const created = mutateStore((data) => {
+    const created = await mutateStoreAsync((data) => {
       const existingMax = data.implementationPlanItems
         .filter((p) => p.workspaceId === ctx.workspaceId)
         .reduce((acc, p) => Math.max(acc, p.order ?? 0), 0);
@@ -59,7 +59,7 @@ export const createPlanItemTool: ToolDefinition = {
         order: existingMax + 1,
       });
     });
-    recordToolActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.created", { id: created.id, title: created.title });
+    await recordToolActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.created", { id: created.id, title: created.title });
     return { ok: true, output: { planItem: created } };
   },
 };
@@ -79,7 +79,7 @@ export const updatePlanItemStatusTool: ToolDefinition = {
   side: "write",
   async handle(input, ctx) {
     const { planItemId, status } = input as { planItemId: string; status: "todo" | "in_progress" | "blocked" | "done" };
-    const updated = mutateStore((data) => {
+    const updated = await mutateStoreAsync((data) => {
       const entry = data.implementationPlanItems.find((p) => p.id === planItemId && p.workspaceId === ctx.workspaceId);
       if (!entry) return null;
       entry.status = status;
@@ -87,7 +87,7 @@ export const updatePlanItemStatusTool: ToolDefinition = {
       return entry;
     });
     if (!updated) return { ok: false, error: `plan item ${planItemId} not found in workspace` };
-    recordToolActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.status_updated", { id: planItemId, status });
+    await recordToolActivity(ctx.workspaceId, ctx.userId, "tool.plan_item.status_updated", { id: planItemId, status });
     return { ok: true, output: { planItem: updated } };
   },
 };
@@ -111,7 +111,7 @@ export const createBlockerTool: ToolDefinition = {
     const { title, detail = "", kind = "blocker", severity = "medium" } = input as {
       title: string; detail?: string; kind?: "blocker" | "open_question"; severity?: "low" | "medium" | "high" | "critical";
     };
-    const created = mutateStore((data) =>
+    const created = await mutateStoreAsync((data) =>
       upsertWorkflowConcern(data, {
         workspaceId: ctx.workspaceId,
         kind,
@@ -121,7 +121,7 @@ export const createBlockerTool: ToolDefinition = {
         status: "open",
       }),
     );
-    recordToolActivity(ctx.workspaceId, ctx.userId, `tool.${kind}.opened`, { id: created.id, title: created.title });
+    await recordToolActivity(ctx.workspaceId, ctx.userId, `tool.${kind}.opened`, { id: created.id, title: created.title });
     return { ok: true, output: { concern: created } };
   },
 };
@@ -141,7 +141,7 @@ export const logNoteTool: ToolDefinition = {
   side: "write",
   async handle(input, ctx) {
     const { title, body = "" } = input as { title: string; body?: string };
-    recordToolActivity(ctx.workspaceId, ctx.userId, "tool.note", { title: title.trim(), body });
+    await recordToolActivity(ctx.workspaceId, ctx.userId, "tool.note", { title: title.trim(), body });
     return { ok: true, output: { note: { title: title.trim(), body } } };
   },
 };

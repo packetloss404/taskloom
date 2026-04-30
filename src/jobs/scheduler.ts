@@ -1,5 +1,13 @@
 import type { JobRecord } from "../taskloom-store.js";
-import { claimNextJob, enqueueRecurringJob, findJob, maintainScheduledAgentJobs, sweepStaleRunningJobs, updateJob } from "./store.js";
+import {
+  cancelJobAsync,
+  claimNextJobAsync,
+  enqueueRecurringJobAsync,
+  findJobAsync,
+  maintainScheduledAgentJobsAsync,
+  sweepStaleRunningJobsAsync,
+  updateJobAsync,
+} from "./store.js";
 import { nextAfter } from "./cron.js";
 import { redactedErrorMessage } from "../security/redaction.js";
 import type { SchedulerLeaderLock } from "./scheduler-lock.js";
@@ -46,8 +54,8 @@ export class JobScheduler {
   start(): void {
     if (this.polling) return;
     this.polling = true;
-    maintainScheduledAgentJobs();
-    sweepStaleRunningJobs();
+    void maintainScheduledAgentJobsAsync().catch(() => undefined);
+    void sweepStaleRunningJobsAsync().catch(() => undefined);
     __setSchedulerLeaderProbe(() => this.leaderLock.isHeld());
     recordSchedulerStart();
     this.scheduleNext(0);
@@ -83,7 +91,7 @@ export class JobScheduler {
           this.scheduleNext(this.pollIntervalMs);
           return;
         }
-        const job = await claimNextJob(new Date());
+        const job = await claimNextJobAsync(new Date());
         if (job) {
           void this.runJob(job);
           this.scheduleNext(0);
@@ -101,8 +109,11 @@ export class JobScheduler {
     const ctrl = new AbortController();
     this.inFlight.set(job.id, ctrl);
     const cancelWatcher = setInterval(() => {
-      const fresh = findJob(job.id);
-      if (fresh?.cancelRequested) ctrl.abort();
+      void findJobAsync(job.id)
+        .then((fresh) => {
+          if (fresh?.cancelRequested) ctrl.abort();
+        })
+        .catch(() => undefined);
     }, this.cancelWatchMs);
     const startedAt = new Date().toISOString();
     const startTime = Date.now();
@@ -118,37 +129,38 @@ export class JobScheduler {
     try {
       if (!handler) {
         recordTerminal("failed");
-        updateJob(job.id, { status: "failed", error: `no handler registered for type "${job.type}"`, completedAt: new Date().toISOString() });
+        await updateJobAsync(job.id, { status: "failed", error: `no handler registered for type "${job.type}"`, completedAt: new Date().toISOString() });
         return;
       }
       const result = await handler.handle(job, { signal: ctrl.signal });
       if (ctrl.signal.aborted) {
         recordTerminal("canceled");
-        updateJob(job.id, { status: "canceled", completedAt: new Date().toISOString() });
+        await cancelJobAsync(job.id);
+        await updateJobAsync(job.id, { status: "canceled", completedAt: new Date().toISOString() });
         return;
       }
       recordTerminal("success");
-      updateJob(job.id, { status: "success", result, completedAt: new Date().toISOString() });
+      await updateJobAsync(job.id, { status: "success", result, completedAt: new Date().toISOString() });
       if (job.cron) {
         try {
           const next = nextAfter(job.cron, new Date());
-          enqueueRecurringJob(job, next.toISOString());
+          await enqueueRecurringJobAsync(job, next.toISOString());
         } catch { /* invalid cron => stop recurring */ }
       }
     } catch (error) {
-      const fresh = findJob(job.id);
+      const fresh = await findJobAsync(job.id);
       if (fresh?.cancelRequested || ctrl.signal.aborted) {
         recordTerminal("canceled");
-        updateJob(job.id, { status: "canceled", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
+        await updateJobAsync(job.id, { status: "canceled", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
         return;
       }
       if (job.attempts < job.maxAttempts) {
         // retry path: do not record metrics; only terminal outcomes are tracked.
         const next = new Date(Date.now() + backoffMs(job.attempts));
-        updateJob(job.id, { status: "queued", error: redactedErrorMessage(error), scheduledAt: next.toISOString(), startedAt: undefined });
+        await updateJobAsync(job.id, { status: "queued", error: redactedErrorMessage(error), scheduledAt: next.toISOString(), startedAt: undefined });
       } else {
         recordTerminal("failed");
-        updateJob(job.id, { status: "failed", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
+        await updateJobAsync(job.id, { status: "failed", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
       }
     } finally {
       clearInterval(cancelWatcher);

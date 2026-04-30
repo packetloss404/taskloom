@@ -5,6 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   clearStoreCacheForTests,
+  findUserByEmailIndexedAsync,
+  findWorkspaceMembershipIndexedAsync,
+  findWorkspaceBriefIndexedAsync,
+  listAgentsForWorkspaceIndexedAsync,
+  listRequirementsForWorkspaceIndexedAsync,
   loadStore,
   loadStoreAsync,
   ManagedPostgresStoreConfigurationError,
@@ -54,6 +59,10 @@ test("JSON async load and mutate reuse the current store behavior", async () => 
     const loaded = await loadStoreAsync();
     assert.equal(loaded, seeded);
     assert.equal(loaded.workspaces.some((entry) => entry.id === "alpha"), true);
+    assert.equal((await findUserByEmailIndexedAsync("ALPHA@TASKLOOM.LOCAL"))?.id, "user_alpha");
+    assert.equal((await findWorkspaceMembershipIndexedAsync("alpha", "user_alpha"))?.role, "owner");
+    assert.equal((await findWorkspaceBriefIndexedAsync("alpha"))?.workspaceId, "alpha");
+    assert.equal((await listAgentsForWorkspaceIndexedAsync("alpha")).length > 0, true);
 
     const requirementId = await mutateStoreAsync(async (data) => {
       await Promise.resolve();
@@ -71,6 +80,7 @@ test("JSON async load and mutate reuse the current store behavior", async () => 
     assert.equal(requirementId, "req_async_json_boundary");
     clearStoreCacheForTests();
     assert.equal((await loadStoreAsync()).requirements.some((entry) => entry.id === requirementId), true);
+    assert.equal((await listRequirementsForWorkspaceIndexedAsync("alpha")).some((entry) => entry.id === requirementId), true);
   });
 });
 

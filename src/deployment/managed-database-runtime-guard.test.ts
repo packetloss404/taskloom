@@ -29,6 +29,10 @@ test("local JSON runtime is allowed by default", () => {
   assert.equal(report.phase50?.asyncAdapterAvailable, false);
   assert.equal(report.phase50?.backfillAvailable, false);
   assert.equal(report.phase50?.syncStartupSupported, false);
+  assert.equal(report.phase51?.tracked, true);
+  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
+  assert.equal(report.phase51?.managedPostgresStartupSupported, false);
+  assert.deepEqual(report.phase51?.remainingSyncCallSiteGroups, []);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("local JSON"));
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
@@ -92,10 +96,14 @@ test("Phase 50 async postgres adapter and managed URL report capability while bl
   assert.equal(report.phase50?.backfillAvailable, true);
   assert.equal(report.phase50?.syncStartupSupported, false);
   assert.equal(report.phase50?.adapter, "postgres");
+  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
+  assert.equal(report.phase51?.managedPostgresStartupSupported, false);
+  assert.ok(report.phase51?.summary.includes("no remaining sync call-site groups"));
   assert.equal(report.observed.managedDatabaseAdapter, "postgres");
   assert.ok(report.summary.includes("blocked unsupported managed database"));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous app startup remains blocked")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("managed Postgres startup support is not asserted")));
   assert.ok(report.warnings.some((warning) => warning.includes("Phase 50 async managed adapter/backfill capability")));
+  assert.ok(report.warnings.some((warning) => warning.includes("no remaining sync call-site groups")));
   assert.throws(
     () =>
       assertManagedDatabaseRuntimeSupported({
@@ -105,6 +113,25 @@ test("Phase 50 async postgres adapter and managed URL report capability while bl
       }),
     ManagedDatabaseRuntimeGuardError,
   );
+});
+
+test("Phase 51 migration evidence can report migrated call sites without asserting startup support", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    phase51: {
+      remainingSyncCallSiteGroups: [],
+    },
+  });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
+  assert.equal(report.phase51?.managedPostgresStartupSupported, false);
+  assert.equal(report.phase51?.strictBlocker, true);
+  assert.ok(report.blockers.some((blocker) => blocker.includes("startup support is not asserted")));
 });
 
 test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () => {

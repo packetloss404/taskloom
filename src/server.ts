@@ -3,32 +3,32 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import {
-  archiveAgent,
-  cancelAgentRun,
-  createAgent,
-  createAgentFromTemplate,
-  createProvider,
-  createWorkspaceEnvVar,
-  deleteWorkspaceEnvVarById,
-  getAgent,
+  archiveAgentAsync,
+  cancelAgentRunAsync,
+  createAgentAsync,
+  createAgentFromTemplateAsync,
+  createProviderAsync,
+  createWorkspaceEnvVarAsync,
+  deleteWorkspaceEnvVarByIdAsync,
+  getAgentAsync,
   getPublicActivationSummary,
   handleInvitationEmailJob,
   INVITATION_EMAIL_JOB_TYPE,
   listPublicActivationSummaries,
-  listAgentRuns,
+  listAgentRunsAsync,
   listAgentTemplates,
-  listAgents,
-  listProviders,
-  listReleaseHistory,
-  listWorkspaceEnvVarsForUser,
+  listAgentsAsync,
+  listProvidersAsync,
+  listReleaseHistoryAsync,
+  listWorkspaceEnvVarsForUserAsync,
   retryAgentRun,
-  recordRunAsPlaybook,
+  recordRunAsPlaybookAsync,
   runAgent,
-  updateAgent,
-  updateProvider,
-  updateWorkspaceEnvVar,
+  updateAgentAsync,
+  updateProviderAsync,
+  updateWorkspaceEnvVarAsync,
 } from "./taskloom-services.js";
-import { requirePrivateWorkspaceRole } from "./rbac.js";
+import { requirePrivateWorkspaceRoleAsync } from "./rbac.js";
 import { appRoutes } from "./app-routes.js";
 import { workflowRoutes } from "./workflow-routes.js";
 import { apiKeyRoutes } from "./api-key-routes.js";
@@ -38,7 +38,7 @@ import { jobRoutes } from "./job-routes.js";
 import { JobScheduler } from "./jobs/scheduler.js";
 import { selectSchedulerLeaderLock } from "./jobs/scheduler-leader-selection.js";
 import {
-  ensureMetricsSnapshotCronJob,
+  ensureMetricsSnapshotCronJobAsync,
   handleMetricsSnapshotJob,
   METRICS_SNAPSHOT_JOB_TYPE,
   type MetricsSnapshotJobPayload,
@@ -59,7 +59,7 @@ import { operationsJobMetricsRoutes } from "./operations-job-metrics-routes.js";
 import { operationsAlertsRoutes } from "./operations-alerts-routes.js";
 import {
   ALERTS_EVALUATE_JOB_TYPE,
-  ensureAlertsCronJob,
+  ensureAlertsCronJobAsync,
   handleAlertsEvaluateJob,
   type AlertsEvaluateJobPayload,
 } from "./alerts/alerts-evaluate-handler.js";
@@ -97,9 +97,9 @@ app.use("/api/app/*", enforcePrivateAppMutationSecurity);
 
 app.route("/api", appRoutes);
 
-app.get("/api/app/agents", (c) => {
+app.get("/api/app/agents", async (c) => {
   try {
-    return c.json(listAgents(requirePrivateWorkspaceRole(c, "viewer")));
+    return c.json(await listAgentsAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -107,15 +107,15 @@ app.get("/api/app/agents", (c) => {
 
 app.post("/api/app/agents", async (c) => {
   try {
-    return c.json(createAgent(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
+    return c.json(await createAgentAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.get("/api/app/agents/:agentId", (c) => {
+app.get("/api/app/agents/:agentId", async (c) => {
   try {
-    return c.json(getAgent(requirePrivateWorkspaceRole(c, "viewer"), c.req.param("agentId")));
+    return c.json(await getAgentAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer"), c.req.param("agentId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -123,15 +123,15 @@ app.get("/api/app/agents/:agentId", (c) => {
 
 app.patch("/api/app/agents/:agentId", async (c) => {
   try {
-    return c.json(updateAgent(requirePrivateWorkspaceRole(c, "admin"), c.req.param("agentId"), await readJsonBody(c)));
+    return c.json(await updateAgentAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("agentId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.delete("/api/app/agents/:agentId", (c) => {
+app.delete("/api/app/agents/:agentId", async (c) => {
   try {
-    return c.json(archiveAgent(requirePrivateWorkspaceRole(c, "admin"), c.req.param("agentId")));
+    return c.json(await archiveAgentAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("agentId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -141,7 +141,7 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
     const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
     const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
-    return c.json(await runAgent(requirePrivateWorkspaceRole(c, "member"), c.req.param("agentId"), {
+    return c.json(await runAgent(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("agentId"), {
       triggerKind: body?.triggerKind,
       inputs,
     }), 201);
@@ -150,9 +150,9 @@ app.post("/api/app/agents/:agentId/runs", async (c) => {
   }
 });
 
-app.get("/api/app/agent-templates", (c) => {
+app.get("/api/app/agent-templates", async (c) => {
   try {
-    requirePrivateWorkspaceRole(c, "viewer");
+    await requirePrivateWorkspaceRoleAsync(c, "viewer");
     return c.json(listAgentTemplates());
   } catch (error) {
     return errorResponse(c, error);
@@ -162,7 +162,7 @@ app.get("/api/app/agent-templates", (c) => {
 app.post("/api/app/agents/from-template/:templateId", async (c) => {
   try {
     const body = await readJsonBody(c);
-    return c.json(createAgentFromTemplate(requirePrivateWorkspaceRole(c, "admin"), c.req.param("templateId"), {
+    return c.json(await createAgentFromTemplateAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("templateId"), {
       name: typeof body.name === "string" ? body.name : undefined,
       providerId: typeof body.providerId === "string" ? body.providerId : undefined,
       model: typeof body.model === "string" ? body.model : undefined,
@@ -172,9 +172,9 @@ app.post("/api/app/agents/from-template/:templateId", async (c) => {
   }
 });
 
-app.get("/api/app/providers", (c) => {
+app.get("/api/app/providers", async (c) => {
   try {
-    return c.json(listProviders(requirePrivateWorkspaceRole(c, "viewer")));
+    return c.json(await listProvidersAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -182,7 +182,7 @@ app.get("/api/app/providers", (c) => {
 
 app.post("/api/app/providers", async (c) => {
   try {
-    return c.json(createProvider(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
+    return c.json(await createProviderAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -190,23 +190,23 @@ app.post("/api/app/providers", async (c) => {
 
 app.patch("/api/app/providers/:providerId", async (c) => {
   try {
-    return c.json(updateProvider(requirePrivateWorkspaceRole(c, "admin"), c.req.param("providerId"), await readJsonBody(c)));
+    return c.json(await updateProviderAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("providerId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.get("/api/app/agent-runs", (c) => {
+app.get("/api/app/agent-runs", async (c) => {
   try {
-    return c.json(listAgentRuns(requirePrivateWorkspaceRole(c, "viewer")));
+    return c.json(await listAgentRunsAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.post("/api/app/agent-runs/:runId/cancel", (c) => {
+app.post("/api/app/agent-runs/:runId/cancel", async (c) => {
   try {
-    return c.json(cancelAgentRun(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")));
+    return c.json(await cancelAgentRunAsync(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -214,15 +214,15 @@ app.post("/api/app/agent-runs/:runId/cancel", (c) => {
 
 app.post("/api/app/agent-runs/:runId/retry", async (c) => {
   try {
-    return c.json(await retryAgentRun(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")), 201);
+    return c.json(await retryAgentRun(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("runId")), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.post("/api/app/agent-runs/:runId/record-as-playbook", (c) => {
+app.post("/api/app/agent-runs/:runId/record-as-playbook", async (c) => {
   try {
-    return c.json(recordRunAsPlaybook(requirePrivateWorkspaceRole(c, "member"), c.req.param("runId")));
+    return c.json(await recordRunAsPlaybookAsync(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -230,9 +230,9 @@ app.post("/api/app/agent-runs/:runId/record-as-playbook", (c) => {
 
 app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
   try {
-    const ctx = requirePrivateWorkspaceRole(c, "member");
-    const { loadStore } = await import("./taskloom-store.js");
-    const data = loadStore();
+    const ctx = await requirePrivateWorkspaceRoleAsync(c, "member");
+    const { loadStoreAsync } = await import("./taskloom-store.js");
+    const data = await loadStoreAsync();
     const run = data.agentRuns.find((r) => r.id === c.req.param("runId") && r.workspaceId === ctx.workspace.id);
     if (!run) return errorResponse(c, Object.assign(new Error("agent run not found"), { status: 404 }));
     const { diagnoseFailedRun } = await import("./diagnostics.js");
@@ -243,9 +243,9 @@ app.post("/api/app/agent-runs/:runId/diagnose", async (c) => {
   }
 });
 
-app.get("/api/app/tools", (c) => {
+app.get("/api/app/tools", async (c) => {
   try {
-    requirePrivateWorkspaceRole(c, "viewer");
+    await requirePrivateWorkspaceRoleAsync(c, "viewer");
     const registry = getDefaultToolRegistry();
     return c.json({
       tools: registry.list().map((t: { name: string; description: string; side: string }) => ({
@@ -259,9 +259,9 @@ app.get("/api/app/tools", (c) => {
   }
 });
 
-app.get("/api/app/env-vars", (c) => {
+app.get("/api/app/env-vars", async (c) => {
   try {
-    return c.json(listWorkspaceEnvVarsForUser(requirePrivateWorkspaceRole(c, "viewer")));
+    return c.json(await listWorkspaceEnvVarsForUserAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -269,7 +269,7 @@ app.get("/api/app/env-vars", (c) => {
 
 app.post("/api/app/env-vars", async (c) => {
   try {
-    return c.json(createWorkspaceEnvVar(requirePrivateWorkspaceRole(c, "admin"), await readJsonBody(c)), 201);
+    return c.json(await createWorkspaceEnvVarAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), await readJsonBody(c)), 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -277,23 +277,23 @@ app.post("/api/app/env-vars", async (c) => {
 
 app.patch("/api/app/env-vars/:envVarId", async (c) => {
   try {
-    return c.json(updateWorkspaceEnvVar(requirePrivateWorkspaceRole(c, "admin"), c.req.param("envVarId"), await readJsonBody(c)));
+    return c.json(await updateWorkspaceEnvVarAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("envVarId"), await readJsonBody(c)));
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.delete("/api/app/env-vars/:envVarId", (c) => {
+app.delete("/api/app/env-vars/:envVarId", async (c) => {
   try {
-    return c.json(deleteWorkspaceEnvVarById(requirePrivateWorkspaceRole(c, "admin"), c.req.param("envVarId")));
+    return c.json(await deleteWorkspaceEnvVarByIdAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("envVarId")));
   } catch (error) {
     return errorResponse(c, error);
   }
 });
 
-app.get("/api/app/release-history", (c) => {
+app.get("/api/app/release-history", async (c) => {
   try {
-    return c.json(listReleaseHistory(requirePrivateWorkspaceRole(c, "viewer")));
+    return c.json(await listReleaseHistoryAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -320,8 +320,8 @@ scheduler.register({
   async handle(job) {
     const payload = job.payload as { agentId?: string; triggerKind?: string; inputs?: Record<string, unknown> };
     if (!payload.agentId) throw new Error("agent.run job missing agentId");
-    const { loadStore } = await import("./taskloom-store.js");
-    const data = loadStore();
+    const { loadStoreAsync } = await import("./taskloom-store.js");
+    const data = await loadStoreAsync();
     const agent = data.agents.find((a) => a.id === payload.agentId);
     if (!agent) throw new Error(`agent ${payload.agentId} not found`);
     if (agent.workspaceId !== job.workspaceId) throw new Error(`agent ${payload.agentId} is not in job workspace`);
@@ -333,7 +333,6 @@ scheduler.register({
     };
     const liveWorkspace = data.workspaces.find((w) => w.id === agent.workspaceId);
     if (liveWorkspace) Object.assign(context.workspace, liveWorkspace);
-    const { runAgent } = await import("./taskloom-services.js");
     const result = await runAgent(context as never, agent.id, {
       triggerKind: payload.triggerKind,
       inputs: payload.inputs,
@@ -367,8 +366,8 @@ scheduler.register({
 });
 assertManagedDatabaseRuntimeSupported(process.env);
 scheduler.start();
-ensureMetricsSnapshotCronJob();
-ensureAlertsCronJob();
+await ensureMetricsSnapshotCronJobAsync();
+await ensureAlertsCronJobAsync();
 const shutdown = async () => {
   await scheduler.stop();
   try {

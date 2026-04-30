@@ -1,6 +1,10 @@
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
-import { listApiKeysForWorkspace, removeApiKeyForWorkspace, upsertApiKey } from "./security/api-key-store.js";
+import {
+  listApiKeysForWorkspaceAsync,
+  removeApiKeyForWorkspaceAsync,
+  upsertApiKeyAsync,
+} from "./security/api-key-store.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 import type { ApiKeyProvider } from "./taskloom-store.js";
 
@@ -17,10 +21,10 @@ function errorResponse(c: Context, error: unknown) {
 
 export const apiKeyRoutes = new Hono();
 
-apiKeyRoutes.get("/", (c) => {
+apiKeyRoutes.get("/", async (c) => {
   try {
     const { workspace } = requirePrivateWorkspaceRole(c, "viewer");
-    return c.json({ apiKeys: listApiKeysForWorkspace(workspace.id) });
+    return c.json({ apiKeys: await listApiKeysForWorkspaceAsync(workspace.id) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -35,7 +39,7 @@ apiKeyRoutes.post("/", async (c) => {
     }
     if (!body.label || typeof body.label !== "string") throw httpError(400, "label is required");
     if (!body.value || typeof body.value !== "string") throw httpError(400, "value is required");
-    const record = upsertApiKey({
+    const record = await upsertApiKeyAsync({
       workspaceId: workspace.id,
       provider: body.provider as ApiKeyProvider,
       label: body.label.trim(),
@@ -47,10 +51,10 @@ apiKeyRoutes.post("/", async (c) => {
   }
 });
 
-apiKeyRoutes.delete("/:id", (c) => {
+apiKeyRoutes.delete("/:id", async (c) => {
   try {
     const { workspace } = requirePrivateWorkspaceRole(c, "admin");
-    const removed = removeApiKeyForWorkspace(c.req.param("id"), workspace.id);
+    const removed = await removeApiKeyForWorkspaceAsync(c.req.param("id"), workspace.id);
     if (!removed) return errorResponse(c, httpError(404, "api key not found"));
     return c.json({ ok: true });
   } catch (error) {

@@ -1,10 +1,10 @@
 import { Hono, type Context } from "hono";
 import {
-  applyInvitationEmailReconciliation,
   parseInvitationEmailReconciliationBody,
 } from "./invitation-email-reconciliation.js";
 import { resolveInvitationEmailReconciliationConfig } from "./invitation-email.js";
 import { redactedErrorMessage } from "./security/redaction.js";
+import { mutateStoreAsync, recordInvitationEmailProviderStatus } from "./taskloom-store.js";
 
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as 500);
@@ -64,21 +64,27 @@ invitationEmailWebhookRoutes.post("/", async (c) => {
       return c.json({ error: "invalid request" }, 400);
     }
 
-    const result = applyInvitationEmailReconciliation(parsed.input);
-    if (!result.ok) {
-      if (result.reason === "delivery_not_found") {
-        return c.json({ error: "delivery not found", deliveryId: result.deliveryId }, 404);
-      }
-      return c.json({ error: "invalid request" }, 400);
+    const appliedAt = parsed.input.occurredAt ?? new Date().toISOString();
+    const updated = await mutateStoreAsync((data) =>
+      recordInvitationEmailProviderStatus(data, {
+        deliveryId: parsed.input.deliveryId,
+        providerStatus: parsed.input.providerStatus,
+        providerDeliveryId: parsed.input.providerDeliveryId,
+        providerError: parsed.input.providerError,
+        occurredAt: appliedAt,
+      }),
+    );
+    if (!updated) {
+      return c.json({ error: "delivery not found", deliveryId: parsed.input.deliveryId }, 404);
     }
 
     return c.json({
       ok: true,
-      deliveryId: result.deliveryId,
-      invitationId: result.invitationId,
-      workspaceId: result.workspaceId,
-      providerStatus: result.providerStatus,
-      appliedAt: result.appliedAt,
+      deliveryId: updated.id,
+      invitationId: updated.invitationId,
+      workspaceId: updated.workspaceId,
+      providerStatus: parsed.input.providerStatus,
+      appliedAt,
     });
   } catch (error) {
     return errorResponse(c, error);

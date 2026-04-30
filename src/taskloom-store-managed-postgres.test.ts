@@ -3,6 +3,10 @@ import test from "node:test";
 import {
   clearStoreCacheForTests,
   createSeedStore,
+  findUserByEmailIndexedAsync,
+  findWorkspaceBriefIndexedAsync,
+  listAgentsForWorkspaceIndexedAsync,
+  listRequirementsForWorkspaceIndexedAsync,
   loadStoreAsync,
   type ManagedPostgresStoreClientConfig,
   type ManagedPostgresStoreQueryClient,
@@ -196,5 +200,23 @@ test("managed database URL hints use the async Postgres backend even when sqlite
     assert.equal(configs[0].envKey, "DATABASE_URL");
     assert.equal(loaded.workspaces.some((entry) => entry.id === "alpha"), true);
     assert.equal(client.normalizedQueries().some((query) => query.startsWith("create table if not exists taskloom_document_store")), true);
+  });
+});
+
+test("async indexed helpers read through the managed Postgres document store", async () => {
+  const client = new FakeManagedPostgresClient();
+  client.payloadJson = JSON.stringify(createSeedStore());
+
+  await withManagedStoreEnv({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  }, client, async () => {
+    assert.equal((await findUserByEmailIndexedAsync("ALPHA@TASKLOOM.LOCAL"))?.id, "user_alpha");
+    assert.equal((await findWorkspaceBriefIndexedAsync("alpha"))?.workspaceId, "alpha");
+    assert.equal((await listAgentsForWorkspaceIndexedAsync("alpha")).length > 0, true);
+    assert.equal((await listRequirementsForWorkspaceIndexedAsync("alpha")).length > 0, true);
+
+    const queries = client.normalizedQueries();
+    assert.equal(queries.some((query) => query.startsWith("select payload from taskloom_document_store")), true);
   });
 });

@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { clearStoreCacheForTests, resetStoreForTests, loadStore, mutateStore, type ProviderCallRecord } from "../../taskloom-store.js";
-import { listProviderCalls, recordedCall, recordedStream, summarizeUsage } from "../ledger.js";
+import {
+  listProviderCalls,
+  listProviderCallsAsync,
+  recordedCall,
+  recordedStream,
+  summarizeUsage,
+  summarizeUsageAsync,
+} from "../ledger.js";
 import type { ProviderStreamChunk } from "../types.js";
 
 test("recordedCall writes a success record with measured duration", async () => {
@@ -117,6 +124,22 @@ test("summarizeUsage excludes records older than 24h from last24h block", () => 
   assert.equal(summary.totalCalls, 1);
   assert.equal(summary.last24h.calls, 0);
   assert.equal(summary.last24h.costUsd, 0);
+});
+
+test("async provider usage readers mirror sync summaries", async () => {
+  resetStoreForTests();
+  await recordedCall(
+    { workspaceId: "alpha", routeKey: "async.summary", provider: "stub", model: "stub-small" },
+    async () => ({ usage: { promptTokens: 6, completionTokens: 4, costUsd: 0.003 } }),
+  );
+
+  const calls = await listProviderCallsAsync("alpha", { limit: 1 });
+  const summary = await summarizeUsageAsync("alpha");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].routeKey, "async.summary");
+  assert.equal(summary.totalCalls, 1);
+  assert.equal(summary.totalPromptTokens, 6);
 });
 
 async function withSqliteLedgerStore(testFn: (dbPath: string) => Promise<void>): Promise<void> {

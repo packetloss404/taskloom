@@ -4,12 +4,12 @@ import {
   resolveAlertWebhookConfig,
   type AlertWebhookConfig,
 } from "./alert-webhook.js";
-import { recordAlerts } from "./alert-store.js";
-import { getOperationsHealth, type OperationsHealthReport } from "../operations-health.js";
+import { recordAlertsAsync } from "./alert-store.js";
+import { getOperationsHealthAsync, type OperationsHealthReport } from "../operations-health.js";
 import { getJobTypeMetrics, type JobTypeMetrics } from "../jobs/scheduler-metrics.js";
-import { enqueueJob, type EnqueueJobInput } from "../jobs/store.js";
+import { enqueueJob, enqueueJobAsync, type EnqueueJobInput } from "../jobs/store.js";
 import { nextAfter } from "../jobs/cron.js";
-import { loadStore as defaultLoadStore, type JobRecord, type TaskloomData } from "../taskloom-store.js";
+import { loadStore as defaultLoadStore, loadStoreAsync as defaultLoadStoreAsync, type JobRecord, type TaskloomData } from "../taskloom-store.js";
 
 export const ALERTS_EVALUATE_JOB_TYPE = "alerts.evaluate" as const;
 
@@ -46,12 +46,17 @@ export interface AlertsEvaluateJobResult {
 
 export interface AlertsEvaluateHandlerDeps {
   evaluate?: typeof evaluateAlerts;
-  health?: () => OperationsHealthReport;
+  health?: () => OperationsHealthReport | Promise<OperationsHealthReport>;
   metrics?: () => JobTypeMetrics[];
   webhookConfig?: () => AlertWebhookConfig | null;
   deliver?: typeof deliverAlertWebhook;
-  record?: typeof recordAlerts;
-  enqueueDeliverJob?: (input: EnqueueJobInput) => JobRecord;
+  record?: (
+    events: AlertEvent[],
+    deliveryOk: boolean,
+    deliveryError: string | undefined,
+    options?: { retentionDays?: number },
+  ) => { stored: number; pruned: number } | Promise<{ stored: number; pruned: number }>;
+  enqueueDeliverJob?: (input: EnqueueJobInput) => JobRecord | Promise<JobRecord>;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
 }
@@ -60,6 +65,12 @@ export interface EnsureAlertsCronJobDeps {
   env?: NodeJS.ProcessEnv;
   loadStore?: () => TaskloomData;
   enqueue?: (input: EnqueueJobInput) => JobRecord;
+}
+
+export interface EnsureAlertsCronJobAsyncDeps {
+  env?: NodeJS.ProcessEnv;
+  loadStore?: () => TaskloomData | Promise<TaskloomData>;
+  enqueue?: (input: EnqueueJobInput) => JobRecord | Promise<JobRecord>;
 }
 
 export interface EnsureAlertsCronJobResult {
@@ -100,12 +111,12 @@ export async function handleAlertsEvaluateJob(
   deps: AlertsEvaluateHandlerDeps = {},
 ): Promise<AlertsEvaluateJobResult> {
   const evaluate = deps.evaluate ?? evaluateAlerts;
-  const healthFn = deps.health ?? getOperationsHealth;
+  const healthFn = deps.health ?? getOperationsHealthAsync;
   const metricsFn = deps.metrics ?? getJobTypeMetrics;
   const webhookConfigFn = deps.webhookConfig ?? (() => resolveAlertWebhookConfig());
   const deliverFn = deps.deliver ?? deliverAlertWebhook;
-  const recordFn = deps.record ?? recordAlerts;
-  const enqueueDeliverFn = deps.enqueueDeliverJob ?? enqueueJob;
+  const recordFn = deps.record ?? recordAlertsAsync;
+  const enqueueDeliverFn = deps.enqueueDeliverJob ?? enqueueJobAsync;
   const env = deps.env ?? process.env;
   const nowFn = deps.now ?? (() => new Date());
 
@@ -122,7 +133,7 @@ export async function handleAlertsEvaluateJob(
   const retentionDays = payload.retentionDays ?? parseRetentionFromEnv(env[ALERT_RETENTION_DAYS_ENV]);
 
   const events: AlertEvent[] = evaluate({
-    health: healthFn(),
+    health: await healthFn(),
     metrics: metricsFn(),
     jobFailureRateThreshold,
     jobFailureMinSamples,
@@ -143,7 +154,7 @@ export async function handleAlertsEvaluateJob(
     }
   }
 
-  const recordResult = recordFn(events, delivered, deliveryError, { retentionDays });
+  const recordResult = await recordFn(events, delivered, deliveryError, { retentionDays });
 
   let enqueuedDeliverJobs = 0;
   if (delivered === false && events.length > 0) {
@@ -152,7 +163,7 @@ export async function handleAlertsEvaluateJob(
     const workspaceId = env[ALERT_WORKSPACE_ID_ENV]?.trim() || DEFAULT_WORKSPACE_ID;
     const scheduledAt = nowFn().toISOString();
     for (const event of events) {
-      enqueueDeliverFn({
+      await enqueueDeliverFn({
         workspaceId,
         type: ALERTS_DELIVER_JOB_TYPE,
         payload: { alertId: event.id },
@@ -211,6 +222,50 @@ export function ensureAlertsCronJob(
   const retentionDays = parseRetentionFromEnv(env[ALERT_RETENTION_DAYS_ENV]);
 
   const created = enqueue({
+    workspaceId,
+    type: ALERTS_EVALUATE_JOB_TYPE,
+    payload: { retentionDays },
+    cron,
+    scheduledAt: firstRun.toISOString(),
+  });
+
+  return { action: "enqueued", jobId: created.id };
+}
+
+export async function ensureAlertsCronJobAsync(
+  deps: EnsureAlertsCronJobAsyncDeps = {},
+): Promise<EnsureAlertsCronJobResult> {
+  const env = deps.env ?? process.env;
+  const loadStore = deps.loadStore ?? defaultLoadStoreAsync;
+  const enqueue = deps.enqueue ?? enqueueJobAsync;
+
+  const cron = env[ALERT_EVALUATE_CRON_ENV]?.trim();
+  if (!cron) return { action: "skipped" };
+
+  let firstRun: Date;
+  try {
+    firstRun = nextAfter(cron, new Date());
+  } catch (error) {
+    console.warn(
+      `alerts.evaluate: invalid ${ALERT_EVALUATE_CRON_ENV} expression ${JSON.stringify(cron)}; skipping bootstrap (${(error as Error).message})`,
+    );
+    return { action: "skipped" };
+  }
+
+  const data = await loadStore();
+  const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+  const existing = jobs.find(
+    (job) =>
+      job.type === ALERTS_EVALUATE_JOB_TYPE &&
+      job.cron === cron &&
+      ACTIVE_RECURRING_STATUSES.has(job.status),
+  );
+  if (existing) return { action: "exists", jobId: existing.id };
+
+  const workspaceId = env[ALERT_WORKSPACE_ID_ENV]?.trim() || DEFAULT_WORKSPACE_ID;
+  const retentionDays = parseRetentionFromEnv(env[ALERT_RETENTION_DAYS_ENV]);
+
+  const created = await enqueue({
     workspaceId,
     type: ALERTS_EVALUATE_JOB_TYPE,
     payload: { retentionDays },

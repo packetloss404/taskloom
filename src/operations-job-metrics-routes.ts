@@ -1,11 +1,11 @@
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
-import { listJobMetricSnapshots } from "./jobs/job-metrics-snapshot.js";
+import { listJobMetricSnapshotsAsync } from "./jobs/job-metrics-snapshot.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 
 export const operationsJobMetricsRoutes = new Hono();
 
-operationsJobMetricsRoutes.get("/history", (c: Context) => {
+operationsJobMetricsRoutes.get("/history", async (c: Context) => {
   try {
     requirePrivateWorkspaceRole(c, "admin");
     const type = c.req.query("type") || undefined;
@@ -19,7 +19,7 @@ operationsJobMetricsRoutes.get("/history", (c: Context) => {
     }
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? Math.max(1, Math.min(500, Number.parseInt(limitRaw, 10) || 100)) : undefined;
-    const snapshots = listJobMetricSnapshots({ type, since, until, limit });
+    const snapshots = await listJobMetricSnapshotsAsync({ type, since, until, limit });
     return c.json({ snapshots });
   } catch (error) {
     const status = ((error as { status?: number }).status ?? 500) as 401 | 403 | 404 | 500;

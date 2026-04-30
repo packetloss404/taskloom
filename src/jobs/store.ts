@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createJobsRepository } from "../repositories/jobs-repo.js";
-import { clearStoreCache, findJobIndexed, listJobsForWorkspaceIndexed, mutateStore, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
+import { createAsyncJobsRepository, createJobsRepository } from "../repositories/jobs-repo.js";
+import { clearStoreCache, findJobIndexed, listJobsForWorkspaceIndexed, loadStoreAsync, mutateStore, mutateStoreAsync, type AgentRecord, type JobRecord, type JobStatus, type TaskloomData } from "../taskloom-store.js";
 import { nextAfter } from "./cron.js";
 
 const STALE_RUNNING_MS = 5 * 60 * 1000;
@@ -305,6 +305,178 @@ export function sweepStaleRunningJobs(staleAfterMs: number = STALE_RUNNING_MS, n
   return count;
 }
 
+function createDefaultAsyncJobsRepository() {
+  return createAsyncJobsRepository({
+    loadStore: loadStoreAsync,
+    mutateStore: mutateStoreAsync,
+  });
+}
+
+async function enqueueJobViaAsyncStore(input: EnqueueJobInput): Promise<JobRecord> {
+  const ts = nowIso();
+  const record: JobRecord = {
+    id: randomUUID(),
+    workspaceId: input.workspaceId,
+    type: input.type,
+    payload: input.payload ?? {},
+    status: "queued",
+    attempts: 0,
+    maxAttempts: input.maxAttempts ?? 3,
+    scheduledAt: input.scheduledAt ?? ts,
+    ...(input.cron ? { cron: input.cron } : {}),
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  const inserted = await mutateStoreAsync((data) => {
+    data.jobs.push(record);
+    return record;
+  });
+  dualWriteJobs([inserted]);
+  return inserted;
+}
+
+async function maintainScheduledAgentJobsViaAsyncStore(agentId?: string): Promise<JobRecord[]> {
+  const timestamp = nowIso();
+  const { maintained, touched } = await mutateStoreAsync((data) => {
+    const agents = agentId ? data.agents.filter((agent) => agent.id === agentId) : data.agents;
+    const maintained: JobRecord[] = [];
+    const touched: JobRecord[] = [];
+    for (const agent of agents) {
+      const result = ensureScheduledAgentJob(data, agent, timestamp);
+      if (result.maintained) maintained.push(result.maintained);
+      for (const job of result.touched) touched.push(job);
+    }
+    return { maintained, touched };
+  });
+  const dedup = new Map<string, JobRecord>();
+  for (const job of touched) dedup.set(job.id, job);
+  for (const job of maintained) dedup.set(job.id, job);
+  dualWriteJobs([...dedup.values()]);
+  return maintained;
+}
+
+async function enqueueRecurringJobViaAsyncStore(job: JobRecord, scheduledAt: string): Promise<JobRecord | null> {
+  if (job.type === "agent.run" && job.payload?.triggerKind === "schedule" && typeof job.payload.agentId === "string") {
+    const { maintained, touched } = await mutateStoreAsync((data) => {
+      const agent = data.agents.find((entry) => entry.id === job.payload.agentId);
+      if (!agent) return { maintained: null as JobRecord | null, touched: [] as JobRecord[] };
+      const result = ensureScheduledAgentJob(data, agent, nowIso(), scheduledAt, job.payload);
+      return { maintained: result.maintained, touched: result.touched };
+    });
+    const dedup = new Map<string, JobRecord>();
+    for (const entry of touched) dedup.set(entry.id, entry);
+    if (maintained) dedup.set(maintained.id, maintained);
+    dualWriteJobs([...dedup.values()]);
+    return maintained;
+  }
+
+  return enqueueJobViaAsyncStore({
+    workspaceId: job.workspaceId,
+    type: job.type,
+    payload: job.payload,
+    cron: job.cron,
+    scheduledAt,
+    maxAttempts: job.maxAttempts,
+  });
+}
+
+let claimAsyncMutex: Promise<unknown> = Promise.resolve();
+
+export function createAsyncJobSchedulerStorage(): JobSchedulerStorage {
+  return {
+    enqueueJob(input) {
+      return enqueueJobViaAsyncStore(input);
+    },
+    maintainScheduledAgentJobs(agentId) {
+      return maintainScheduledAgentJobsViaAsyncStore(agentId);
+    },
+    enqueueRecurringJob(job, scheduledAt) {
+      return enqueueRecurringJobViaAsyncStore(job, scheduledAt);
+    },
+    listJobs(workspaceId, opts = {}) {
+      return createDefaultAsyncJobsRepository().list({ workspaceId, ...opts });
+    },
+    findJob(id) {
+      return createDefaultAsyncJobsRepository().find(id);
+    },
+    async updateJob(id, patch) {
+      const updated = await createDefaultAsyncJobsRepository().update(id, patch);
+      if (updated) dualWriteJobs([updated]);
+      return updated;
+    },
+    async cancelJob(id) {
+      const updated = await mutateStoreAsync((data) => {
+        const job = data.jobs.find((j) => j.id === id);
+        if (!job) return null;
+        job.cancelRequested = true;
+        job.updatedAt = nowIso();
+        if (job.status === "queued") {
+          job.status = "canceled";
+          job.completedAt = job.updatedAt;
+        }
+        return job;
+      });
+      if (updated) dualWriteJobs([updated]);
+      return updated;
+    },
+    async claimNextJob(now) {
+      if (isSqliteMode()) {
+        const claimed = await createDefaultAsyncJobsRepository().claimNext(now);
+        if (claimed) clearStoreCache();
+        return claimed;
+      }
+
+      const previous = claimAsyncMutex;
+      let release!: () => void;
+      claimAsyncMutex = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        const claimed = await mutateStoreAsync((data) => {
+          const candidate = data.jobs
+            .filter((j) => j.status === "queued" && Date.parse(j.scheduledAt) <= now.getTime())
+            .sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt))[0];
+          if (!candidate) return null;
+          candidate.status = "running";
+          candidate.attempts += 1;
+          candidate.startedAt = now.toISOString();
+          candidate.updatedAt = candidate.startedAt;
+          return candidate;
+        });
+        if (claimed) dualWriteJobs([claimed]);
+        return claimed;
+      } finally {
+        release();
+      }
+    },
+    async sweepStaleRunningJobs(staleAfterMs = STALE_RUNNING_MS, now = new Date()) {
+      if (isSqliteMode()) {
+        const swept = await createDefaultAsyncJobsRepository().sweepStaleRunning(staleAfterMs, now);
+        if (swept > 0) clearStoreCache();
+        return swept;
+      }
+
+      const swept: JobRecord[] = [];
+      const count = await mutateStoreAsync((data) => {
+        const cutoff = now.getTime() - staleAfterMs;
+        const timestamp = now.toISOString();
+        let count = 0;
+        for (const job of data.jobs) {
+          if (job.status === "running" && job.startedAt && Date.parse(job.startedAt) < cutoff) {
+            job.status = "queued";
+            job.updatedAt = timestamp;
+            delete job.startedAt;
+            swept.push(job);
+            count++;
+          }
+        }
+        return count;
+      });
+      dualWriteJobs(swept);
+      return count;
+    },
+  };
+}
+
 export function createSyncJobSchedulerStorage(): JobSchedulerStorageSync {
   return {
     enqueueJob,
@@ -319,7 +491,8 @@ export function createSyncJobSchedulerStorage(): JobSchedulerStorageSync {
   };
 }
 
-export function asyncJobSchedulerStorage(syncStorage: JobSchedulerStorageSync = createSyncJobSchedulerStorage()): JobSchedulerStorage {
+export function asyncJobSchedulerStorage(syncStorage?: JobSchedulerStorageSync): JobSchedulerStorage {
+  if (!syncStorage) return createAsyncJobSchedulerStorage();
   return {
     async enqueueJob(input) {
       return syncStorage.enqueueJob(input);
@@ -382,6 +555,10 @@ export function updateJobAsync(id: string, patch: Partial<JobRecord>): Promise<J
 
 export function cancelJobAsync(id: string): Promise<JobRecord | null> {
   return defaultJobSchedulerStorage.cancelJob(id);
+}
+
+export function claimNextJobAsync(now: Date): Promise<JobRecord | null> {
+  return defaultJobSchedulerStorage.claimNextJob(now);
 }
 
 export function sweepStaleRunningJobsAsync(staleAfterMs: number = STALE_RUNNING_MS, now: Date = new Date()): Promise<number> {

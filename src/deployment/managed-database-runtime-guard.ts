@@ -44,6 +44,21 @@ export interface ManagedDatabaseRuntimeGuardCheck {
   summary: string;
 }
 
+export interface ManagedDatabaseRuntimeCallSiteMigrationInput {
+  remainingSyncCallSiteGroups?: readonly string[];
+  managedPostgresStartupSupported?: boolean;
+}
+
+export interface ManagedDatabaseRuntimeCallSiteMigrationReport {
+  phase: "51";
+  tracked: true;
+  runtimeCallSitesMigrated: boolean;
+  remainingSyncCallSiteGroups: string[];
+  managedPostgresStartupSupported: boolean;
+  strictBlocker: boolean;
+  summary: string;
+}
+
 export interface ManagedDatabaseRuntimeGuardReport {
   phase: "46";
   allowed: boolean;
@@ -63,10 +78,12 @@ export interface ManagedDatabaseRuntimeGuardReport {
     adapter: string | null;
     syncStartupSupported: false;
   };
+  phase51?: ManagedDatabaseRuntimeCallSiteMigrationReport;
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
   supportedLocalModes?: readonly string[];
+  phase51?: ManagedDatabaseRuntimeCallSiteMigrationInput;
 }
 
 export interface ManagedDatabaseRuntimeGuardInput extends ManagedDatabaseRuntimeGuardDeps {
@@ -113,6 +130,7 @@ const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
   "managed-postgres",
   "managed-postgresql",
 ]);
+const DEFAULT_PHASE_51_REMAINING_SYNC_CALL_SITE_GROUPS: string[] = [];
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 
 function clean(value: string | undefined): string {
@@ -198,6 +216,33 @@ function phase50AsyncAdapter(env: ManagedDatabaseRuntimeGuardEnv, urlConfigured:
   };
 }
 
+function phase51RuntimeCallSiteMigration(
+  input: ManagedDatabaseRuntimeCallSiteMigrationInput | undefined,
+): ManagedDatabaseRuntimeCallSiteMigrationReport {
+  const remainingSyncCallSiteGroups = Array.from(
+    input?.remainingSyncCallSiteGroups ?? DEFAULT_PHASE_51_REMAINING_SYNC_CALL_SITE_GROUPS,
+  );
+  const runtimeCallSitesMigrated = remainingSyncCallSiteGroups.length === 0;
+  const managedPostgresStartupSupported =
+    runtimeCallSitesMigrated && input?.managedPostgresStartupSupported === true;
+  const strictBlocker = !managedPostgresStartupSupported;
+  const summary = managedPostgresStartupSupported
+    ? "Phase 51 runtime call-site migration evidence reports managed Postgres startup support."
+    : runtimeCallSitesMigrated
+      ? "Phase 51 runtime call-site migration has no remaining sync call-site groups, but managed Postgres startup support is not asserted."
+      : `Phase 51 runtime call-site migration is incomplete; ${remainingSyncCallSiteGroups.length} sync call-site group(s) still block managed Postgres startup.`;
+
+  return {
+    phase: "51",
+    tracked: true,
+    runtimeCallSitesMigrated,
+    remainingSyncCallSiteGroups,
+    managedPostgresStartupSupported,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -210,7 +255,11 @@ function supportedStore(store: string, supportedLocalModes: readonly string[]): 
   return supportedLocalModes.includes(store);
 }
 
-function buildNextSteps(checks: ManagedDatabaseRuntimeGuardCheck[], bypassEnabled: boolean): string[] {
+function buildNextSteps(
+  checks: ManagedDatabaseRuntimeGuardCheck[],
+  bypassEnabled: boolean,
+  phase51: ManagedDatabaseRuntimeCallSiteMigrationReport,
+): string[] {
   const steps = new Set<string>();
 
   for (const check of checks) {
@@ -221,6 +270,11 @@ function buildNextSteps(checks: ManagedDatabaseRuntimeGuardCheck[], bypassEnable
     if (check.id === "managed-database-runtime") {
       steps.add("Do not use managed database URL environment variables as synchronous app startup configuration.");
       steps.add("Treat Phase 50 async adapter/backfill evidence separately from synchronous startup support.");
+      if (phase51.runtimeCallSitesMigrated) {
+        steps.add("Keep managed/Postgres hints blocked until managed Postgres startup support is explicitly asserted and covered.");
+      } else {
+        steps.add("Finish Phase 51 runtime call-site migration before managed/Postgres hints become startup configuration.");
+      }
     }
     if (check.id === "single-writer-runtime") {
       steps.add("Keep Taskloom on local JSON or single-node SQLite until multi-writer runtime support exists.");
@@ -248,6 +302,7 @@ export function assessManagedDatabaseRuntimeGuard(
   const bypassEnabled = normalize(env.TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS) === "true";
   const hasManagedDatabaseUrl = managedDatabaseUrlConfigured(env);
   const phase50 = phase50AsyncAdapter(env, hasManagedDatabaseUrl);
+  const phase51 = phase51RuntimeCallSiteMigration(input.phase51);
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -280,7 +335,9 @@ export function assessManagedDatabaseRuntimeGuard(
     hasManagedIntent ? "fail" : "pass",
     hasManagedIntent
       ? phase50.asyncAdapterAvailable
-        ? "Managed database runtime intent was detected and Phase 50 async adapter/backfill capability is configured, but synchronous app startup remains blocked."
+        ? phase51.runtimeCallSitesMigrated
+          ? "Managed database runtime intent was detected and Phase 50 async adapter/backfill capability is configured, but managed Postgres startup support is not asserted."
+          : "Managed database runtime intent was detected and Phase 50 async adapter/backfill capability is configured, but Phase 51 runtime call-site migration is incomplete."
         : "Managed database runtime intent was detected, but Taskloom's synchronous app runtime still has no supported managed database startup path."
       : "No managed database URL or managed database runtime hint was detected.",
   );
@@ -307,6 +364,13 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push("Phase 50 async managed adapter/backfill capability is available for evidence, but the synchronous app runtime remains blocked for managed startup.");
   } else if (phase50.asyncAdapterConfigured) {
     warnings.push("TASKLOOM_MANAGED_DATABASE_ADAPTER is configured, but Phase 50 adapter availability also requires a recognized postgres adapter value and managed database URL.");
+  }
+  if (hasManagedIntent && phase51.strictBlocker) {
+    warnings.push(
+      phase51.remainingSyncCallSiteGroups.length > 0
+        ? `${phase51.summary} Remaining sync call-site groups: ${phase51.remainingSyncCallSiteGroups.join(", ")}.`
+        : phase51.summary,
+    );
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -348,7 +412,7 @@ export function assessManagedDatabaseRuntimeGuard(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, bypassEnabled),
+    nextSteps: buildNextSteps(checks, bypassEnabled, phase51),
     observed: {
       nodeEnv,
       store,
@@ -362,6 +426,7 @@ export function assessManagedDatabaseRuntimeGuard(
       env: observedEnv,
     },
     phase50,
+    phase51,
   };
 }
 

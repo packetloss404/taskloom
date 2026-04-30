@@ -13,8 +13,11 @@ import {
   getWorkspaceRole,
   hasWorkspaceRole,
   requirePrivateWorkspace,
+  requirePrivateWorkspaceAsync,
   requirePrivateWorkspacePermission,
+  requirePrivateWorkspacePermissionAsync,
   requirePrivateWorkspaceRole,
+  requirePrivateWorkspaceRoleAsync,
   requireWorkspaceRole,
 } from "./rbac";
 import { login } from "./taskloom-services.js";
@@ -149,6 +152,22 @@ test("route role policy helper accepts roles above the minimum", async () => {
   assert.deepEqual(await response.json(), { workspaceId: "alpha", userId: "user_alpha" });
 });
 
+test("async route policy helpers return the authenticated context when permission is allowed", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "member";
+  });
+  const app = createAsyncPolicyApp();
+
+  const response = await app.request("/private", { headers: authHeaders(auth.cookieValue) });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { workspaceId: "alpha", userId: "user_alpha" });
+});
+
 function createPolicyApp(mode: "permission" | "membership" | "role" = "permission") {
   const app = new Hono();
   app.get("/private", (c) => {
@@ -162,10 +181,29 @@ function createPolicyApp(mode: "permission" | "membership" | "role" = "permissio
   return app;
 }
 
+function createAsyncPolicyApp(mode: "permission" | "membership" | "role" = "permission") {
+  const app = new Hono();
+  app.get("/private", async (c) => {
+    try {
+      const context = await asyncRoutePolicyContext(c, mode);
+      return c.json({ workspaceId: context.workspace.id, userId: context.user.id });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+  return app;
+}
+
 function routePolicyContext(c: Context, mode: "permission" | "membership" | "role") {
   if (mode === "membership") return requirePrivateWorkspace(c);
   if (mode === "role") return requirePrivateWorkspaceRole(c, "admin");
   return requirePrivateWorkspacePermission(c, "editWorkflow");
+}
+
+function asyncRoutePolicyContext(c: Context, mode: "permission" | "membership" | "role") {
+  if (mode === "membership") return requirePrivateWorkspaceAsync(c);
+  if (mode === "role") return requirePrivateWorkspaceRoleAsync(c, "admin");
+  return requirePrivateWorkspacePermissionAsync(c, "editWorkflow");
 }
 
 function authHeaders(cookieValue: string) {

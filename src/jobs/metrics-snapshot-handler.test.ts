@@ -92,9 +92,9 @@ function captureWarn(): { restore: () => void; calls: unknown[][] } {
   };
 }
 
-test("handleMetricsSnapshotJob with valid retentionDays calls snapshot and returns mapped result", () => {
+test("handleMetricsSnapshotJob with valid retentionDays calls snapshot and returns mapped result", async () => {
   const { deps, calls } = makeSnapshotStub();
-  const result = handleMetricsSnapshotJob({ retentionDays: 14 }, deps);
+  const result = await handleMetricsSnapshotJob({ retentionDays: 14 }, deps);
   assert.deepEqual(calls, [{ retentionDays: 14 }]);
   assert.deepEqual(result, {
     snapshotCount: 2,
@@ -103,32 +103,32 @@ test("handleMetricsSnapshotJob with valid retentionDays calls snapshot and retur
   });
 });
 
-test("handleMetricsSnapshotJob with no payload defaults retentionDays to 30", () => {
+test("handleMetricsSnapshotJob with no payload defaults retentionDays to 30", async () => {
   const { deps, calls } = makeSnapshotStub();
-  const result = handleMetricsSnapshotJob({}, deps);
+  const result = await handleMetricsSnapshotJob({}, deps);
   assert.deepEqual(calls, [{ retentionDays: 30 }]);
   assert.equal(result.snapshotCount, 2);
 });
 
-test("handleMetricsSnapshotJob throws when retentionDays is negative", () => {
+test("handleMetricsSnapshotJob throws when retentionDays is negative", async () => {
   const { deps } = makeSnapshotStub();
-  assert.throws(
+  await assert.rejects(
     () => handleMetricsSnapshotJob({ retentionDays: -1 }, deps),
     /retentionDays must be a non-negative integer/,
   );
 });
 
-test("handleMetricsSnapshotJob throws when retentionDays is non-integer", () => {
+test("handleMetricsSnapshotJob throws when retentionDays is non-integer", async () => {
   const { deps } = makeSnapshotStub();
-  assert.throws(
+  await assert.rejects(
     () => handleMetricsSnapshotJob({ retentionDays: 1.5 }, deps),
     /retentionDays must be a non-negative integer/,
   );
 });
 
-test("handleMetricsSnapshotJob throws when retentionDays is not a number", () => {
+test("handleMetricsSnapshotJob throws when retentionDays is not a number", async () => {
   const { deps } = makeSnapshotStub();
-  assert.throws(
+  await assert.rejects(
     () => handleMetricsSnapshotJob({ retentionDays: "30" as unknown as number }, deps),
     /retentionDays must be a non-negative integer/,
   );

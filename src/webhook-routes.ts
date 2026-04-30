@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
-import { findAgent, loadStore, mutateStore } from "./taskloom-store.js";
-import { enqueueJob } from "./jobs/store.js";
+import { findAgent, loadStoreAsync, mutateStoreAsync } from "./taskloom-store.js";
+import { enqueueJobAsync } from "./jobs/store.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 
 function errorResponse(c: Context, error: unknown) {
@@ -20,11 +20,11 @@ function generateWebhookToken(): string {
 
 export const agentWebhookRoutes = new Hono();
 
-agentWebhookRoutes.post("/agents/:agentId/rotate", (c) => {
+agentWebhookRoutes.post("/agents/:agentId/rotate", async (c) => {
   try {
     const ctx = requirePrivateWorkspaceRole(c, "admin");
     const id = c.req.param("agentId");
-    const updated = mutateStore((data) => {
+    const updated = await mutateStoreAsync((data) => {
       const agent = findAgent(data, id);
       if (!agent || agent.workspaceId !== ctx.workspace.id) return null;
       agent.webhookToken = generateWebhookToken();
@@ -38,11 +38,11 @@ agentWebhookRoutes.post("/agents/:agentId/rotate", (c) => {
   }
 });
 
-agentWebhookRoutes.delete("/agents/:agentId", (c) => {
+agentWebhookRoutes.delete("/agents/:agentId", async (c) => {
   try {
     const ctx = requirePrivateWorkspaceRole(c, "admin");
     const id = c.req.param("agentId");
-    const ok = mutateStore((data) => {
+    const ok = await mutateStoreAsync((data) => {
       const agent = findAgent(data, id);
       if (!agent || agent.workspaceId !== ctx.workspace.id) return false;
       delete agent.webhookToken;
@@ -61,13 +61,13 @@ export const publicWebhookRoutes = new Hono();
 publicWebhookRoutes.post("/agents/:token", async (c) => {
   try {
     const tokenParam = c.req.param("token");
-    const data = loadStore();
+    const data = await loadStoreAsync();
     const agent = data.agents.find((a) => a.webhookToken === tokenParam && a.status !== "archived");
     if (!agent) return errorResponse(c, Object.assign(new Error("not found"), { status: 404 }));
     let body: Record<string, unknown> = {};
     try { body = (await c.req.json()) as Record<string, unknown>; }
     catch { body = {}; }
-    const job = enqueueJob({
+    const job = await enqueueJobAsync({
       workspaceId: agent.workspaceId,
       type: "agent.run",
       payload: { agentId: agent.id, triggerKind: "webhook", inputs: body },

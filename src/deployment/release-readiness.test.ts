@@ -34,6 +34,9 @@ test("local JSON development produces warnings instead of release blockers", () 
   assert.equal(report.asyncStoreBoundary.managedDatabaseAdapterImplemented, false);
   assert.equal(report.asyncStoreBoundary.managedDatabaseBackfillAvailable, false);
   assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseRuntimeCallSiteMigrationTracked, true);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated, true);
+  assert.deepEqual(report.asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups, []);
   assert.equal(report.asyncStoreBoundary.classification, "foundation-ready");
   assert.equal(checkStatus(report, "storage-topology"), "warn");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
@@ -112,6 +115,7 @@ test("strict release with a managed database URL fails managed topology and runt
   assert.equal(report.asyncStoreBoundary.managedDatabaseRepositoriesImplemented, false);
   assert.equal(report.asyncStoreBoundary.managedDatabaseBackfillAvailable, false);
   assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated, true);
   assert.equal(report.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
   assert.ok(report.blockers.some((blocker) => /managed database topology/i.test(blocker)));
   assert.ok(report.blockers.some((blocker) => blocker.includes("runtime guard blocks startup")));
@@ -147,11 +151,14 @@ test("strict release with Phase 50 adapter config and managed URL reports async 
   assert.equal(report.asyncStoreBoundary.managedDatabaseAdapterImplemented, true);
   assert.equal(report.asyncStoreBoundary.managedDatabaseBackfillAvailable, true);
   assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated, true);
+  assert.deepEqual(report.asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups, []);
   assert.equal(report.asyncStoreBoundary.managedPostgresSupported, false);
   assert.equal(checkStatus(report, "managed-database-runtime-guard"), "fail");
   assert.equal(checkStatus(report, "async-store-boundary"), "fail");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous app startup remains blocked")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("managed Postgres startup support is not asserted")));
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 50 async adapter/backfill evidence")));
+  assert.ok(report.nextSteps.some((step) => step.includes("runtime support claim is explicitly updated")));
   assert.ok(report.summary.includes("blocked"));
 });
 

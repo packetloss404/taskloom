@@ -82,6 +82,9 @@ export interface ReleaseEvidenceBundle {
       managedDatabaseRepositoriesImplemented: false;
       managedDatabaseBackfillAvailable: boolean;
       managedDatabaseSyncStartupSupported: false;
+      managedDatabaseRuntimeCallSiteMigrationTracked: boolean;
+      managedDatabaseRuntimeCallSitesMigrated: boolean;
+      managedDatabaseRemainingSyncCallSiteGroups: string[];
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -311,6 +314,15 @@ function buildAttachments(
         : "Phase 50 async managed adapter/backfill capability is not configured.",
     },
     {
+      id: "phase-51-runtime-call-site-migration",
+      label: "Phase 51 runtime call-site migration evidence",
+      format: "json",
+      required: !asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated,
+      summary: asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated
+        ? "Phase 51 runtime call-site migration reports no remaining sync call-site groups; startup support still requires an explicit runtime support claim."
+        : `Phase 51 runtime call-site migration remains incomplete; ${asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups.length} sync call-site group(s) still block managed Postgres startup.`,
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -470,6 +482,9 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         managedDatabaseRepositoriesImplemented: asyncStoreBoundary.managedDatabaseRepositoriesImplemented,
         managedDatabaseBackfillAvailable: asyncStoreBoundary.managedDatabaseBackfillAvailable,
         managedDatabaseSyncStartupSupported: asyncStoreBoundary.managedDatabaseSyncStartupSupported,
+        managedDatabaseRuntimeCallSiteMigrationTracked: asyncStoreBoundary.managedDatabaseRuntimeCallSiteMigrationTracked,
+        managedDatabaseRuntimeCallSitesMigrated: asyncStoreBoundary.managedDatabaseRuntimeCallSitesMigrated,
+        managedDatabaseRemainingSyncCallSiteGroups: asyncStoreBoundary.managedDatabaseRemainingSyncCallSiteGroups,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

@@ -4,7 +4,49 @@ import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils";
 import { appRoutes } from "./app-routes";
 import { login } from "./taskloom-services";
-import { mutateStore, resetStoreForTests } from "./taskloom-store";
+import {
+  clearStoreCacheForTests,
+  createSeedStore,
+  mutateStore,
+  resetStoreForTests,
+  setManagedPostgresStoreClientFactoryForTests,
+  type ManagedPostgresStoreClientConfig,
+  type ManagedPostgresStoreQueryClient,
+  type ManagedPostgresStoreQueryResult,
+  type TaskloomData,
+} from "./taskloom-store";
+
+const STORE_ENV_KEYS = [
+  "TASKLOOM_STORE",
+  "DATABASE_URL",
+  "TASKLOOM_DATABASE_URL",
+  "TASKLOOM_MANAGED_DATABASE_URL",
+] as const;
+
+type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
+
+class FakeManagedPostgresClient implements ManagedPostgresStoreQueryClient {
+  payloadJson: string | null = JSON.stringify(createSeedStore());
+
+  async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params: readonly unknown[] = [],
+  ): Promise<ManagedPostgresStoreQueryResult<TRow>> {
+    const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+    if (normalized.startsWith("select payload from taskloom_document_store")) {
+      return { rows: this.payloadJson ? [{ payload: this.payloadJson } as unknown as TRow] : [] };
+    }
+    if (normalized.startsWith("insert into taskloom_document_store")) {
+      this.payloadJson = String(params[3]);
+    }
+    return { rows: [] };
+  }
+
+  storedData(): TaskloomData {
+    assert.ok(this.payloadJson);
+    return JSON.parse(this.payloadJson) as TaskloomData;
+  }
+}
 
 function createTestApp() {
   const app = new Hono();
@@ -16,6 +58,45 @@ function authHeaders(cookieValue: string) {
   return { Cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
 }
 
+function cookieValue(response: Response) {
+  const cookie = response.headers.get("set-cookie") ?? "";
+  const match = cookie.match(new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`));
+  assert.ok(match?.[1], "expected response to set a session cookie");
+  return match[1];
+}
+
+async function withManagedStoreEnv(
+  env: Partial<Record<StoreEnvKey, string>>,
+  client: FakeManagedPostgresClient,
+  run: (configs: ManagedPostgresStoreClientConfig[]) => Promise<void> | void,
+) {
+  const previous = new Map<StoreEnvKey, string | undefined>();
+  for (const key of STORE_ENV_KEYS) previous.set(key, process.env[key]);
+
+  const configs: ManagedPostgresStoreClientConfig[] = [];
+  const restoreFactory = setManagedPostgresStoreClientFactoryForTests((config) => {
+    configs.push(config);
+    return client;
+  });
+
+  try {
+    for (const key of STORE_ENV_KEYS) delete process.env[key];
+    for (const [key, value] of Object.entries(env) as Array<[StoreEnvKey, string | undefined]>) {
+      if (value !== undefined) process.env[key] = value;
+    }
+    clearStoreCacheForTests();
+    await run(configs);
+  } finally {
+    clearStoreCacheForTests();
+    restoreFactory();
+    for (const key of STORE_ENV_KEYS) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 test("app activation route requires authentication", async () => {
   resetStoreForTests();
   const app = createTestApp();
@@ -25,6 +106,39 @@ test("app activation route requires authentication", async () => {
 
   assert.equal(response.status, 401);
   assert.deepEqual(body, { error: "authentication required" });
+});
+
+test("auth session routes run through the async managed store backend", async () => {
+  const client = new FakeManagedPostgresClient();
+
+  await withManagedStoreEnv({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  }, client, async (configs) => {
+    const app = createTestApp();
+
+    const loginResponse = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alpha@taskloom.local", password: "demo12345" }),
+    });
+    const loginBody = await loginResponse.json() as { authenticated: boolean; user: { id: string } };
+
+    assert.equal(configs[0].envKey, "TASKLOOM_DATABASE_URL");
+    assert.equal(loginResponse.status, 200);
+    assert.equal(loginBody.authenticated, true);
+    assert.equal(loginBody.user.id, "user_alpha");
+
+    const sessionResponse = await app.request("/api/auth/session", {
+      headers: authHeaders(cookieValue(loginResponse)),
+    });
+    const sessionBody = await sessionResponse.json() as { authenticated: boolean; user: { id: string } };
+
+    assert.equal(sessionResponse.status, 200);
+    assert.equal(sessionBody.authenticated, true);
+    assert.equal(sessionBody.user.id, "user_alpha");
+    assert.equal(client.storedData().sessions.some((entry) => entry.userId === "user_alpha"), true);
+  });
 });
 
 test("app activation detail is scoped to the authenticated workspace", async () => {

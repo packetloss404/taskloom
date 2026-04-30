@@ -1,6 +1,6 @@
 import type { Context } from "hono";
-import { requireAuthenticatedContext } from "./taskloom-services.js";
-import { findWorkspaceMembership, loadStore } from "./taskloom-store.js";
+import { requireAuthenticatedContext, requireAuthenticatedContextAsync } from "./taskloom-services.js";
+import { findWorkspaceMembership, loadStore, loadStoreAsync } from "./taskloom-store.js";
 
 export const WORKSPACE_ROLES = ["viewer", "member", "admin", "owner"] as const;
 
@@ -13,6 +13,7 @@ export interface WorkspaceMembershipLike {
 }
 
 export type AuthenticatedWorkspaceContext = ReturnType<typeof requireAuthenticatedContext>;
+export type AuthenticatedWorkspaceContextAsync = Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>;
 
 export interface WorkspaceRoleDefinition {
   rank: number;
@@ -125,9 +126,24 @@ export function requirePrivateWorkspace(c: Context): AuthenticatedWorkspaceConte
   return context;
 }
 
+export async function requirePrivateWorkspaceAsync(c: Context): Promise<AuthenticatedWorkspaceContextAsync> {
+  const context = await requireAuthenticatedContextAsync(c);
+  await requireWorkspaceMembershipAsync(context);
+  return context;
+}
+
 export function requirePrivateWorkspaceRole(c: Context, minimumRole: WorkspaceRole): AuthenticatedWorkspaceContext {
   const context = requireAuthenticatedContext(c);
   requireWorkspaceRole(requireWorkspaceMembership(context), minimumRole);
+  return context;
+}
+
+export async function requirePrivateWorkspaceRoleAsync(
+  c: Context,
+  minimumRole: WorkspaceRole,
+): Promise<AuthenticatedWorkspaceContextAsync> {
+  const context = await requireAuthenticatedContextAsync(c);
+  requireWorkspaceRole(await requireWorkspaceMembershipAsync(context), minimumRole);
   return context;
 }
 
@@ -140,8 +156,25 @@ export function requirePrivateWorkspacePermission(
   return context;
 }
 
+export async function requirePrivateWorkspacePermissionAsync(
+  c: Context,
+  permission: WorkspacePermission,
+): Promise<AuthenticatedWorkspaceContextAsync> {
+  const context = await requireAuthenticatedContextAsync(c);
+  assertPermission(await requireWorkspaceMembershipAsync(context), permission);
+  return context;
+}
+
 function requireWorkspaceMembership(context: AuthenticatedWorkspaceContext): WorkspaceMembershipLike {
   const membership = findWorkspaceMembership(loadStore(), context.workspace.id, context.user.id);
+  if (!membership || getWorkspaceRole(membership) === null) {
+    throw new WorkspaceAccessError("workspace membership is required");
+  }
+  return membership;
+}
+
+async function requireWorkspaceMembershipAsync(context: AuthenticatedWorkspaceContextAsync): Promise<WorkspaceMembershipLike> {
+  const membership = findWorkspaceMembership(await loadStoreAsync(), context.workspace.id, context.user.id);
   if (!membership || getWorkspaceRole(membership) === null) {
     throw new WorkspaceAccessError("workspace membership is required");
   }

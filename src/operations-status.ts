@@ -1,6 +1,6 @@
 import type { TaskloomData } from "./taskloom-store.js";
 import { createRequire } from "node:module";
-import { loadStore as defaultLoadStore } from "./taskloom-store.js";
+import { loadStore as defaultLoadStore, loadStoreAsync as defaultLoadStoreAsync } from "./taskloom-store.js";
 import { getJobTypeMetrics, type JobTypeMetrics } from "./jobs/scheduler-metrics.js";
 import { buildStorageTopologyReport as defaultBuildStorageTopologyReport } from "./deployment/storage-topology.js";
 import { buildManagedDatabaseTopologyReport as defaultBuildManagedDatabaseTopologyReport } from "./deployment/managed-database-topology.js";
@@ -118,6 +118,10 @@ export interface OperationsStatusDeps {
     env: NodeJS.ProcessEnv,
     deps?: IntegratedReleaseEvidenceDeps,
   ) => ReleaseEvidenceBundle;
+}
+
+export interface OperationsStatusAsyncDeps extends Omit<OperationsStatusDeps, "loadStore"> {
+  loadStore?: () => TaskloomData | Promise<TaskloomData>;
 }
 
 type LeaderMode = OperationsStatus["scheduler"]["leaderMode"];
@@ -568,6 +572,88 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
   const buildReleaseEvidenceBundle = deps.buildReleaseEvidenceBundle ?? defaultBuildReleaseEvidenceBundle;
 
   const data = loadStore();
+  const leaderMode = resolveLeaderMode(env);
+  const storageTopology = buildStorageTopologyReport(env);
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);
+  const managedDatabaseRuntimeGuard = buildManagedDatabaseRuntimeGuardReport(env);
+  const releaseReadiness = buildReleaseReadinessReport(env, {
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  });
+  const releaseEvidence = buildReleaseEvidenceBundle(env, {
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    releaseReadiness,
+  });
+  const managedDatabaseRuntimeBoundary = findManagedDatabaseRuntimeBoundary([
+    { source: "managedDatabaseRuntimeGuard", report: managedDatabaseRuntimeGuard },
+    { source: "releaseReadiness", report: releaseReadiness },
+    { source: "releaseEvidence", report: releaseEvidence },
+  ]);
+  const storeMode = resolveStoreMode(env);
+  const asyncStoreBoundary = findAsyncStoreBoundary([
+    { source: "managedDatabaseRuntimeGuard", report: managedDatabaseRuntimeGuard },
+    { source: "releaseReadiness", report: releaseReadiness },
+    { source: "releaseEvidence", report: releaseEvidence },
+  ]) ?? deriveAsyncStoreBoundary(storeMode, managedDatabaseTopology, managedDatabaseRuntimeGuard);
+  const managedPostgresCapability = deriveManagedPostgresCapability(env, managedDatabaseRuntimeGuard);
+
+  const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
+  const lastCapturedAt = snapshotRows.length === 0
+    ? null
+    : snapshotRows.reduce((acc, row) => {
+        const t = Date.parse(row.capturedAt);
+        return Number.isFinite(t) && t > acc ? t : acc;
+      }, 0);
+  const lastCapturedAtIso = lastCapturedAt === null || lastCapturedAt === 0 ? null : new Date(lastCapturedAt).toISOString();
+
+  return {
+    generatedAt: now().toISOString(),
+    store: { mode: storeMode },
+    scheduler: {
+      leaderMode,
+      leaderTtlMs: resolveLeaderTtlMs(env),
+      leaderHeldLocally: resolveLeaderHeldLocally(leaderMode),
+      lockSummary: resolveLockSummary(leaderMode, env),
+    },
+    jobs: summarizeJobs(data),
+    jobMetrics: (deps?.jobTypeMetrics ?? getJobTypeMetrics)(),
+    jobMetricsSnapshots: {
+      total: snapshotRows.length,
+      lastCapturedAt: lastCapturedAtIso,
+    },
+    accessLog: {
+      mode: resolveAccessLogMode(env),
+      path: resolveAccessLogPath(env),
+      maxBytes: resolveAccessLogMaxBytes(env),
+      maxFiles: resolveAccessLogMaxFiles(env),
+    },
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseRuntimeBoundary,
+    asyncStoreBoundary,
+    managedPostgresCapability,
+    releaseReadiness,
+    releaseEvidence,
+    runtime: { nodeVersion: process.versions.node },
+  };
+}
+
+export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps = {}): Promise<OperationsStatus> {
+  const loadStore = deps.loadStore ?? defaultLoadStoreAsync;
+  const env = deps.env ?? process.env;
+  const now = deps.now ?? (() => new Date());
+  const buildStorageTopologyReport = deps.buildStorageTopologyReport ?? defaultBuildStorageTopologyReport;
+  const buildManagedDatabaseTopologyReport = deps.buildManagedDatabaseTopologyReport ?? defaultBuildManagedDatabaseTopologyReport;
+  const buildManagedDatabaseRuntimeGuardReport =
+    deps.buildManagedDatabaseRuntimeGuardReport ?? defaultBuildManagedDatabaseRuntimeGuardReport;
+  const buildReleaseReadinessReport = deps.buildReleaseReadinessReport ?? defaultBuildReleaseReadinessReport;
+  const buildReleaseEvidenceBundle = deps.buildReleaseEvidenceBundle ?? defaultBuildReleaseEvidenceBundle;
+
+  const data = await loadStore();
   const leaderMode = resolveLeaderMode(env);
   const storageTopology = buildStorageTopologyReport(env);
   const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);

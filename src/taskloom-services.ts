@@ -33,8 +33,9 @@ import {
   listWorkspaceMembershipsIndexed,
   listWorkspaceEnvVars,
   loadStore,
+  loadStoreAsync,
   mutateStore,
-  persistStore,
+  mutateStoreAsync,
   nextIncompleteStep,
   recordActivity,
   type ActivityRecord,
@@ -77,7 +78,7 @@ import {
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
 import { LOCAL_INVITATION_EMAIL_PROVIDER, invitationEmailSubject, resolveInvitationEmailMode, resolveInvitationEmailRetryMaxAttempts, resolveInvitationEmailWebhookConfig } from "./invitation-email.js";
 import { deliverInvitationEmail, type InvitationEmailDeliveryAction } from "./invitation-email-delivery.js";
-import { enqueueJob, maintainScheduledAgentJobs } from "./jobs/store.js";
+import { maintainScheduledAgentJobs } from "./jobs/store.js";
 import { isSensitiveKey, maskSecret as maskBearerSecret, redactSensitiveString, redactSensitiveValue } from "./security/redaction.js";
 import {
   buildSessionCookieValue,
@@ -103,7 +104,7 @@ type AuthenticatedContext = {
 export const INVITATION_EMAIL_JOB_TYPE = "invitation.email";
 
 export async function listPublicActivationSummaries() {
-  const data = loadStore();
+  const data = await loadStoreAsync();
   const summaries = [];
   for (const workspace of data.workspaces) {
     const status = await syncWorkspaceActivation(workspace.id, false, { type: "system", id: "public-read" });
@@ -117,7 +118,7 @@ export async function listPublicActivationSummaries() {
 }
 
 export async function getPublicActivationSummary(workspaceId: string) {
-  const data = loadStore();
+  const data = await loadStoreAsync();
   const workspace = data.workspaces.find((entry) => entry.id === workspaceId);
   if (!workspace) return null;
   const status = await syncWorkspaceActivation(workspace.id, false, { type: "system", id: "public-read" });
@@ -135,6 +136,71 @@ export function register(input: { email: string; password: string; displayName: 
   if (input.displayName.trim().length < 2) throw httpError(400, "display name must be at least 2 characters");
 
   return mutateStore((data) => {
+    if (data.users.some((user) => normalizeEmail(user.email) === email)) {
+      throw httpError(409, "an account with that email already exists");
+    }
+
+    const timestamp = now();
+    const userId = generateId();
+    const workspaceId = generateId();
+    const displayName = input.displayName.trim();
+    const workspaceName = `${displayName.split(" ")[0] || "Taskloom"} workspace`;
+
+    data.users.push({
+      id: userId,
+      email,
+      displayName,
+      timezone: "UTC",
+      passwordHash: hashPassword(input.password),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    data.workspaces.push({
+      id: workspaceId,
+      slug: slugify(workspaceName) || workspaceId,
+      name: workspaceName,
+      website: "",
+      automationGoal: "",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    data.memberships.push({
+      workspaceId,
+      userId,
+      role: "owner",
+      joinedAt: timestamp,
+    });
+
+    data.onboardingStates.push({
+      workspaceId,
+      status: "not_started",
+      currentStep: "create_workspace_profile",
+      completedSteps: [],
+      updatedAt: timestamp,
+    });
+
+    data.activationFacts[workspaceId] = { now: timestamp };
+    recordActivity(data, makeActivity(workspaceId, "account", "account.created", { type: "user", id: userId, displayName }, { title: `Account created for ${displayName}` }, timestamp));
+    recordActivity(data, makeActivity(workspaceId, "workspace", "workspace.created", { type: "user", id: userId, displayName }, { title: `Workspace ${workspaceName} created` }, timestamp));
+
+    const session = createSessionRecord(userId, timestamp);
+    data.sessions.push(session.record);
+    return {
+      cookieValue: session.cookieValue,
+      context: buildAuthenticatedContext(data, userId),
+    };
+  });
+}
+
+export async function registerAsync(input: { email: string; password: string; displayName: string }) {
+  const email = normalizeEmail(input.email);
+  if (!email.includes("@")) throw httpError(400, "valid email is required");
+  if (input.password.length < 8) throw httpError(400, "password must be at least 8 characters");
+  if (input.displayName.trim().length < 2) throw httpError(400, "display name must be at least 2 characters");
+
+  return mutateStoreAsync((data) => {
     if (data.users.some((user) => normalizeEmail(user.email) === email)) {
       throw httpError(409, "an account with that email already exists");
     }
@@ -211,10 +277,38 @@ export function login(input: { email: string; password: string }) {
   });
 }
 
+export async function loginAsync(input: { email: string; password: string }) {
+  const email = normalizeEmail(input.email);
+  return mutateStoreAsync((data) => {
+    const user = data.users.find((entry) => normalizeEmail(entry.email) === email);
+    if (!user || !verifyPassword(input.password, user.passwordHash)) {
+      throw httpError(401, "invalid email or password");
+    }
+
+    const session = createSessionRecord(user.id, now());
+    data.sessions = data.sessions.filter((entry) => entry.userId !== user.id);
+    data.sessions.push(session.record);
+    return {
+      cookieValue: session.cookieValue,
+      context: buildAuthenticatedContext(data, user.id),
+    };
+  });
+}
+
 export function logout(c: Context) {
   const parsed = parseSessionCookieValue(getCookie(c, SESSION_COOKIE_NAME) ?? "");
   if (parsed) {
     mutateStore((data) => {
+      data.sessions = data.sessions.filter((entry) => entry.id !== parsed.sessionId);
+    });
+  }
+  clearSessionCookie(c);
+}
+
+export async function logoutAsync(c: Context) {
+  const parsed = parseSessionCookieValue(getCookie(c, SESSION_COOKIE_NAME) ?? "");
+  if (parsed) {
+    await mutateStoreAsync((data) => {
       data.sessions = data.sessions.filter((entry) => entry.id !== parsed.sessionId);
     });
   }
@@ -236,9 +330,23 @@ export function restoreSession(c: Context): AuthenticatedContext | null {
   return context;
 }
 
+export async function restoreSessionAsync(c: Context): Promise<AuthenticatedContext | null> {
+  const parsed = parseSessionCookieValue(getCookie(c, SESSION_COOKIE_NAME) ?? "");
+  if (!parsed) return null;
+
+  return mutateStoreAsync((data) => {
+    const session = data.sessions.find((entry) => entry.id === parsed.sessionId);
+    if (!session) return null;
+    if (session.secretHash !== hashSessionSecret(parsed.secret)) return null;
+    if (new Date(session.expiresAt).getTime() <= Date.now()) return null;
+    session.lastAccessedAt = now();
+    return buildAuthenticatedContext(data, session.userId);
+  });
+}
+
 export async function getPrivateBootstrap(context: AuthenticatedContext) {
   const status = await syncWorkspaceActivation(context.workspace.id, false, { type: "system", id: "bootstrap" });
-  const data = loadStore();
+  const data = await loadStoreAsync();
   const onboarding = data.onboardingStates.find((entry) => entry.workspaceId === context.workspace.id);
   const activities = data.activities.filter((entry) => entry.workspaceId === context.workspace.id).slice(0, 20);
 
@@ -314,6 +422,44 @@ export function getSessionPayload(context: AuthenticatedContext) {
   };
 }
 
+export async function getSessionPayloadAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  const onboarding = data.onboardingStates.find((entry) => entry.workspaceId === context.workspace.id);
+
+  return {
+    authenticated: true,
+    user: {
+      id: context.user.id,
+      email: context.user.email,
+      displayName: context.user.displayName,
+      timezone: context.user.timezone,
+    },
+    workspace: {
+      id: context.workspace.id,
+      slug: context.workspace.slug,
+      name: context.workspace.name,
+      website: context.workspace.website,
+      automationGoal: context.workspace.automationGoal,
+      role: context.role,
+    },
+    onboarding: onboarding
+      ? {
+          status: onboarding.status,
+          currentStep: onboarding.currentStep,
+          completed: onboarding.status === "completed",
+          completedSteps: onboarding.completedSteps,
+          completedAt: onboarding.completedAt ?? null,
+        }
+      : {
+          status: "not_started",
+          currentStep: "create_workspace_profile",
+          completed: false,
+          completedSteps: [],
+          completedAt: null,
+        },
+  };
+}
+
 export async function updateProfile(
   context: AuthenticatedContext,
   input: { displayName: string; timezone: string },
@@ -321,7 +467,7 @@ export async function updateProfile(
   if (input.displayName.trim().length < 2) throw httpError(400, "display name must be at least 2 characters");
   if (!input.timezone.trim()) throw httpError(400, "timezone is required");
 
-  return mutateStore((data) => {
+  return mutateStoreAsync((data) => {
     const user = data.users.find((entry) => entry.id === context.user.id);
     if (!user) throw httpError(404, "user not found");
     user.displayName = input.displayName.trim();
@@ -348,7 +494,7 @@ export async function updateWorkspace(
     }
   }
 
-  const result = mutateStore((data) => {
+  const result = await mutateStoreAsync((data) => {
     const workspace = data.workspaces.find((entry) => entry.id === context.workspace.id);
     if (!workspace) throw httpError(404, "workspace not found");
     workspace.name = input.name.trim();
@@ -371,13 +517,16 @@ export async function updateWorkspace(
   return result;
 }
 
-export function listWorkspaceMembers(context: AuthenticatedContext) {
-  const data = loadStore();
+export async function listWorkspaceMembers(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
   return {
-    members: listWorkspaceMembershipsIndexed(context.workspace.id)
+    members: data.memberships
+      .filter((membership) => membership.workspaceId === context.workspace.id)
       .map((membership) => summarizeWorkspaceMember(data, membership))
       .sort((left, right) => left.displayName.localeCompare(right.displayName)),
-    invitations: listWorkspaceInvitationsIndexed(context.workspace.id)
+    invitations: data.workspaceInvitations
+      .filter((invitation) => invitation.workspaceId === context.workspace.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((invitation) => summarizeWorkspaceInvitation(invitation)),
   };
 }
@@ -388,8 +537,8 @@ export async function createWorkspaceInvitation(context: AuthenticatedContext, i
   if (!email.includes("@")) throw httpError(400, "valid email is required");
   assertCanManageRole(context.role, role);
 
-  const result = mutateStore((data) => {
-    const existingUser = findUserByEmailIndexed(email);
+  const result = await mutateStoreAsync((data) => {
+    const existingUser = data.users.find((entry) => normalizeEmail(entry.email) === email);
     if (existingUser && findWorkspaceMembership(data, context.workspace.id, existingUser.id)) {
       throw httpError(409, "user is already a workspace member");
     }
@@ -428,10 +577,10 @@ export async function createWorkspaceInvitation(context: AuthenticatedContext, i
   return { invitation: result.invitation, emailDelivery };
 }
 
-export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: string) {
+export async function acceptWorkspaceInvitation(context: AuthenticatedContext, token: string) {
   if (!token.trim()) throw httpError(400, "invitation token is required");
 
-  return mutateStore((data) => {
+  return mutateStoreAsync((data) => {
     const invitation = findWorkspaceInvitationByToken(data, token.trim());
     if (!invitation) throw httpError(404, "invitation not found");
     if (invitation.revokedAt) throw httpError(400, "invitation has been revoked");
@@ -467,7 +616,7 @@ export function acceptWorkspaceInvitation(context: AuthenticatedContext, token: 
 export async function resendWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
   if (!invitationId.trim()) throw httpError(400, "invitation id is required");
 
-  const result = mutateStore((data) => {
+  const result = await mutateStoreAsync((data) => {
     const invitation = data.workspaceInvitations.find((entry) => {
       return entry.id === invitationId.trim() && entry.workspaceId === context.workspace.id;
     });
@@ -494,10 +643,10 @@ export async function resendWorkspaceInvitation(context: AuthenticatedContext, i
   return { invitation: result.invitation, emailDelivery };
 }
 
-export function revokeWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
+export async function revokeWorkspaceInvitation(context: AuthenticatedContext, invitationId: string) {
   if (!invitationId.trim()) throw httpError(400, "invitation id is required");
 
-  return mutateStore((data) => {
+  return mutateStoreAsync((data) => {
     const invitation = data.workspaceInvitations.find((entry) => {
       return entry.id === invitationId.trim() && entry.workspaceId === context.workspace.id;
     });
@@ -519,11 +668,11 @@ export function revokeWorkspaceInvitation(context: AuthenticatedContext, invitat
   });
 }
 
-export function updateWorkspaceMemberRole(context: AuthenticatedContext, userId: string, input: { role: string }) {
+export async function updateWorkspaceMemberRole(context: AuthenticatedContext, userId: string, input: { role: string }) {
   const role = parseWorkspaceRole(input.role);
   assertCanManageRole(context.role, role);
 
-  return mutateStore((data) => {
+  return mutateStoreAsync((data) => {
     const membership = findWorkspaceMembership(data, context.workspace.id, userId);
     if (!membership) throw httpError(404, "workspace member not found");
     assertCanManageRole(context.role, membership.role);
@@ -541,8 +690,8 @@ export function updateWorkspaceMemberRole(context: AuthenticatedContext, userId:
   });
 }
 
-export function removeWorkspaceMember(context: AuthenticatedContext, userId: string) {
-  return mutateStore((data) => {
+export async function removeWorkspaceMember(context: AuthenticatedContext, userId: string) {
+  return mutateStoreAsync((data) => {
     const membership = findWorkspaceMembership(data, context.workspace.id, userId);
     if (!membership) throw httpError(404, "workspace member not found");
     assertCanManageRole(context.role, membership.role);
@@ -562,8 +711,8 @@ export function removeWorkspaceMember(context: AuthenticatedContext, userId: str
   });
 }
 
-export function getOnboarding(context: AuthenticatedContext) {
-  const data = loadStore();
+export async function getOnboarding(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
   const onboarding = data.onboardingStates.find((entry) => entry.workspaceId === context.workspace.id);
   if (!onboarding) throw httpError(404, "onboarding state not found");
   return onboarding;
@@ -574,7 +723,7 @@ export async function completeOnboardingStep(context: AuthenticatedContext, step
     throw httpError(400, "unknown onboarding step");
   }
 
-  const onboarding = mutateStore((data) => {
+  const onboarding = await mutateStoreAsync((data) => {
     const record = data.onboardingStates.find((entry) => entry.workspaceId === context.workspace.id);
     if (!record) throw httpError(404, "onboarding state not found");
     if (!record.completedSteps.includes(stepKey as any)) {
@@ -600,11 +749,26 @@ export async function completeOnboardingStep(context: AuthenticatedContext, step
 }
 
 export function listWorkspaceActivities(context: AuthenticatedContext) {
-  return listActivitiesForWorkspaceIndexed(context.workspace.id, 50).map(redactActivity);
+  return workspaceActivitiesFromData(loadStore(), context.workspace.id, 50).map(redactActivity);
+}
+
+export async function listWorkspaceActivitiesAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  return workspaceActivitiesFromData(data, context.workspace.id, 50).map(redactActivity);
 }
 
 export function getWorkspaceActivityDetail(context: AuthenticatedContext, activityId: string) {
-  const activities = listWorkspaceActivities(context);
+  const data = loadStore();
+  return getWorkspaceActivityDetailFromData(data, context, activityId);
+}
+
+export async function getWorkspaceActivityDetailAsync(context: AuthenticatedContext, activityId: string) {
+  const data = await loadStoreAsync();
+  return getWorkspaceActivityDetailFromData(data, context, activityId);
+}
+
+function getWorkspaceActivityDetailFromData(data: TaskloomData, context: AuthenticatedContext, activityId: string) {
+  const activities = workspaceActivitiesFromData(data, context.workspace.id, 50).map(redactActivity);
   const index = activities.findIndex((entry) => entry.id === activityId);
   if (index === -1) throw httpError(404, "activity not found");
 
@@ -613,8 +777,18 @@ export function getWorkspaceActivityDetail(context: AuthenticatedContext, activi
     activity,
     previous: index > 0 ? activities[index - 1] : null,
     next: index < activities.length - 1 ? activities[index + 1] : null,
-    related: buildActivityRelatedContext(context.workspace.id, activity),
+    related: buildActivityRelatedContext(data, context.workspace.id, activity),
   };
+}
+
+function workspaceActivitiesFromData(data: TaskloomData, workspaceId: string, limit?: number) {
+  const activities = data.activities
+    .filter((entry) => entry.workspaceId === workspaceId)
+    .sort((left, right) => {
+      const cmp = right.occurredAt.localeCompare(left.occurredAt);
+      return cmp !== 0 ? cmp : right.id.localeCompare(left.id);
+    });
+  return limit && limit > 0 ? activities.slice(0, limit) : activities;
 }
 
 type ActivityRelatedContext = {
@@ -637,6 +811,7 @@ type ActivityRelatedContext = {
 };
 
 function buildActivityRelatedContext(
+  data: TaskloomData,
   workspaceId: string,
   activity: ActivityRecord,
 ): ActivityRelatedContext {
@@ -650,28 +825,28 @@ function buildActivityRelatedContext(
   const evidenceId = stringDataValue(activity.data, "evidenceId");
   const releaseId = stringDataValue(activity.data, "releaseId");
 
-  const agent = agentId ? findAgentForWorkspaceIndexed(workspaceId, agentId) : undefined;
+  const agent = agentId ? data.agents.find((entry) => entry.workspaceId === workspaceId && entry.id === agentId) : undefined;
   if (agent) related.agent = summarizeAgent(agent);
 
-  const run = runId ? findAgentRunForWorkspaceIndexed(workspaceId, runId) : undefined;
+  const run = runId ? data.agentRuns.find((entry) => entry.workspaceId === workspaceId && entry.id === runId) : undefined;
   if (run) related.run = summarizeAgentRun(run);
 
-  const blocker = blockerId ? findWorkflowConcernForWorkspaceIndexed(workspaceId, blockerId, "blocker") : undefined;
+  const blocker = blockerId ? data.workflowConcerns.find((entry) => entry.workspaceId === workspaceId && entry.id === blockerId && entry.kind === "blocker") : undefined;
   if (blocker) related.blocker = summarizeWorkflowConcern(blocker);
 
-  const question = questionId ? findWorkflowConcernForWorkspaceIndexed(workspaceId, questionId, "open_question") : undefined;
+  const question = questionId ? data.workflowConcerns.find((entry) => entry.workspaceId === workspaceId && entry.id === questionId && entry.kind === "open_question") : undefined;
   if (question) related.question = summarizeWorkflowConcern(question);
 
-  const planItem = planItemId ? findImplementationPlanItemForWorkspaceIndexed(workspaceId, planItemId) : undefined;
+  const planItem = planItemId ? data.implementationPlanItems.find((entry) => entry.workspaceId === workspaceId && entry.id === planItemId) : undefined;
   if (planItem) related.planItem = summarizePlanItem(planItem);
 
-  const requirement = requirementId ? findRequirementForWorkspaceIndexed(workspaceId, requirementId) : undefined;
+  const requirement = requirementId ? data.requirements.find((entry) => entry.workspaceId === workspaceId && entry.id === requirementId) : undefined;
   if (requirement) related.requirement = summarizeRequirement(requirement);
 
-  const evidence = evidenceId ? findValidationEvidenceForWorkspaceIndexed(workspaceId, evidenceId) : undefined;
+  const evidence = evidenceId ? data.validationEvidence.find((entry) => entry.workspaceId === workspaceId && entry.id === evidenceId) : undefined;
   if (evidence) related.evidence = summarizeValidationEvidence(evidence);
 
-  const release = releaseId ? findReleaseConfirmationForWorkspaceIndexed(workspaceId, releaseId) : undefined;
+  const release = releaseId ? listReleaseConfirmationsForWorkspace(data, workspaceId).find((entry) => entry.id === releaseId || entry.workspaceId === releaseId) : undefined;
   if (release) related.release = summarizeReleaseConfirmation(release);
 
   const workflow = {
@@ -786,6 +961,21 @@ export function listAgents(context: AuthenticatedContext) {
   };
 }
 
+export async function listAgentsAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  const providersById = new Map(
+    data.providers
+      .filter((provider) => provider.workspaceId === context.workspace.id)
+      .map((provider) => [provider.id, provider]),
+  );
+  return {
+    agents: data.agents
+      .filter((agent) => agent.workspaceId === context.workspace.id && agent.status !== "archived")
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((agent) => decorateAgentWithProvider(agent, agent.providerId ? providersById.get(agent.providerId) ?? null : null, { includeWebhookToken: false })),
+  };
+}
+
 export function getAgent(context: AuthenticatedContext, agentId: string) {
   const agent = findAgentForWorkspaceIndexed(context.workspace.id, agentId);
   if (!agent || agent.status === "archived") {
@@ -801,11 +991,71 @@ export function getAgent(context: AuthenticatedContext, agentId: string) {
   };
 }
 
+export async function getAgentAsync(context: AuthenticatedContext, agentId: string) {
+  const data = await loadStoreAsync();
+  const agent = data.agents.find((entry) =>
+    entry.workspaceId === context.workspace.id && entry.id === agentId
+  );
+  if (!agent || agent.status === "archived") {
+    throw httpError(404, "agent not found");
+  }
+  const provider = agent.providerId
+    ? data.providers.find((entry) => entry.workspaceId === context.workspace.id && entry.id === agent.providerId) ?? null
+    : null;
+
+  return {
+    agent: decorateAgentWithProvider(agent, provider),
+    runs: data.agentRuns
+      .filter((entry) => entry.workspaceId === context.workspace.id && entry.agentId === agent.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 20)
+      .map(decorateRun),
+  };
+}
+
 export function createAgent(context: AuthenticatedContext, input: AgentInput) {
   const normalized = normalizeAgentInput(input);
   const timestamp = now();
 
   const result = mutateStore((data) => {
+    validateProvider(data, context.workspace.id, normalized.providerId);
+
+    const agent = upsertAgent(data, {
+      workspaceId: context.workspace.id,
+      name: normalized.name,
+      description: normalized.description,
+      instructions: normalized.instructions,
+      providerId: normalized.providerId,
+      model: normalized.model,
+      tools: normalized.tools,
+      enabledTools: normalized.enabledTools,
+      routeKey: normalized.routeKey,
+      schedule: normalized.schedule,
+      triggerKind: normalized.triggerKind,
+      playbook: normalized.playbook,
+      status: normalized.status,
+      templateId: normalized.templateId,
+      inputSchema: normalized.inputSchema,
+      createdByUserId: context.user.id,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Agent created: ${agent.name}`, agentId: agent.id }, timestamp));
+
+    return { agent: decorateAgent(data, agent) };
+  });
+  maintainScheduledAgentJobs(result.agent.id);
+  return result;
+}
+
+export async function createAgentAsync(context: AuthenticatedContext, input: AgentInput) {
+  const normalized = normalizeAgentInput(input);
+  const timestamp = now();
+
+  const result = await mutateStoreAsync((data) => {
     validateProvider(data, context.workspace.id, normalized.providerId);
 
     const agent = upsertAgent(data, {
@@ -881,10 +1131,79 @@ export function updateAgent(context: AuthenticatedContext, agentId: string, inpu
   return result;
 }
 
+export async function updateAgentAsync(context: AuthenticatedContext, agentId: string, input: Partial<AgentInput>) {
+  const timestamp = now();
+
+  const result = await mutateStoreAsync((data) => {
+    const existing = findAgent(data, agentId);
+    if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
+      throw httpError(404, "agent not found");
+    }
+
+    const normalized = normalizeAgentInput({ ...existing, ...input });
+    validateProvider(data, context.workspace.id, normalized.providerId);
+
+    const agent = upsertAgent(data, {
+      ...existing,
+      name: normalized.name,
+      description: normalized.description,
+      instructions: normalized.instructions,
+      providerId: normalized.providerId,
+      model: normalized.model,
+      tools: normalized.tools,
+      enabledTools: normalized.enabledTools,
+      routeKey: normalized.routeKey,
+      schedule: normalized.schedule,
+      triggerKind: normalized.triggerKind,
+      playbook: normalized.playbook,
+      status: normalized.status,
+      templateId: normalized.templateId ?? existing.templateId,
+      inputSchema: normalized.inputSchema,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Agent updated: ${agent.name}`, agentId: agent.id }, timestamp));
+
+    return { agent: decorateAgent(data, agent) };
+  });
+  maintainScheduledAgentJobs(result.agent.id);
+  return result;
+}
+
 export function archiveAgent(context: AuthenticatedContext, agentId: string) {
   const timestamp = now();
 
   const result = mutateStore((data) => {
+    const existing = findAgent(data, agentId);
+    if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
+      throw httpError(404, "agent not found");
+    }
+
+    const agent = upsertAgent(data, {
+      ...existing,
+      status: "archived",
+      archivedAt: timestamp,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.archived", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Agent archived: ${agent.name}`, agentId: agent.id }, timestamp));
+
+    return { agent: decorateAgent(data, agent) };
+  });
+  maintainScheduledAgentJobs(result.agent.id);
+  return result;
+}
+
+export async function archiveAgentAsync(context: AuthenticatedContext, agentId: string) {
+  const timestamp = now();
+
+  const result = await mutateStoreAsync((data) => {
     const existing = findAgent(data, agentId);
     if (!existing || existing.workspaceId !== context.workspace.id || existing.status === "archived") {
       throw httpError(404, "agent not found");
@@ -920,7 +1239,7 @@ export async function runAgent(
     : "manual";
   const rawInputs: Record<string, unknown> = input?.inputs ?? {};
 
-  const data = loadStore();
+  const data = await loadStoreAsync();
   const agent = findAgent(data, agentId);
   if (!agent || agent.workspaceId !== context.workspace.id || agent.status === "archived") {
     throw httpError(404, "agent not found");
@@ -940,7 +1259,7 @@ export async function runAgent(
     return { run: decorateRun(run) };
   }
 
-  return mutateStore((store) => {
+  return mutateStoreAsync((store) => {
     const liveAgent = findAgent(store, agentId);
     if (!liveAgent) throw httpError(404, "agent not found");
     const provider = liveAgent.providerId ? findProvider(store, liveAgent.providerId) : null;
@@ -1058,7 +1377,7 @@ async function runAgentWithToolLoop(args: {
     logs.push({ at: completedAt, level: "info", message: `Finished in ${loopResult.turnsUsed} turn(s) using ${loopResult.modelUsed} ($${loopResult.costUsd.toFixed(4)}).` });
   }
 
-  return mutateStore((store) => {
+  return mutateStoreAsync((store) => {
     const run = upsertAgentRun(store, {
       workspaceId: context.workspace.id,
       agentId: agent.id,
@@ -1156,8 +1475,35 @@ export function createAgentFromTemplate(context: AuthenticatedContext, templateI
   });
 }
 
+export async function createAgentFromTemplateAsync(context: AuthenticatedContext, templateId: string, overrides: { name?: string; providerId?: string; model?: string } = {}) {
+  const template = findAgentTemplate(templateId);
+  if (!template) throw httpError(404, "agent template not found");
+
+  return createAgentAsync(context, {
+    name: overrides.name?.trim() || template.name,
+    description: template.description,
+    instructions: template.instructions,
+    providerId: overrides.providerId,
+    model: overrides.model,
+    tools: template.tools,
+    schedule: template.schedule,
+    status: "active",
+    templateId: template.id,
+    inputSchema: template.inputSchema,
+  });
+}
+
 export function listProviders(context: AuthenticatedContext) {
   return { providers: listProvidersForWorkspaceIndexed(context.workspace.id) };
+}
+
+export async function listProvidersAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  return {
+    providers: data.providers
+      .filter((entry) => entry.workspaceId === context.workspace.id)
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  };
 }
 
 export function createProvider(context: AuthenticatedContext, input: ProviderInput) {
@@ -1165,6 +1511,26 @@ export function createProvider(context: AuthenticatedContext, input: ProviderInp
   const timestamp = now();
 
   return mutateStore((data) => {
+    const provider = upsertProvider(data, {
+      workspaceId: context.workspace.id,
+      ...normalized,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "provider.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Provider connected: ${provider.name}`, providerId: provider.id }, timestamp));
+
+    return { provider };
+  });
+}
+
+export async function createProviderAsync(context: AuthenticatedContext, input: ProviderInput) {
+  const normalized = normalizeProviderInput(input);
+  const timestamp = now();
+
+  return mutateStoreAsync((data) => {
     const provider = upsertProvider(data, {
       workspaceId: context.workspace.id,
       ...normalized,
@@ -1205,8 +1571,44 @@ export function updateProvider(context: AuthenticatedContext, providerId: string
   });
 }
 
+export async function updateProviderAsync(context: AuthenticatedContext, providerId: string, input: Partial<ProviderInput>) {
+  const timestamp = now();
+
+  return mutateStoreAsync((data) => {
+    const existing = findProvider(data, providerId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "provider not found");
+    }
+
+    const normalized = normalizeProviderInput({ ...existing, ...input });
+    const provider = upsertProvider(data, {
+      ...existing,
+      ...normalized,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "provider.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Provider updated: ${provider.name}`, providerId: provider.id }, timestamp));
+
+    return { provider };
+  });
+}
+
 export function listAgentRuns(context: AuthenticatedContext) {
   return { runs: listAgentRunsForWorkspaceIndexed(context.workspace.id, 50).map(decorateRun) };
+}
+
+export async function listAgentRunsAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  return {
+    runs: data.agentRuns
+      .filter((entry) => entry.workspaceId === context.workspace.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 50)
+      .map(decorateRun),
+  };
 }
 
 export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
@@ -1219,6 +1621,33 @@ export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
     throw httpError(409, "only queued or running runs can be canceled");
   }
   return mutateStore((data) => {
+    const updated = upsertAgentRun(data, {
+      ...run,
+      status: "canceled",
+      completedAt: timestamp,
+      error: run.error ?? "Canceled by operator.",
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "agent.run_canceled", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Run canceled: ${updated.title}`, agentId: updated.agentId, runId: updated.id }, timestamp));
+
+    return { run: decorateRun(updated) };
+  });
+}
+
+export async function cancelAgentRunAsync(context: AuthenticatedContext, runId: string) {
+  const timestamp = now();
+  return mutateStoreAsync((data) => {
+    const run = data.agentRuns.find((entry) => entry.workspaceId === context.workspace.id && entry.id === runId);
+    if (!run) {
+      throw httpError(404, "agent run not found");
+    }
+    if (run.status !== "queued" && run.status !== "running") {
+      throw httpError(409, "only queued or running runs can be canceled");
+    }
     const updated = upsertAgentRun(data, {
       ...run,
       status: "canceled",
@@ -1255,8 +1684,28 @@ export function recordRunAsPlaybook(context: AuthenticatedContext, runId: string
   });
 }
 
+export async function recordRunAsPlaybookAsync(context: AuthenticatedContext, runId: string) {
+  return mutateStoreAsync((data) => {
+    const run = data.agentRuns.find((r) => r.id === runId && r.workspaceId === context.workspace.id);
+    if (!run) throw httpError(404, "agent run not found");
+    if (!run.agentId) throw httpError(400, "this run is not linked to an agent");
+    const agent = findAgent(data, run.agentId);
+    if (!agent || agent.workspaceId !== context.workspace.id) throw httpError(404, "agent not found");
+    if (!run.toolCalls || run.toolCalls.length === 0) throw httpError(400, "run has no tool calls to record");
+    const playbook: AgentPlaybookStep[] = run.toolCalls.map((call, index) => ({
+      id: generateId(),
+      title: `${index + 1}. ${call.toolName}`,
+      instruction: `Call ${call.toolName} with: ${JSON.stringify(call.input).slice(0, 380)}`,
+    }));
+    agent.playbook = playbook.slice(0, 20);
+    agent.updatedAt = now();
+    return { agent: decorateAgent(data, agent) };
+  });
+}
+
 export async function retryAgentRun(context: AuthenticatedContext, runId: string) {
-  const previous = findAgentRunForWorkspaceIndexed(context.workspace.id, runId);
+  const data = await loadStoreAsync();
+  const previous = data.agentRuns.find((entry) => entry.workspaceId === context.workspace.id && entry.id === runId);
   if (!previous) {
     throw httpError(404, "agent run not found");
   }
@@ -1264,7 +1713,7 @@ export async function retryAgentRun(context: AuthenticatedContext, runId: string
     throw httpError(400, "this run is not linked to an agent and cannot be retried");
   }
   const timestamp = now();
-  mutateStore((store) => {
+  await mutateStoreAsync((store) => {
     const existingSignal = store.activationSignals.find((entry) =>
       entry.workspaceId === context.workspace.id && entry.kind === "retry" && entry.sourceId === previous.id
     );
@@ -1307,11 +1756,45 @@ export function listWorkspaceEnvVarsForUser(context: AuthenticatedContext) {
   return { envVars: listWorkspaceEnvVars(data, context.workspace.id).map(maskEnvVar) };
 }
 
+export async function listWorkspaceEnvVarsForUserAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  return { envVars: listWorkspaceEnvVars(data, context.workspace.id).map(maskEnvVar) };
+}
+
 export function createWorkspaceEnvVar(context: AuthenticatedContext, input: WorkspaceEnvVarInput) {
   const normalized = normalizeEnvVarInput(input);
   const timestamp = now();
 
   return mutateStore((data) => {
+    const conflict = listWorkspaceEnvVars(data, context.workspace.id)
+      .find((entry) => entry.key === normalized.key);
+    if (conflict) throw httpError(409, `env var ${normalized.key} already exists`);
+
+    const created = upsertWorkspaceEnvVar(data, {
+      workspaceId: context.workspace.id,
+      key: normalized.key,
+      value: normalized.value,
+      scope: normalized.scope,
+      secret: normalized.secret,
+      description: normalized.description,
+      createdByUserId: context.user.id,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "env_var.created", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var added: ${created.key}`, envVarId: created.id, scope: created.scope, secret: created.secret }, timestamp));
+
+    return { envVar: maskEnvVar(created) };
+  });
+}
+
+export async function createWorkspaceEnvVarAsync(context: AuthenticatedContext, input: WorkspaceEnvVarInput) {
+  const normalized = normalizeEnvVarInput(input);
+  const timestamp = now();
+
+  return mutateStoreAsync((data) => {
     const conflict = listWorkspaceEnvVars(data, context.workspace.id)
       .find((entry) => entry.key === normalized.key);
     if (conflict) throw httpError(409, `env var ${normalized.key} already exists`);
@@ -1382,6 +1865,52 @@ export function updateWorkspaceEnvVar(
   });
 }
 
+export async function updateWorkspaceEnvVarAsync(
+  context: AuthenticatedContext,
+  envVarId: string,
+  input: Partial<WorkspaceEnvVarInput>,
+) {
+  const timestamp = now();
+
+  return mutateStoreAsync((data) => {
+    const existing = findWorkspaceEnvVar(data, envVarId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "env var not found");
+    }
+
+    const merged = normalizeEnvVarInput({
+      key: input.key ?? existing.key,
+      value: input.value ?? existing.value,
+      scope: input.scope ?? existing.scope,
+      secret: input.secret ?? existing.secret,
+      description: input.description ?? existing.description,
+    });
+
+    if (merged.key !== existing.key) {
+      const conflict = listWorkspaceEnvVars(data, context.workspace.id)
+        .find((entry) => entry.key === merged.key && entry.id !== existing.id);
+      if (conflict) throw httpError(409, `env var ${merged.key} already exists`);
+    }
+
+    const updated = upsertWorkspaceEnvVar(data, {
+      ...existing,
+      key: merged.key,
+      value: merged.value,
+      scope: merged.scope,
+      secret: merged.secret,
+      description: merged.description,
+    }, timestamp);
+
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "env_var.updated", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var updated: ${updated.key}`, envVarId: updated.id }, timestamp));
+
+    return { envVar: maskEnvVar(updated) };
+  });
+}
+
 export function deleteWorkspaceEnvVarById(context: AuthenticatedContext, envVarId: string) {
   const timestamp = now();
   return mutateStore((data) => {
@@ -1399,13 +1928,39 @@ export function deleteWorkspaceEnvVarById(context: AuthenticatedContext, envVarI
   });
 }
 
+export async function deleteWorkspaceEnvVarByIdAsync(context: AuthenticatedContext, envVarId: string) {
+  const timestamp = now();
+  return mutateStoreAsync((data) => {
+    const existing = findWorkspaceEnvVar(data, envVarId);
+    if (!existing || existing.workspaceId !== context.workspace.id) {
+      throw httpError(404, "env var not found");
+    }
+    deleteWorkspaceEnvVar(data, envVarId);
+    recordActivity(data, makeActivity(context.workspace.id, "workspace", "env_var.deleted", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: `Env var removed: ${existing.key}`, envVarId: existing.id }, timestamp));
+    return { ok: true };
+  });
+}
+
 export function listReleaseHistory(context: AuthenticatedContext) {
   const data = loadStore();
-  const releases = listReleaseConfirmationsForWorkspace(data, context.workspace.id)
+  return listReleaseHistoryFromData(data, context.workspace.id);
+}
+
+export async function listReleaseHistoryAsync(context: AuthenticatedContext) {
+  const data = await loadStoreAsync();
+  return listReleaseHistoryFromData(data, context.workspace.id);
+}
+
+function listReleaseHistoryFromData(data: TaskloomData, workspaceId: string) {
+  const releases = listReleaseConfirmationsForWorkspace(data, workspaceId)
     .sort((left, right) => (right.confirmedAt ?? right.updatedAt).localeCompare(left.confirmedAt ?? left.updatedAt));
 
-  const evidence = data.validationEvidence.filter((entry) => entry.workspaceId === context.workspace.id);
-  const concerns = data.workflowConcerns.filter((entry) => entry.workspaceId === context.workspace.id);
+  const evidence = data.validationEvidence.filter((entry) => entry.workspaceId === workspaceId);
+  const concerns = data.workflowConcerns.filter((entry) => entry.workspaceId === workspaceId);
 
   const passedEvidence = evidence.filter((entry) => entry.status === "passed").length;
   const failedEvidence = evidence.filter((entry) => entry.status === "failed").length;
@@ -1792,15 +2347,15 @@ async function syncWorkspaceActivation(
   const status = await readActivationStatus(
     {
       signals: {
-        loadSnapshot: async () => snapshotForWorkspace(loadStore(), workspaceId),
+        loadSnapshot: async () => snapshotForWorkspace(await loadStoreAsync(), workspaceId),
       },
       milestones: {
-        listForSubject: async () => loadStore().activationMilestones[workspaceId] ?? [],
+        listForSubject: async () => (await loadStoreAsync()).activationMilestones[workspaceId] ?? [],
       },
       derive: deriveActivationStatus,
       readModel: {
         save: async (nextStatus) => {
-          mutateStore((data) => {
+          await mutateStoreAsync((data) => {
             const previous = data.activationReadModels[workspaceId];
             data.activationReadModels[workspaceId] = nextStatus;
             data.activationMilestones[workspaceId] = nextStatus.milestones;
@@ -1810,7 +2365,7 @@ async function syncWorkspaceActivation(
             }
           });
         },
-        load: async () => loadStore().activationReadModels[workspaceId] ?? null,
+        load: async () => (await loadStoreAsync()).activationReadModels[workspaceId] ?? null,
       },
     },
     { subject: toSubject(workspaceId) },
@@ -1969,32 +2524,23 @@ async function recordInvitationEmailDeliveryForWorkspace(input: {
   action: InvitationEmailDeliveryAction;
   enqueueRetry: boolean;
 }) {
-  const data = loadStore();
-  const delivery = await deliverInvitationEmail(data, {
-    action: input.action,
-    workspaceId: input.invitation.workspaceId,
-    workspaceName: input.workspace.name,
-    invitationId: input.invitation.id,
-    email: input.invitation.email,
-    token: input.invitation.token,
-    subject: invitationEmailSubject(input.workspace.name),
+  const delivery = await mutateStoreAsync((data) => {
+    return deliverInvitationEmail(data, {
+      action: input.action,
+      workspaceId: input.invitation.workspaceId,
+      workspaceName: input.workspace.name,
+      invitationId: input.invitation.id,
+      email: input.invitation.email,
+      token: input.invitation.token,
+      subject: invitationEmailSubject(input.workspace.name),
+    });
   });
-  persistStore(data);
 
   const retryJob = input.enqueueRetry && delivery.status === "failed" && resolveInvitationEmailMode() === "webhook"
-    ? enqueueJob({
-      workspaceId: input.invitation.workspaceId,
-      type: INVITATION_EMAIL_JOB_TYPE,
-      payload: {
-        invitationId: input.invitation.id,
-        action: input.action,
-        ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
-      },
-      maxAttempts: resolveInvitationEmailRetryMaxAttempts(),
-    })
+    ? await enqueueInvitationEmailRetryJob(input)
     : null;
 
-  mutateStore((data) => {
+  await mutateStoreAsync((data) => {
     recordActivity(data, makeActivity(input.invitation.workspaceId, "workspace", "workspace.invitation_email_delivery", input.actor, {
       title: delivery.status === "sent" ? `Invitation email sent to ${input.invitation.email}` : `Invitation email ${delivery.status} for ${input.invitation.email}`,
       invitationId: input.invitation.id,
@@ -2023,7 +2569,7 @@ export async function handleInvitationEmailJob(job: JobRecord) {
   if (typeof payload.invitationId !== "string" || !payload.invitationId.trim()) throw new Error("invitation.email job missing invitationId");
   if (payload.action !== "create" && payload.action !== "resend") throw new Error("invitation.email job missing action");
 
-  const data = loadStore();
+  const data = await loadStoreAsync();
   const invitation = data.workspaceInvitations.find((entry) => entry.id === payload.invitationId && entry.workspaceId === job.workspaceId);
   if (!invitation) throw new Error(`invitation ${payload.invitationId} not found`);
   const workspace = data.workspaces.find((entry) => entry.id === job.workspaceId);
@@ -2058,7 +2604,7 @@ function inactiveInvitationRetryReason(invitation: WorkspaceInvitationRecord): s
   return null;
 }
 
-function recordSkippedInvitationEmailRetry(
+async function recordSkippedInvitationEmailRetry(
   workspace: WorkspaceRecord,
   actor: ActivityRecord["actor"],
   invitation: WorkspaceInvitationRecord,
@@ -2068,7 +2614,7 @@ function recordSkippedInvitationEmailRetry(
   const timestamp = now();
   const mode = resolveInvitationEmailMode();
   const provider = mode === "webhook" ? resolveInvitationEmailWebhookConfig().provider : LOCAL_INVITATION_EMAIL_PROVIDER;
-  const delivery = mutateStore((data) => {
+  const delivery = await mutateStoreAsync((data) => {
     const record = createInvitationEmailDelivery(data, {
       workspaceId: invitation.workspaceId,
       invitationId: invitation.id,
@@ -2095,8 +2641,42 @@ function recordSkippedInvitationEmailRetry(
   return { id: delivery.id, status: delivery.status, action, error: delivery.error ?? null, retryJobId: null };
 }
 
+async function enqueueInvitationEmailRetryJob(input: {
+  invitation: WorkspaceInvitationRecord;
+  action: InvitationEmailDeliveryAction;
+  requestedByUserId?: string;
+}): Promise<JobRecord> {
+  const timestamp = now();
+  return mutateStoreAsync((data) => {
+    const record: JobRecord = {
+      id: generateId(),
+      workspaceId: input.invitation.workspaceId,
+      type: INVITATION_EMAIL_JOB_TYPE,
+      payload: {
+        invitationId: input.invitation.id,
+        action: input.action,
+        ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
+      },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: resolveInvitationEmailRetryMaxAttempts(),
+      scheduledAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    data.jobs.push(record);
+    return record;
+  });
+}
+
 export function requireAuthenticatedContext(c: Context): AuthenticatedContext {
   const context = restoreSession(c);
+  if (!context) throw httpError(401, "authentication required");
+  return context;
+}
+
+export async function requireAuthenticatedContextAsync(c: Context): Promise<AuthenticatedContext> {
+  const context = await restoreSessionAsync(c);
   if (!context) throw httpError(401, "authentication required");
   return context;
 }

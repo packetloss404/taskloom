@@ -2,9 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resetStoreForTests } from "../../taskloom-store.js";
 import {
+  listApiKeysForWorkspaceAsync,
   listApiKeysForWorkspace,
+  removeApiKeyForWorkspaceAsync,
+  resolveApiKeyAsync,
   removeApiKey,
   resolveApiKey,
+  upsertApiKeyAsync,
   upsertApiKey,
 } from "../api-key-store.js";
 
@@ -59,4 +63,19 @@ test("remove deletes the record", () => {
 test("resolve returns null when no key exists", () => {
   resetStoreForTests();
   assert.equal(resolveApiKey("alpha", "openai"), null);
+});
+
+test("async api key operations round-trip through async store access", async () => {
+  resetStoreForTests();
+  const masked = await upsertApiKeyAsync({
+    workspaceId: "alpha",
+    provider: "openai",
+    label: "async",
+    value: "sk-async",
+  });
+
+  assert.equal((await resolveApiKeyAsync("alpha", "openai")), "sk-async");
+  assert.equal((await listApiKeysForWorkspaceAsync("alpha")).some((entry) => entry.id === masked.id), true);
+  assert.equal(await removeApiKeyForWorkspaceAsync(masked.id, "alpha"), true);
+  assert.equal(await resolveApiKeyAsync("alpha", "openai"), null);
 });

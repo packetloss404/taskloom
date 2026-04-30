@@ -14,7 +14,9 @@ import {
   listWorkspaceBriefVersionsIndexed,
   listWorkspaceBriefVersions,
   loadStore,
+  loadStoreAsync,
   mutateStore,
+  mutateStoreAsync,
   nextIncompleteStep,
   ONBOARDING_STEPS,
   recordActivity,
@@ -214,9 +216,26 @@ export function getWorkflowOverview(context: WorkflowContext) {
   };
 }
 
+export async function getWorkflowOverviewAsync(context: WorkflowContext) {
+  return {
+    brief: await readWorkspaceBriefAsync(context),
+    requirements: await listRequirementsAsync(context),
+    planItems: await listPlanItemsAsync(context),
+    blockersAndQuestions: await listBlockersAndQuestionsAsync(context),
+    validationEvidence: await listValidationEvidenceAsync(context),
+    releaseConfirmation: await readReleaseConfirmationAsync(context),
+  };
+}
+
 export function readWorkspaceBrief(context: WorkflowContext): WorkspaceBriefRecord {
   ensureWorkspaceExists(context.workspace.id);
   return copyRecord(findWorkspaceBriefIndexed(context.workspace.id) ?? defaultWorkspaceBrief(context));
+}
+
+export async function readWorkspaceBriefAsync(context: WorkflowContext): Promise<WorkspaceBriefRecord> {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  return copyRecord(findWorkspaceBrief(data, context.workspace.id) ?? defaultWorkspaceBrief(context));
 }
 
 export function updateWorkspaceBrief(
@@ -224,6 +243,13 @@ export function updateWorkspaceBrief(
   input: UpdateWorkspaceBriefInput,
 ): WorkspaceBriefRecord {
   return saveWorkspaceBriefInternal(context, input, { source: "manual" });
+}
+
+export async function updateWorkspaceBriefAsync(
+  context: WorkflowContext,
+  input: UpdateWorkspaceBriefInput,
+): Promise<WorkspaceBriefRecord> {
+  return saveWorkspaceBriefInternalAsync(context, input, { source: "manual" });
 }
 
 export function applyWorkspaceBriefTemplate(
@@ -240,9 +266,29 @@ export function applyWorkspaceBriefTemplate(
   });
 }
 
+export async function applyWorkspaceBriefTemplateAsync(
+  context: WorkflowContext,
+  input: { templateId?: string },
+): Promise<WorkspaceBriefRecord> {
+  const templateId = input.templateId?.trim();
+  if (!templateId) throw httpError(400, "template id is required");
+  const template = WORKSPACE_BRIEF_TEMPLATES.find((entry) => entry.id === templateId);
+  if (!template) throw httpError(404, "brief template not found");
+  return saveWorkspaceBriefInternalAsync(context, template.brief, {
+    source: "template",
+    sourceLabel: template.name,
+  });
+}
+
 export function listWorkspaceBriefHistory(context: WorkflowContext): WorkspaceBriefVersionRecord[] {
   ensureWorkspaceExists(context.workspace.id);
   return listWorkspaceBriefVersionsIndexed(context.workspace.id).map(copyRecord);
+}
+
+export async function listWorkspaceBriefHistoryAsync(context: WorkflowContext): Promise<WorkspaceBriefVersionRecord[]> {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  return listWorkspaceBriefVersions(data, context.workspace.id).map(copyRecord);
 }
 
 export function restoreWorkspaceBriefVersion(
@@ -255,6 +301,34 @@ export function restoreWorkspaceBriefVersion(
   const version = findWorkspaceBriefVersionIndexed(context.workspace.id, versionId);
   if (!version) throw httpError(404, "brief version not found");
   return saveWorkspaceBriefInternal(
+    context,
+    {
+      summary: version.summary,
+      goals: version.goals,
+      audience: version.audience,
+      constraints: version.constraints,
+      problemStatement: version.problemStatement,
+      targetCustomers: version.targetCustomers,
+      desiredOutcome: version.desiredOutcome,
+      successMetrics: version.successMetrics,
+    },
+    { source: "restore", sourceLabel: `Restored v${version.versionNumber}` },
+  );
+}
+
+export async function restoreWorkspaceBriefVersionAsync(
+  context: WorkflowContext,
+  input: { versionId?: string },
+): Promise<WorkspaceBriefRecord> {
+  const versionId = input.versionId?.trim();
+  if (!versionId) throw httpError(400, "brief version id is required");
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  const version = data.workspaceBriefVersions.find((entry) =>
+    entry.workspaceId === context.workspace.id && entry.id === versionId
+  );
+  if (!version) throw httpError(404, "brief version not found");
+  return saveWorkspaceBriefInternalAsync(
     context,
     {
       summary: version.summary,
@@ -369,9 +443,116 @@ function saveWorkspaceBriefInternal(
   });
 }
 
+function saveWorkspaceBriefInternalAsync(
+  context: WorkflowContext,
+  input: UpdateWorkspaceBriefInput,
+  options: { source: WorkspaceBriefVersionRecord["source"]; sourceLabel?: string },
+): Promise<WorkspaceBriefRecord> {
+  const timestamp = now();
+  const summary = requireText(input.summary, "brief summary", 2);
+  const problemStatement = (input.problemStatement ?? "").trim();
+  const desiredOutcome = (input.desiredOutcome ?? "").trim();
+  const targetCustomers = normalizeTextList(input.targetCustomers ?? []);
+  const successMetrics = normalizeTextList(input.successMetrics ?? []);
+  const goals = normalizeTextList(input.goals ?? input.successMetrics ?? []);
+  const audience = (input.audience ?? targetCustomers.join(", ")).trim();
+  const constraints = (input.constraints ?? problemStatement).trim();
+
+  return mutateStoreAsync((data) => {
+    const workspace = ensureWorkspace(data, context.workspace.id);
+    const previousBrief = findWorkspaceBrief(data, workspace.id);
+    const scopeChanged = previousBrief
+      ? briefScopeChanged(previousBrief, { summary, goals, audience, constraints, problemStatement, targetCustomers, desiredOutcome, successMetrics })
+      : false;
+    const brief = upsertWorkspaceBrief(
+      data,
+      {
+        workspaceId: workspace.id,
+        summary,
+        goals,
+        audience,
+        constraints,
+        problemStatement,
+        targetCustomers,
+        desiredOutcome,
+        successMetrics,
+        updatedByUserId: context.user.id,
+      },
+      timestamp,
+    );
+
+    const version = appendWorkspaceBriefVersion(
+      data,
+      {
+        workspaceId: workspace.id,
+        summary,
+        goals,
+        audience,
+        constraints,
+        problemStatement,
+        targetCustomers,
+        desiredOutcome,
+        successMetrics,
+        source: options.source,
+        sourceLabel: options.sourceLabel,
+        createdByUserId: context.user.id,
+        createdByDisplayName: context.user.displayName,
+      },
+      timestamp,
+    );
+
+    workspace.automationGoal = summary;
+    workspace.updatedAt = timestamp;
+    const facts = ensureActivationFacts(data, workspace.id, timestamp);
+    facts.briefCapturedAt = timestamp;
+    markOnboardingStep(data, workspace.id, "create_workspace_profile", timestamp);
+    if (scopeChanged) {
+      const signal = upsertActivationSignal(data, {
+        workspaceId: workspace.id,
+        kind: "scope_change",
+        source: "workflow",
+        origin: "user_entered",
+        sourceId: version.id,
+        stableKey: activationSignalStableKey(workspace.id, "scope_change", "workflow", version.id),
+        data: {
+          source: options.source,
+          sourceLabel: options.sourceLabel,
+          versionNumber: version.versionNumber,
+        },
+      }, timestamp);
+      pushActivity(data, workspace.id, "workflow.scope_changed", actorFor(context), {
+        title: "Workflow scope changed",
+        activationSignalKind: "scope_change",
+        activationSignalId: signal.id,
+        sourceId: version.id,
+        versionNumber: version.versionNumber,
+        origin: "user_entered",
+        observedBy: "workflow_service",
+      }, timestamp, activationActivityId(workspace.id, "workflow.scope_changed", signal.id));
+    }
+    pushActivity(data, workspace.id, "workflow.brief_updated", actorFor(context), {
+      title: "Workspace brief updated",
+      goalCount: goals.length,
+      targetCustomerCount: targetCustomers.length,
+      successMetricCount: successMetrics.length,
+      source: options.source,
+      sourceLabel: options.sourceLabel,
+    }, timestamp);
+    return copyRecord(brief);
+  });
+}
+
 export function listRequirements(context: WorkflowContext): RequirementRecord[] {
   ensureWorkspaceExists(context.workspace.id);
   return listRequirementsForWorkspaceIndexed(context.workspace.id).map(copyRecord);
+}
+
+export async function listRequirementsAsync(context: WorkflowContext): Promise<RequirementRecord[]> {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  return data.requirements
+    .filter((entry) => entry.workspaceId === context.workspace.id)
+    .map(copyRecord);
 }
 
 export function replaceRequirements(
@@ -399,9 +580,43 @@ export function replaceRequirements(
   });
 }
 
+export async function replaceRequirementsAsync(
+  context: WorkflowContext,
+  input: WorkflowRequirementInput[] | { requirements?: WorkflowRequirementInput[] },
+): Promise<RequirementRecord[]> {
+  const timestamp = now();
+  const entries = Array.isArray(input) ? input : input.requirements ?? [];
+  const requirements = entries.map((entry) => normalizeRequirement(context, entry, timestamp));
+
+  return mutateStoreAsync((data) => {
+    ensureWorkspace(data, context.workspace.id);
+    data.requirements = data.requirements.filter((entry) => entry.workspaceId !== context.workspace.id);
+    data.requirements.push(...requirements);
+
+    const facts = ensureActivationFacts(data, context.workspace.id, timestamp);
+    if (requirements.length > 0) facts.requirementsDefinedAt = timestamp;
+    else delete facts.requirementsDefinedAt;
+    markOnboardingStep(data, context.workspace.id, "define_requirements", timestamp, requirements.length > 0);
+    pushActivity(data, context.workspace.id, "workflow.requirements_updated", actorFor(context), {
+      title: "Requirements updated",
+      requirementCount: requirements.length,
+    }, timestamp);
+    return requirements.map(copyRecord);
+  });
+}
+
 export function listPlanItems(context: WorkflowContext): ImplementationPlanItemRecord[] {
   ensureWorkspaceExists(context.workspace.id);
   return listImplementationPlanItemsForWorkspaceIndexed(context.workspace.id).map(copyRecord);
+}
+
+export async function listPlanItemsAsync(context: WorkflowContext): Promise<ImplementationPlanItemRecord[]> {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  return data.implementationPlanItems
+    .filter((entry) => entry.workspaceId === context.workspace.id)
+    .sort((left, right) => left.order - right.order)
+    .map(copyRecord);
 }
 
 export function replacePlanItems(
@@ -444,9 +659,58 @@ export function replacePlanItems(
   });
 }
 
+export async function replacePlanItemsAsync(
+  context: WorkflowContext,
+  input: WorkflowPlanItemInput[] | { planItems?: WorkflowPlanItemInput[] },
+): Promise<ImplementationPlanItemRecord[]> {
+  const timestamp = now();
+  const entries = Array.isArray(input) ? input : input.planItems ?? [];
+  const planItems = entries.map((entry, index) => normalizePlanItem(context.workspace.id, entry, index, timestamp));
+
+  return mutateStoreAsync((data) => {
+    ensureWorkspace(data, context.workspace.id);
+    data.implementationPlanItems = data.implementationPlanItems.filter((entry) => entry.workspaceId !== context.workspace.id);
+    data.implementationPlanItems.push(...planItems);
+
+    const facts = ensureActivationFacts(data, context.workspace.id, timestamp);
+    if (planItems.length > 0) facts.planDefinedAt = timestamp;
+    else delete facts.planDefinedAt;
+    if (planItems.some((entry) => entry.status === "in_progress" || entry.status === "blocked" || entry.status === "done")) {
+      facts.implementationStartedAt = timestamp;
+      facts.startedAt = facts.startedAt ?? timestamp;
+    }
+    if (planItems.length > 0 && planItems.every((entry) => entry.status === "done")) {
+      facts.completedAt = timestamp;
+    }
+    markOnboardingStep(data, context.workspace.id, "define_plan", timestamp, planItems.length > 0);
+    markOnboardingStep(
+      data,
+      context.workspace.id,
+      "start_implementation",
+      timestamp,
+      planItems.some((entry) => entry.status === "in_progress" || entry.status === "blocked" || entry.status === "done"),
+    );
+    pushActivity(data, context.workspace.id, "workflow.plan_updated", actorFor(context), {
+      title: "Plan items updated",
+      planItemCount: planItems.length,
+      completedCount: planItems.filter((entry) => entry.status === "done").length,
+    }, timestamp);
+    return planItems.map(copyRecord);
+  });
+}
+
 export function createWorkflowPlanItem(context: WorkflowContext, input: WorkflowPlanItemInput): ImplementationPlanItemRecord {
   const current = listPlanItems(context).map(planItemToInput);
   const saved = replacePlanItems(context, [...current, input]);
+  return saved[saved.length - 1];
+}
+
+export async function createWorkflowPlanItemAsync(
+  context: WorkflowContext,
+  input: WorkflowPlanItemInput,
+): Promise<ImplementationPlanItemRecord> {
+  const current = (await listPlanItemsAsync(context)).map(planItemToInput);
+  const saved = await replacePlanItemsAsync(context, [...current, input]);
   return saved[saved.length - 1];
 }
 
@@ -466,6 +730,22 @@ export function updateWorkflowPlanItem(
   return saved.find((entry) => entry.id === itemId) ?? saved[0];
 }
 
+export async function updateWorkflowPlanItemAsync(
+  context: WorkflowContext,
+  input: WorkflowPlanItemInput & { itemId?: string },
+): Promise<ImplementationPlanItemRecord> {
+  const itemId = input.itemId ?? input.id;
+  if (!itemId) throw httpError(400, "plan item id is required");
+  const current = await listPlanItemsAsync(context);
+  const existing = current.find((entry) => entry.id === itemId);
+  if (!existing) throw httpError(404, "plan item not found");
+  const saved = await replacePlanItemsAsync(
+    context,
+    current.map((entry) => entry.id === itemId ? { ...planItemToInput(entry), ...input, id: itemId } : planItemToInput(entry)),
+  );
+  return saved.find((entry) => entry.id === itemId) ?? saved[0];
+}
+
 export function listBlockersAndQuestions(context: WorkflowContext) {
   ensureWorkspaceExists(context.workspace.id);
   return {
@@ -474,13 +754,39 @@ export function listBlockersAndQuestions(context: WorkflowContext) {
   };
 }
 
+export async function listBlockersAndQuestionsAsync(context: WorkflowContext) {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  return {
+    blockers: data.workflowConcerns
+      .filter((entry) => entry.workspaceId === context.workspace.id && entry.kind === "blocker")
+      .map(copyRecord),
+    questions: data.workflowConcerns
+      .filter((entry) => entry.workspaceId === context.workspace.id && entry.kind === "open_question")
+      .map(copyRecord),
+  };
+}
+
 export function listWorkflowBlockers(context: WorkflowContext) {
   return listBlockersAndQuestions(context).blockers.map(toBlockerDto);
+}
+
+export async function listWorkflowBlockersAsync(context: WorkflowContext) {
+  return (await listBlockersAndQuestionsAsync(context)).blockers.map(toBlockerDto);
 }
 
 export function createWorkflowBlocker(context: WorkflowContext, input: WorkflowConcernInput) {
   const current = listBlockersAndQuestions(context);
   const saved = replaceBlockersAndQuestions(context, {
+    blockers: [...current.blockers.map(concernToInput), input],
+    questions: current.questions.map(concernToInput),
+  });
+  return toBlockerDto(saved.blockers[saved.blockers.length - 1]);
+}
+
+export async function createWorkflowBlockerAsync(context: WorkflowContext, input: WorkflowConcernInput) {
+  const current = await listBlockersAndQuestionsAsync(context);
+  const saved = await replaceBlockersAndQuestionsAsync(context, {
     blockers: [...current.blockers.map(concernToInput), input],
     questions: current.questions.map(concernToInput),
   });
@@ -500,13 +806,39 @@ export function updateWorkflowBlocker(context: WorkflowContext, input: WorkflowC
   return toBlockerDto(saved.blockers.find((entry) => entry.id === blockerId) ?? saved.blockers[0]);
 }
 
+export async function updateWorkflowBlockerAsync(context: WorkflowContext, input: WorkflowConcernInput & { blockerId?: string }) {
+  const blockerId = input.blockerId ?? input.id;
+  if (!blockerId) throw httpError(400, "blocker id is required");
+  const current = await listBlockersAndQuestionsAsync(context);
+  const existing = current.blockers.find((entry) => entry.id === blockerId);
+  if (!existing) throw httpError(404, "blocker not found");
+  const saved = await replaceBlockersAndQuestionsAsync(context, {
+    blockers: current.blockers.map((entry) => entry.id === blockerId ? { ...concernToInput(entry), ...input, id: blockerId } : concernToInput(entry)),
+    questions: current.questions.map(concernToInput),
+  });
+  return toBlockerDto(saved.blockers.find((entry) => entry.id === blockerId) ?? saved.blockers[0]);
+}
+
 export function listWorkflowQuestions(context: WorkflowContext) {
   return listBlockersAndQuestions(context).questions.map(toQuestionDto);
+}
+
+export async function listWorkflowQuestionsAsync(context: WorkflowContext) {
+  return (await listBlockersAndQuestionsAsync(context)).questions.map(toQuestionDto);
 }
 
 export function createWorkflowQuestion(context: WorkflowContext, input: WorkflowConcernInput) {
   const current = listBlockersAndQuestions(context);
   const saved = replaceBlockersAndQuestions(context, {
+    blockers: current.blockers.map(concernToInput),
+    questions: [...current.questions.map(concernToInput), input],
+  });
+  return toQuestionDto(saved.questions[saved.questions.length - 1]);
+}
+
+export async function createWorkflowQuestionAsync(context: WorkflowContext, input: WorkflowConcernInput) {
+  const current = await listBlockersAndQuestionsAsync(context);
+  const saved = await replaceBlockersAndQuestionsAsync(context, {
     blockers: current.blockers.map(concernToInput),
     questions: [...current.questions.map(concernToInput), input],
   });
@@ -520,6 +852,19 @@ export function updateWorkflowQuestion(context: WorkflowContext, input: Workflow
   const existing = current.questions.find((entry) => entry.id === questionId);
   if (!existing) throw httpError(404, "question not found");
   const saved = replaceBlockersAndQuestions(context, {
+    blockers: current.blockers.map(concernToInput),
+    questions: current.questions.map((entry) => entry.id === questionId ? { ...concernToInput(entry), ...input, id: questionId } : concernToInput(entry)),
+  });
+  return toQuestionDto(saved.questions.find((entry) => entry.id === questionId) ?? saved.questions[0]);
+}
+
+export async function updateWorkflowQuestionAsync(context: WorkflowContext, input: WorkflowConcernInput & { questionId?: string }) {
+  const questionId = input.questionId ?? input.id;
+  if (!questionId) throw httpError(400, "question id is required");
+  const current = await listBlockersAndQuestionsAsync(context);
+  const existing = current.questions.find((entry) => entry.id === questionId);
+  if (!existing) throw httpError(404, "question not found");
+  const saved = await replaceBlockersAndQuestionsAsync(context, {
     blockers: current.blockers.map(concernToInput),
     questions: current.questions.map((entry) => entry.id === questionId ? { ...concernToInput(entry), ...input, id: questionId } : concernToInput(entry)),
   });
@@ -557,9 +902,48 @@ export function replaceBlockersAndQuestions(
   });
 }
 
+export async function replaceBlockersAndQuestionsAsync(
+  context: WorkflowContext,
+  input: { blockers?: WorkflowConcernInput[]; questions?: WorkflowConcernInput[] },
+) {
+  const timestamp = now();
+  const blockers = (input.blockers ?? []).map((entry) => normalizeConcern(context.workspace.id, "blocker", entry, timestamp));
+  const questions = (input.questions ?? []).map((entry) => normalizeConcern(context.workspace.id, "open_question", entry, timestamp));
+
+  return mutateStoreAsync((data) => {
+    ensureWorkspace(data, context.workspace.id);
+    data.workflowConcerns = data.workflowConcerns.filter((entry) => entry.workspaceId !== context.workspace.id);
+    data.workflowConcerns.push(...blockers, ...questions);
+
+    const facts = ensureActivationFacts(data, context.workspace.id, timestamp);
+    const openBlockers = blockers.filter((entry) => entry.status === "open");
+    facts.blockerCount = openBlockers.length;
+    facts.dependencyBlockerCount = openBlockers.filter((entry) => Boolean(entry.relatedPlanItemId || entry.relatedRequirementId)).length;
+    facts.criticalIssueCount = openBlockers.filter((entry) => entry.severity === "critical").length;
+    facts.openQuestionCount = questions.filter((entry) => entry.status === "open").length;
+    pushActivity(data, context.workspace.id, "workflow.blockers_questions_updated", actorFor(context), {
+      title: "Blockers and questions updated",
+      blockerCount: facts.blockerCount,
+      openQuestionCount: facts.openQuestionCount,
+    }, timestamp);
+    return {
+      blockers: blockers.map(copyRecord),
+      questions: questions.map(copyRecord),
+    };
+  });
+}
+
 export function listValidationEvidence(context: WorkflowContext): ValidationEvidenceRecord[] {
   ensureWorkspaceExists(context.workspace.id);
   return listValidationEvidenceForWorkspaceIndexed(context.workspace.id).map(copyRecord);
+}
+
+export async function listValidationEvidenceAsync(context: WorkflowContext): Promise<ValidationEvidenceRecord[]> {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  return data.validationEvidence
+    .filter((entry) => entry.workspaceId === context.workspace.id)
+    .map(copyRecord);
 }
 
 export function replaceValidationEvidence(
@@ -597,7 +981,43 @@ export function replaceValidationEvidence(
   });
 }
 
+export async function replaceValidationEvidenceAsync(
+  context: WorkflowContext,
+  input: WorkflowValidationEvidenceInput[] | { validationEvidence?: WorkflowValidationEvidenceInput[] },
+): Promise<ValidationEvidenceRecord[]> {
+  const timestamp = now();
+  const entries = Array.isArray(input) ? input : input.validationEvidence ?? [];
+  const evidence = entries.map((entry) => normalizeValidationEvidence(context, entry, timestamp));
+
+  return mutateStoreAsync((data) => {
+    ensureWorkspace(data, context.workspace.id);
+    data.validationEvidence = data.validationEvidence.filter((entry) => entry.workspaceId !== context.workspace.id);
+    data.validationEvidence.push(...evidence);
+
+    const facts = ensureActivationFacts(data, context.workspace.id, timestamp);
+    const passedCount = evidence.filter((entry) => entry.status === "passed").length;
+    const failedCount = evidence.filter((entry) => entry.status === "failed").length;
+    facts.failedValidationCount = failedCount;
+    if (passedCount > 0) facts.testsPassedAt = timestamp;
+    if (passedCount > 0 && failedCount === 0) {
+      facts.validationPassedAt = timestamp;
+      facts.completedAt = facts.completedAt ?? timestamp;
+    } else {
+      delete facts.validationPassedAt;
+    }
+    markOnboardingStep(data, context.workspace.id, "validate", timestamp, passedCount > 0 && failedCount === 0);
+    pushActivity(data, context.workspace.id, "workflow.validation_evidence_updated", actorFor(context), {
+      title: "Validation evidence updated",
+      evidenceCount: evidence.length,
+      passedCount,
+      failedCount,
+    }, timestamp);
+    return evidence.map(copyRecord);
+  });
+}
+
 export const listWorkflowValidationEvidence = listValidationEvidence;
+export const listWorkflowValidationEvidenceAsync = listValidationEvidenceAsync;
 
 export function createWorkflowValidationEvidence(
   context: WorkflowContext,
@@ -605,6 +1025,15 @@ export function createWorkflowValidationEvidence(
 ): ValidationEvidenceRecord {
   const current = listValidationEvidence(context).map(validationEvidenceToInput);
   const saved = replaceValidationEvidence(context, [...current, input]);
+  return saved[saved.length - 1];
+}
+
+export async function createWorkflowValidationEvidenceAsync(
+  context: WorkflowContext,
+  input: WorkflowValidationEvidenceInput,
+): Promise<ValidationEvidenceRecord> {
+  const current = (await listValidationEvidenceAsync(context)).map(validationEvidenceToInput);
+  const saved = await replaceValidationEvidenceAsync(context, [...current, input]);
   return saved[saved.length - 1];
 }
 
@@ -624,6 +1053,22 @@ export function updateWorkflowValidationEvidence(
   return saved.find((entry) => entry.id === evidenceId) ?? saved[0];
 }
 
+export async function updateWorkflowValidationEvidenceAsync(
+  context: WorkflowContext,
+  input: WorkflowValidationEvidenceInput & { evidenceId?: string },
+): Promise<ValidationEvidenceRecord> {
+  const evidenceId = input.evidenceId ?? input.id;
+  if (!evidenceId) throw httpError(400, "validation evidence id is required");
+  const current = await listValidationEvidenceAsync(context);
+  const existing = current.find((entry) => entry.id === evidenceId);
+  if (!existing) throw httpError(404, "validation evidence not found");
+  const saved = await replaceValidationEvidenceAsync(
+    context,
+    current.map((entry) => entry.id === evidenceId ? { ...validationEvidenceToInput(entry), ...input, id: evidenceId } : validationEvidenceToInput(entry)),
+  );
+  return saved.find((entry) => entry.id === evidenceId) ?? saved[0];
+}
+
 export function readReleaseConfirmation(context: WorkflowContext): ReleaseConfirmationRecord | null {
   ensureWorkspaceExists(context.workspace.id);
   const confirmations = listReleaseConfirmationsForWorkspaceIndexed(context.workspace.id);
@@ -631,8 +1076,18 @@ export function readReleaseConfirmation(context: WorkflowContext): ReleaseConfir
   return latest ? copyRecord(latest) : null;
 }
 
+export async function readReleaseConfirmationAsync(context: WorkflowContext): Promise<ReleaseConfirmationRecord | null> {
+  const data = await loadStoreAsync();
+  ensureWorkspace(data, context.workspace.id);
+  const confirmations = listReleaseConfirmationsForWorkspace(data, context.workspace.id);
+  const latest = confirmations.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return latest ? copyRecord(latest) : null;
+}
+
 export const getWorkflowReleaseConfirmation = readReleaseConfirmation;
 export const confirmWorkflowRelease = updateReleaseConfirmation;
+export const getWorkflowReleaseConfirmationAsync = readReleaseConfirmationAsync;
+export const confirmWorkflowReleaseAsync = updateReleaseConfirmationAsync;
 
 export function updateReleaseConfirmation(
   context: WorkflowContext,
@@ -643,6 +1098,53 @@ export function updateReleaseConfirmation(
   if (input.confirmed && releaseNotes.length < 2) throw httpError(400, "release summary must be at least 2 characters");
 
   return mutateStore((data) => {
+    ensureWorkspace(data, context.workspace.id);
+    const existing = listReleaseConfirmationsForWorkspace(data, context.workspace.id)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    const confirmation = upsertReleaseConfirmation(
+      data,
+      {
+        id: existing?.id,
+        workspaceId: context.workspace.id,
+        versionLabel: (input.versionLabel ?? existing?.versionLabel ?? "release").trim() || "release",
+        confirmed: input.confirmed,
+        summary: releaseNotes,
+        confirmedBy: input.confirmed ? context.user.displayName : "",
+        status: input.confirmed ? "confirmed" : "pending",
+        confirmedByUserId: input.confirmed ? context.user.id : undefined,
+        confirmedAt: input.confirmed ? timestamp : undefined,
+        releaseNotes,
+        validationEvidenceIds: input.validationEvidenceIds ?? existing?.validationEvidenceIds ?? [],
+      },
+      timestamp,
+    );
+
+    const facts = ensureActivationFacts(data, context.workspace.id, timestamp);
+    if (confirmation.status === "confirmed") {
+      facts.releaseConfirmedAt = timestamp;
+      facts.releasedAt = timestamp;
+      markOnboardingStep(data, context.workspace.id, "confirm_release", timestamp);
+    } else {
+      delete facts.releaseConfirmedAt;
+      delete facts.releasedAt;
+    }
+    pushActivity(data, context.workspace.id, "workflow.release_confirmation_updated", actorFor(context), {
+      title: confirmation.status === "confirmed" ? "Release confirmed" : "Release confirmation cleared",
+      confirmed: confirmation.status === "confirmed",
+    }, timestamp);
+    return copyRecord(confirmation);
+  });
+}
+
+export async function updateReleaseConfirmationAsync(
+  context: WorkflowContext,
+  input: UpdateReleaseConfirmationInput,
+): Promise<ReleaseConfirmationRecord> {
+  const timestamp = now();
+  const releaseNotes = (input.summary ?? "").trim();
+  if (input.confirmed && releaseNotes.length < 2) throw httpError(400, "release summary must be at least 2 characters");
+
+  return mutateStoreAsync((data) => {
     ensureWorkspace(data, context.workspace.id);
     const existing = listReleaseConfirmationsForWorkspace(data, context.workspace.id)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];

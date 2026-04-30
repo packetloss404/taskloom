@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { requirePrivateWorkspaceRole } from "./rbac.js";
-import { listAlerts } from "./alerts/alert-store.js";
+import { listAlertsAsync } from "./alerts/alert-store.js";
 import type { AlertSeverity } from "./alerts/alert-engine.js";
 import { redactedErrorMessage } from "./security/redaction.js";
 
@@ -8,7 +8,7 @@ const ALLOWED_SEVERITIES: ReadonlySet<AlertSeverity> = new Set<AlertSeverity>(["
 
 export const operationsAlertsRoutes = new Hono();
 
-operationsAlertsRoutes.get("/", (c: Context) => {
+operationsAlertsRoutes.get("/", async (c: Context) => {
   try {
     requirePrivateWorkspaceRole(c, "admin");
     const severityRaw = c.req.query("severity") || undefined;
@@ -25,7 +25,7 @@ operationsAlertsRoutes.get("/", (c: Context) => {
     }
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? Math.max(1, Math.min(500, Number.parseInt(limitRaw, 10) || 100)) : undefined;
-    const alerts = listAlerts({
+    const alerts = await listAlertsAsync({
       severity: severityRaw as AlertSeverity | undefined,
       since,
       until,
