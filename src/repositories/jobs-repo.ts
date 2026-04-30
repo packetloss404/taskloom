@@ -26,15 +26,72 @@ export interface JobsRepository {
   sweepStaleRunning(staleAfterMs: number, now: Date): number;
 }
 
+export interface AsyncJobsRepository {
+  list(filter: ListJobsFilter): Promise<JobRecord[]>;
+  find(id: string): Promise<JobRecord | null>;
+  upsert(record: JobRecord): Promise<void>;
+  update(id: string, patch: Partial<JobRecord>): Promise<JobRecord | null>;
+  count(): Promise<number>;
+  claimNext(now: Date): Promise<JobRecord | null>;
+  sweepStaleRunning(staleAfterMs: number, now: Date): Promise<number>;
+}
+
 export interface JobsRepositoryDeps {
   loadStore?: () => TaskloomData;
   mutateStore?: <T>(mutator: (data: TaskloomData) => T) => T;
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncJobsRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: JobsRepository;
+  dbPath?: string;
+}
+
 export function createJobsRepository(deps: JobsRepositoryDeps = {}): JobsRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteJobsRepository(deps);
   return jsonJobsRepository(deps);
+}
+
+export function asyncJobsRepository(repository: JobsRepository): AsyncJobsRepository {
+  return {
+    async list(filter) {
+      return repository.list(filter);
+    },
+    async find(id) {
+      return repository.find(id);
+    },
+    async upsert(record) {
+      repository.upsert(record);
+    },
+    async update(id, patch) {
+      return repository.update(id, patch);
+    },
+    async count() {
+      return repository.count();
+    },
+    async claimNext(now) {
+      return repository.claimNext(now);
+    },
+    async sweepStaleRunning(staleAfterMs, now) {
+      return repository.sweepStaleRunning(staleAfterMs, now);
+    },
+  };
+}
+
+export function asyncJobsRepositoryFromSync(repository: JobsRepository): AsyncJobsRepository {
+  return asyncJobsRepository(repository);
+}
+
+export function createAsyncJobsRepository(deps: AsyncJobsRepositoryDeps = {}): AsyncJobsRepository {
+  if (deps.repository) return asyncJobsRepository(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncJobsRepository(sqliteJobsRepository({ dbPath: deps.dbPath }));
+  }
+  return asyncJsonJobsRepository(deps);
 }
 
 export function jsonJobsRepository(deps: JobsRepositoryDeps = {}): JobsRepository {
@@ -103,6 +160,96 @@ export function jsonJobsRepository(deps: JobsRepositoryDeps = {}): JobsRepositor
       });
     },
     sweepStaleRunning(staleAfterMs, now) {
+      return mutate((data) => {
+        if (!Array.isArray(data.jobs)) {
+          data.jobs = [];
+          return 0;
+        }
+        const cutoff = now.getTime() - staleAfterMs;
+        const ts = now.toISOString();
+        let count = 0;
+        for (const entry of data.jobs) {
+          if (entry.status !== "running") continue;
+          if (!entry.startedAt) continue;
+          const startedMs = Date.parse(entry.startedAt);
+          if (Number.isNaN(startedMs) || startedMs >= cutoff) continue;
+          entry.status = "queued";
+          entry.updatedAt = ts;
+          delete entry.startedAt;
+          count += 1;
+        }
+        return count;
+      });
+    },
+  };
+}
+
+export function asyncJsonJobsRepository(deps: AsyncJobsRepositoryDeps = {}): AsyncJobsRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(filter) {
+      const data = await load();
+      const collection = Array.isArray(data.jobs) ? data.jobs : [];
+      const filtered = collection.filter((entry) => {
+        if (entry.workspaceId !== filter.workspaceId) return false;
+        if (filter.status !== undefined && entry.status !== filter.status) return false;
+        return true;
+      });
+      return sortAndLimit(filtered, filter.limit);
+    },
+    async find(id) {
+      const data = await load();
+      const collection = Array.isArray(data.jobs) ? data.jobs : [];
+      return collection.find((entry) => entry.id === id) ?? null;
+    },
+    async upsert(record) {
+      await mutate((data) => {
+        if (!Array.isArray(data.jobs)) data.jobs = [];
+        const index = data.jobs.findIndex((entry) => entry.id === record.id);
+        if (index >= 0) {
+          data.jobs[index] = record;
+        } else {
+          data.jobs.push(record);
+        }
+        return null;
+      });
+    },
+    async update(id, patch) {
+      return mutate((data) => {
+        if (!Array.isArray(data.jobs)) {
+          data.jobs = [];
+          return null;
+        }
+        const target = data.jobs.find((entry) => entry.id === id);
+        if (!target) return null;
+        Object.assign(target, patch, { updatedAt: new Date().toISOString() });
+        return target;
+      });
+    },
+    async count() {
+      const data = await load();
+      return Array.isArray(data.jobs) ? data.jobs.length : 0;
+    },
+    async claimNext(now) {
+      return mutate((data) => {
+        if (!Array.isArray(data.jobs)) {
+          data.jobs = [];
+          return null;
+        }
+        const candidate = data.jobs
+          .filter((entry) => entry.status === "queued" && Date.parse(entry.scheduledAt) <= now.getTime())
+          .sort((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt))[0];
+        if (!candidate) return null;
+        const ts = now.toISOString();
+        candidate.status = "running";
+        candidate.attempts += 1;
+        candidate.startedAt = ts;
+        candidate.updatedAt = ts;
+        return candidate;
+      });
+    },
+    async sweepStaleRunning(staleAfterMs, now) {
       return mutate((data) => {
         if (!Array.isArray(data.jobs)) {
           data.jobs = [];

@@ -47,7 +47,9 @@ test("runReleaseEvidenceCli exports local JSON evidence in non-strict mode", asy
   assert.equal(bundle.readyForRelease, true);
   assert.equal(bundle.phase, "44");
   assert.equal((bundle.storageTopology as { mode?: unknown }).mode, "json");
+  assert.equal((bundle.asyncStoreBoundary as { phase?: unknown }).phase, "49");
   assert.equal(((bundle.evidence as { config?: { strictRelease?: unknown } }).config)?.strictRelease, false);
+  assert.equal(((bundle.evidence as { config?: { managedPostgresSupported?: unknown } }).config)?.managedPostgresSupported, false);
 });
 
 test("runReleaseEvidenceCli fails strict mode when the bundle is not release-ready", async () => {
@@ -85,6 +87,8 @@ test("runReleaseEvidenceCli strict mode blocks managed database runtime handoff"
   assert.equal(((bundle.evidence as { config?: { strictRelease?: unknown } }).config)?.strictRelease, true);
   assert.match(serializedBundle, /Managed database runtime intent was detected/);
   assert.match(serializedBundle, /managed-database-blocked/);
+  assert.match(serializedBundle, /Phase 49 async-store boundary exists as foundation/);
+  assert.match(serializedBundle, /managed Postgres remains unsupported/);
   assert.doesNotMatch(serializedBundle, /taskloom:secret/);
 });
 

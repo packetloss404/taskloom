@@ -69,6 +69,12 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(typeof snapshots.total, "number");
   assert.ok(snapshots.lastCapturedAt === null || typeof snapshots.lastCapturedAt === "string");
   assert.ok(body.accessLog && typeof body.accessLog === "object");
+  assert.ok(body.asyncStoreBoundary && typeof body.asyncStoreBoundary === "object");
+  const asyncStoreBoundary = body.asyncStoreBoundary as Record<string, unknown>;
+  assert.equal(asyncStoreBoundary.phase, "49");
+  assert.equal(asyncStoreBoundary.foundationPresent, true);
+  assert.equal(asyncStoreBoundary.managedDatabaseRuntimeAllowed, false);
+  assert.equal(asyncStoreBoundary.managedDatabaseRuntimeBlocked, true);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);

@@ -166,6 +166,11 @@ test("Operations surface renders the Production Status tile for admin sessions",
   assert.match(operations, /managedDatabaseRuntimeBoundary/);
   assert.match(operations, /Managed DB runtime boundary/);
   assert.match(operations, /MANAGED DB RUNTIME BOUNDARY/);
+  assert.match(operations, /asyncStoreBoundary/);
+  assert.match(operations, /Async store boundary/);
+  assert.match(operations, /ASYNC STORE BOUNDARY/);
+  assert.match(operations, /Foundation present/);
+  assert.match(operations, /Managed DB runtime/);
   assert.match(operations, /releaseReadiness/);
   assert.match(operations, /Release readiness/);
   assert.match(operations, /releaseEvidence/);

@@ -34,11 +34,58 @@ export interface InvitationEmailDeliveriesRepositoryDeps {
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncInvitationEmailDeliveriesRepository {
+  list(filter: ListInvitationEmailDeliveriesFilter): Promise<InvitationEmailDeliveryRecord[]>;
+  find(id: string): Promise<InvitationEmailDeliveryRecord | null>;
+  upsert(record: InvitationEmailDeliveryRecord): Promise<void>;
+  count(): Promise<number>;
+}
+
+export interface AsyncInvitationEmailDeliveriesRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: InvitationEmailDeliveriesRepository;
+  dbPath?: string;
+}
+
 export function createInvitationEmailDeliveriesRepository(
   deps: InvitationEmailDeliveriesRepositoryDeps = {},
 ): InvitationEmailDeliveriesRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteInvitationEmailDeliveriesRepository(deps);
   return jsonInvitationEmailDeliveriesRepository(deps);
+}
+
+export function createAsyncInvitationEmailDeliveriesRepository(
+  deps: AsyncInvitationEmailDeliveriesRepositoryDeps = {},
+): AsyncInvitationEmailDeliveriesRepository {
+  if (deps.repository) return asyncInvitationEmailDeliveriesRepositoryFromSync(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncInvitationEmailDeliveriesRepositoryFromSync(
+      sqliteInvitationEmailDeliveriesRepository({ dbPath: deps.dbPath }),
+    );
+  }
+  return asyncJsonInvitationEmailDeliveriesRepository(deps);
+}
+
+export function asyncInvitationEmailDeliveriesRepositoryFromSync(
+  repository: InvitationEmailDeliveriesRepository,
+): AsyncInvitationEmailDeliveriesRepository {
+  return {
+    async list(filter) {
+      return repository.list(filter);
+    },
+    async find(id) {
+      return repository.find(id);
+    },
+    async upsert(record) {
+      repository.upsert(record);
+    },
+    async count() {
+      return repository.count();
+    },
+  };
 }
 
 export function jsonInvitationEmailDeliveriesRepository(
@@ -71,6 +118,41 @@ export function jsonInvitationEmailDeliveriesRepository(
     },
     count() {
       const data = load();
+      return Array.isArray(data.invitationEmailDeliveries) ? data.invitationEmailDeliveries.length : 0;
+    },
+  };
+}
+
+export function asyncJsonInvitationEmailDeliveriesRepository(
+  deps: AsyncInvitationEmailDeliveriesRepositoryDeps = {},
+): AsyncInvitationEmailDeliveriesRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(filter) {
+      const data = await load();
+      const collection = Array.isArray(data.invitationEmailDeliveries) ? data.invitationEmailDeliveries : [];
+      return applyListFilter(collection, filter);
+    },
+    async find(id) {
+      const data = await load();
+      const collection = Array.isArray(data.invitationEmailDeliveries) ? data.invitationEmailDeliveries : [];
+      return collection.find((entry) => entry.id === id) ?? null;
+    },
+    async upsert(record) {
+      await mutate((data) => {
+        if (!Array.isArray(data.invitationEmailDeliveries)) data.invitationEmailDeliveries = [];
+        const index = data.invitationEmailDeliveries.findIndex((entry) => entry.id === record.id);
+        if (index >= 0) {
+          data.invitationEmailDeliveries[index] = record;
+        } else {
+          data.invitationEmailDeliveries.push(record);
+        }
+        return null;
+      });
+    },
+    async count() {
+      const data = await load();
       return Array.isArray(data.invitationEmailDeliveries) ? data.invitationEmailDeliveries.length : 0;
     },
   };

@@ -32,11 +32,60 @@ export interface AgentRunsRepositoryDeps {
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncAgentRunsRepository {
+  list(workspaceId: string, limit?: number): Promise<AgentRunRecord[]>;
+  listForAgent(workspaceId: string, agentId: string, limit?: number): Promise<AgentRunRecord[]>;
+  find(workspaceId: string, runId: string): Promise<AgentRunRecord | null>;
+  upsert(record: AgentRunRecord): Promise<void>;
+  count(): Promise<number>;
+}
+
+export interface AsyncAgentRunsRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: AgentRunsRepository;
+  dbPath?: string;
+}
+
 export function createAgentRunsRepository(
   deps: AgentRunsRepositoryDeps = {},
 ): AgentRunsRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteAgentRunsRepository(deps);
   return jsonAgentRunsRepository(deps);
+}
+
+export function createAsyncAgentRunsRepository(
+  deps: AsyncAgentRunsRepositoryDeps = {},
+): AsyncAgentRunsRepository {
+  if (deps.repository) return asyncAgentRunsRepositoryFromSync(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncAgentRunsRepositoryFromSync(sqliteAgentRunsRepository({ dbPath: deps.dbPath }));
+  }
+  return asyncJsonAgentRunsRepository(deps);
+}
+
+export function asyncAgentRunsRepositoryFromSync(
+  repository: AgentRunsRepository,
+): AsyncAgentRunsRepository {
+  return {
+    async list(workspaceId, limit) {
+      return repository.list(workspaceId, limit);
+    },
+    async listForAgent(workspaceId, agentId, limit) {
+      return repository.listForAgent(workspaceId, agentId, limit);
+    },
+    async find(workspaceId, runId) {
+      return repository.find(workspaceId, runId);
+    },
+    async upsert(record) {
+      repository.upsert(record);
+    },
+    async count() {
+      return repository.count();
+    },
+  };
 }
 
 export function jsonAgentRunsRepository(
@@ -78,6 +127,50 @@ export function jsonAgentRunsRepository(
     },
     count() {
       const data = load();
+      return Array.isArray(data.agentRuns) ? data.agentRuns.length : 0;
+    },
+  };
+}
+
+export function asyncJsonAgentRunsRepository(
+  deps: AsyncAgentRunsRepositoryDeps = {},
+): AsyncAgentRunsRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(workspaceId, limit) {
+      const data = await load();
+      const collection = Array.isArray(data.agentRuns) ? data.agentRuns : [];
+      const filtered = collection.filter((entry) => entry.workspaceId === workspaceId);
+      return sortAndLimit(filtered, limit);
+    },
+    async listForAgent(workspaceId, agentId, limit) {
+      const data = await load();
+      const collection = Array.isArray(data.agentRuns) ? data.agentRuns : [];
+      const filtered = collection.filter(
+        (entry) => entry.workspaceId === workspaceId && entry.agentId === agentId,
+      );
+      return sortAndLimit(filtered, limit);
+    },
+    async find(workspaceId, runId) {
+      const data = await load();
+      const collection = Array.isArray(data.agentRuns) ? data.agentRuns : [];
+      return collection.find((entry) => entry.workspaceId === workspaceId && entry.id === runId) ?? null;
+    },
+    async upsert(record) {
+      await mutate((data) => {
+        if (!Array.isArray(data.agentRuns)) data.agentRuns = [];
+        const index = data.agentRuns.findIndex((entry) => entry.id === record.id);
+        if (index >= 0) {
+          data.agentRuns[index] = record;
+        } else {
+          data.agentRuns.push(record);
+        }
+        return null;
+      });
+    },
+    async count() {
+      const data = await load();
       return Array.isArray(data.agentRuns) ? data.agentRuns.length : 0;
     },
   };

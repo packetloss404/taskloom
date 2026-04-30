@@ -30,11 +30,56 @@ export interface JobMetricSnapshotsRepositoryDeps {
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncJobMetricSnapshotsRepository {
+  list(filter?: ListJobMetricSnapshotsFilter): Promise<JobMetricSnapshotRecord[]>;
+  insertMany(records: JobMetricSnapshotRecord[]): Promise<void>;
+  prune(retainAfterIso: string): Promise<number>;
+  count(): Promise<number>;
+}
+
+export interface AsyncJobMetricSnapshotsRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: JobMetricSnapshotsRepository;
+  dbPath?: string;
+}
+
 export function createJobMetricSnapshotsRepository(
   deps: JobMetricSnapshotsRepositoryDeps = {},
 ): JobMetricSnapshotsRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteJobMetricSnapshotsRepository(deps);
   return jsonJobMetricSnapshotsRepository(deps);
+}
+
+export function createAsyncJobMetricSnapshotsRepository(
+  deps: AsyncJobMetricSnapshotsRepositoryDeps = {},
+): AsyncJobMetricSnapshotsRepository {
+  if (deps.repository) return asyncJobMetricSnapshotsRepositoryFromSync(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncJobMetricSnapshotsRepositoryFromSync(sqliteJobMetricSnapshotsRepository({ dbPath: deps.dbPath }));
+  }
+  return asyncJsonJobMetricSnapshotsRepository(deps);
+}
+
+export function asyncJobMetricSnapshotsRepositoryFromSync(
+  repository: JobMetricSnapshotsRepository,
+): AsyncJobMetricSnapshotsRepository {
+  return {
+    async list(filter) {
+      return repository.list(filter);
+    },
+    async insertMany(records) {
+      repository.insertMany(records);
+    },
+    async prune(retainAfterIso) {
+      return repository.prune(retainAfterIso);
+    },
+    async count() {
+      return repository.count();
+    },
+  };
 }
 
 export function jsonJobMetricSnapshotsRepository(
@@ -83,6 +128,57 @@ export function jsonJobMetricSnapshotsRepository(
     },
     count() {
       const data = load();
+      return Array.isArray(data.jobMetricSnapshots) ? data.jobMetricSnapshots.length : 0;
+    },
+  };
+}
+
+export function asyncJsonJobMetricSnapshotsRepository(
+  deps: AsyncJobMetricSnapshotsRepositoryDeps = {},
+): AsyncJobMetricSnapshotsRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(filter = {}) {
+      const data = await load();
+      const collection = Array.isArray(data.jobMetricSnapshots) ? data.jobMetricSnapshots : [];
+      return applyListFilter(collection, filter);
+    },
+    async insertMany(records) {
+      if (records.length === 0) return;
+      await mutate((data) => {
+        if (!Array.isArray(data.jobMetricSnapshots)) data.jobMetricSnapshots = [];
+        const existingIds = new Set(data.jobMetricSnapshots.map((entry) => entry.id));
+        for (const record of records) {
+          if (existingIds.has(record.id)) {
+            const index = data.jobMetricSnapshots.findIndex((entry) => entry.id === record.id);
+            if (index >= 0) data.jobMetricSnapshots[index] = record;
+          } else {
+            data.jobMetricSnapshots.push(record);
+            existingIds.add(record.id);
+          }
+        }
+        return null;
+      });
+    },
+    async prune(retainAfterIso) {
+      const cutoffMs = Date.parse(retainAfterIso);
+      return mutate((data) => {
+        if (!Array.isArray(data.jobMetricSnapshots)) {
+          data.jobMetricSnapshots = [];
+          return 0;
+        }
+        const before = data.jobMetricSnapshots.length;
+        data.jobMetricSnapshots = data.jobMetricSnapshots.filter((entry) => {
+          const capturedMs = Date.parse(entry.capturedAt);
+          if (Number.isNaN(capturedMs)) return true;
+          return capturedMs >= cutoffMs;
+        });
+        return before - data.jobMetricSnapshots.length;
+      });
+    },
+    async count() {
+      const data = await load();
       return Array.isArray(data.jobMetricSnapshots) ? data.jobMetricSnapshots.length : 0;
     },
   };

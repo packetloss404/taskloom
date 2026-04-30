@@ -28,11 +28,60 @@ export interface ProviderCallsRepositoryDeps {
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncProviderCallsRepository {
+  list(filter: ListProviderCallsFilter): Promise<ProviderCallRecord[]>;
+  upsert(record: ProviderCallRecord): Promise<void>;
+  insertMany(records: ProviderCallRecord[]): Promise<void>;
+  pruneRetainLatest(maxRows: number): Promise<number>;
+  count(): Promise<number>;
+}
+
+export interface AsyncProviderCallsRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: ProviderCallsRepository;
+  dbPath?: string;
+}
+
 export function createProviderCallsRepository(
   deps: ProviderCallsRepositoryDeps = {},
 ): ProviderCallsRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteProviderCallsRepository(deps);
   return jsonProviderCallsRepository(deps);
+}
+
+export function createAsyncProviderCallsRepository(
+  deps: AsyncProviderCallsRepositoryDeps = {},
+): AsyncProviderCallsRepository {
+  if (deps.repository) return asyncProviderCallsRepositoryFromSync(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncProviderCallsRepositoryFromSync(sqliteProviderCallsRepository({ dbPath: deps.dbPath }));
+  }
+  return asyncJsonProviderCallsRepository(deps);
+}
+
+export function asyncProviderCallsRepositoryFromSync(
+  repository: ProviderCallsRepository,
+): AsyncProviderCallsRepository {
+  return {
+    async list(filter) {
+      return repository.list(filter);
+    },
+    async upsert(record) {
+      repository.upsert(record);
+    },
+    async insertMany(records) {
+      repository.insertMany(records);
+    },
+    async pruneRetainLatest(maxRows) {
+      return repository.pruneRetainLatest(maxRows);
+    },
+    async count() {
+      return repository.count();
+    },
+  };
 }
 
 export function jsonProviderCallsRepository(
@@ -78,6 +127,54 @@ export function jsonProviderCallsRepository(
     },
     count() {
       const data = load();
+      return Array.isArray(data.providerCalls) ? data.providerCalls.length : 0;
+    },
+  };
+}
+
+export function asyncJsonProviderCallsRepository(
+  deps: AsyncProviderCallsRepositoryDeps = {},
+): AsyncProviderCallsRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(filter) {
+      const data = await load();
+      const collection = Array.isArray(data.providerCalls) ? data.providerCalls : [];
+      return applyListFilter(collection, filter);
+    },
+    async upsert(record) {
+      await mutate((data) => {
+        if (!Array.isArray(data.providerCalls)) data.providerCalls = [];
+        upsertIntoCollection(data.providerCalls, record);
+        return null;
+      });
+    },
+    async insertMany(records) {
+      if (records.length === 0) return;
+      await mutate((data) => {
+        if (!Array.isArray(data.providerCalls)) data.providerCalls = [];
+        for (const record of records) {
+          upsertIntoCollection(data.providerCalls, record);
+        }
+        return null;
+      });
+    },
+    async pruneRetainLatest(maxRows) {
+      const retain = normalizeMaxRows(maxRows);
+      return mutate((data) => {
+        if (!Array.isArray(data.providerCalls)) {
+          data.providerCalls = [];
+          return 0;
+        }
+        const before = data.providerCalls.length;
+        if (before <= retain) return 0;
+        data.providerCalls = sortNewestFirst(data.providerCalls).slice(0, retain);
+        return before - data.providerCalls.length;
+      });
+    },
+    async count() {
+      const data = await load();
       return Array.isArray(data.providerCalls) ? data.providerCalls.length : 0;
     },
   };

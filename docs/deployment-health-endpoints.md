@@ -1,6 +1,6 @@
 # Taskloom Health And Operational Status Endpoints
 
-Phase 24 adds two public health probes plus an admin-scoped operator-status endpoint that summarizes runtime configuration in a single call. The probes give container orchestrators and load balancers the standard `live`/`ready` split they expect, while the operator-status endpoint surfaces store mode, scheduler leader configuration, jobs queue depth, access-log knobs, and Node version without requiring an SSH session into the host. Pair this phase with Phase 21 scheduler coordination, Phase 23 access-log shipping, and the existing rate-limit and SQLite/topology guidance in `docs/deployment-auth-hardening.md` and `docs/deployment-sqlite-topology.md` to round out the production posture.
+Phase 24 adds two public health probes plus an admin-scoped operator-status endpoint that summarizes runtime configuration in a single call. The probes give container orchestrators and load balancers the standard `live`/`ready` split they expect, while the operator-status endpoint surfaces store mode, managed database runtime boundary, Phase 49 async store boundary foundation, scheduler leader configuration, jobs queue depth, access-log knobs, and Node version without requiring an SSH session into the host. Pair this phase with Phase 21 scheduler coordination, Phase 23 access-log shipping, and the existing rate-limit and SQLite/topology guidance in `docs/deployment-auth-hardening.md` and `docs/deployment-sqlite-topology.md` to round out the production posture.
 
 Before Phase 24, Taskloom exposed a single `GET /api/health` route returning `{ "ok": true }` and no operator-visibility endpoint other than the per-resource jobs/agents/runs surfaces under `/api/app`. That covered the smoke-test case but did not match the live/ready split orchestrators expect, did not give load balancers a way to detect store-level degradation, and did not give operators a single call to confirm scheduler leader mode, store mode, and access-log envelope are configured the way the deployment intends. Phase 24 closes those gaps without changing the existing endpoint, so older consumers continue to work unchanged.
 
@@ -60,7 +60,7 @@ It is not redundant with the new probes. Existing consumers that depend on the `
 
 ## Operator Status (/api/app/operations/status)
 
-`GET /api/app/operations/status` is an admin-scoped endpoint that returns a single `OperationsStatus` payload covering the runtime configuration the operator most often needs in one place. The intent is to answer "is this deployment configured the way I think it is?" with one curl rather than several. Auth follows the standard Taskloom session model with route-level RBAC:
+`GET /api/app/operations/status` is an admin-scoped endpoint that returns a single `OperationsStatus` payload covering the runtime configuration the operator most often needs in one place. This includes the Phase 49 async store boundary foundation status so operators can see that the boundary exists while managed Postgres runtime support remains blocked. The intent is to answer "is this deployment configured the way I think it is?" with one curl rather than several. Auth follows the standard Taskloom session model with route-level RBAC:
 
 - Unauthenticated requests return `401 Unauthorized`.
 - Authenticated non-admin/non-owner requests return `403 Forbidden`.
@@ -116,6 +116,16 @@ Sample 200 response:
     "maxBytes": 10485760,
     "maxFiles": 5
   },
+  "asyncStoreBoundary": {
+    "source": "releaseReadiness",
+    "phase": "49",
+    "status": "pass",
+    "classification": "foundation-ready",
+    "foundationPresent": true,
+    "managedDatabaseRuntimeAllowed": false,
+    "managedDatabaseRuntimeBlocked": true,
+    "managedPostgresSupported": false
+  },
   "runtime": { "nodeVersion": "v22.5.0" }
 }
 ```
@@ -143,6 +153,7 @@ Field-by-field notes:
 - `jobs[]` contains one row per `type` encountered in the queue, with `queued`, `running`, `succeeded`, `failed`, and `canceled` counts. The array is empty when there are no queued jobs at all.
 - `jobMetrics[]` contains one entry per job `type` that has produced a terminal outcome (`success`, `failed`, or `canceled`) since process start. The retry-back-to-queued path does NOT record an entry, so a job that retries twice and then succeeds counts as one terminal `success` rather than three runs. `lastDurationMs` reflects the most recent run regardless of status. `averageDurationMs` and `p95DurationMs` are computed over success runs only in the rolling window so a flood of failures does not poison the latency metric, and are `null` when the window has no success runs yet. The window is in-memory and resets on process restart by design; configure size with `TASKLOOM_SCHEDULER_METRICS_WINDOW_SIZE` (default `50`, integer >= 1, read at module load). Long-tail and SLO tracking should still rely on shipped logs plus a downstream system; this field is for the on-call's "is the scheduler healthy right now" view rather than historical analysis.
 - `accessLog` mirrors the Phase 20 and Phase 23 environment knobs: `mode` (`stdout`, `file`, or `off`), `path` (when mode is `file`), and the rotation envelope `maxBytes`/`maxFiles`.
+- `asyncStoreBoundary` summarizes the Phase 49 async store boundary foundation. `foundationPresent`/`foundationAvailable` means the async boundary exists; `managedPostgresSupported: false`, `managedDatabaseRuntimeAllowed: false`, and `managedDatabaseRuntimeBlocked: true` mean it is not managed Postgres runtime support. Managed/Postgres hints must remain blocked until Phase 50 lands the real adapter/repositories/backfills.
 - `runtime.nodeVersion` is `process.versions.node`, useful for confirming the runtime version in place after a rolling deploy.
 
 The endpoint is intentionally read-only. It does not mutate any state, schedule any jobs, or reach out to external services.
@@ -279,7 +290,7 @@ The operator-status endpoint requires session auth and is therefore not directly
 
 ## Frontend Operations Page
 
-The Operations page now displays the operator-status payload as an admin-gated "Production Status" tile. Admins and owners see the rendered tile with store mode, scheduler leader configuration, jobs queue summary, access-log mode, and Node version; non-admin members do not see the tile, matching the route-level RBAC on the underlying endpoint. The tile is the recommended way for operators to spot store/scheduler/access-log misconfiguration without SSHing into the host. The frontend wiring lives in `web/src/pages/Operations.tsx`.
+The Operations page now displays the operator-status payload as an admin-gated "Production Status" tile. Admins and owners see the rendered tile with store mode, managed database/runtime boundary posture, Phase 49 async store boundary foundation, scheduler leader configuration, jobs queue summary, access-log mode, and Node version; non-admin members do not see the tile, matching the route-level RBAC on the underlying endpoint. The tile is the recommended way for operators to spot store/scheduler/access-log misconfiguration without SSHing into the host. The frontend wiring lives in `web/src/pages/Operations.tsx`.
 
 ## Frontend Subsystem Health Tile
 
@@ -293,7 +304,7 @@ After deploying Phase 24, walk through:
 - `curl http://localhost:8484/api/health/ready` returns `200` with `{ "status": "ready" }` against a healthy store. Force a store failure (for example, point `TASKLOOM_DB_PATH` at an unreadable path) and confirm the response becomes `503` with `{ "status": "not_ready", "error": "<redacted>" }`.
 - `curl http://localhost:8484/api/app/operations/status` without a session cookie returns `401`.
 - `curl` with a non-admin member session cookie returns `403`.
-- `curl` with an admin or owner session cookie returns `200` with the expected JSON shape: `generatedAt`, `store.mode`, `scheduler.{leaderMode, leaderTtlMs, leaderHeldLocally, lockSummary}`, `jobs[]`, `accessLog.{mode, path, maxBytes, maxFiles}`, and `runtime.nodeVersion`.
+- `curl` with an admin or owner session cookie returns `200` with the expected JSON shape: `generatedAt`, `store.mode`, `scheduler.{leaderMode, leaderTtlMs, leaderHeldLocally, lockSummary}`, `jobs[]`, `accessLog.{mode, path, maxBytes, maxFiles}`, `asyncStoreBoundary.{phase, foundationPresent, managedDatabaseRuntimeAllowed, managedDatabaseRuntimeBlocked}`, and `runtime.nodeVersion`.
 - The `scheduler.lockSummary` field never contains a secret. Confirm `"local"` for `off` mode, the configured file path for `file` mode, and the URL with any query string stripped for `http` mode (even when `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` is set).
 - The Operations page renders the "Production Status" tile for admins and owners and omits it for member/viewer roles.
 - After kicking off a manual job (e.g., `npm run jobs:recompute-activation`), `GET /api/app/operations/status` shows a `jobMetrics` entry for the job type with `totalRuns >= 1` and `lastDurationMs` populated.

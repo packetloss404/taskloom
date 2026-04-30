@@ -608,10 +608,25 @@ function assertSupportedSyncStoreMode(resolution: ResolvedTaskloomStoreMode): vo
 
 export function loadStore(): TaskloomData {
   const backend = currentStoreBackend();
+  return loadStoreFromBackend(backend);
+}
+
+function loadStoreFromBackend(backend: StoreBackend): TaskloomData {
   if (cache && cacheBackendKey === backend.key) return cache;
 
+  const loaded = backend.load();
   cacheBackendKey = backend.key;
-  cache = backend.load();
+  cache = loaded;
+  return cache;
+}
+
+export async function loadStoreAsync(): Promise<TaskloomData> {
+  const backend = currentAsyncStoreBackend();
+  if (cache && cacheBackendKey === backend.key) return cache;
+
+  const loaded = await backend.load();
+  cacheBackendKey = backend.key;
+  cache = loaded;
   return cache;
 }
 
@@ -629,6 +644,10 @@ export function mutateStore<T>(mutator: (data: TaskloomData) => T): T {
   return result;
 }
 
+export async function mutateStoreAsync<T>(mutator: (data: TaskloomData) => T | Promise<T>): Promise<T> {
+  return currentAsyncStoreBackend().mutate(mutator);
+}
+
 let activeMutateSqliteDepth = 0;
 const pendingActivityDualWrites: ActivityRecord[] = [];
 const pendingActivationSignalDualWrites: ActivationSignalRecord[] = [];
@@ -644,6 +663,40 @@ function mutateSqliteStore<T>(dbPath: string, mutator: (data: TaskloomData) => T
     try {
       const data = loadSqliteStore(db) ?? seedStore();
       const result = mutator(data);
+      persistSqliteStoreRows(db, data);
+      db.exec("commit");
+      cache = data;
+      cacheBackendKey = backendKey;
+      return result;
+    } catch (error) {
+      db.exec("rollback");
+      pendingActivityDualWrites.length = 0;
+      pendingActivationSignalDualWrites.length = 0;
+      pendingAgentRunDualWrites.length = 0;
+      pendingInvitationEmailDeliveryDualWrites.length = 0;
+      throw error;
+    }
+  } finally {
+    db.close();
+    activeMutateSqliteDepth -= 1;
+    if (activeMutateSqliteDepth === 0) {
+      flushPendingActivityDualWrites();
+      flushPendingActivationSignalDualWrites();
+      flushPendingAgentRunDualWrites();
+      flushPendingInvitationEmailDeliveryDualWrites();
+    }
+  }
+}
+
+async function mutateSqliteStoreAsync<T>(dbPath: string, mutator: (data: TaskloomData) => T | Promise<T>): Promise<T> {
+  const db = openStoreDatabase(dbPath);
+  const backendKey = `sqlite:${dbPath}`;
+  activeMutateSqliteDepth += 1;
+  try {
+    db.exec("begin immediate");
+    try {
+      const data = loadSqliteStore(db) ?? seedStore();
+      const result = await mutator(data);
       persistSqliteStoreRows(db, data);
       db.exec("commit");
       cache = data;
@@ -811,11 +864,74 @@ function currentStoreBackend(): StoreBackend {
   return jsonStoreBackend();
 }
 
+function currentAsyncStoreBackend(): AsyncStoreBackend {
+  const resolution = resolveTaskloomStoreMode();
+  if (resolution.mode === "managed" || resolution.mode === "postgres" || resolution.managedDatabaseUrlKeys.length > 0) {
+    return managedDatabaseAsyncStoreBackend(resolution);
+  }
+
+  if (resolution.mode === "sqlite") return sqliteAsyncStoreBackend(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
+  return syncStoreAsyncBackend(jsonStoreBackend());
+}
+
 interface StoreBackend {
   key: string;
   load(): TaskloomData;
   persist(data: TaskloomData): void;
   reset(): TaskloomData;
+}
+
+interface AsyncStoreBackend {
+  key: string;
+  load(): Promise<TaskloomData>;
+  mutate<T>(mutator: (data: TaskloomData) => T | Promise<T>): Promise<T>;
+}
+
+function syncStoreAsyncBackend(backend: StoreBackend): AsyncStoreBackend {
+  return {
+    key: backend.key,
+    async load() {
+      return backend.load();
+    },
+    async mutate(mutator) {
+      const data = loadStoreFromBackend(backend);
+      const result = await mutator(data);
+      backend.persist(data);
+      return result;
+    },
+  };
+}
+
+function sqliteAsyncStoreBackend(dbPath: string): AsyncStoreBackend {
+  const backend = sqliteStoreBackend(dbPath);
+  return {
+    key: backend.key,
+    async load() {
+      return backend.load();
+    },
+    mutate(mutator) {
+      return mutateSqliteStoreAsync(dbPath, mutator);
+    },
+  };
+}
+
+function managedDatabaseAsyncStoreBackend(resolution: ResolvedTaskloomStoreMode): AsyncStoreBackend {
+  const rejectManagedBoundary = <T>(): Promise<T> => Promise.reject(new ManagedDatabaseStoreBoundaryError(resolution));
+  const hintKey = [
+    resolution.mode,
+    resolution.requestedStore,
+    ...resolution.managedDatabaseUrlKeys,
+  ].join(":");
+
+  return {
+    key: `managed:${hintKey}`,
+    load() {
+      return rejectManagedBoundary();
+    },
+    mutate() {
+      return rejectManagedBoundary();
+    },
+  };
 }
 
 function jsonStoreBackend(): StoreBackend {

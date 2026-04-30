@@ -31,6 +31,30 @@ export interface EnqueueJobInput {
   maxAttempts?: number;
 }
 
+export interface JobSchedulerStorageSync {
+  enqueueJob(input: EnqueueJobInput): JobRecord;
+  maintainScheduledAgentJobs(agentId?: string): JobRecord[];
+  enqueueRecurringJob(job: JobRecord, scheduledAt: string): JobRecord | null;
+  listJobs(workspaceId: string, opts?: { status?: JobStatus; limit?: number }): JobRecord[];
+  findJob(id: string): JobRecord | null;
+  updateJob(id: string, patch: Partial<JobRecord>): JobRecord | null;
+  cancelJob(id: string): JobRecord | null;
+  claimNextJob(now: Date): Promise<JobRecord | null>;
+  sweepStaleRunningJobs(staleAfterMs?: number, now?: Date): number;
+}
+
+export interface JobSchedulerStorage {
+  enqueueJob(input: EnqueueJobInput): Promise<JobRecord>;
+  maintainScheduledAgentJobs(agentId?: string): Promise<JobRecord[]>;
+  enqueueRecurringJob(job: JobRecord, scheduledAt: string): Promise<JobRecord | null>;
+  listJobs(workspaceId: string, opts?: { status?: JobStatus; limit?: number }): Promise<JobRecord[]>;
+  findJob(id: string): Promise<JobRecord | null>;
+  updateJob(id: string, patch: Partial<JobRecord>): Promise<JobRecord | null>;
+  cancelJob(id: string): Promise<JobRecord | null>;
+  claimNextJob(now: Date): Promise<JobRecord | null>;
+  sweepStaleRunningJobs(staleAfterMs?: number, now?: Date): Promise<number>;
+}
+
 export function enqueueJob(input: EnqueueJobInput): JobRecord {
   const ts = nowIso();
   const record: JobRecord = {
@@ -279,4 +303,87 @@ export function sweepStaleRunningJobs(staleAfterMs: number = STALE_RUNNING_MS, n
   });
   dualWriteJobs(swept);
   return count;
+}
+
+export function createSyncJobSchedulerStorage(): JobSchedulerStorageSync {
+  return {
+    enqueueJob,
+    maintainScheduledAgentJobs,
+    enqueueRecurringJob,
+    listJobs,
+    findJob,
+    updateJob,
+    cancelJob,
+    claimNextJob,
+    sweepStaleRunningJobs,
+  };
+}
+
+export function asyncJobSchedulerStorage(syncStorage: JobSchedulerStorageSync = createSyncJobSchedulerStorage()): JobSchedulerStorage {
+  return {
+    async enqueueJob(input) {
+      return syncStorage.enqueueJob(input);
+    },
+    async maintainScheduledAgentJobs(agentId) {
+      return syncStorage.maintainScheduledAgentJobs(agentId);
+    },
+    async enqueueRecurringJob(job, scheduledAt) {
+      return syncStorage.enqueueRecurringJob(job, scheduledAt);
+    },
+    async listJobs(workspaceId, opts) {
+      return syncStorage.listJobs(workspaceId, opts);
+    },
+    async findJob(id) {
+      return syncStorage.findJob(id);
+    },
+    async updateJob(id, patch) {
+      return syncStorage.updateJob(id, patch);
+    },
+    async cancelJob(id) {
+      return syncStorage.cancelJob(id);
+    },
+    async claimNextJob(now) {
+      return syncStorage.claimNextJob(now);
+    },
+    async sweepStaleRunningJobs(staleAfterMs, now) {
+      return syncStorage.sweepStaleRunningJobs(staleAfterMs, now);
+    },
+  };
+}
+
+export const defaultJobSchedulerStorage: JobSchedulerStorage = asyncJobSchedulerStorage();
+
+export function enqueueJobAsync(input: EnqueueJobInput): Promise<JobRecord> {
+  return defaultJobSchedulerStorage.enqueueJob(input);
+}
+
+export function maintainScheduledAgentJobsAsync(agentId?: string): Promise<JobRecord[]> {
+  return defaultJobSchedulerStorage.maintainScheduledAgentJobs(agentId);
+}
+
+export function enqueueRecurringJobAsync(job: JobRecord, scheduledAt: string): Promise<JobRecord | null> {
+  return defaultJobSchedulerStorage.enqueueRecurringJob(job, scheduledAt);
+}
+
+export function listJobsAsync(
+  workspaceId: string,
+  opts: { status?: JobStatus; limit?: number } = {},
+): Promise<JobRecord[]> {
+  return defaultJobSchedulerStorage.listJobs(workspaceId, opts);
+}
+
+export function findJobAsync(id: string): Promise<JobRecord | null> {
+  return defaultJobSchedulerStorage.findJob(id);
+}
+
+export function updateJobAsync(id: string, patch: Partial<JobRecord>): Promise<JobRecord | null> {
+  return defaultJobSchedulerStorage.updateJob(id, patch);
+}
+
+export function cancelJobAsync(id: string): Promise<JobRecord | null> {
+  return defaultJobSchedulerStorage.cancelJob(id);
+}
+
+export function sweepStaleRunningJobsAsync(staleAfterMs: number = STALE_RUNNING_MS, now: Date = new Date()): Promise<number> {
+  return defaultJobSchedulerStorage.sweepStaleRunningJobs(staleAfterMs, now);
 }

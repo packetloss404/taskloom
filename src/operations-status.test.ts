@@ -49,6 +49,13 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.accessLog.maxBytes, 0);
   assert.equal(status.accessLog.maxFiles, 5);
   assert.deepEqual(status.jobs, []);
+  assert.equal(status.asyncStoreBoundary?.phase, "49");
+  assert.equal(status.asyncStoreBoundary?.status, "pass");
+  assert.equal(status.asyncStoreBoundary?.classification, "foundation-ready");
+  assert.equal(status.asyncStoreBoundary?.foundationPresent, true);
+  assert.equal(status.asyncStoreBoundary?.localRuntimeSupported, true);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, false);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -60,6 +67,10 @@ test("TASKLOOM_STORE=sqlite flips store mode", () => {
   });
 
   assert.equal(status.store.mode, "sqlite");
+  assert.equal(status.asyncStoreBoundary?.foundationPresent, true);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, false);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
+  assert.match(String(status.asyncStoreBoundary?.summary), /JSON and single-node SQLite/i);
 });
 
 test("file leader mode reflects custom path and not-held when no probe registered", () => {
@@ -306,6 +317,106 @@ test("managedDatabaseRuntimeBoundary passes through when a managed runtime repor
   assert.equal(status.managedDatabaseRuntimeBoundary?.classification, "runtime-boundary");
   assert.equal(status.managedDatabaseRuntimeBoundary?.enforced, true);
   assert.match(String(status.managedDatabaseRuntimeBoundary?.summary), /managed DB runtime remains unsupported/i);
+});
+
+test("asyncStoreBoundary passes through when a deployment report exposes it", () => {
+  const releaseReadiness = {
+    summary: "stubbed release readiness",
+    asyncStoreBoundary: {
+      phase: "49",
+      status: "present",
+      classification: "single-node-sqlite",
+      summary: "Phase 49 async boundary evidence supplied by readiness.",
+      foundationPresent: true,
+      managedDatabaseRuntimeAllowed: false,
+      managedDatabaseRuntimeBlocked: true,
+    },
+  };
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_STORE: "sqlite" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => releaseReadiness as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.asyncStoreBoundary?.source, "releaseReadiness");
+  assert.equal(status.asyncStoreBoundary?.phase, "49");
+  assert.equal(status.asyncStoreBoundary?.status, "present");
+  assert.equal(status.asyncStoreBoundary?.classification, "single-node-sqlite");
+  assert.equal(status.asyncStoreBoundary?.foundationPresent, true);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, false);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
+});
+
+test("asyncStoreBoundary derives managed database runtime as blocked from runtime reports", () => {
+  const runtimeGuard = {
+    phase: "46",
+    allowed: false,
+    managedDatabaseRuntimeBlocked: true,
+    status: "fail",
+    classification: "managed-database-blocked",
+    summary: "managed database runtime intent is blocked",
+    checks: [],
+    blockers: ["Remove managed database runtime intent before startup"],
+    warnings: ["DATABASE_URL is advisory until runtime support lands"],
+    nextSteps: ["Use single-node SQLite until the managed database adapter is ready"],
+    observed: {
+      nodeEnv: "production",
+      store: "sqlite",
+      dbPath: "/srv/taskloom/taskloom.sqlite",
+      databaseTopology: "managed-database",
+      bypassEnabled: false,
+      managedDatabaseUrl: "[redacted]",
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+  } as unknown as ManagedDatabaseRuntimeGuardReport;
+  const managedDatabaseTopology = {
+    phase: "45",
+    status: "fail",
+    classification: "managed-database-requested",
+    ready: false,
+    summary: "managed database topology requested",
+    checks: [],
+    blockers: ["Managed database runtime unavailable"],
+    warnings: [],
+    nextSteps: [],
+    observed: {
+      nodeEnv: "production",
+      isProductionEnv: true,
+      store: "sqlite",
+      dbPath: "/srv/taskloom/taskloom.sqlite",
+      databaseTopology: "managed-database",
+      managedDatabaseUrl: "[redacted]",
+      databaseUrl: null,
+      taskloomDatabaseUrl: null,
+      env: {},
+    },
+    managedDatabase: { requested: true, configured: true, supported: false },
+  } as unknown as ManagedDatabaseTopologyReport;
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: { TASKLOOM_STORE: "sqlite", TASKLOOM_DATABASE_TOPOLOGY: "managed-database" },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildManagedDatabaseTopologyReport: () => managedDatabaseTopology,
+    buildManagedDatabaseRuntimeGuardReport: () => runtimeGuard,
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.asyncStoreBoundary?.source, "derived");
+  assert.equal(status.asyncStoreBoundary?.phase, "49");
+  assert.equal(status.asyncStoreBoundary?.status, "blocked");
+  assert.equal(status.asyncStoreBoundary?.classification, "managed-database-blocked");
+  assert.equal(status.asyncStoreBoundary?.foundationPresent, true);
+  assert.equal(status.asyncStoreBoundary?.localRuntimeSupported, true);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, false);
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
+  assert.match(String(status.asyncStoreBoundary?.summary), /managed database runtime remains blocked/i);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

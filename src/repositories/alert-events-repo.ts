@@ -38,11 +38,63 @@ export interface AlertEventsRepositoryDeps {
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncAlertEventsRepository {
+  list(filter?: ListAlertsFilter): Promise<AlertEventRecord[]>;
+  insertMany(records: AlertEventRecord[]): Promise<void>;
+  updateDeliveryStatus(
+    alertId: string,
+    patch: UpdateAlertDeliveryStatusPatch,
+  ): Promise<AlertEventRecord | null>;
+  prune(retainAfterIso: string): Promise<number>;
+  count(): Promise<number>;
+}
+
+export interface AsyncAlertEventsRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: AlertEventsRepository;
+  dbPath?: string;
+}
+
 export function createAlertEventsRepository(
   deps: AlertEventsRepositoryDeps = {},
 ): AlertEventsRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteAlertEventsRepository(deps);
   return jsonAlertEventsRepository(deps);
+}
+
+export function createAsyncAlertEventsRepository(
+  deps: AsyncAlertEventsRepositoryDeps = {},
+): AsyncAlertEventsRepository {
+  if (deps.repository) return asyncAlertEventsRepositoryFromSync(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncAlertEventsRepositoryFromSync(sqliteAlertEventsRepository({ dbPath: deps.dbPath }));
+  }
+  return asyncJsonAlertEventsRepository(deps);
+}
+
+export function asyncAlertEventsRepositoryFromSync(
+  repository: AlertEventsRepository,
+): AsyncAlertEventsRepository {
+  return {
+    async list(filter) {
+      return repository.list(filter);
+    },
+    async insertMany(records) {
+      repository.insertMany(records);
+    },
+    async updateDeliveryStatus(alertId, patch) {
+      return repository.updateDeliveryStatus(alertId, patch);
+    },
+    async prune(retainAfterIso) {
+      return repository.prune(retainAfterIso);
+    },
+    async count() {
+      return repository.count();
+    },
+  };
 }
 
 export function jsonAlertEventsRepository(
@@ -127,6 +179,89 @@ export function jsonAlertEventsRepository(
     },
     count() {
       const data = load();
+      return Array.isArray(data.alertEvents) ? data.alertEvents.length : 0;
+    },
+  };
+}
+
+export function asyncJsonAlertEventsRepository(
+  deps: AsyncAlertEventsRepositoryDeps = {},
+): AsyncAlertEventsRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(filter = {}) {
+      const data = await load();
+      const collection = Array.isArray(data.alertEvents) ? data.alertEvents : [];
+      return applyListFilter(collection, filter);
+    },
+    async insertMany(records) {
+      if (records.length === 0) return;
+      await mutate((data) => {
+        if (!Array.isArray(data.alertEvents)) data.alertEvents = [];
+        const latestById = new Map<string, AlertEventRecord>();
+        for (const record of records) {
+          latestById.set(record.id, record);
+        }
+        const existingIndex = new Map<string, number>();
+        data.alertEvents.forEach((entry, index) => existingIndex.set(entry.id, index));
+        for (const [id, record] of latestById) {
+          const index = existingIndex.get(id);
+          if (index !== undefined) {
+            data.alertEvents[index] = record;
+          } else {
+            existingIndex.set(id, data.alertEvents.length);
+            data.alertEvents.push(record);
+          }
+        }
+        return null;
+      });
+    },
+    async updateDeliveryStatus(alertId, patch) {
+      return mutate((data) => {
+        if (!Array.isArray(data.alertEvents)) {
+          data.alertEvents = [];
+          return null;
+        }
+        const target = data.alertEvents.find((entry) => entry.id === alertId);
+        if (!target) return null;
+
+        const previousAttempts = typeof target.deliveryAttempts === "number" ? target.deliveryAttempts : 0;
+        target.deliveryAttempts = previousAttempts + 1;
+        target.lastDeliveryAttemptAt = patch.attemptedAt;
+        target.delivered = patch.delivered;
+
+        if (patch.deliveryError !== undefined) {
+          target.deliveryError = patch.deliveryError;
+        } else if (patch.delivered === true) {
+          target.deliveryError = undefined;
+        }
+
+        if (patch.deadLettered !== undefined) {
+          target.deadLettered = patch.deadLettered;
+        }
+
+        return { ...target };
+      });
+    },
+    async prune(retainAfterIso) {
+      const cutoffMs = Date.parse(retainAfterIso);
+      return mutate((data) => {
+        if (!Array.isArray(data.alertEvents)) {
+          data.alertEvents = [];
+          return 0;
+        }
+        const before = data.alertEvents.length;
+        data.alertEvents = data.alertEvents.filter((entry) => {
+          const observedMs = Date.parse(entry.observedAt);
+          if (Number.isNaN(observedMs)) return true;
+          return observedMs >= cutoffMs;
+        });
+        return before - data.alertEvents.length;
+      });
+    },
+    async count() {
+      const data = await load();
       return Array.isArray(data.alertEvents) ? data.alertEvents.length : 0;
     },
   };

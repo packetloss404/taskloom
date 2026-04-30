@@ -5,7 +5,9 @@ import {
   type StorageTopologyReport,
 } from "./storage-topology.js";
 import {
+  buildAsyncStoreBoundaryReport,
   buildManagedDatabaseRuntimeBoundaryReport,
+  type AsyncStoreBoundaryReport,
   buildReleaseReadinessReport as defaultBuildReleaseReadinessReport,
   type ManagedDatabaseRuntimeBoundaryReport,
   type ReleaseReadinessDeps,
@@ -56,6 +58,7 @@ export interface ReleaseEvidenceBundle {
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport;
+  asyncStoreBoundary: AsyncStoreBoundaryReport;
   evidence: {
     environment: ReleaseEvidenceEntry[];
     config: {
@@ -70,6 +73,13 @@ export interface ReleaseEvidenceBundle {
       managedDatabaseRuntimeBoundaryStatus: ManagedDatabaseRuntimeBoundaryReport["status"];
       managedDatabaseRuntimeBoundaryClassification: ManagedDatabaseRuntimeBoundaryReport["classification"];
       managedDatabaseRuntimeBoundaryAllowed: boolean;
+      asyncStoreBoundaryStatus: AsyncStoreBoundaryReport["status"];
+      asyncStoreBoundaryClassification: AsyncStoreBoundaryReport["classification"];
+      asyncStoreBoundaryFoundationAvailable: true;
+      asyncStoreBoundaryReleaseAllowed: boolean;
+      managedPostgresSupported: false;
+      managedDatabaseAdapterImplemented: false;
+      managedDatabaseRepositoriesImplemented: false;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -88,6 +98,7 @@ export interface ReleaseEvidenceDeps {
   managedDatabaseTopology?: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryReport;
+  asyncStoreBoundary?: AsyncStoreBoundaryReport;
   managedDatabaseTopologyDeps?: ManagedDatabaseTopologyDeps;
   managedDatabaseRuntimeGuardDeps?: ManagedDatabaseRuntimeGuardDeps;
   buildStorageTopologyReport?: (
@@ -113,12 +124,14 @@ type ReleaseReadinessWithManagedReports = ReleaseReadinessReport & {
   managedDatabaseTopology?: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryReport;
+  asyncStoreBoundary?: AsyncStoreBoundaryReport;
 };
 
 type ReleaseEvidenceReleaseReadinessReport = ReleaseReadinessReport & {
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport;
+  asyncStoreBoundary: AsyncStoreBoundaryReport;
 };
 
 export interface ReleaseEvidenceInput extends ReleaseEvidenceDeps {
@@ -239,6 +252,7 @@ function buildAttachments(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
   bundleReady: boolean,
 ): ReleaseEvidenceAttachment[] {
   return [
@@ -278,6 +292,13 @@ function buildAttachments(
       summary: managedDatabaseRuntimeBoundary.summary,
     },
     {
+      id: "phase-49-async-store-boundary",
+      label: "Phase 49 async store boundary foundation report",
+      format: "json",
+      required: true,
+      summary: asyncStoreBoundary.summary,
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -294,21 +315,23 @@ function buildSummary(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
   readyForRelease: boolean,
 ): string {
   if (readyForRelease) {
-    return `Phase 44 release evidence is ready for handoff. ${releaseReadiness.summary} ${managedDatabaseTopology.summary} ${managedDatabaseRuntimeGuard.summary} ${managedDatabaseRuntimeBoundary.summary}`;
+    return `Phase 44 release evidence is ready for handoff. ${releaseReadiness.summary} ${managedDatabaseTopology.summary} ${managedDatabaseRuntimeGuard.summary} ${managedDatabaseRuntimeBoundary.summary} ${asyncStoreBoundary.summary}`;
   }
 
   const managedBlockers = Array.from(new Set([
     ...managedDatabaseTopology.blockers,
     ...managedDatabaseRuntimeGuard.blockers,
     ...managedDatabaseRuntimeBoundary.blockers,
+    ...asyncStoreBoundary.blockers,
   ]));
   const managedDetail = managedBlockers.length > 0
     ? ` Managed DB blockers: ${managedBlockers.join(" ")}`
     : "";
-  return `Phase 44 release evidence is blocked. ${releaseReadiness.summary} ${managedDatabaseTopology.summary} ${managedDatabaseRuntimeGuard.summary} ${managedDatabaseRuntimeBoundary.summary}${managedDetail}`;
+  return `Phase 44 release evidence is blocked. ${releaseReadiness.summary} ${managedDatabaseTopology.summary} ${managedDatabaseRuntimeGuard.summary} ${managedDatabaseRuntimeBoundary.summary} ${asyncStoreBoundary.summary}${managedDetail}`;
 }
 
 function buildNextSteps(
@@ -316,12 +339,14 @@ function buildNextSteps(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
 ): string[] {
   return Array.from(new Set([
     ...releaseReadiness.nextSteps,
     ...managedDatabaseTopology.nextSteps,
     ...managedDatabaseRuntimeGuard.nextSteps,
     ...managedDatabaseRuntimeBoundary.nextSteps,
+    ...asyncStoreBoundary.nextSteps,
   ]));
 }
 
@@ -341,6 +366,8 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       storageTopology,
       managedDatabaseTopology: input.managedDatabaseTopology,
       managedDatabaseRuntimeGuard: input.managedDatabaseRuntimeGuard,
+      managedDatabaseRuntimeBoundary: input.managedDatabaseRuntimeBoundary,
+      asyncStoreBoundary: input.asyncStoreBoundary,
       strict: input.strict,
       buildStorageTopologyReport,
       buildManagedDatabaseTopologyReport: input.buildManagedDatabaseTopologyReport,
@@ -368,16 +395,26 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
     );
+  const asyncStoreBoundary =
+    input.asyncStoreBoundary ??
+    releaseReadinessWithManagedReports.asyncStoreBoundary ??
+    buildAsyncStoreBoundaryReport(
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseRuntimeBoundary,
+    );
   const readyForRelease =
     releaseReadiness.readyForRelease &&
     managedDatabaseTopology.ready &&
     managedDatabaseRuntimeGuard.allowed &&
-    managedDatabaseRuntimeBoundary.allowed;
+    managedDatabaseRuntimeBoundary.allowed &&
+    asyncStoreBoundary.releaseAllowed;
   const releaseReadinessEvidence: ReleaseEvidenceReleaseReadinessReport = {
     ...releaseReadiness,
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
     managedDatabaseRuntimeBoundary,
+    asyncStoreBoundary,
   };
 
   return {
@@ -388,6 +425,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
       managedDatabaseRuntimeBoundary,
+      asyncStoreBoundary,
       readyForRelease,
     ),
     readyForRelease,
@@ -396,6 +434,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
     managedDatabaseRuntimeBoundary,
+    asyncStoreBoundary,
     evidence: {
       environment: buildEnvironmentEvidence(env),
       config: {
@@ -410,6 +449,13 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         managedDatabaseRuntimeBoundaryStatus: managedDatabaseRuntimeBoundary.status,
         managedDatabaseRuntimeBoundaryClassification: managedDatabaseRuntimeBoundary.classification,
         managedDatabaseRuntimeBoundaryAllowed: managedDatabaseRuntimeBoundary.allowed,
+        asyncStoreBoundaryStatus: asyncStoreBoundary.status,
+        asyncStoreBoundaryClassification: asyncStoreBoundary.classification,
+        asyncStoreBoundaryFoundationAvailable: asyncStoreBoundary.foundationAvailable,
+        asyncStoreBoundaryReleaseAllowed: asyncStoreBoundary.releaseAllowed,
+        managedPostgresSupported: asyncStoreBoundary.managedPostgresSupported,
+        managedDatabaseAdapterImplemented: asyncStoreBoundary.managedDatabaseAdapterImplemented,
+        managedDatabaseRepositoriesImplemented: asyncStoreBoundary.managedDatabaseRepositoriesImplemented,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),
@@ -423,6 +469,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
       managedDatabaseRuntimeBoundary,
+      asyncStoreBoundary,
       readyForRelease,
     ),
     nextSteps: buildNextSteps(
@@ -430,6 +477,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
       managedDatabaseRuntimeBoundary,
+      asyncStoreBoundary,
     ),
   };
 }

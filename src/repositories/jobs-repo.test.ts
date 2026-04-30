@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  asyncJobsRepository,
   createJobsRepository,
+  createAsyncJobsRepository,
   jsonJobsRepository,
   sqliteJobsRepository,
   type JobsRepository,
@@ -530,6 +532,34 @@ test("sweepStaleRunning ignores rows whose startedAt is recent", () => {
   });
 });
 
+test("asyncJobsRepository delegates enqueue, claim, and sweep to the sync repository", async () => {
+  const syncRepo = makeJsonRepo();
+  const asyncRepo = asyncJobsRepository(syncRepo);
+  const queued = makeRecord({
+    id: "async_claim",
+    workspaceId: "ws_a",
+    status: "queued",
+    attempts: 0,
+    scheduledAt: "2026-04-26T09:00:00.000Z",
+    startedAt: undefined,
+  });
+
+  await asyncRepo.upsert(queued);
+  assert.deepEqual(await asyncRepo.find(queued.id), syncRepo.find(queued.id));
+
+  const claimTime = new Date("2026-04-26T10:00:00.000Z");
+  const claimed = await asyncRepo.claimNext(claimTime);
+  assert.deepEqual(claimed, syncRepo.find(queued.id));
+  assert.equal(claimed?.status, "running");
+  assert.equal(claimed?.startedAt, claimTime.toISOString());
+
+  const sweepTime = new Date("2026-04-26T10:10:00.000Z");
+  const swept = await asyncRepo.sweepStaleRunning(5 * 60 * 1000, sweepTime);
+  assert.equal(swept, 1);
+  assert.equal(syncRepo.find(queued.id)?.status, "queued");
+  assert.equal(syncRepo.find(queued.id)?.startedAt, undefined);
+});
+
 test("createJobsRepository returns json impl when env is unset", () => {
   const prevStore = process.env.TASKLOOM_STORE;
   try {
@@ -542,6 +572,54 @@ test("createJobsRepository returns json impl when env is unset", () => {
     repo.upsert(makeRecord({ id: "job_1", workspaceId: "ws_a" }));
     assert.equal(repo.count(), 1);
     assert.equal(data.jobs.length, 1);
+  } finally {
+    if (prevStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = prevStore;
+  }
+});
+
+test("createAsyncJobsRepository wraps the selected repository implementation", async () => {
+  const prevStore = process.env.TASKLOOM_STORE;
+  try {
+    delete process.env.TASKLOOM_STORE;
+    const data = { jobs: [] as JobRecord[] } as unknown as TaskloomData;
+    const repo = createAsyncJobsRepository({
+      loadStore: () => data,
+      mutateStore: <T,>(mutator: (target: TaskloomData) => T) => mutator(data),
+    });
+
+    await repo.upsert(makeRecord({ id: "job_1", workspaceId: "ws_a" }));
+
+    assert.equal(await repo.count(), 1);
+    assert.equal(data.jobs.length, 1);
+    assert.equal((await repo.list({ workspaceId: "ws_a" }))[0]?.id, "job_1");
+  } finally {
+    if (prevStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = prevStore;
+  }
+});
+
+test("createAsyncJobsRepository accepts awaitable store dependencies", async () => {
+  const prevStore = process.env.TASKLOOM_STORE;
+  try {
+    delete process.env.TASKLOOM_STORE;
+    const data = { jobs: [] as JobRecord[] } as unknown as TaskloomData;
+    let mutations = 0;
+    const repo = createAsyncJobsRepository({
+      loadStore: async () => data,
+      mutateStore: async <T,>(mutator: (target: TaskloomData) => T | Promise<T>) => {
+        mutations += 1;
+        return mutator(data);
+      },
+    });
+
+    await repo.upsert(makeRecord({ id: "async_job", workspaceId: "ws_a" }));
+    const claimed = await repo.claimNext(new Date("2026-04-26T10:00:00.000Z"));
+
+    assert.equal(mutations, 2);
+    assert.equal(claimed?.id, "async_job");
+    assert.equal(claimed?.status, "running");
+    assert.equal((await repo.list({ workspaceId: "ws_a" }))[0]?.status, "running");
   } finally {
     if (prevStore === undefined) delete process.env.TASKLOOM_STORE;
     else process.env.TASKLOOM_STORE = prevStore;

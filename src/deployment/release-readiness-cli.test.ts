@@ -45,6 +45,8 @@ test("runReleaseReadinessCli exports local JSON readiness in non-strict mode", a
   assert.equal(report.readyForRelease, true);
   assert.equal(report.phase, "43");
   assert.equal((report.storageTopology as { mode?: unknown }).mode, "json");
+  assert.equal((report.asyncStoreBoundary as { phase?: unknown }).phase, "49");
+  assert.equal((report.asyncStoreBoundary as { managedPostgresSupported?: unknown }).managedPostgresSupported, false);
 });
 
 test("runReleaseReadinessCli fails strict mode when the report is not release-ready", async () => {
@@ -80,6 +82,8 @@ test("runReleaseReadinessCli strict mode blocks managed database runtime handoff
   assert.equal(report.readyForRelease, false);
   assert.match(serializedReport, /Managed database runtime intent was detected/);
   assert.match(serializedReport, /managed-database-blocked/);
+  assert.match(serializedReport, /Phase 49 async-store boundary exists as foundation/);
+  assert.match(serializedReport, /managed Postgres remains unsupported/);
   assert.doesNotMatch(serializedReport, /taskloom:secret/);
 });
 

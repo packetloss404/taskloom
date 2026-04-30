@@ -589,6 +589,23 @@ interface ManagedDatabaseRuntimeBoundaryStatus {
   [key: string]: unknown;
 }
 
+interface AsyncStoreBoundaryStatus {
+  source?: string;
+  phase?: string;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  detail?: string;
+  label?: string;
+  foundationPresent?: boolean;
+  localRuntimeSupported?: boolean;
+  managedDatabaseRuntimeAllowed?: boolean;
+  managedDatabaseRuntimeBlocked?: boolean;
+  storeMode?: string;
+  topology?: string | null;
+  [key: string]: unknown;
+}
+
 interface ProductionStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -620,6 +637,7 @@ interface ProductionStatus {
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryStatus | null;
+  asyncStoreBoundary?: AsyncStoreBoundaryStatus | null;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -809,6 +827,7 @@ interface ReleaseReadinessReport {
   storageTopology?: StorageTopologyReport;
   managedDatabaseTopology?: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+  asyncStoreBoundary?: AsyncStoreBoundaryStatus;
   [key: string]: unknown;
 }
 
@@ -833,6 +852,7 @@ interface ReleaseEvidenceBundle {
   storageTopology?: StorageTopologyReport;
   managedDatabaseTopology?: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
+  asyncStoreBoundary?: AsyncStoreBoundaryStatus;
   [key: string]: unknown;
 }
 
@@ -1025,6 +1045,10 @@ function ProductionStatusPanel() {
               report={status.managedDatabaseRuntimeGuard}
               boundary={status.managedDatabaseRuntimeBoundary}
             />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <AsyncStoreBoundarySection boundary={status.asyncStoreBoundary} />
           </div>
 
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
@@ -1691,6 +1715,79 @@ function isManagedDatabaseRuntimeGuardCheck(value: unknown): value is ManagedDat
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function AsyncStoreBoundarySection({ boundary }: { boundary: AsyncStoreBoundaryStatus | null | undefined }) {
+  if (!boundary) {
+    return (
+      <div>
+        <div className="kicker mb-1">ASYNC STORE BOUNDARY</div>
+        <h3 className="font-serif text-base text-ink-100">Async store boundary</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting Phase 49 boundary report
+        </p>
+      </div>
+    );
+  }
+
+  const status = asyncStoreBoundaryStatus(boundary);
+  const fields = asyncStoreBoundaryFields(boundary);
+  const summary = asyncStoreBoundarySummary(boundary);
+
+  return (
+    <div>
+      <div className="kicker mb-1">ASYNC STORE BOUNDARY</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Async store boundary</h3>
+        <StatusBadge value={status.label} tone={status.tone} />
+      </div>
+      {summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function asyncStoreBoundaryStatus(boundary: AsyncStoreBoundaryStatus): { label: string; tone: ReleaseReadinessTone } {
+  if (typeof boundary.managedDatabaseRuntimeBlocked === "boolean" && boundary.managedDatabaseRuntimeBlocked) {
+    return releaseReadinessTone(boundary.status ?? boundary.classification ?? "blocked");
+  }
+  if (typeof boundary.foundationPresent === "boolean") {
+    return boundary.foundationPresent
+      ? releaseReadinessTone(boundary.status ?? boundary.classification ?? "present")
+      : releaseReadinessTone(boundary.status ?? boundary.classification ?? "missing");
+  }
+  return releaseReadinessTone(boundary.status ?? boundary.classification ?? boundary.label);
+}
+
+function asyncStoreBoundarySummary(boundary: AsyncStoreBoundaryStatus): string {
+  const summary = boundary.summary ?? boundary.detail;
+  return typeof summary === "string" ? summary : "";
+}
+
+function asyncStoreBoundaryFields(boundary: AsyncStoreBoundaryStatus) {
+  const entries: Array<[string, unknown]> = [
+    ["Phase", boundary.phase],
+    ["Source", boundary.source],
+    ["Classification", boundary.classification],
+    ["Store", boundary.storeMode],
+    ["Topology", boundary.topology],
+    ["Foundation present", boundary.foundationPresent],
+    ["Local runtime", boundary.localRuntimeSupported],
+    ["Managed DB runtime", boundary.managedDatabaseRuntimeAllowed ? "allowed" : boundary.managedDatabaseRuntimeBlocked ? "blocked" : null],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
+}
+
 function ReleaseReadinessSection({ report }: { report: ReleaseReadinessReport | null | undefined }) {
   if (!report) {
     return (
@@ -1887,7 +1984,7 @@ function releaseReadinessCheckStatus(check: ReleaseReadinessCheck): { label: str
 function releaseReadinessTone(status: unknown): { label: string; tone: ReleaseReadinessTone } {
   const label = typeof status === "string" && status.trim() ? status.trim() : "unknown";
   const normalized = label.toLowerCase().replaceAll(" ", "_");
-  if (["ready", "ok", "healthy", "configured", "available", "pass", "passed", "met", "go"].includes(normalized)) {
+  if (["ready", "ok", "healthy", "configured", "available", "pass", "passed", "met", "go", "present", "local-json", "single-node-sqlite"].includes(normalized)) {
     return { label, tone: "good" };
   }
   if (["warn", "warning", "degraded", "partial", "pending", "review", "needs_review"].includes(normalized)) {
@@ -1908,6 +2005,7 @@ function releaseReadinessFields(report: ReleaseReadinessReport) {
     ["Storage topology", embeddedReportStatus(report.storageTopology)],
     ["Managed topology", embeddedReportStatus(report.managedDatabaseTopology)],
     ["Runtime guard", embeddedReportStatus(report.managedDatabaseRuntimeGuard)],
+    ["Async boundary", embeddedReportStatus(report.asyncStoreBoundary)],
   ];
 
   return entries.flatMap(([label, raw]) => {
@@ -1921,6 +2019,7 @@ function releaseEvidenceHandoffFields(bundle: ReleaseEvidenceBundle) {
     ["Readiness report", embeddedReportStatus(bundle.releaseReadiness)],
     ["Managed topology", embeddedReportStatus(bundle.managedDatabaseTopology)],
     ["Runtime guard", embeddedReportStatus(bundle.managedDatabaseRuntimeGuard)],
+    ["Async boundary", embeddedReportStatus(bundle.asyncStoreBoundary)],
   ];
 
   return entries.flatMap(([label, raw]) => {

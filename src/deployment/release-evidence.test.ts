@@ -4,6 +4,7 @@ import { assessReleaseEvidence, buildReleaseEvidenceBundle, type ReleaseEvidence
 import type { ManagedDatabaseRuntimeGuardReport } from "./managed-database-runtime-guard.js";
 import type { ManagedDatabaseTopologyReport } from "./managed-database-topology.js";
 import {
+  buildAsyncStoreBoundaryReport,
   buildManagedDatabaseRuntimeBoundaryReport,
   type ReleaseReadinessReport,
 } from "./release-readiness.js";
@@ -42,6 +43,10 @@ function injectedStorageTopology(): StorageTopologyReport {
 function injectedReleaseReadiness(storageTopology: StorageTopologyReport): ReleaseReadinessReport {
   const managedDatabaseTopology = injectedManagedDatabaseTopology();
   const managedDatabaseRuntimeGuard = injectedManagedDatabaseRuntimeGuard();
+  const managedDatabaseRuntimeBoundary = buildManagedDatabaseRuntimeBoundaryReport(
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  );
   return {
     phase: "43",
     readyForRelease: true,
@@ -53,9 +58,11 @@ function injectedReleaseReadiness(storageTopology: StorageTopologyReport): Relea
     storageTopology,
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
-    managedDatabaseRuntimeBoundary: buildManagedDatabaseRuntimeBoundaryReport(
+    managedDatabaseRuntimeBoundary,
+    asyncStoreBoundary: buildAsyncStoreBoundaryReport(
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
+      managedDatabaseRuntimeBoundary,
     ),
   };
 }
@@ -130,14 +137,23 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.equal(bundle.managedDatabaseTopology.phase, "45");
   assert.equal(bundle.managedDatabaseRuntimeGuard.phase, "46");
   assert.equal(bundle.managedDatabaseRuntimeBoundary.phase, "48");
+  assert.equal(bundle.asyncStoreBoundary.phase, "49");
+  assert.equal(bundle.asyncStoreBoundary.foundationAvailable, true);
+  assert.equal(bundle.asyncStoreBoundary.managedPostgresSupported, false);
+  assert.equal(bundle.asyncStoreBoundary.classification, "foundation-ready");
   assert.equal(bundle.evidence.config.storageMode, "json");
   assert.equal(bundle.evidence.config.backupConfigured, false);
+  assert.equal(bundle.evidence.config.asyncStoreBoundaryFoundationAvailable, true);
+  assert.equal(bundle.evidence.config.managedPostgresSupported, false);
+  assert.equal(bundle.evidence.config.managedDatabaseAdapterImplemented, false);
+  assert.equal(bundle.evidence.config.managedDatabaseRepositoriesImplemented, false);
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_STORE").configured, false);
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-42-storage-topology"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-43-release-readiness"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-45-managed-database-topology"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-46-runtime-guard"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-48-managed-database-runtime-boundary"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-49-async-store-boundary"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-44-release-evidence"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_STORE=sqlite")));
 });
@@ -244,15 +260,16 @@ test("injected reports are embedded without calling report builders", () => {
   assert.equal(bundle.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(bundle.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
   assert.equal(bundle.managedDatabaseRuntimeBoundary, managedDatabaseRuntimeBoundary);
+  assert.equal(bundle.asyncStoreBoundary.phase, "49");
   assert.equal(bundle.releaseReadiness.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(bundle.releaseReadiness.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
   assert.equal(bundle.releaseReadiness.managedDatabaseRuntimeBoundary, managedDatabaseRuntimeBoundary);
+  assert.equal(bundle.releaseReadiness.asyncStoreBoundary, bundle.asyncStoreBoundary);
   assert.equal(bundle.readyForRelease, true);
-  assert.deepEqual(bundle.nextSteps, [
-    "Injected release next step.",
-    "Injected managed topology next step.",
-    "Injected runtime guard next step.",
-  ]);
+  assert.ok(bundle.nextSteps.includes("Injected release next step."));
+  assert.ok(bundle.nextSteps.includes("Injected managed topology next step."));
+  assert.ok(bundle.nextSteps.includes("Injected runtime guard next step."));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 49 as async-store-boundary foundation only")));
 });
 
 test("strict evidence reflects managed database blockers in summary config and next steps", () => {
@@ -279,12 +296,18 @@ test("strict evidence reflects managed database blockers in summary config and n
   assert.equal(bundle.evidence.config.managedDatabaseRuntimeAllowed, false);
   assert.equal(bundle.evidence.config.managedDatabaseRuntimeBoundaryStatus, "fail");
   assert.equal(bundle.evidence.config.managedDatabaseRuntimeBoundaryAllowed, false);
+  assert.equal(bundle.evidence.config.asyncStoreBoundaryStatus, "fail");
+  assert.equal(bundle.evidence.config.asyncStoreBoundaryClassification, "managed-postgres-unsupported");
+  assert.equal(bundle.evidence.config.asyncStoreBoundaryReleaseAllowed, false);
+  assert.equal(bundle.evidence.config.managedPostgresSupported, false);
   assert.equal(bundle.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
+  assert.equal(bundle.asyncStoreBoundary.classification, "managed-postgres-unsupported");
   assert.match(bundle.summary, /Managed DB blockers/);
-  assert.match(bundle.summary, /synchronous adapter gap/);
+  assert.match(bundle.summary, /Phase 49 async-store boundary exists as foundation/);
+  assert.match(bundle.summary, /managed Postgres remains unsupported/);
   assert.ok(bundle.summary.includes("no executable managed database adapter yet"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("managed database URL environment variables")));
-  assert.ok(bundle.nextSteps.some((step) => step.includes("synchronous storage adapter gap")));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("real adapter and repositories")));
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MANAGED_DATABASE_URL").value, "[redacted]");
 });
 
@@ -315,6 +338,8 @@ test("release readiness managed reports are reused when present", () => {
   assert.equal(bundle.managedDatabaseTopology, managedDatabaseTopology);
   assert.equal(bundle.managedDatabaseRuntimeGuard, managedDatabaseRuntimeGuard);
   assert.equal(bundle.managedDatabaseRuntimeBoundary, managedDatabaseRuntimeBoundary);
+  assert.equal(bundle.asyncStoreBoundary, bundle.releaseReadiness.asyncStoreBoundary);
+  assert.equal(bundle.asyncStoreBoundary.phase, "49");
 });
 
 test("generatedAt accepts Date injection", () => {

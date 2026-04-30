@@ -26,9 +26,54 @@ export interface ActivitiesRepositoryDeps {
   dbPath?: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AsyncActivitiesRepository {
+  list(filter: ListActivitiesFilter): Promise<ActivityRecord[]>;
+  find(id: string): Promise<ActivityRecord | null>;
+  upsert(record: ActivityRecord): Promise<void>;
+  count(): Promise<number>;
+}
+
+export interface AsyncActivitiesRepositoryDeps {
+  loadStore?: () => MaybePromise<TaskloomData>;
+  mutateStore?: <T>(mutator: (data: TaskloomData) => MaybePromise<T>) => MaybePromise<T>;
+  repository?: ActivitiesRepository;
+  dbPath?: string;
+}
+
 export function createActivitiesRepository(deps: ActivitiesRepositoryDeps = {}): ActivitiesRepository {
   if (process.env.TASKLOOM_STORE === "sqlite") return sqliteActivitiesRepository(deps);
   return jsonActivitiesRepository(deps);
+}
+
+export function createAsyncActivitiesRepository(
+  deps: AsyncActivitiesRepositoryDeps = {},
+): AsyncActivitiesRepository {
+  if (deps.repository) return asyncActivitiesRepositoryFromSync(deps.repository);
+  if (process.env.TASKLOOM_STORE === "sqlite") {
+    return asyncActivitiesRepositoryFromSync(sqliteActivitiesRepository({ dbPath: deps.dbPath }));
+  }
+  return asyncJsonActivitiesRepository(deps);
+}
+
+export function asyncActivitiesRepositoryFromSync(
+  repository: ActivitiesRepository,
+): AsyncActivitiesRepository {
+  return {
+    async list(filter) {
+      return repository.list(filter);
+    },
+    async find(id) {
+      return repository.find(id);
+    },
+    async upsert(record) {
+      repository.upsert(record);
+    },
+    async count() {
+      return repository.count();
+    },
+  };
 }
 
 export function jsonActivitiesRepository(deps: ActivitiesRepositoryDeps = {}): ActivitiesRepository {
@@ -60,6 +105,42 @@ export function jsonActivitiesRepository(deps: ActivitiesRepositoryDeps = {}): A
     },
     count() {
       const data = load();
+      return Array.isArray(data.activities) ? data.activities.length : 0;
+    },
+  };
+}
+
+export function asyncJsonActivitiesRepository(
+  deps: AsyncActivitiesRepositoryDeps = {},
+): AsyncActivitiesRepository {
+  const load = deps.loadStore ?? defaultLoadStore;
+  const mutate = deps.mutateStore ?? defaultMutateStore;
+  return {
+    async list(filter) {
+      const data = await load();
+      const collection = Array.isArray(data.activities) ? data.activities : [];
+      const filtered = collection.filter((entry) => entry.workspaceId === filter.workspaceId);
+      return sortAndLimit(filtered, filter.limit);
+    },
+    async find(id) {
+      const data = await load();
+      const collection = Array.isArray(data.activities) ? data.activities : [];
+      return collection.find((entry) => entry.id === id) ?? null;
+    },
+    async upsert(record) {
+      await mutate((data) => {
+        if (!Array.isArray(data.activities)) data.activities = [];
+        const index = data.activities.findIndex((entry) => entry.id === record.id);
+        if (index >= 0) {
+          data.activities[index] = record;
+        } else {
+          data.activities.push(record);
+        }
+        return null;
+      });
+    },
+    async count() {
+      const data = await load();
       return Array.isArray(data.activities) ? data.activities.length : 0;
     },
   };

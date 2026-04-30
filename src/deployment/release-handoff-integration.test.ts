@@ -102,8 +102,13 @@ test("Phase 47 strict managed DATABASE_URL handoff blocks readiness and redacts 
   assert.equal(readiness.managedDatabaseRuntimeBoundary.phase, "48");
   assert.equal(readiness.managedDatabaseRuntimeBoundary.allowed, false);
   assert.equal(readiness.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
+  assert.equal(readiness.asyncStoreBoundary.phase, "49");
+  assert.equal(readiness.asyncStoreBoundary.foundationAvailable, true);
+  assert.equal(readiness.asyncStoreBoundary.managedPostgresSupported, false);
+  assert.equal(readiness.asyncStoreBoundary.classification, "managed-postgres-unsupported");
   assert.equal(checkStatus(readiness, "managed-database-runtime-boundary"), "fail");
-  assert.ok(readiness.blockers.some((blocker) => blocker.includes("synchronous adapter gap")));
+  assert.equal(checkStatus(readiness, "async-store-boundary"), "fail");
+  assert.ok(readiness.blockers.some((blocker) => blocker.includes("managed Postgres remains unsupported")));
   assert.ok(readiness.blockers.some((blocker) => /managed database/i.test(blocker)));
 
   assert.equal(evidence.readyForRelease, false);
@@ -111,12 +116,14 @@ test("Phase 47 strict managed DATABASE_URL handoff blocks readiness and redacts 
   assert.deepEqual(evidenceContract.managedDatabaseTopology, evidence.releaseReadiness.managedDatabaseTopology);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeGuard, evidence.releaseReadiness.managedDatabaseRuntimeGuard);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeBoundary, evidence.releaseReadiness.managedDatabaseRuntimeBoundary);
+  assert.deepEqual(evidenceContract.asyncStoreBoundary, evidence.releaseReadiness.asyncStoreBoundary);
   assert.ok(attachmentIds(evidence).includes("phase-45-managed-database-topology"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 46 managed database runtime guard report"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 48 managed database runtime boundary report"));
+  assert.ok(hasAttachmentLabel(evidence, "Phase 49 async store boundary foundation report"));
   assert.equal(evidenceEntry(evidence, "DATABASE_URL").value, "[redacted]");
   assert.equal(evidenceEntry(evidence, "DATABASE_URL").redacted, true);
-  assert.match(evidence.summary, /synchronous adapter gap/);
+  assert.match(evidence.summary, /managed Postgres remains unsupported/);
 });
 
 test("Phase 47 production SQLite handoff stays ready with Phase 45/46 reports and no managed hints", () => {
@@ -163,6 +170,9 @@ test("Phase 47 production SQLite handoff stays ready with Phase 45/46 reports an
   assert.equal(readiness.managedDatabaseRuntimeBoundary.phase, "48");
   assert.equal(readiness.managedDatabaseRuntimeBoundary.allowed, true);
   assert.equal(readiness.managedDatabaseRuntimeBoundary.classification, "single-node-sqlite");
+  assert.equal(readiness.asyncStoreBoundary.phase, "49");
+  assert.equal(readiness.asyncStoreBoundary.classification, "foundation-ready");
+  assert.equal(readiness.asyncStoreBoundary.managedPostgresSupported, false);
   assert.ok(!readiness.warnings.some((warning) => /managed database|multi-writer/i.test(warning)));
 
   assert.equal(evidence.readyForRelease, true);
@@ -172,7 +182,9 @@ test("Phase 47 production SQLite handoff stays ready with Phase 45/46 reports an
   assert.deepEqual(evidenceContract.managedDatabaseTopology, evidence.releaseReadiness.managedDatabaseTopology);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeGuard, evidence.releaseReadiness.managedDatabaseRuntimeGuard);
   assert.deepEqual(evidenceContract.managedDatabaseRuntimeBoundary, evidence.releaseReadiness.managedDatabaseRuntimeBoundary);
+  assert.deepEqual(evidenceContract.asyncStoreBoundary, evidence.releaseReadiness.asyncStoreBoundary);
   assert.ok(attachmentIds(evidence).includes("phase-45-managed-database-topology"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 46 managed database runtime guard report"));
   assert.ok(hasAttachmentLabel(evidence, "Phase 48 managed database runtime boundary report"));
+  assert.ok(hasAttachmentLabel(evidence, "Phase 49 async store boundary foundation report"));
 });

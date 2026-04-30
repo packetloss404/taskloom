@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  asyncActivitiesRepositoryFromSync,
   createActivitiesRepository,
+  createAsyncActivitiesRepository,
   jsonActivitiesRepository,
   sqliteActivitiesRepository,
   type ActivitiesRepository,
@@ -163,6 +165,52 @@ test("upsert replaces an existing record by id", () => {
     assert.deepEqual(repo.list({ workspaceId: "ws_a" }), []);
     assert.deepEqual(repo.list({ workspaceId: "ws_b" }), [replacement]);
   });
+});
+
+test("asyncActivitiesRepositoryFromSync delegates to an existing sync repository", async () => {
+  const syncRepo = makeJsonRepo();
+  const asyncRepo = asyncActivitiesRepositoryFromSync(syncRepo);
+  const record = makeRecord({
+    id: "async_delegate",
+    workspaceId: "ws_a",
+    occurredAt: "2026-04-26T10:00:00.000Z",
+  });
+
+  await asyncRepo.upsert(record);
+
+  assert.deepEqual(await asyncRepo.find(record.id), syncRepo.find(record.id));
+  assert.deepEqual(await asyncRepo.list({ workspaceId: "ws_a" }), syncRepo.list({ workspaceId: "ws_a" }));
+  assert.equal(await asyncRepo.count(), 1);
+});
+
+test("createAsyncActivitiesRepository accepts awaitable store dependencies", async () => {
+  const prevStore = process.env.TASKLOOM_STORE;
+  try {
+    delete process.env.TASKLOOM_STORE;
+    const data = { activities: [] as ActivityRecord[] } as unknown as TaskloomData;
+    let loads = 0;
+    let mutations = 0;
+    const repo = createAsyncActivitiesRepository({
+      loadStore: async () => {
+        loads += 1;
+        return data;
+      },
+      mutateStore: async <T,>(mutator: (target: TaskloomData) => T | Promise<T>) => {
+        mutations += 1;
+        return mutator(data);
+      },
+    });
+
+    await repo.upsert(makeRecord({ id: "async_store", workspaceId: "ws_a" }));
+
+    assert.equal(mutations, 1);
+    assert.equal(await repo.count(), 1);
+    assert.equal((await repo.list({ workspaceId: "ws_a" }))[0]?.id, "async_store");
+    assert.equal(loads, 2);
+  } finally {
+    if (prevStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = prevStore;
+  }
 });
 
 test("actor and data fields round-trip through JSON and SQLite", () => {

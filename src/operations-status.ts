@@ -36,6 +36,28 @@ export interface ManagedDatabaseRuntimeBoundaryStatus {
   [key: string]: unknown;
 }
 
+export interface AsyncStoreBoundaryStatus {
+  source: "managedDatabaseRuntimeGuard" | "releaseReadiness" | "releaseEvidence" | "derived";
+  phase?: string;
+  status?: string;
+  classification?: string;
+  summary?: string;
+  detail?: string;
+  label?: string;
+  foundationPresent?: boolean;
+  foundationAvailable?: boolean;
+  releaseAllowed?: boolean;
+  localRuntimeSupported?: boolean;
+  managedDatabaseRuntimeAllowed?: boolean;
+  managedDatabaseRuntimeBlocked?: boolean;
+  managedPostgresSupported?: boolean;
+  managedDatabaseAdapterImplemented?: boolean;
+  managedDatabaseRepositoriesImplemented?: boolean;
+  storeMode?: string;
+  topology?: string | null;
+  [key: string]: unknown;
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -56,6 +78,7 @@ export interface OperationsStatus {
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryStatus | null;
+  asyncStoreBoundary: AsyncStoreBoundaryStatus | null;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -217,6 +240,17 @@ const MANAGED_DATABASE_RUNTIME_BOUNDARY_KEYS = [
   "boundaryStatus",
 ] as const;
 
+const ASYNC_STORE_BOUNDARY_KEYS = [
+  "asyncStoreBoundary",
+  "asyncStoreBoundaryStatus",
+  "asyncStorageBoundary",
+  "asyncStorageBoundaryStatus",
+  "storeAsyncBoundary",
+  "storeAsyncBoundaryStatus",
+  "storageAsyncBoundary",
+  "storageAsyncBoundaryStatus",
+] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -257,6 +291,137 @@ function findManagedDatabaseRuntimeBoundary(
   return null;
 }
 
+function normalizeAsyncStoreBoundary(
+  value: unknown,
+  source: AsyncStoreBoundaryStatus["source"],
+): AsyncStoreBoundaryStatus | null {
+  if (typeof value === "string") {
+    const status = value.trim();
+    return status ? enrichAsyncStoreBoundary({ source, status }) : null;
+  }
+  if (typeof value === "boolean") {
+    return enrichAsyncStoreBoundary({
+      source,
+      foundationPresent: value,
+      status: value ? "present" : "missing",
+    });
+  }
+  if (!isRecord(value)) return null;
+  return enrichAsyncStoreBoundary({ source, ...value });
+}
+
+function enrichAsyncStoreBoundary(boundary: AsyncStoreBoundaryStatus): AsyncStoreBoundaryStatus {
+  const foundationAvailable = typeof boundary.foundationAvailable === "boolean"
+    ? boundary.foundationAvailable
+    : undefined;
+  const foundationPresent = typeof boundary.foundationPresent === "boolean"
+    ? boundary.foundationPresent
+    : foundationAvailable;
+  const managedPostgresSupported = typeof boundary.managedPostgresSupported === "boolean"
+    ? boundary.managedPostgresSupported
+    : undefined;
+  const adapterImplemented = typeof boundary.managedDatabaseAdapterImplemented === "boolean"
+    ? boundary.managedDatabaseAdapterImplemented
+    : undefined;
+  const repositoriesImplemented = typeof boundary.managedDatabaseRepositoriesImplemented === "boolean"
+    ? boundary.managedDatabaseRepositoriesImplemented
+    : undefined;
+  const managedDatabaseRuntimeAllowed = typeof boundary.managedDatabaseRuntimeAllowed === "boolean"
+    ? boundary.managedDatabaseRuntimeAllowed
+    : managedPostgresSupported === true || (adapterImplemented === true && repositoriesImplemented === true)
+      ? true
+      : managedPostgresSupported === false || adapterImplemented === false || repositoriesImplemented === false
+        ? false
+        : undefined;
+  const managedDatabaseRuntimeBlocked = typeof boundary.managedDatabaseRuntimeBlocked === "boolean"
+    ? boundary.managedDatabaseRuntimeBlocked
+    : managedDatabaseRuntimeAllowed === false
+      ? true
+      : undefined;
+
+  return {
+    ...boundary,
+    foundationPresent,
+    localRuntimeSupported: typeof boundary.localRuntimeSupported === "boolean"
+      ? boundary.localRuntimeSupported
+      : foundationPresent,
+    managedDatabaseRuntimeAllowed,
+    managedDatabaseRuntimeBlocked,
+  };
+}
+
+function findAsyncStoreBoundary(
+  reports: Array<{ source: Exclude<AsyncStoreBoundaryStatus["source"], "derived">; report: unknown }>,
+): AsyncStoreBoundaryStatus | null {
+  for (const { source, report } of reports) {
+    if (!isRecord(report)) continue;
+    for (const key of ASYNC_STORE_BOUNDARY_KEYS) {
+      const boundary = normalizeAsyncStoreBoundary(report[key], source);
+      if (boundary) return boundary;
+    }
+    for (const nestedKey of ["observed", "config", "evidence"] as const) {
+      const nested = report[nestedKey];
+      if (!isRecord(nested)) continue;
+      for (const key of ASYNC_STORE_BOUNDARY_KEYS) {
+        const boundary = normalizeAsyncStoreBoundary(nested[key], source);
+        if (boundary) return boundary;
+      }
+    }
+  }
+  return null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function deriveAsyncStoreBoundary(
+  storeMode: StoreMode,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): AsyncStoreBoundaryStatus | null {
+  if (!isRecord(managedDatabaseTopology) || !isRecord(managedDatabaseRuntimeGuard)) return null;
+
+  const guardObserved: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.observed)
+    ? managedDatabaseRuntimeGuard.observed
+    : {};
+  const topologyObserved: Record<string, unknown> = isRecord(managedDatabaseTopology.observed)
+    ? managedDatabaseTopology.observed
+    : {};
+  const observedStore = stringValue(guardObserved.store) || stringValue(topologyObserved.store) || storeMode;
+  const topology = stringValue(guardObserved.databaseTopology) || stringValue(topologyObserved.databaseTopology) || null;
+  const classification = stringValue(managedDatabaseRuntimeGuard.classification) ||
+    stringValue(managedDatabaseTopology.classification) ||
+    (observedStore === "sqlite" ? "single-node-sqlite" : observedStore === "json" ? "local-json" : "unsupported-store");
+  const localRuntimeSupported = observedStore === "json" || observedStore === "sqlite";
+  const foundationPresent = localRuntimeSupported;
+  const managedDatabaseRuntimeAllowed = false;
+  const managedDatabaseRuntimeBlocked = true;
+  const managedIntent =
+    classification.includes("managed-database") ||
+    classification.includes("multi-writer") ||
+    Boolean(managedDatabaseRuntimeGuard.managedDatabaseRuntimeBlocked) ||
+    Boolean(isRecord(managedDatabaseTopology.managedDatabase) && managedDatabaseTopology.managedDatabase.requested);
+  const status = localRuntimeSupported && !managedIntent ? "present" : "blocked";
+  const summary = localRuntimeSupported
+    ? `Phase 49 async store boundary foundation is present for ${observedStore === "sqlite" ? "single-node SQLite" : "local JSON"}; managed database runtime remains blocked until an async managed adapter is implemented.`
+    : "Phase 49 async store boundary cannot enable this store mode; managed database runtime remains blocked until an async managed adapter is implemented.";
+
+  return {
+    source: "derived",
+    phase: "49",
+    status,
+    classification,
+    summary,
+    foundationPresent,
+    localRuntimeSupported,
+    managedDatabaseRuntimeAllowed,
+    managedDatabaseRuntimeBlocked,
+    storeMode: observedStore,
+    topology,
+  };
+}
+
 export function getOperationsStatus(deps: OperationsStatusDeps = {}): OperationsStatus {
   const loadStore = deps.loadStore ?? defaultLoadStore;
   const env = deps.env ?? process.env;
@@ -289,6 +454,12 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     { source: "releaseReadiness", report: releaseReadiness },
     { source: "releaseEvidence", report: releaseEvidence },
   ]);
+  const storeMode = resolveStoreMode(env);
+  const asyncStoreBoundary = findAsyncStoreBoundary([
+    { source: "managedDatabaseRuntimeGuard", report: managedDatabaseRuntimeGuard },
+    { source: "releaseReadiness", report: releaseReadiness },
+    { source: "releaseEvidence", report: releaseEvidence },
+  ]) ?? deriveAsyncStoreBoundary(storeMode, managedDatabaseTopology, managedDatabaseRuntimeGuard);
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -301,7 +472,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
 
   return {
     generatedAt: now().toISOString(),
-    store: { mode: resolveStoreMode(env) },
+    store: { mode: storeMode },
     scheduler: {
       leaderMode,
       leaderTtlMs: resolveLeaderTtlMs(env),
@@ -324,6 +495,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
     managedDatabaseRuntimeBoundary,
+    asyncStoreBoundary,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

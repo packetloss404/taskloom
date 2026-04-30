@@ -57,6 +57,29 @@ export interface ManagedDatabaseRuntimeBoundaryReport {
   nextSteps: string[];
 }
 
+export type AsyncStoreBoundaryClassification =
+  | "foundation-ready"
+  | "managed-postgres-unsupported"
+  | "multi-writer-unsupported"
+  | "unsupported-store"
+  | "bypassed"
+  | "inherited-blocker";
+
+export interface AsyncStoreBoundaryReport {
+  phase: "49";
+  status: ReleaseReadinessStatus;
+  foundationAvailable: true;
+  releaseAllowed: boolean;
+  managedPostgresSupported: false;
+  managedDatabaseAdapterImplemented: false;
+  managedDatabaseRepositoriesImplemented: false;
+  classification: AsyncStoreBoundaryClassification;
+  summary: string;
+  blockers: string[];
+  warnings: string[];
+  nextSteps: string[];
+}
+
 export interface ReleaseReadinessReport {
   phase: "43";
   readyForRelease: boolean;
@@ -69,6 +92,7 @@ export interface ReleaseReadinessReport {
   managedDatabaseTopology: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport;
+  asyncStoreBoundary: AsyncStoreBoundaryReport;
 }
 
 export interface ReleaseReadinessDeps {
@@ -77,6 +101,7 @@ export interface ReleaseReadinessDeps {
   managedDatabaseTopology?: ManagedDatabaseTopologyReport;
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryReport;
+  asyncStoreBoundary?: AsyncStoreBoundaryReport;
   buildStorageTopologyReport?: (
     env?: StorageTopologyEnv,
     probes?: StorageTopologyProbeDeps,
@@ -193,6 +218,14 @@ function boundaryCheckStatus(
   return managedDatabaseRuntimeBoundary.status === "warn" ? "warn" : "pass";
 }
 
+function asyncBoundaryCheckStatus(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  isGated: boolean,
+): ReleaseReadinessStatus {
+  if (!asyncStoreBoundary.releaseAllowed) return chooseBlockingStatus(isGated);
+  return asyncStoreBoundary.status === "warn" ? "warn" : "pass";
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -238,7 +271,7 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
   }
 
   if (managedDatabaseBlocked || unsupportedStore) {
-    nextSteps.add("Keep managed database rollout blocked until the synchronous storage adapter gap is closed by an implemented managed database adapter.");
+    nextSteps.add("Keep managed database rollout blocked until real managed database adapter and repository implementations land.");
   }
   if (multiWriterBlocked) {
     nextSteps.add("Keep multi-writer or managed database topology out of strict release until the runtime boundary supports it.");
@@ -255,7 +288,7 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
     : "fail";
   let summary: string;
   if (managedDatabaseBlocked || unsupportedStore) {
-    summary = "Phase 48 managed database runtime boundary is blocked by the synchronous adapter gap; managed database storage is intentionally unsupported for release.";
+    summary = "Phase 48 managed database runtime boundary blocks managed database storage until the real adapter and repositories land.";
   } else if (multiWriterBlocked) {
     summary = "Phase 48 managed database runtime boundary blocks multi-writer or managed topology until runtime support exists.";
   } else if (bypassed) {
@@ -280,12 +313,109 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
   };
 }
 
+export function buildAsyncStoreBoundaryReport(
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
+): AsyncStoreBoundaryReport {
+  const managedIntent =
+    managedDatabaseTopology.managedDatabase.requested ||
+    managedDatabaseTopology.managedDatabase.configured ||
+    managedDatabaseTopology.classification === "managed-database-requested" ||
+    managedDatabaseRuntimeGuard.classification === "managed-database-blocked" ||
+    managedDatabaseRuntimeBoundary.classification === "managed-database-blocked";
+  const multiWriterIntent =
+    managedDatabaseTopology.classification === "production-blocked" ||
+    managedDatabaseRuntimeGuard.classification === "multi-writer-blocked" ||
+    managedDatabaseRuntimeBoundary.classification === "multi-writer-blocked";
+  const unsupportedStore =
+    managedDatabaseTopology.classification === "unsupported-store" ||
+    managedDatabaseRuntimeGuard.classification === "unsupported-store" ||
+    managedDatabaseRuntimeBoundary.classification === "unsupported-store";
+  const bypassed =
+    managedDatabaseRuntimeGuard.classification === "bypassed" ||
+    managedDatabaseRuntimeBoundary.classification === "bypassed";
+  const blockers = Array.from(new Set([
+    ...managedDatabaseTopology.blockers,
+    ...managedDatabaseRuntimeGuard.blockers,
+    ...managedDatabaseRuntimeBoundary.blockers,
+  ]));
+  const warnings = Array.from(new Set([
+    ...managedDatabaseTopology.warnings,
+    ...managedDatabaseRuntimeGuard.warnings,
+    ...managedDatabaseRuntimeBoundary.warnings,
+  ]));
+  const nextSteps = new Set([
+    ...managedDatabaseTopology.nextSteps,
+    ...managedDatabaseRuntimeGuard.nextSteps,
+    ...managedDatabaseRuntimeBoundary.nextSteps,
+  ]);
+
+  let classification: AsyncStoreBoundaryClassification;
+  if (bypassed) {
+    classification = "bypassed";
+  } else if (managedIntent) {
+    classification = "managed-postgres-unsupported";
+  } else if (multiWriterIntent) {
+    classification = "multi-writer-unsupported";
+  } else if (unsupportedStore) {
+    classification = "unsupported-store";
+  } else if (blockers.length > 0) {
+    classification = "inherited-blocker";
+  } else {
+    classification = "foundation-ready";
+  }
+
+  nextSteps.add("Treat Phase 49 as async-store-boundary foundation only; do not enable managed Postgres until the real adapter and repositories land.");
+  if (managedIntent || unsupportedStore) {
+    nextSteps.add("Keep managed Postgres rollout blocked until adapter, repositories, migrations/backfills, and parity tests are implemented.");
+  }
+  if (multiWriterIntent) {
+    nextSteps.add("Keep multi-writer database topology blocked until managed runtime coordination exists.");
+  }
+
+  const releaseAllowed = managedDatabaseRuntimeBoundary.allowed && !managedIntent && !unsupportedStore && !multiWriterIntent;
+  const status: ReleaseReadinessStatus = releaseAllowed
+    ? warnings.length > 0 || bypassed
+      ? "warn"
+      : "pass"
+    : "fail";
+  let summary: string;
+  if (managedIntent || unsupportedStore) {
+    summary = "Phase 49 async-store boundary exists as foundation, but managed Postgres remains unsupported until real adapter and repository implementations land.";
+  } else if (multiWriterIntent) {
+    summary = "Phase 49 async-store boundary exists as foundation, but multi-writer database topology remains unsupported until managed runtime coordination lands.";
+  } else if (bypassed) {
+    summary = "Phase 49 async-store boundary exists as foundation, but the managed database runtime bypass means this is not production support.";
+  } else if (releaseAllowed) {
+    summary = "Phase 49 async-store boundary exists as foundation; supported local JSON and single-node SQLite release postures remain allowed.";
+  } else {
+    summary = "Phase 49 async-store boundary exists as foundation, but inherited deployment blockers remain unresolved.";
+  }
+
+  return {
+    phase: "49",
+    status,
+    foundationAvailable: true,
+    releaseAllowed,
+    managedPostgresSupported: false,
+    managedDatabaseAdapterImplemented: false,
+    managedDatabaseRepositoriesImplemented: false,
+    classification,
+    summary,
+    blockers,
+    warnings,
+    nextSteps: Array.from(nextSteps),
+  };
+}
+
 function buildNextSteps(
   checks: ReleaseReadinessCheck[],
   storageTopology: StorageTopologyReport,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
 ): string[] {
   const steps = new Set<string>();
 
@@ -302,6 +432,9 @@ function buildNextSteps(
     }
     if (check.id === "managed-database-runtime-boundary") {
       for (const step of managedDatabaseRuntimeBoundary.nextSteps) steps.add(step);
+    }
+    if (check.id === "async-store-boundary") {
+      for (const step of asyncStoreBoundary.nextSteps) steps.add(step);
     }
     if (check.id === "backup-dir") {
       steps.add("Set TASKLOOM_BACKUP_DIR to a backed-up directory and verify it exists before release handoff.");
@@ -345,6 +478,13 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
     );
+  const asyncStoreBoundary =
+    input.asyncStoreBoundary ??
+    buildAsyncStoreBoundaryReport(
+      managedDatabaseTopology,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseRuntimeBoundary,
+    );
   const checks: ReleaseReadinessCheck[] = [];
 
   pushCheck(
@@ -381,6 +521,15 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
     managedDatabaseRuntimeBoundary.allowed
       ? `Managed database runtime boundary allows release: ${managedDatabaseRuntimeBoundary.summary}`
       : `Managed database runtime boundary blocks release: ${managedDatabaseRuntimeBoundary.summary}`,
+  );
+
+  pushCheck(
+    checks,
+    "async-store-boundary",
+    asyncBoundaryCheckStatus(asyncStoreBoundary, isGated),
+    asyncStoreBoundary.releaseAllowed
+      ? `Async store boundary foundation allows current release posture: ${asyncStoreBoundary.summary}`
+      : `Async store boundary foundation does not allow managed DB release: ${asyncStoreBoundary.summary}`,
   );
 
   const dbPath = clean(env.TASKLOOM_DB_PATH);
@@ -491,6 +640,7 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
     ...managedDatabaseTopology.warnings,
     ...managedDatabaseRuntimeGuard.warnings,
     ...managedDatabaseRuntimeBoundary.warnings,
+    ...asyncStoreBoundary.warnings,
   ]));
   const readyForRelease = blockers.length === 0;
   const summary = readyForRelease
@@ -512,11 +662,13 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
       managedDatabaseTopology,
       managedDatabaseRuntimeGuard,
       managedDatabaseRuntimeBoundary,
+      asyncStoreBoundary,
     ),
     storageTopology,
     managedDatabaseTopology,
     managedDatabaseRuntimeGuard,
     managedDatabaseRuntimeBoundary,
+    asyncStoreBoundary,
   };
 }
 
