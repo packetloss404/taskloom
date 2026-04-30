@@ -1,4 +1,5 @@
 import type { TaskloomData } from "./taskloom-store.js";
+import { createRequire } from "node:module";
 import { loadStore as defaultLoadStore } from "./taskloom-store.js";
 import { getJobTypeMetrics, type JobTypeMetrics } from "./jobs/scheduler-metrics.js";
 import { buildStorageTopologyReport as defaultBuildStorageTopologyReport } from "./deployment/storage-topology.js";
@@ -58,6 +59,22 @@ export interface AsyncStoreBoundaryStatus {
   [key: string]: unknown;
 }
 
+export interface ManagedPostgresCapabilityStatus {
+  phase: "50";
+  status: "available" | "not-configured" | "missing-adapter";
+  summary: string;
+  adapterConfigured: boolean;
+  adapterAvailable: boolean;
+  backfillAvailable: boolean;
+  syncRuntimeGuarded: boolean;
+  runtimeAllowed: boolean;
+  managedIntentDetected: boolean;
+  configuredHintKeys: string[];
+  adapter: string | null;
+  provider: "postgres";
+  backfillCommands: string[];
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -79,6 +96,7 @@ export interface OperationsStatus {
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryStatus | null;
   asyncStoreBoundary: AsyncStoreBoundaryStatus | null;
+  managedPostgresCapability: ManagedPostgresCapabilityStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -121,6 +139,30 @@ const VALID_ACCESS_LOG_MODES: ReadonlySet<AccessLogMode> = new Set(["off", "stdo
 const DEFAULT_LEADER_TTL_MS = 30000;
 const DEFAULT_FILE_LOCK_PATH = "data/scheduler-leader.json";
 const DEFAULT_ACCESS_LOG_MAX_FILES = 5;
+const require = createRequire(import.meta.url);
+const MANAGED_POSTGRES_URL_HINT_KEYS = [
+  "TASKLOOM_MANAGED_DATABASE_URL",
+  "DATABASE_URL",
+  "TASKLOOM_DATABASE_URL",
+] as const;
+const MANAGED_POSTGRES_ADAPTER_HINT_KEY = "TASKLOOM_MANAGED_DATABASE_ADAPTER";
+const MANAGED_POSTGRES_TOPOLOGY_HINTS = new Set([
+  "managed",
+  "managed-db",
+  "managed-database",
+  "postgres",
+  "postgresql",
+]);
+const MANAGED_POSTGRES_ADAPTERS = new Set(["postgres", "postgresql"]);
+const MANAGED_POSTGRES_BACKFILL_COMMANDS = [
+  "npm run db:backfill",
+  "npm run db:backfill-agent-runs",
+  "npm run db:backfill-jobs",
+  "npm run db:backfill-invitation-email-deliveries",
+  "npm run db:backfill-activities",
+  "npm run db:backfill-provider-calls",
+  "npm run db:backfill-activation-signals",
+] as const;
 
 let schedulerLeaderProbe: (() => boolean) | null = null;
 
@@ -375,6 +417,98 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function hasConfiguredEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  return stringValue(env[key]).length > 0;
+}
+
+function managedPostgresHintKeys(env: NodeJS.ProcessEnv): string[] {
+  const keys: string[] = [];
+  for (const key of MANAGED_POSTGRES_URL_HINT_KEYS) {
+    if (hasConfiguredEnvValue(env, key)) keys.push(key);
+  }
+  if (hasConfiguredEnvValue(env, MANAGED_POSTGRES_ADAPTER_HINT_KEY)) {
+    keys.push(MANAGED_POSTGRES_ADAPTER_HINT_KEY);
+  }
+
+  const store = stringValue(env.TASKLOOM_STORE).toLowerCase();
+  if (MANAGED_POSTGRES_TOPOLOGY_HINTS.has(store)) keys.push("TASKLOOM_STORE");
+
+  const topology = stringValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  if (MANAGED_POSTGRES_TOPOLOGY_HINTS.has(topology)) keys.push("TASKLOOM_DATABASE_TOPOLOGY");
+
+  return Array.from(new Set(keys));
+}
+
+function packageAvailable(name: string): boolean {
+  try {
+    require.resolve(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function deriveManagedPostgresCapability(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): ManagedPostgresCapabilityStatus {
+  const configuredHintKeys = managedPostgresHintKeys(env);
+  const phase50: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.phase50)
+    ? managedDatabaseRuntimeGuard.phase50
+    : {};
+  const observed: Record<string, unknown> = isRecord(managedDatabaseRuntimeGuard.observed)
+    ? managedDatabaseRuntimeGuard.observed
+    : {};
+  const adapter = stringValue(phase50.adapter) ||
+    stringValue(observed.managedDatabaseAdapter) ||
+    stringValue(env.TASKLOOM_MANAGED_DATABASE_ADAPTER).toLowerCase() ||
+    null;
+  const hasManagedDatabaseUrl = MANAGED_POSTGRES_URL_HINT_KEYS.some((key) => hasConfiguredEnvValue(env, key));
+  const adapterConfigured = booleanValue(phase50.asyncAdapterConfigured) ??
+    Boolean(adapter);
+  const adapterAvailable = booleanValue(phase50.asyncAdapterAvailable) ??
+    Boolean(adapter && MANAGED_POSTGRES_ADAPTERS.has(adapter) && hasManagedDatabaseUrl && packageAvailable("pg"));
+  const backfillAvailable = booleanValue(phase50.backfillAvailable) ?? adapterAvailable;
+  const runtimeAllowed = Boolean(managedDatabaseRuntimeGuard.allowed);
+  const syncRuntimeGuarded = Boolean(managedDatabaseRuntimeGuard.managedDatabaseRuntimeBlocked) && !runtimeAllowed;
+  const status: ManagedPostgresCapabilityStatus["status"] = adapterAvailable
+    ? adapterConfigured
+      ? "available"
+      : "not-configured"
+    : adapterConfigured
+      ? "missing-adapter"
+      : "not-configured";
+  const summary = adapterConfigured
+    ? adapterAvailable
+      ? syncRuntimeGuarded
+        ? "Phase 50 managed Postgres adapter/backfill capability is configured and available from env hints; the synchronous app runtime remains guarded."
+        : "Phase 50 managed Postgres adapter/backfill capability is configured and available from env hints."
+      : "Phase 50 managed Postgres env hints are configured, but the pg adapter package is not available."
+    : adapterAvailable
+      ? "Phase 50 managed Postgres adapter/backfill capability is available, but no managed Postgres env hints are configured."
+      : "Phase 50 managed Postgres adapter/backfill capability is not configured.";
+
+  return {
+    phase: "50",
+    status,
+    summary,
+    adapterConfigured,
+    adapterAvailable,
+    backfillAvailable,
+    syncRuntimeGuarded,
+    runtimeAllowed,
+    managedIntentDetected: configuredHintKeys.length > 0,
+    configuredHintKeys,
+    adapter,
+    provider: "postgres",
+    backfillCommands: Array.from(MANAGED_POSTGRES_BACKFILL_COMMANDS),
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -460,6 +594,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     { source: "releaseReadiness", report: releaseReadiness },
     { source: "releaseEvidence", report: releaseEvidence },
   ]) ?? deriveAsyncStoreBoundary(storeMode, managedDatabaseTopology, managedDatabaseRuntimeGuard);
+  const managedPostgresCapability = deriveManagedPostgresCapability(env, managedDatabaseRuntimeGuard);
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -496,6 +631,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedDatabaseRuntimeGuard,
     managedDatabaseRuntimeBoundary,
     asyncStoreBoundary,
+    managedPostgresCapability,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

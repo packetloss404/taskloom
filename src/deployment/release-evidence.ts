@@ -78,8 +78,10 @@ export interface ReleaseEvidenceBundle {
       asyncStoreBoundaryFoundationAvailable: true;
       asyncStoreBoundaryReleaseAllowed: boolean;
       managedPostgresSupported: false;
-      managedDatabaseAdapterImplemented: false;
+      managedDatabaseAdapterImplemented: boolean;
       managedDatabaseRepositoriesImplemented: false;
+      managedDatabaseBackfillAvailable: boolean;
+      managedDatabaseSyncStartupSupported: false;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -159,6 +161,7 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MANAGED_DATABASE_URL",
   "DATABASE_URL",
   "TASKLOOM_DATABASE_URL",
+  "TASKLOOM_MANAGED_DATABASE_ADAPTER",
   "TASKLOOM_DATABASE_TOPOLOGY",
   "TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS",
 ] as const;
@@ -297,6 +300,15 @@ function buildAttachments(
       format: "json",
       required: true,
       summary: asyncStoreBoundary.summary,
+    },
+    {
+      id: "phase-50-managed-database-adapter",
+      label: "Phase 50 managed database adapter/backfill evidence",
+      format: "json",
+      required: asyncStoreBoundary.managedDatabaseAdapterImplemented,
+      summary: asyncStoreBoundary.managedDatabaseAdapterImplemented
+        ? "Phase 50 async managed adapter/backfill capability is available; synchronous startup support remains false."
+        : "Phase 50 async managed adapter/backfill capability is not configured.",
     },
     {
       id: "phase-44-release-evidence",
@@ -456,6 +468,8 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         managedPostgresSupported: asyncStoreBoundary.managedPostgresSupported,
         managedDatabaseAdapterImplemented: asyncStoreBoundary.managedDatabaseAdapterImplemented,
         managedDatabaseRepositoriesImplemented: asyncStoreBoundary.managedDatabaseRepositoriesImplemented,
+        managedDatabaseBackfillAvailable: asyncStoreBoundary.managedDatabaseBackfillAvailable,
+        managedDatabaseSyncStartupSupported: asyncStoreBoundary.managedDatabaseSyncStartupSupported,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

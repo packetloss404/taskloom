@@ -56,6 +56,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.asyncStoreBoundary?.localRuntimeSupported, true);
   assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeAllowed, false);
   assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
+  assert.equal(status.managedPostgresCapability.phase, "50");
+  assert.equal(status.managedPostgresCapability.adapterConfigured, false);
+  assert.equal(status.managedPostgresCapability.adapterAvailable, false);
+  assert.equal(status.managedPostgresCapability.backfillAvailable, false);
+  assert.equal(status.managedPostgresCapability.syncRuntimeGuarded, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -249,7 +254,15 @@ test("managedDatabaseRuntimeGuard is built from the injected environment", () =>
       managedDatabaseUrl: "[redacted]",
       databaseUrl: null,
       taskloomDatabaseUrl: null,
+      managedDatabaseAdapter: null,
       env: {},
+    },
+    phase50: {
+      asyncAdapterConfigured: false,
+      asyncAdapterAvailable: false,
+      backfillAvailable: false,
+      adapter: null,
+      syncStartupSupported: false,
     },
     checks: [
       { id: "managed-database-runtime", status: "fail", summary: "Managed database runtime is not enabled" },
@@ -419,6 +432,41 @@ test("asyncStoreBoundary derives managed database runtime as blocked from runtim
   assert.match(String(status.asyncStoreBoundary?.summary), /managed database runtime remains blocked/i);
 });
 
+test("managedPostgresCapability reports configured adapter/backfill capability while sync runtime remains guarded", () => {
+  const env = {
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  };
+
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env,
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.managedPostgresCapability.phase, "50");
+  assert.equal(status.managedPostgresCapability.status, "available");
+  assert.equal(status.managedPostgresCapability.provider, "postgres");
+  assert.equal(status.managedPostgresCapability.adapterConfigured, true);
+  assert.equal(status.managedPostgresCapability.adapterAvailable, true);
+  assert.equal(status.managedPostgresCapability.backfillAvailable, true);
+  assert.equal(status.managedPostgresCapability.managedIntentDetected, true);
+  assert.equal(status.managedPostgresCapability.syncRuntimeGuarded, true);
+  assert.equal(status.managedPostgresCapability.runtimeAllowed, false);
+  assert.equal(status.managedPostgresCapability.adapter, "postgres");
+  assert.deepEqual(status.managedPostgresCapability.configuredHintKeys, [
+    "DATABASE_URL",
+    "TASKLOOM_MANAGED_DATABASE_ADAPTER",
+  ]);
+  assert.ok(status.managedPostgresCapability.backfillCommands.includes("npm run db:backfill-activation-signals"));
+  assert.match(status.managedPostgresCapability.summary, /configured and available/i);
+  assert.match(status.managedPostgresCapability.summary, /synchronous app runtime remains guarded/i);
+  assert.equal(status.asyncStoreBoundary?.phase, "49");
+  assert.equal(status.asyncStoreBoundary?.managedDatabaseRuntimeBlocked, true);
+  assert.equal(status.managedDatabaseRuntimeGuard.allowed, false);
+});
+
 test("releaseReadiness is built from the injected environment", () => {
   const fixture = {
     readyForRelease: false,
@@ -503,9 +551,21 @@ test("release readiness and evidence receive the already-built managed reports",
       managedDatabaseUrl: null,
       databaseUrl: null,
       taskloomDatabaseUrl: null,
+      managedDatabaseAdapter: null,
       env: {},
     },
-    managedDatabase: { requested: false, configured: false, supported: false },
+    managedDatabase: {
+      requested: false,
+      configured: false,
+      supported: false,
+      syncStartupSupported: false,
+      phase50: {
+        asyncAdapterConfigured: false,
+        asyncAdapterAvailable: false,
+        backfillAvailable: false,
+        adapter: null,
+      },
+    },
   };
   const managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport = {
     phase: "46",
@@ -526,7 +586,15 @@ test("release readiness and evidence receive the already-built managed reports",
       managedDatabaseUrl: null,
       databaseUrl: null,
       taskloomDatabaseUrl: null,
+      managedDatabaseAdapter: null,
       env: {},
+    },
+    phase50: {
+      asyncAdapterConfigured: false,
+      asyncAdapterAvailable: false,
+      backfillAvailable: false,
+      adapter: null,
+      syncStartupSupported: false,
     },
   };
   const releaseReadiness = {

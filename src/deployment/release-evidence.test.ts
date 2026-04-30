@@ -87,12 +87,20 @@ function injectedManagedDatabaseTopology(): ManagedDatabaseTopologyReport {
       managedDatabaseUrl: null,
       databaseUrl: null,
       taskloomDatabaseUrl: null,
+      managedDatabaseAdapter: null,
       env: {},
     },
     managedDatabase: {
       requested: false,
       configured: false,
       supported: false,
+      syncStartupSupported: false,
+      phase50: {
+        asyncAdapterConfigured: false,
+        asyncAdapterAvailable: false,
+        backfillAvailable: false,
+        adapter: null,
+      },
     },
   };
 }
@@ -117,7 +125,15 @@ function injectedManagedDatabaseRuntimeGuard(): ManagedDatabaseRuntimeGuardRepor
       managedDatabaseUrl: null,
       databaseUrl: null,
       taskloomDatabaseUrl: null,
+      managedDatabaseAdapter: null,
       env: {},
+    },
+    phase50: {
+      asyncAdapterConfigured: false,
+      asyncAdapterAvailable: false,
+      backfillAvailable: false,
+      adapter: null,
+      syncStartupSupported: false,
     },
   };
 }
@@ -147,6 +163,8 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.equal(bundle.evidence.config.managedPostgresSupported, false);
   assert.equal(bundle.evidence.config.managedDatabaseAdapterImplemented, false);
   assert.equal(bundle.evidence.config.managedDatabaseRepositoriesImplemented, false);
+  assert.equal(bundle.evidence.config.managedDatabaseBackfillAvailable, false);
+  assert.equal(bundle.evidence.config.managedDatabaseSyncStartupSupported, false);
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_STORE").configured, false);
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-42-storage-topology"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-43-release-readiness"));
@@ -154,6 +172,7 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-46-runtime-guard"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-48-managed-database-runtime-boundary"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-49-async-store-boundary"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-50-managed-database-adapter"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-44-release-evidence"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_STORE=sqlite")));
 });
@@ -269,7 +288,7 @@ test("injected reports are embedded without calling report builders", () => {
   assert.ok(bundle.nextSteps.includes("Injected release next step."));
   assert.ok(bundle.nextSteps.includes("Injected managed topology next step."));
   assert.ok(bundle.nextSteps.includes("Injected runtime guard next step."));
-  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 49 as async-store-boundary foundation only")));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 50 adapter/backfill evidence")));
 });
 
 test("strict evidence reflects managed database blockers in summary config and next steps", () => {
@@ -300,14 +319,53 @@ test("strict evidence reflects managed database blockers in summary config and n
   assert.equal(bundle.evidence.config.asyncStoreBoundaryClassification, "managed-postgres-unsupported");
   assert.equal(bundle.evidence.config.asyncStoreBoundaryReleaseAllowed, false);
   assert.equal(bundle.evidence.config.managedPostgresSupported, false);
+  assert.equal(bundle.evidence.config.managedDatabaseBackfillAvailable, false);
+  assert.equal(bundle.evidence.config.managedDatabaseSyncStartupSupported, false);
   assert.equal(bundle.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
   assert.equal(bundle.asyncStoreBoundary.classification, "managed-postgres-unsupported");
   assert.match(bundle.summary, /Managed DB blockers/);
   assert.match(bundle.summary, /Phase 49 async-store boundary exists as foundation/);
   assert.match(bundle.summary, /managed Postgres remains unsupported/);
-  assert.ok(bundle.summary.includes("no executable managed database adapter yet"));
+  assert.ok(bundle.summary.includes("no supported managed database startup path"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("managed database URL environment variables")));
-  assert.ok(bundle.nextSteps.some((step) => step.includes("real adapter and repositories")));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("adapter, repositories")));
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MANAGED_DATABASE_URL").value, "[redacted]");
+});
+
+test("strict evidence separates Phase 50 adapter and backfill capability from sync startup support", () => {
+  const bundle = assessReleaseEvidence({
+    env: {
+      NODE_ENV: "production",
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+      TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+      TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+      TASKLOOM_ACCESS_LOG_MODE: "stdout",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-28T22:00:00.000Z",
+    strict: true,
+  });
+
+  const phase50Attachment = bundle.attachments.find((attachment) => attachment.id === "phase-50-managed-database-adapter");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.managedDatabaseAdapterImplemented, true);
+  assert.equal(bundle.evidence.config.managedDatabaseBackfillAvailable, true);
+  assert.equal(bundle.evidence.config.managedDatabaseSyncStartupSupported, false);
+  assert.equal(bundle.evidence.config.managedPostgresSupported, false);
+  assert.equal(bundle.evidence.config.asyncStoreBoundaryClassification, "managed-postgres-adapter-available-sync-blocked");
+  assert.equal(bundle.managedDatabaseRuntimeGuard.allowed, false);
+  assert.equal(bundle.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.managedDatabaseAdapterImplemented, true);
+  assert.equal(bundle.asyncStoreBoundary.managedDatabaseBackfillAvailable, true);
+  assert.equal(phase50Attachment?.required, true);
+  assert.match(bundle.summary, /Phase 50 async managed adapter\/backfill capability is available/);
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MANAGED_DATABASE_ADAPTER").value, "postgres");
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MANAGED_DATABASE_URL").value, "[redacted]");
 });
 

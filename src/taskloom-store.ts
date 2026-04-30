@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { dirname, resolve } from "node:path";
@@ -553,6 +554,8 @@ export interface ResolvedTaskloomStoreMode {
 
 export const MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE =
   "Managed database storage is not supported by Taskloom's synchronous store API yet. Use TASKLOOM_STORE=json or TASKLOOM_STORE=sqlite until an async managed database adapter is implemented.";
+const MANAGED_POSTGRES_DOCUMENT_KEY = "taskloom:store";
+const MANAGED_POSTGRES_SCHEMA_VERSION = 1;
 
 const MANAGED_DATABASE_URL_ENV_KEYS = [
   "DATABASE_URL",
@@ -576,6 +579,47 @@ export class ManagedDatabaseStoreBoundaryError extends Error {
     this.storeMode = resolution.requestedStore;
     this.managedDatabaseUrlKeys = resolution.managedDatabaseUrlKeys;
   }
+}
+
+export class ManagedPostgresStoreConfigurationError extends Error {
+  readonly code = "TASKLOOM_MANAGED_POSTGRES_CONFIGURATION";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ManagedPostgresStoreConfigurationError";
+  }
+}
+
+export interface ManagedPostgresStoreQueryResult<TRow extends Record<string, unknown> = Record<string, unknown>> {
+  rows: TRow[];
+  rowCount?: number | null;
+}
+
+export interface ManagedPostgresStoreQueryClient {
+  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<ManagedPostgresStoreQueryResult<TRow>>;
+  close?(): Promise<void> | void;
+}
+
+export interface ManagedPostgresStoreClientConfig {
+  url: string;
+  envKey: string;
+  resolution: ResolvedTaskloomStoreMode;
+}
+
+export type ManagedPostgresStoreClientFactory =
+  (config: ManagedPostgresStoreClientConfig) => ManagedPostgresStoreQueryClient | Promise<ManagedPostgresStoreQueryClient>;
+
+let managedPostgresStoreClientFactory: ManagedPostgresStoreClientFactory = createDefaultManagedPostgresStoreClient;
+
+export function setManagedPostgresStoreClientFactoryForTests(factory: ManagedPostgresStoreClientFactory | null): () => void {
+  const previous = managedPostgresStoreClientFactory;
+  managedPostgresStoreClientFactory = factory ?? createDefaultManagedPostgresStoreClient;
+  return () => {
+    managedPostgresStoreClientFactory = previous;
+  };
 }
 
 function cleanStoreEnvValue(value: string | undefined): string {
@@ -916,22 +960,175 @@ function sqliteAsyncStoreBackend(dbPath: string): AsyncStoreBackend {
 }
 
 function managedDatabaseAsyncStoreBackend(resolution: ResolvedTaskloomStoreMode): AsyncStoreBackend {
-  const rejectManagedBoundary = <T>(): Promise<T> => Promise.reject(new ManagedDatabaseStoreBoundaryError(resolution));
-  const hintKey = [
-    resolution.mode,
-    resolution.requestedStore,
-    ...resolution.managedDatabaseUrlKeys,
-  ].join(":");
+  const config = resolveManagedPostgresStoreClientConfig(resolution);
 
   return {
-    key: `managed:${hintKey}`,
+    key: managedPostgresBackendKey(config),
     load() {
-      return rejectManagedBoundary();
+      return loadManagedPostgresStore(config);
     },
-    mutate() {
-      return rejectManagedBoundary();
+    mutate(mutator) {
+      return mutateManagedPostgresStore(config, mutator);
     },
   };
+}
+
+function resolveManagedPostgresStoreClientConfig(resolution: ResolvedTaskloomStoreMode): ManagedPostgresStoreClientConfig {
+  const envKey = MANAGED_DATABASE_URL_ENV_KEYS.find((key) => cleanStoreEnvValue(process.env[key]).length > 0);
+  if (!envKey) {
+    throw new ManagedPostgresStoreConfigurationError(
+      "Managed Postgres storage requires DATABASE_URL, TASKLOOM_DATABASE_URL, or TASKLOOM_MANAGED_DATABASE_URL.",
+    );
+  }
+
+  return {
+    url: cleanStoreEnvValue(process.env[envKey]),
+    envKey,
+    resolution,
+  };
+}
+
+async function createDefaultManagedPostgresStoreClient(config: ManagedPostgresStoreClientConfig): Promise<ManagedPostgresStoreQueryClient> {
+  const importModule = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
+  let pgModule: unknown;
+  try {
+    pgModule = await importModule("pg");
+  } catch (error) {
+    throw new ManagedPostgresStoreConfigurationError(
+      `Managed Postgres storage requires the optional "pg" package to be installed. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const poolConstructor = (pgModule as { Pool?: new (options: { connectionString: string }) => ManagedPostgresStoreQueryClient & { end?: () => Promise<void> | void } }).Pool;
+  if (!poolConstructor) {
+    throw new ManagedPostgresStoreConfigurationError("Managed Postgres storage could not find pg.Pool.");
+  }
+
+  const pool = new poolConstructor({ connectionString: config.url });
+  return {
+    query(sql, params) {
+      return pool.query(sql, params);
+    },
+    close() {
+      return pool.end?.() ?? pool.close?.();
+    },
+  };
+}
+
+async function withManagedPostgresClient<T>(
+  config: ManagedPostgresStoreClientConfig,
+  run: (client: ManagedPostgresStoreQueryClient) => Promise<T>,
+): Promise<T> {
+  const client = await managedPostgresStoreClientFactory(config);
+  try {
+    return await run(client);
+  } finally {
+    await client.close?.();
+  }
+}
+
+async function ensureManagedPostgresDocumentStore(client: ManagedPostgresStoreQueryClient): Promise<void> {
+  await client.query(`
+    create table if not exists taskloom_document_store (
+      document_key text primary key,
+      schema_version integer not null,
+      metadata jsonb not null default '{}'::jsonb,
+      payload jsonb not null,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+}
+
+async function loadManagedPostgresStore(config: ManagedPostgresStoreClientConfig): Promise<TaskloomData> {
+  return withManagedPostgresClient(config, async (client) => {
+    await ensureManagedPostgresDocumentStore(client);
+    const loaded = await readManagedPostgresStore(client);
+    if (loaded) return loaded;
+
+    const seeded = seedStore();
+    await persistManagedPostgresStore(client, seeded);
+    return seeded;
+  });
+}
+
+async function mutateManagedPostgresStore<T>(
+  config: ManagedPostgresStoreClientConfig,
+  mutator: (data: TaskloomData) => T | Promise<T>,
+): Promise<T> {
+  const backendKey = managedPostgresBackendKey(config);
+  return withManagedPostgresClient(config, async (client) => {
+    await ensureManagedPostgresDocumentStore(client);
+    await client.query("begin");
+    try {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [MANAGED_POSTGRES_DOCUMENT_KEY]);
+      const data = await readManagedPostgresStore(client, true) ?? seedStore();
+      const result = await mutator(data);
+      await persistManagedPostgresStore(client, data);
+      await client.query("commit");
+      cache = data;
+      cacheBackendKey = backendKey;
+      return result;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
+  });
+}
+
+function managedPostgresBackendKey(config: ManagedPostgresStoreClientConfig): string {
+  return [
+    "postgres",
+    config.resolution.mode,
+    config.resolution.requestedStore,
+    config.envKey,
+    createHash("sha256").update(config.url).digest("hex").slice(0, 16),
+  ].join(":");
+}
+
+async function readManagedPostgresStore(
+  client: ManagedPostgresStoreQueryClient,
+  forUpdate = false,
+): Promise<TaskloomData | null> {
+  const result = await client.query<{ payload: unknown }>(
+    `
+      select payload
+      from taskloom_document_store
+      where document_key = $1
+      limit 1
+      ${forUpdate ? "for update" : ""}
+    `,
+    [MANAGED_POSTGRES_DOCUMENT_KEY],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
+  return normalizeStore(payload as Partial<TaskloomData>);
+}
+
+async function persistManagedPostgresStore(client: ManagedPostgresStoreQueryClient, data: TaskloomData): Promise<void> {
+  await client.query(
+    `
+      insert into taskloom_document_store (
+        document_key, schema_version, metadata, payload, created_at, updated_at
+      )
+      values ($1, $2, $3::jsonb, $4::jsonb, now(), now())
+      on conflict(document_key) do update set
+        schema_version = excluded.schema_version,
+        metadata = excluded.metadata,
+        payload = excluded.payload,
+        updated_at = now()
+    `,
+    [
+      MANAGED_POSTGRES_DOCUMENT_KEY,
+      MANAGED_POSTGRES_SCHEMA_VERSION,
+      JSON.stringify({
+        adapter: "managed-postgres-document-store",
+        foundation: "phase-50",
+      }),
+      JSON.stringify(normalizeStore(data)),
+    ],
+  );
 }
 
 function jsonStoreBackend(): StoreBackend {

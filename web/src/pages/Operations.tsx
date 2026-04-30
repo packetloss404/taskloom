@@ -606,6 +606,23 @@ interface AsyncStoreBoundaryStatus {
   [key: string]: unknown;
 }
 
+interface ManagedPostgresCapabilityStatus {
+  phase?: string;
+  status?: string;
+  summary?: string;
+  adapterConfigured?: boolean;
+  adapterAvailable?: boolean;
+  backfillAvailable?: boolean;
+  syncRuntimeGuarded?: boolean;
+  runtimeAllowed?: boolean;
+  managedIntentDetected?: boolean;
+  configuredHintKeys?: string[];
+  adapter?: string | null;
+  provider?: string;
+  backfillCommands?: string[];
+  [key: string]: unknown;
+}
+
 interface ProductionStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -638,6 +655,7 @@ interface ProductionStatus {
   managedDatabaseRuntimeGuard?: ManagedDatabaseRuntimeGuardReport;
   managedDatabaseRuntimeBoundary?: ManagedDatabaseRuntimeBoundaryStatus | null;
   asyncStoreBoundary?: AsyncStoreBoundaryStatus | null;
+  managedPostgresCapability?: ManagedPostgresCapabilityStatus | null;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -1045,6 +1063,10 @@ function ProductionStatusPanel() {
               report={status.managedDatabaseRuntimeGuard}
               boundary={status.managedDatabaseRuntimeBoundary}
             />
+          </div>
+
+          <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
+            <ManagedPostgresCapabilitySection capability={status.managedPostgresCapability} />
           </div>
 
           <div className="border border-ink-700 bg-ink-875 px-4 py-3 xl:col-span-2">
@@ -1713,6 +1735,86 @@ function managedDatabaseRuntimeGuardCheckDetail(check: ManagedDatabaseRuntimeGua
 
 function isManagedDatabaseRuntimeGuardCheck(value: unknown): value is ManagedDatabaseRuntimeGuardCheck {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function ManagedPostgresCapabilitySection({
+  capability,
+}: {
+  capability: ManagedPostgresCapabilityStatus | null | undefined;
+}) {
+  if (!capability) {
+    return (
+      <div>
+        <div className="kicker mb-1">MANAGED POSTGRES CAPABILITY</div>
+        <h3 className="font-serif text-base text-ink-100">Managed Postgres capability</h3>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
+          Awaiting Phase 50 capability report
+        </p>
+      </div>
+    );
+  }
+
+  const status = managedPostgresCapabilityStatus(capability);
+  const fields = managedPostgresCapabilityFields(capability);
+
+  return (
+    <div>
+      <div className="kicker mb-1">MANAGED POSTGRES CAPABILITY</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-serif text-base text-ink-100">Managed Postgres capability</h3>
+        <StatusBadge value={status.label} tone={status.tone} />
+      </div>
+      {capability.summary && (
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{capability.summary}</p>
+      )}
+      {fields.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {fields.map((field) => (
+            <KeyValue key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function managedPostgresCapabilityStatus(
+  capability: ManagedPostgresCapabilityStatus,
+): { label: string; tone: ReleaseReadinessTone } {
+  if (capability.adapterConfigured && capability.adapterAvailable === false) {
+    return { label: capability.status ?? "missing adapter", tone: "danger" };
+  }
+  if (capability.adapterConfigured && capability.adapterAvailable) return { label: capability.status ?? "available", tone: "good" };
+  if (capability.adapterAvailable === false || capability.adapterAvailable) {
+    return { label: capability.status ?? "not configured", tone: "muted" };
+  }
+  return releaseReadinessTone(capability.status);
+}
+
+function managedPostgresCapabilityFields(capability: ManagedPostgresCapabilityStatus) {
+  const commandCount = Array.isArray(capability.backfillCommands)
+    ? `${capability.backfillCommands.length} commands`
+    : null;
+  const hints = Array.isArray(capability.configuredHintKeys)
+    ? capability.configuredHintKeys.join(" · ")
+    : null;
+  const entries: Array<[string, unknown]> = [
+    ["Phase", capability.phase],
+    ["Provider", capability.provider],
+    ["Adapter", capability.adapter],
+    ["Adapter configured", capability.adapterConfigured],
+    ["Adapter available", capability.adapterAvailable],
+    ["Backfill available", capability.backfillAvailable],
+    ["Managed hints", hints],
+    ["Sync runtime", capability.syncRuntimeGuarded ? "guarded" : capability.runtimeAllowed ? "allowed" : null],
+    ["Runtime allowed", capability.runtimeAllowed],
+    ["Backfill commands", commandCount],
+  ];
+
+  return entries.flatMap(([label, raw]) => {
+    const value = formatStorageTopologyValue(raw);
+    return value ? [{ label, value }] : [];
+  });
 }
 
 function AsyncStoreBoundarySection({ boundary }: { boundary: AsyncStoreBoundaryStatus | null | undefined }) {

@@ -31,6 +31,9 @@ test("local JSON development produces warnings instead of release blockers", () 
   assert.equal(report.asyncStoreBoundary.phase, "49");
   assert.equal(report.asyncStoreBoundary.foundationAvailable, true);
   assert.equal(report.asyncStoreBoundary.managedPostgresSupported, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseAdapterImplemented, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseBackfillAvailable, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
   assert.equal(report.asyncStoreBoundary.classification, "foundation-ready");
   assert.equal(checkStatus(report, "storage-topology"), "warn");
   assert.equal(checkStatus(report, "managed-database-topology"), "pass");
@@ -107,12 +110,49 @@ test("strict release with a managed database URL fails managed topology and runt
   assert.equal(report.asyncStoreBoundary.classification, "managed-postgres-unsupported");
   assert.equal(report.asyncStoreBoundary.managedDatabaseAdapterImplemented, false);
   assert.equal(report.asyncStoreBoundary.managedDatabaseRepositoriesImplemented, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseBackfillAvailable, false);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
   assert.equal(report.managedDatabaseRuntimeBoundary.classification, "managed-database-blocked");
   assert.ok(report.blockers.some((blocker) => /managed database topology/i.test(blocker)));
   assert.ok(report.blockers.some((blocker) => blocker.includes("runtime guard blocks startup")));
   assert.ok(report.blockers.some((blocker) => blocker.includes("managed Postgres remains unsupported")));
-  assert.ok(report.nextSteps.some((step) => step.includes("Remove managed database URL")));
-  assert.ok(report.nextSteps.some((step) => step.includes("real adapter and repositories")));
+  assert.ok(report.nextSteps.some((step) => step.includes("managed database URL environment variables")));
+  assert.ok(report.nextSteps.some((step) => step.includes("adapter, repositories")));
+});
+
+test("strict release with Phase 50 adapter config and managed URL reports async capability but blocks sync startup", () => {
+  const report = assessReleaseReadiness({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+      TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+      TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+      TASKLOOM_ACCESS_LOG_MODE: "stdout",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.managedDatabaseTopology.managedDatabase.phase50?.asyncAdapterAvailable, true);
+  assert.equal(report.managedDatabaseRuntimeGuard.phase50?.asyncAdapterAvailable, true);
+  assert.equal(report.managedDatabaseRuntimeGuard.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBoundary.allowed, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.classification, "managed-postgres-adapter-available-sync-blocked");
+  assert.equal(report.asyncStoreBoundary.managedDatabaseAdapterImplemented, true);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseBackfillAvailable, true);
+  assert.equal(report.asyncStoreBoundary.managedDatabaseSyncStartupSupported, false);
+  assert.equal(report.asyncStoreBoundary.managedPostgresSupported, false);
+  assert.equal(checkStatus(report, "managed-database-runtime-guard"), "fail");
+  assert.equal(checkStatus(report, "async-store-boundary"), "fail");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous app startup remains blocked")));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 50 async adapter/backfill evidence")));
+  assert.ok(report.summary.includes("blocked"));
 });
 
 test("strict release with TASKLOOM_STORE=postgres fails the managed database runtime boundary", () => {
@@ -137,7 +177,7 @@ test("strict release with TASKLOOM_STORE=postgres fails the managed database run
   assert.equal(checkStatus(report, "managed-database-runtime-boundary"), "fail");
   assert.equal(checkStatus(report, "async-store-boundary"), "fail");
   assert.ok(report.blockers.some((blocker) => blocker.includes("managed Postgres remains unsupported")));
-  assert.ok(report.nextSteps.some((step) => step.includes("managed database adapter")));
+  assert.ok(report.nextSteps.some((step) => step.includes("adapter, repositories")));
 });
 
 test("runtime guard bypass warns without blocking release when the managed topology is already accepted", () => {

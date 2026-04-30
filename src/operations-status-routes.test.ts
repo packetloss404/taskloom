@@ -75,6 +75,12 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(asyncStoreBoundary.foundationPresent, true);
   assert.equal(asyncStoreBoundary.managedDatabaseRuntimeAllowed, false);
   assert.equal(asyncStoreBoundary.managedDatabaseRuntimeBlocked, true);
+  assert.ok(body.managedPostgresCapability && typeof body.managedPostgresCapability === "object");
+  const managedPostgresCapability = body.managedPostgresCapability as Record<string, unknown>;
+  assert.equal(managedPostgresCapability.phase, "50");
+  assert.equal(managedPostgresCapability.provider, "postgres");
+  assert.equal(managedPostgresCapability.adapterAvailable, false);
+  assert.equal(managedPostgresCapability.backfillAvailable, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);

@@ -59,6 +59,7 @@ export interface ManagedDatabaseRuntimeBoundaryReport {
 
 export type AsyncStoreBoundaryClassification =
   | "foundation-ready"
+  | "managed-postgres-adapter-available-sync-blocked"
   | "managed-postgres-unsupported"
   | "multi-writer-unsupported"
   | "unsupported-store"
@@ -71,8 +72,10 @@ export interface AsyncStoreBoundaryReport {
   foundationAvailable: true;
   releaseAllowed: boolean;
   managedPostgresSupported: false;
-  managedDatabaseAdapterImplemented: false;
+  managedDatabaseAdapterImplemented: boolean;
   managedDatabaseRepositoriesImplemented: false;
+  managedDatabaseBackfillAvailable: boolean;
+  managedDatabaseSyncStartupSupported: false;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -226,10 +229,33 @@ function asyncBoundaryCheckStatus(
   return asyncStoreBoundary.status === "warn" ? "warn" : "pass";
 }
 
+function phase50ManagedDatabaseCapability(
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+): {
+  adapterConfigured: boolean;
+  adapterAvailable: boolean;
+  backfillAvailable: boolean;
+  adapter: string | null;
+} {
+  const topologyPhase50 = managedDatabaseTopology.managedDatabase.phase50;
+  const guardPhase50 = managedDatabaseRuntimeGuard.phase50;
+  return {
+    adapterConfigured: topologyPhase50?.asyncAdapterConfigured === true || guardPhase50?.asyncAdapterConfigured === true,
+    adapterAvailable: topologyPhase50?.asyncAdapterAvailable === true || guardPhase50?.asyncAdapterAvailable === true,
+    backfillAvailable: topologyPhase50?.backfillAvailable === true || guardPhase50?.backfillAvailable === true,
+    adapter: topologyPhase50?.adapter ?? guardPhase50?.adapter ?? null,
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
 ): ManagedDatabaseRuntimeBoundaryReport {
+  const phase50Capability = phase50ManagedDatabaseCapability(
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  );
   const managedDatabaseBlocked =
     managedDatabaseTopology.classification === "managed-database-requested" ||
     managedDatabaseRuntimeGuard.classification === "managed-database-blocked";
@@ -271,7 +297,11 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
   }
 
   if (managedDatabaseBlocked || unsupportedStore) {
-    nextSteps.add("Keep managed database rollout blocked until real managed database adapter and repository implementations land.");
+    if (phase50Capability.adapterAvailable) {
+      nextSteps.add("Use Phase 50 async adapter/backfill evidence for migration planning, while keeping synchronous managed startup blocked.");
+    } else {
+      nextSteps.add("Keep managed database rollout blocked until async adapter/backfill evidence and synchronous startup support are explicitly available.");
+    }
   }
   if (multiWriterBlocked) {
     nextSteps.add("Keep multi-writer or managed database topology out of strict release until the runtime boundary supports it.");
@@ -288,7 +318,9 @@ export function buildManagedDatabaseRuntimeBoundaryReport(
     : "fail";
   let summary: string;
   if (managedDatabaseBlocked || unsupportedStore) {
-    summary = "Phase 48 managed database runtime boundary blocks managed database storage until the real adapter and repositories land.";
+    summary = phase50Capability.adapterAvailable
+      ? "Phase 48 managed database runtime boundary still blocks synchronous managed startup even though Phase 50 async adapter/backfill capability is available."
+      : "Phase 48 managed database runtime boundary blocks managed database storage until managed startup support is explicitly available.";
   } else if (multiWriterBlocked) {
     summary = "Phase 48 managed database runtime boundary blocks multi-writer or managed topology until runtime support exists.";
   } else if (bypassed) {
@@ -318,6 +350,10 @@ export function buildAsyncStoreBoundaryReport(
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseRuntimeBoundary: ManagedDatabaseRuntimeBoundaryReport,
 ): AsyncStoreBoundaryReport {
+  const phase50Capability = phase50ManagedDatabaseCapability(
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  );
   const managedIntent =
     managedDatabaseTopology.managedDatabase.requested ||
     managedDatabaseTopology.managedDatabase.configured ||
@@ -354,6 +390,8 @@ export function buildAsyncStoreBoundaryReport(
   let classification: AsyncStoreBoundaryClassification;
   if (bypassed) {
     classification = "bypassed";
+  } else if (managedIntent && phase50Capability.adapterAvailable) {
+    classification = "managed-postgres-adapter-available-sync-blocked";
   } else if (managedIntent) {
     classification = "managed-postgres-unsupported";
   } else if (multiWriterIntent) {
@@ -366,9 +404,13 @@ export function buildAsyncStoreBoundaryReport(
     classification = "foundation-ready";
   }
 
-  nextSteps.add("Treat Phase 49 as async-store-boundary foundation only; do not enable managed Postgres until the real adapter and repositories land.");
+  nextSteps.add("Treat Phase 49 as async-store-boundary foundation and Phase 50 adapter/backfill evidence separately from synchronous startup support.");
   if (managedIntent || unsupportedStore) {
-    nextSteps.add("Keep managed Postgres rollout blocked until adapter, repositories, migrations/backfills, and parity tests are implemented.");
+    if (phase50Capability.adapterAvailable) {
+      nextSteps.add("Keep managed Postgres synchronous startup blocked until the app runtime support claim is explicitly updated.");
+    } else {
+      nextSteps.add("Keep managed Postgres rollout blocked until adapter, repositories, migrations/backfills, and parity tests are implemented.");
+    }
   }
   if (multiWriterIntent) {
     nextSteps.add("Keep multi-writer database topology blocked until managed runtime coordination exists.");
@@ -381,7 +423,9 @@ export function buildAsyncStoreBoundaryReport(
       : "pass"
     : "fail";
   let summary: string;
-  if (managedIntent || unsupportedStore) {
+  if (managedIntent && phase50Capability.adapterAvailable) {
+    summary = "Phase 50 async managed adapter/backfill capability is available, but synchronous app startup remains blocked and managed Postgres is not a full runtime support claim.";
+  } else if (managedIntent || unsupportedStore) {
     summary = "Phase 49 async-store boundary exists as foundation, but managed Postgres remains unsupported until real adapter and repository implementations land.";
   } else if (multiWriterIntent) {
     summary = "Phase 49 async-store boundary exists as foundation, but multi-writer database topology remains unsupported until managed runtime coordination lands.";
@@ -399,8 +443,10 @@ export function buildAsyncStoreBoundaryReport(
     foundationAvailable: true,
     releaseAllowed,
     managedPostgresSupported: false,
-    managedDatabaseAdapterImplemented: false,
+    managedDatabaseAdapterImplemented: phase50Capability.adapterAvailable,
     managedDatabaseRepositoriesImplemented: false,
+    managedDatabaseBackfillAvailable: phase50Capability.backfillAvailable,
+    managedDatabaseSyncStartupSupported: false,
     classification,
     summary,
     blockers,

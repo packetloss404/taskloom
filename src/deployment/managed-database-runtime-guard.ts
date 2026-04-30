@@ -14,6 +14,7 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_MANAGED_DATABASE_URL?: string;
   DATABASE_URL?: string;
   TASKLOOM_DATABASE_URL?: string;
+  TASKLOOM_MANAGED_DATABASE_ADAPTER?: string;
   TASKLOOM_DATABASE_TOPOLOGY?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
@@ -33,6 +34,7 @@ export interface ManagedDatabaseRuntimeGuardObservedConfig {
   managedDatabaseUrl: string | null;
   databaseUrl: string | null;
   taskloomDatabaseUrl: string | null;
+  managedDatabaseAdapter?: string | null;
   env: Record<string, ManagedDatabaseRuntimeGuardObservedEnvValue>;
 }
 
@@ -54,6 +56,13 @@ export interface ManagedDatabaseRuntimeGuardReport {
   warnings: string[];
   nextSteps: string[];
   observed: ManagedDatabaseRuntimeGuardObservedConfig;
+  phase50?: {
+    asyncAdapterConfigured: boolean;
+    asyncAdapterAvailable: boolean;
+    backfillAvailable: boolean;
+    adapter: string | null;
+    syncStartupSupported: false;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -80,6 +89,7 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MANAGED_DATABASE_URL",
   "DATABASE_URL",
   "TASKLOOM_DATABASE_URL",
+  "TASKLOOM_MANAGED_DATABASE_ADAPTER",
   "TASKLOOM_DATABASE_TOPOLOGY",
   BYPASS_ENV_KEY,
 ] as const;
@@ -96,6 +106,12 @@ const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
   "distributed",
   "multi-region",
   "multi-writer",
+]);
+const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
+  "postgres",
+  "postgresql",
+  "managed-postgres",
+  "managed-postgresql",
 ]);
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 
@@ -169,6 +185,19 @@ function managedDatabaseUrlConfigured(env: ManagedDatabaseRuntimeGuardEnv): bool
   );
 }
 
+function phase50AsyncAdapter(env: ManagedDatabaseRuntimeGuardEnv, urlConfigured: boolean) {
+  const adapter = normalize(env.TASKLOOM_MANAGED_DATABASE_ADAPTER);
+  const asyncAdapterConfigured = adapter.length > 0;
+  const asyncAdapterAvailable = urlConfigured && PHASE_50_MANAGED_DATABASE_ADAPTERS.has(adapter);
+  return {
+    asyncAdapterConfigured,
+    asyncAdapterAvailable,
+    backfillAvailable: asyncAdapterAvailable,
+    adapter: adapter || null,
+    syncStartupSupported: false as const,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -190,8 +219,8 @@ function buildNextSteps(checks: ManagedDatabaseRuntimeGuardCheck[], bypassEnable
       steps.add("Set TASKLOOM_STORE=json for local JSON storage or TASKLOOM_STORE=sqlite for single-node SQLite storage.");
     }
     if (check.id === "managed-database-runtime") {
-      steps.add("Remove managed database URL environment variables until an executable managed database runtime is implemented.");
-      steps.add("Treat managed database settings as an explicit Phase 48 runtime boundary, not as startup configuration.");
+      steps.add("Do not use managed database URL environment variables as synchronous app startup configuration.");
+      steps.add("Treat Phase 50 async adapter/backfill evidence separately from synchronous startup support.");
     }
     if (check.id === "single-writer-runtime") {
       steps.add("Keep Taskloom on local JSON or single-node SQLite until multi-writer runtime support exists.");
@@ -218,6 +247,7 @@ export function assessManagedDatabaseRuntimeGuard(
   const databaseTopology = normalize(env.TASKLOOM_DATABASE_TOPOLOGY);
   const bypassEnabled = normalize(env.TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS) === "true";
   const hasManagedDatabaseUrl = managedDatabaseUrlConfigured(env);
+  const phase50 = phase50AsyncAdapter(env, hasManagedDatabaseUrl);
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -239,7 +269,7 @@ export function assessManagedDatabaseRuntimeGuard(
       "supported-runtime-store",
       "fail",
       MANAGED_TOPOLOGY_HINTS.has(store)
-        ? `TASKLOOM_STORE=${store} crosses the Phase 48 managed database runtime boundary and has no executable adapter in this branch.`
+        ? `TASKLOOM_STORE=${store} crosses the synchronous managed database runtime boundary; Phase 50 async adapter availability does not make the sync app startup path supported.`
         : `TASKLOOM_STORE=${store} is not a supported Phase 46 runtime storage mode.`,
     );
   }
@@ -249,7 +279,9 @@ export function assessManagedDatabaseRuntimeGuard(
     "managed-database-runtime",
     hasManagedIntent ? "fail" : "pass",
     hasManagedIntent
-      ? "Managed database runtime intent was detected, but Taskloom has an explicit Phase 48 runtime boundary and no executable managed database adapter yet."
+      ? phase50.asyncAdapterAvailable
+        ? "Managed database runtime intent was detected and Phase 50 async adapter/backfill capability is configured, but synchronous app startup remains blocked."
+        : "Managed database runtime intent was detected, but Taskloom's synchronous app runtime still has no supported managed database startup path."
       : "No managed database URL or managed database runtime hint was detected.",
   );
 
@@ -269,7 +301,12 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(`TASKLOOM_DB_PATH is not set; SQLite will use the default local path ${DEFAULT_SQLITE_PATH}.`);
   }
   if (hasManagedDatabaseUrl) {
-    warnings.push("Managed database URL values were redacted and are blocked at the explicit managed database runtime boundary.");
+    warnings.push("Managed database URL values were redacted and are blocked as synchronous app startup configuration.");
+  }
+  if (phase50.asyncAdapterAvailable) {
+    warnings.push("Phase 50 async managed adapter/backfill capability is available for evidence, but the synchronous app runtime remains blocked for managed startup.");
+  } else if (phase50.asyncAdapterConfigured) {
+    warnings.push("TASKLOOM_MANAGED_DATABASE_ADAPTER is configured, but Phase 50 adapter availability also requires a recognized postgres adapter value and managed database URL.");
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -321,8 +358,10 @@ export function assessManagedDatabaseRuntimeGuard(
       managedDatabaseUrl: observedEnv.TASKLOOM_MANAGED_DATABASE_URL.value,
       databaseUrl: observedEnv.DATABASE_URL.value,
       taskloomDatabaseUrl: observedEnv.TASKLOOM_DATABASE_URL.value,
+      managedDatabaseAdapter: phase50.adapter,
       env: observedEnv,
     },
+    phase50,
   };
 }
 

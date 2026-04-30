@@ -26,6 +26,9 @@ test("local JSON runtime is allowed by default", () => {
   assert.equal(report.classification, "local-json");
   assert.equal(report.observed.store, "json");
   assert.equal(report.observed.dbPath, null);
+  assert.equal(report.phase50?.asyncAdapterAvailable, false);
+  assert.equal(report.phase50?.backfillAvailable, false);
+  assert.equal(report.phase50?.syncStartupSupported, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("local JSON"));
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
@@ -44,6 +47,7 @@ test("single-node SQLite runtime is allowed", () => {
   assert.equal(report.observed.store, "sqlite");
   assert.equal(report.observed.dbPath, "/srv/taskloom/taskloom.sqlite");
   assert.equal(report.observed.databaseTopology, "single-node-sqlite");
+  assert.equal(report.phase50?.asyncAdapterConfigured, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("single-node SQLite"));
 });
@@ -67,7 +71,40 @@ test("managed database URL is redacted and blocked", () => {
   assert.equal(report.observed.databaseUrl, "[redacted]");
   assert.ok(report.blockers.some((blocker) => blocker.includes("Managed database runtime intent")));
   assert.ok(report.warnings.some((warning) => warning.includes("redacted")));
-  assert.ok(report.nextSteps.some((step) => step.includes("explicit Phase 48 runtime boundary")));
+  assert.ok(report.nextSteps.some((step) => step.includes("synchronous app startup configuration")));
+});
+
+test("Phase 50 async postgres adapter and managed URL report capability while blocking sync startup", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+  });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-blocked");
+  assert.equal(report.phase50?.asyncAdapterConfigured, true);
+  assert.equal(report.phase50?.asyncAdapterAvailable, true);
+  assert.equal(report.phase50?.backfillAvailable, true);
+  assert.equal(report.phase50?.syncStartupSupported, false);
+  assert.equal(report.phase50?.adapter, "postgres");
+  assert.equal(report.observed.managedDatabaseAdapter, "postgres");
+  assert.ok(report.summary.includes("blocked unsupported managed database"));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous app startup remains blocked")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 50 async managed adapter/backfill capability")));
+  assert.throws(
+    () =>
+      assertManagedDatabaseRuntimeSupported({
+        TASKLOOM_STORE: "sqlite",
+        TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+        TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      }),
+    ManagedDatabaseRuntimeGuardError,
+  );
 });
 
 test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () => {
@@ -82,9 +119,9 @@ test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () =>
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-database-blocked");
   assert.equal(report.observed.store, "postgres");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 48 managed database runtime boundary")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("no executable adapter")));
-  assert.ok(report.nextSteps.some((step) => step.includes("explicit Phase 48 runtime boundary")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous managed database runtime boundary")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("sync app startup path supported")));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 50 async adapter/backfill evidence")));
   assert.throws(
     () =>
       assertManagedDatabaseRuntimeSupported({
@@ -106,7 +143,7 @@ test("TASKLOOM_STORE=managed is blocked at the managed runtime boundary", () => 
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-database-blocked");
   assert.equal(report.observed.store, "managed");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("no executable adapter")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("sync app startup path supported")));
 });
 
 test("managed URL hints are redacted and block strict startup", () => {
@@ -128,7 +165,7 @@ test("managed URL hints are redacted and block strict startup", () => {
   assert.equal(managedUrl.redacted, true);
   assert.equal(taskloomDatabaseUrl.value, "[redacted]");
   assert.equal(taskloomDatabaseUrl.redacted, true);
-  assert.ok(report.warnings.some((warning) => warning.includes("explicit managed database runtime boundary")));
+  assert.ok(report.warnings.some((warning) => warning.includes("synchronous app startup configuration")));
   assert.throws(
     () =>
       assertManagedDatabaseRuntimeSupported({

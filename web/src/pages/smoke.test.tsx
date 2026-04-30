@@ -171,6 +171,11 @@ test("Operations surface renders the Production Status tile for admin sessions",
   assert.match(operations, /ASYNC STORE BOUNDARY/);
   assert.match(operations, /Foundation present/);
   assert.match(operations, /Managed DB runtime/);
+  assert.match(operations, /managedPostgresCapability/);
+  assert.match(operations, /Managed Postgres capability/);
+  assert.match(operations, /MANAGED POSTGRES CAPABILITY/);
+  assert.match(operations, /Adapter configured/);
+  assert.match(operations, /Sync runtime/);
   assert.match(operations, /releaseReadiness/);
   assert.match(operations, /Release readiness/);
   assert.match(operations, /releaseEvidence/);

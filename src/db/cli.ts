@@ -14,7 +14,9 @@ import { sqliteProviderCallsRepository } from "../repositories/provider-calls-re
 import type { ActivationSignalRecord, ActivityRecord, AgentRunLogEntry, AgentRunRecord, AgentRunStatus, AgentRunStep, AgentRunToolCall, AgentTriggerKind, AlertEventRecord, InvitationEmailDeliveryMode, InvitationEmailDeliveryRecord, InvitationEmailDeliveryStatus, JobMetricSnapshotRecord, JobRecord, JobStatus, ProviderCallRecord } from "../taskloom-store";
 import {
   createSeedStore,
+  loadStoreAsync,
   loadSqliteAppData,
+  mutateStoreAsync,
   normalizeStore,
   persistSqliteAppData,
   resetLocalStore,
@@ -79,6 +81,73 @@ export interface AppDataResult {
 export interface ResetResult {
   command: "reset-db" | "reset-store" | "seed-store";
   path: string;
+}
+
+export type ManagedPostgresSource = "json" | "sqlite" | "seed";
+
+export interface ManagedPostgresOptions extends DbCliOptions {
+  dryRun?: boolean;
+  source?: ManagedPostgresSource;
+}
+
+export interface ManagedPostgresStoreStats {
+  records: number;
+  collections: Record<string, number>;
+}
+
+export interface ManagedPostgresStoreComparison {
+  sourceOnly: number;
+  targetOnly: number;
+  contentDrift: number;
+  matched: number;
+}
+
+export interface ManagedPostgresSourceResult {
+  source: ManagedPostgresSource;
+  sourcePath?: string;
+  data: TaskloomData;
+}
+
+export interface BackfillManagedPostgresResult {
+  command: "backfill-managed-postgres";
+  dryRun: boolean;
+  source: ManagedPostgresSource;
+  sourcePath?: string;
+  target: "managed-postgres";
+  sourceRecords: number;
+  targetRecordsBefore: number;
+  wouldWriteRecords: number;
+  writtenRecords: number;
+  sourceOnly: number;
+  targetOnly: number;
+  contentDrift: number;
+  matched: number;
+  sourceCounts: Record<string, number>;
+  targetCountsBefore: Record<string, number>;
+  targetCountsAfter?: Record<string, number>;
+}
+
+export interface VerifyManagedPostgresResult {
+  command: "verify-managed-postgres";
+  source: ManagedPostgresSource;
+  sourcePath?: string;
+  target: "managed-postgres";
+  sourceRecords: number;
+  targetRecords: number;
+  sourceOnly: number;
+  targetOnly: number;
+  contentDrift: number;
+  matched: number;
+  sourceCounts: Record<string, number>;
+  targetCounts: Record<string, number>;
+}
+
+export interface ManagedPostgresDocumentStoreDeps {
+  loadTargetStore?: () => Promise<TaskloomData>;
+  mutateTargetStore?: <T>(mutator: (data: TaskloomData) => T | Promise<T>) => Promise<T>;
+  loadJsonSource?: (jsonPath: string) => TaskloomData;
+  loadSqliteSource?: (dbPath: string) => TaskloomData | null;
+  createSeedSource?: () => TaskloomData;
 }
 
 export interface BackfillJobMetricSnapshotsResult {
@@ -548,6 +617,269 @@ export function seedLocalStore(): ResetResult {
 export function resetLocalDataStore(): ResetResult {
   resetLocalStore();
   return { command: "reset-store", path: resolve(process.cwd(), "data", "taskloom.json") };
+}
+
+const STORE_COMPARISON_COLLECTIONS = [
+  "users",
+  "sessions",
+  "rateLimits",
+  "workspaces",
+  "memberships",
+  "workspaceInvitations",
+  "invitationEmailDeliveries",
+  "workspaceBriefs",
+  "workspaceBriefVersions",
+  "requirements",
+  "implementationPlanItems",
+  "workflowConcerns",
+  "validationEvidence",
+  "releaseConfirmations",
+  "onboardingStates",
+  "activities",
+  "activationSignals",
+  "agents",
+  "providers",
+  "agentRuns",
+  "workspaceEnvVars",
+  "apiKeys",
+  "providerCalls",
+  "jobs",
+  "jobMetricSnapshots",
+  "alertEvents",
+  "shareTokens",
+  "activationFacts",
+  "activationMilestones",
+  "activationReadModels",
+] as const satisfies readonly (keyof TaskloomData)[];
+
+export async function backfillManagedPostgres(
+  options: ManagedPostgresOptions = {},
+  deps: ManagedPostgresDocumentStoreDeps = {},
+): Promise<BackfillManagedPostgresResult> {
+  const dryRun = options.dryRun ?? false;
+  const source = loadManagedPostgresSource(options, deps);
+  const loadTargetStore = deps.loadTargetStore ?? loadManagedPostgresTargetStore;
+  const mutateTargetStore = deps.mutateTargetStore ?? mutateManagedPostgresTargetStore;
+  const targetBefore = normalizeStore(await loadTargetStore());
+  const sourceStats = managedPostgresStoreStats(source.data);
+  const targetBeforeStats = managedPostgresStoreStats(targetBefore);
+  const comparison = compareManagedPostgresStores(source.data, targetBefore);
+  const wouldWriteRecords = comparison.sourceOnly > 0 || comparison.targetOnly > 0 || comparison.contentDrift > 0
+    ? sourceStats.records
+    : 0;
+
+  let writtenRecords = 0;
+  let targetCountsAfter: Record<string, number> | undefined;
+  if (!dryRun && wouldWriteRecords > 0) {
+    await mutateTargetStore((target) => {
+      replaceManagedPostgresStoreData(target, source.data);
+    });
+    writtenRecords = sourceStats.records;
+    targetCountsAfter = managedPostgresStoreStats(normalizeStore(await loadTargetStore())).collections;
+  }
+
+  return {
+    command: "backfill-managed-postgres",
+    dryRun,
+    source: source.source,
+    ...(source.sourcePath ? { sourcePath: source.sourcePath } : {}),
+    target: "managed-postgres",
+    sourceRecords: sourceStats.records,
+    targetRecordsBefore: targetBeforeStats.records,
+    wouldWriteRecords,
+    writtenRecords,
+    sourceOnly: comparison.sourceOnly,
+    targetOnly: comparison.targetOnly,
+    contentDrift: comparison.contentDrift,
+    matched: comparison.matched,
+    sourceCounts: sourceStats.collections,
+    targetCountsBefore: targetBeforeStats.collections,
+    ...(targetCountsAfter ? { targetCountsAfter } : {}),
+  };
+}
+
+export async function verifyManagedPostgres(
+  options: ManagedPostgresOptions = {},
+  deps: ManagedPostgresDocumentStoreDeps = {},
+): Promise<VerifyManagedPostgresResult> {
+  const source = loadManagedPostgresSource(options, deps);
+  const target = normalizeStore(await (deps.loadTargetStore ?? loadManagedPostgresTargetStore)());
+  const sourceStats = managedPostgresStoreStats(source.data);
+  const targetStats = managedPostgresStoreStats(target);
+  const comparison = compareManagedPostgresStores(source.data, target);
+
+  return {
+    command: "verify-managed-postgres",
+    source: source.source,
+    ...(source.sourcePath ? { sourcePath: source.sourcePath } : {}),
+    target: "managed-postgres",
+    sourceRecords: sourceStats.records,
+    targetRecords: targetStats.records,
+    sourceOnly: comparison.sourceOnly,
+    targetOnly: comparison.targetOnly,
+    contentDrift: comparison.contentDrift,
+    matched: comparison.matched,
+    sourceCounts: sourceStats.collections,
+    targetCounts: targetStats.collections,
+  };
+}
+
+export function loadManagedPostgresSource(
+  options: ManagedPostgresOptions = {},
+  deps: ManagedPostgresDocumentStoreDeps = {},
+): ManagedPostgresSourceResult {
+  const requestedSource = options.source ?? (options.dbPath ? "sqlite" : "json");
+  const createSeedSource = deps.createSeedSource ?? createSeedStore;
+
+  if (requestedSource === "seed") {
+    return { source: "seed", data: normalizeStore(createSeedSource()) };
+  }
+
+  if (requestedSource === "sqlite") {
+    const dbPath = options.dbPath ?? DEFAULT_DB_PATH;
+    const data = (deps.loadSqliteSource ?? loadSqliteAppData)(dbPath);
+    if (!data) throw new Error(`sqlite source has no app data: ${dbPath}`);
+    return { source: "sqlite", sourcePath: dbPath, data: normalizeStore(data) };
+  }
+
+  const jsonPath = options.jsonPath ?? DEFAULT_JSON_PATH;
+  if (!existsSync(jsonPath) && !deps.loadJsonSource) {
+    return { source: "seed", data: normalizeStore(createSeedSource()) };
+  }
+  const data = deps.loadJsonSource
+    ? deps.loadJsonSource(jsonPath)
+    : normalizeStore(JSON.parse(readFileSync(jsonPath, "utf8")) as Partial<TaskloomData>);
+  return { source: "json", sourcePath: jsonPath, data: normalizeStore(data) };
+}
+
+async function loadManagedPostgresTargetStore(): Promise<TaskloomData> {
+  return withManagedPostgresTargetEnv(() => loadStoreAsync());
+}
+
+async function mutateManagedPostgresTargetStore<T>(
+  mutator: (data: TaskloomData) => T | Promise<T>,
+): Promise<T> {
+  return withManagedPostgresTargetEnv(() => mutateStoreAsync(mutator));
+}
+
+async function withManagedPostgresTargetEnv<T>(run: () => Promise<T>): Promise<T> {
+  if (hasManagedPostgresTargetHint()) return run();
+
+  const previousStore = process.env.TASKLOOM_STORE;
+  process.env.TASKLOOM_STORE = "postgres";
+  try {
+    return await run();
+  } finally {
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+  }
+}
+
+function hasManagedPostgresTargetHint(env: NodeJS.ProcessEnv = process.env): boolean {
+  const requestedStore = (env.TASKLOOM_STORE ?? "").trim().toLowerCase();
+  return requestedStore === "managed"
+    || requestedStore === "managed-db"
+    || requestedStore === "managed-database"
+    || requestedStore === "postgres"
+    || requestedStore === "postgresql"
+    || Boolean((env.DATABASE_URL ?? "").trim())
+    || Boolean((env.TASKLOOM_DATABASE_URL ?? "").trim())
+    || Boolean((env.TASKLOOM_MANAGED_DATABASE_URL ?? "").trim());
+}
+
+export function managedPostgresStoreStats(data: TaskloomData): ManagedPostgresStoreStats {
+  const normalized = normalizeStore(data);
+  const collections: Record<string, number> = {};
+  let records = 0;
+  for (const collection of STORE_COMPARISON_COLLECTIONS) {
+    const count = collectionEntries(collection, normalized[collection]).length;
+    collections[collection] = count;
+    records += count;
+  }
+  return { records, collections };
+}
+
+export function compareManagedPostgresStores(
+  sourceData: TaskloomData,
+  targetData: TaskloomData,
+): ManagedPostgresStoreComparison {
+  const source = comparableStoreEntries(normalizeStore(sourceData));
+  const target = comparableStoreEntries(normalizeStore(targetData));
+  let sourceOnly = 0;
+  let targetOnly = 0;
+  let contentDrift = 0;
+  let matched = 0;
+
+  for (const [key, sourceValue] of source) {
+    const targetValue = target.get(key);
+    if (targetValue === undefined) {
+      sourceOnly += 1;
+      continue;
+    }
+    if (sourceValue === targetValue) matched += 1;
+    else contentDrift += 1;
+  }
+
+  for (const key of target.keys()) {
+    if (!source.has(key)) targetOnly += 1;
+  }
+
+  return { sourceOnly, targetOnly, contentDrift, matched };
+}
+
+function replaceManagedPostgresStoreData(target: TaskloomData, source: TaskloomData): void {
+  const normalized = normalizeStore(source);
+  for (const collection of STORE_COMPARISON_COLLECTIONS) {
+    target[collection] = normalized[collection] as never;
+  }
+}
+
+function comparableStoreEntries(data: TaskloomData): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const collection of STORE_COMPARISON_COLLECTIONS) {
+    for (const [id, value] of collectionEntries(collection, data[collection])) {
+      entries.set(`${collection}:${id}`, stableStringify(value));
+    }
+  }
+  return entries;
+}
+
+function collectionEntries(collection: keyof TaskloomData, value: unknown): Array<[string, unknown]> {
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => [recordComparisonId(collection, entry, index), entry]);
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>);
+  }
+  return [];
+}
+
+function recordComparisonId(collection: keyof TaskloomData, value: unknown, index: number): string {
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.id === "string") return record.id;
+    if (collection === "memberships" && typeof record.workspaceId === "string" && typeof record.userId === "string") {
+      return `${record.workspaceId}:${record.userId}`;
+    }
+    if (typeof record.workspaceId === "string") return record.workspaceId;
+  }
+  return `${index}:${stableStringify(value)}`;
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableValue(entry)]),
+    );
+  }
+  return value;
 }
 
 export function backfillJobMetricSnapshots(options: BackfillJobMetricSnapshotsOptions = {}): BackfillJobMetricSnapshotsResult {
@@ -2031,6 +2363,15 @@ export async function runDbCli(argv = process.argv.slice(2)): Promise<number> {
       console.log(JSON.stringify(backfillAppDatabase(options), null, 2));
       return 0;
     }
+    if (command === "backfill-managed-postgres") {
+      const dryRun = args.includes("--dry-run");
+      console.log(JSON.stringify(await backfillManagedPostgres({ ...options, dryRun, source: parseManagedPostgresSource(args) }), null, 2));
+      return 0;
+    }
+    if (command === "verify-managed-postgres") {
+      console.log(JSON.stringify(await verifyManagedPostgres({ ...options, source: parseManagedPostgresSource(args) }), null, 2));
+      return 0;
+    }
     if (command === "reset-db") {
       console.log(JSON.stringify(resetDatabase(options), null, 2));
       return 0;
@@ -2146,8 +2487,16 @@ function readOption(args: string[], prefix: string): string | undefined {
   return value || undefined;
 }
 
+function parseManagedPostgresSource(args: string[]): ManagedPostgresSource | undefined {
+  const rawSource = readOption(args, "--source=");
+  if (!rawSource) return undefined;
+  if (rawSource === "default") return "seed";
+  if (rawSource === "json" || rawSource === "sqlite" || rawSource === "seed") return rawSource;
+  throw new Error(`unsupported managed Postgres source: ${rawSource}`);
+}
+
 function writeUsage(): void {
-  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries|backfill-activities|verify-activities|backfill-provider-calls|verify-provider-calls|backfill-activation-signals|verify-activation-signals> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--dry-run] [--check-orphans]");
+  console.error("Usage: node --import tsx src/db/cli.ts <migrate|status|backup|restore|seed-db|seed-app|backfill|backfill-managed-postgres|verify-managed-postgres|reset-db|reset-app|seed-store|reset-store|backfill-job-metric-snapshots|verify-job-metric-snapshots|backfill-alert-events|verify-alert-events|backfill-agent-runs|verify-agent-runs|backfill-jobs|verify-jobs|backfill-invitation-email-deliveries|verify-invitation-email-deliveries|backfill-activities|verify-activities|backfill-provider-calls|verify-provider-calls|backfill-activation-signals|verify-activation-signals> [--db-path=data/taskloom.sqlite] [--json-path=data/taskloom.json] [--backup-path=data/taskloom.sqlite.bak] [--source=json|sqlite|seed] [--dry-run] [--check-orphans]");
 }
 
 function isExecutedDirectly(): boolean {

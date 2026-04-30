@@ -1,6 +1,6 @@
 # Deployment Managed Database Runtime Guard
 
-Phase 46 adds managed database runtime guardrails for startup and release automation. Phase 48 adds the matching managed database runtime boundary/foundation inside the synchronous app-store path. Phase 49 lands the async store boundary foundation for the next managed-database implementation step. Together they keep the current Taskloom runtime inside the supported local JSON/default and single-node SQLite modes, and they block managed database or multi-writer hints before they can be mistaken for implemented runtime support.
+Phase 46 adds managed database runtime guardrails for startup and release automation. Phase 48 adds the matching managed database runtime boundary/foundation inside the synchronous app-store path. Phase 49 lands the async store boundary foundation, and Phase 50 lands the managed Postgres document-store adapter/backfill foundation. The main app sync startup path still runs this guard before serving traffic, so managed/Postgres hints remain blocked as startup configuration until Phase 51+ migrates runtime call sites.
 
 Run the default guard before startup or handoff automation:
 
@@ -33,12 +33,13 @@ The guard treats these environment values as runtime intent:
 - `TASKLOOM_MANAGED_DATABASE_URL`: a deployment-owned managed database URL hint. This is blocked because Taskloom does not yet implement a managed database runtime adapter.
 - `DATABASE_URL`: common platform database URL hint. This is blocked for the same reason.
 - `TASKLOOM_DATABASE_URL`: Taskloom-specific database URL hint. This is blocked for the same reason.
+- `TASKLOOM_MANAGED_DATABASE_ADAPTER`: Phase 50 adapter hint. Recognized Postgres values include `postgres`, `postgresql`, `managed-postgres`, and `managed-postgresql`; this reports async adapter/backfill evidence but does not make synchronous startup supported.
 - `TASKLOOM_DATABASE_TOPOLOGY`: topology intent. Managed database, production cluster, distributed, multi-region, active/active, or multi-writer values are blocked.
 - `TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS`: break-glass/dev-only bypass for controlled experiments.
 
 URL-like values must be treated as secrets in surrounding automation. The guard exists to reject unsupported runtime intent, not to validate credentials, provision databases, migrate data, or test connectivity.
 
-The Phase 48 store boundary uses the same intent shape inside the current synchronous `loadStore()` / `mutateStore()` backend selection. Managed/Postgres store modes (`managed`, `managed-db`, `managed-database`, `postgres`, `postgresql`) and managed database URL hints are recognized as managed intent and rejected with the sync-adapter gap. Phase 49 then adds the `loadStoreAsync()` / `mutateStoreAsync()` boundary foundation that a real managed Postgres adapter can build on; the async managed-database backend still rejects managed/Postgres hints with the same boundary error. This still leaves managed database I/O, transactions, pooling, repositories, migrations, backfills, and release support for a later implementation phase.
+The Phase 48 store boundary uses the same intent shape inside the current synchronous `loadStore()` / `mutateStore()` backend selection. Managed/Postgres store modes (`managed`, `managed-db`, `managed-database`, `postgres`, `postgresql`) and managed database URL hints are recognized as managed intent and rejected with the sync-adapter gap. Phase 49 then adds the `loadStoreAsync()` / `mutateStoreAsync()` boundary foundation. Phase 50 adds a managed Postgres document-store adapter behind that async boundary plus `npm run db:backfill-managed-postgres` and `npm run db:verify-managed-postgres`, but the Hono server startup still calls the runtime guard before startup completes. This leaves Phase 51+ to migrate app runtime call sites to the async/managed database path before managed/Postgres hints can become supported startup configuration.
 
 ## What It Blocks
 
@@ -49,7 +50,7 @@ The guard blocks:
 - Multi-writer or managed topology hints through `TASKLOOM_DATABASE_TOPOLOGY`.
 - Production/release automation that would otherwise start Taskloom while implying managed Postgres, distributed SQLite, regional failover, PITR, active/active writes, or multi-writer support.
 
-This is a runtime guardrail and boundary foundation, not a managed database feature. Phase 49 does not add managed Postgres runtime support, a managed Postgres adapter, managed database repositories/backfills, distributed SQLite, failover, PITR, active/active writes, or multi-writer support.
+This is a runtime guardrail and boundary foundation. Phase 50 lands the managed Postgres adapter/backfill foundation, but the main app sync startup path remains guarded. It does not add distributed SQLite, failover, PITR, active/active writes, or multi-writer support.
 
 ## Bypass Policy
 
@@ -57,12 +58,12 @@ This is a runtime guardrail and boundary foundation, not a managed database feat
 
 Do not set the bypass in production, release handoff, CI gates that certify production readiness, or customer-facing environments. The bypass does not turn on managed database support, does not make unsupported stores safe, and must not be used as evidence that managed Postgres or multi-writer runtime support exists.
 
-## Relationship To Phases 42-49
+## Relationship To Phases 42-50
 
 Phase 42 reports the current storage posture. Phase 43 gates release readiness over storage, backup/restore, and persistent paths. Phase 44 packages redacted readiness/topology/environment evidence for handoff. Phase 45 documents managed database topology intent and implementation gaps as an advisory.
 
-Phase 46 is the runtime guard layer: it blocks unsupported managed database and multi-writer hints before startup or release automation proceeds. Phase 47 integrates the guard result into the Phase 43 release-readiness gate and the Phase 44 release evidence bundle, so blocked/advisory managed database findings travel with the handoff evidence. Phase 48 adds the in-runtime managed database boundary/foundation by making the synchronous store path fail closed when managed/Postgres hints are present. Phase 49 lands the async store boundary foundation for the next implementation step. It still does not provide managed Postgres runtime support.
+Phase 46 is the runtime guard layer: it blocks unsupported managed database and multi-writer hints before startup or release automation proceeds. Phase 47 integrates the guard result into the Phase 43 release-readiness gate and the Phase 44 release evidence bundle, so blocked/advisory managed database findings travel with the handoff evidence. Phase 48 adds the in-runtime managed database boundary/foundation by making the synchronous store path fail closed when managed/Postgres hints are present. Phase 49 lands the async store boundary foundation. Phase 50 lands the managed Postgres adapter/backfill foundation, while the main app startup path remains guarded.
 
-After Phase 47, release handoffs include the managed database advisory and guard findings. After Phase 48, the store runtime also has the boundary needed to prevent accidental managed database startup. After Phase 49, the next recommended storage phase is Phase 50: actual managed Postgres adapter/repositories/backfills, with multi-writer topology only if horizontal writers or regional failover become requirements.
+After Phase 47, release handoffs include the managed database advisory and guard findings. After Phase 48, the store runtime also has the boundary needed to prevent accidental managed database startup. After Phase 49, async store boundaries exist. After Phase 50, the managed Postgres adapter/backfill foundation is documented as landed, but Phase 51+ still needs to move runtime call sites before the startup guard can allow managed/Postgres hints. Multi-writer topology remains separate and only needed if horizontal writers or regional failover become requirements.
 
 Use `docs/deployment-storage-topology.md` for the Phase 42 posture report, `docs/deployment-release-readiness.md` for release gates, `docs/deployment-release-evidence.md` for handoff bundles, `docs/deployment-managed-database-topology.md` for managed database planning, and `docs/deployment-sqlite-topology.md` for SQLite-specific limits.

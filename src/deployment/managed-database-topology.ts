@@ -13,6 +13,7 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_MANAGED_DATABASE_URL?: string;
   DATABASE_URL?: string;
   TASKLOOM_DATABASE_URL?: string;
+  TASKLOOM_MANAGED_DATABASE_ADAPTER?: string;
   TASKLOOM_DATABASE_TOPOLOGY?: string;
 }
 
@@ -31,6 +32,7 @@ export interface ManagedDatabaseTopologyObservedConfig {
   managedDatabaseUrl: string | null;
   databaseUrl: string | null;
   taskloomDatabaseUrl: string | null;
+  managedDatabaseAdapter?: string | null;
   env: Record<string, ManagedDatabaseTopologyObservedEnvValue>;
 }
 
@@ -55,6 +57,13 @@ export interface ManagedDatabaseTopologyReport {
     requested: boolean;
     configured: boolean;
     supported: false;
+    syncStartupSupported?: false;
+    phase50?: {
+      asyncAdapterConfigured: boolean;
+      asyncAdapterAvailable: boolean;
+      backfillAvailable: boolean;
+      adapter: string | null;
+    };
   };
 }
 
@@ -74,6 +83,7 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MANAGED_DATABASE_URL",
   "DATABASE_URL",
   "TASKLOOM_DATABASE_URL",
+  "TASKLOOM_MANAGED_DATABASE_ADAPTER",
   "TASKLOOM_DATABASE_TOPOLOGY",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -95,6 +105,12 @@ const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
   "multi-writer",
   "production",
   "cluster",
+]);
+const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
+  "postgres",
+  "postgresql",
+  "managed-postgres",
+  "managed-postgresql",
 ]);
 const SECRET_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 
@@ -172,6 +188,18 @@ function managedDatabaseUrlConfigured(env: ManagedDatabaseTopologyEnv): boolean 
   );
 }
 
+function phase50AsyncAdapter(env: ManagedDatabaseTopologyEnv, urlConfigured: boolean) {
+  const adapter = normalize(env.TASKLOOM_MANAGED_DATABASE_ADAPTER);
+  const asyncAdapterConfigured = adapter.length > 0;
+  const asyncAdapterAvailable = urlConfigured && PHASE_50_MANAGED_DATABASE_ADAPTERS.has(adapter);
+  return {
+    asyncAdapterConfigured,
+    asyncAdapterAvailable,
+    backfillAvailable: asyncAdapterAvailable,
+    adapter: adapter || null,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -186,8 +214,8 @@ function buildNextSteps(checks: ManagedDatabaseTopologyCheck[]): string[] {
   for (const check of checks) {
     if (check.status === "pass") continue;
     if (check.id === "managed-database-runtime") {
-      steps.add("Keep TASKLOOM_STORE set to json or sqlite until an executable managed database adapter is implemented.");
-      steps.add("Treat managed database settings as an explicit Phase 48 runtime boundary, not as startup configuration.");
+      steps.add("Keep TASKLOOM_STORE set to json or sqlite for the synchronous app runtime until managed startup is explicitly supported.");
+      steps.add("Treat Phase 50 async adapter/backfill evidence separately from synchronous startup support.");
     }
     if (check.id === "production-topology") {
       steps.add("Use this Phase 45 report as advisory evidence only; do not treat local JSON or SQLite as a managed production database topology.");
@@ -217,6 +245,7 @@ export function assessManagedDatabaseTopology(
   const isProductionEnv = nodeEnv === "production";
   const databaseTopology = normalize(env.TASKLOOM_DATABASE_TOPOLOGY);
   const hasManagedDatabaseUrl = managedDatabaseUrlConfigured(env);
+  const phase50 = phase50AsyncAdapter(env, hasManagedDatabaseUrl);
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -238,7 +267,7 @@ export function assessManagedDatabaseTopology(
       "supported-local-mode",
       "fail",
       MANAGED_TOPOLOGY_HINTS.has(store)
-        ? `TASKLOOM_STORE=${store} crosses the Phase 48 managed database runtime boundary and has no executable adapter in this branch.`
+        ? `TASKLOOM_STORE=${store} crosses the synchronous managed database runtime boundary; Phase 50 async adapter availability does not make the sync app startup path supported.`
         : `TASKLOOM_STORE=${store} is not a supported Phase 45 runtime storage mode.`,
     );
   }
@@ -248,7 +277,9 @@ export function assessManagedDatabaseTopology(
     "managed-database-runtime",
     hasManagedIntent ? "fail" : "pass",
     hasManagedIntent
-      ? "A managed database topology is requested or configured, but Taskloom has an explicit Phase 48 runtime boundary and no executable managed database adapter yet."
+      ? phase50.asyncAdapterAvailable
+        ? "Managed database topology is requested and Phase 50 async adapter/backfill capability is configured, but synchronous app startup remains unsupported."
+        : "Managed database topology is requested or configured, but Taskloom's synchronous app runtime still has no supported managed database startup path."
       : "No managed database URL or managed database topology hint was detected.",
   );
 
@@ -279,7 +310,12 @@ export function assessManagedDatabaseTopology(
     warnings.push(`TASKLOOM_DB_PATH is not set; SQLite will use the default local path ${DEFAULT_SQLITE_PATH}.`);
   }
   if (hasManagedDatabaseUrl) {
-    warnings.push("Managed database URLs are captured only as redacted boundary evidence and are not used by runtime storage.");
+    warnings.push("Managed database URLs are captured as redacted evidence; they do not enable the synchronous app runtime.");
+  }
+  if (phase50.asyncAdapterAvailable) {
+    warnings.push("Phase 50 async managed adapter/backfill capability is available for handoff evidence, but synchronous startup support remains false.");
+  } else if (phase50.asyncAdapterConfigured) {
+    warnings.push("TASKLOOM_MANAGED_DATABASE_ADAPTER is configured, but Phase 50 adapter availability also requires a recognized postgres adapter value and managed database URL.");
   }
 
   const status = statusFromChecks(checks);
@@ -301,7 +337,9 @@ export function assessManagedDatabaseTopology(
       ? "Phase 45 managed database topology report found supported single-node SQLite posture and no managed database request."
       : "Phase 45 managed database topology report found supported local JSON posture and no managed database request."
     : hasManagedIntent
-      ? "Phase 45 managed database topology report found an explicit Phase 48 managed database runtime boundary; managed database startup is not implemented."
+      ? phase50.asyncAdapterAvailable
+        ? "Phase 45 managed database topology report found Phase 50 async adapter/backfill availability, while synchronous managed database startup remains unsupported."
+        : "Phase 45 managed database topology report found a managed database runtime boundary; synchronous managed database startup is not supported."
       : "Phase 45 managed database topology report found blockers for managed production database readiness.";
   const observedEnv = buildObservedEnv(env);
 
@@ -324,12 +362,15 @@ export function assessManagedDatabaseTopology(
       managedDatabaseUrl: observedEnv.TASKLOOM_MANAGED_DATABASE_URL.value,
       databaseUrl: observedEnv.DATABASE_URL.value,
       taskloomDatabaseUrl: observedEnv.TASKLOOM_DATABASE_URL.value,
+      managedDatabaseAdapter: phase50.adapter,
       env: observedEnv,
     },
     managedDatabase: {
       requested: hasManagedIntent || hasMultiWriterIntent,
       configured: hasManagedDatabaseUrl,
       supported: false,
+      syncStartupSupported: false,
+      phase50,
     },
   };
 }

@@ -7,8 +7,7 @@ import {
   clearStoreCacheForTests,
   loadStore,
   loadStoreAsync,
-  ManagedDatabaseStoreBoundaryError,
-  MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE,
+  ManagedPostgresStoreConfigurationError,
   mutateStore,
   mutateStoreAsync,
   resetStoreForTests,
@@ -75,49 +74,14 @@ test("JSON async load and mutate reuse the current store behavior", async () => 
   });
 });
 
-test("managed and Postgres hints reject through async store wrappers", async () => {
+test("managed and Postgres modes require a managed database URL for async wrappers", async () => {
   for (const storeMode of ["managed", "postgres", "postgresql"]) {
     await withStoreEnv({ TASKLOOM_STORE: storeMode }, async () => {
       await assert.rejects(
         loadStoreAsync(),
         (error) => {
-          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
-          assert.equal(error.storeMode, storeMode);
-          assert.ok(error.message.startsWith(MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE));
-          return true;
-        },
-      );
-      await assert.rejects(loadStoreAsync(), ManagedDatabaseStoreBoundaryError);
-
-      let mutatorRan = false;
-      await assert.rejects(
-        mutateStoreAsync(() => {
-          mutatorRan = true;
-          return "should-not-run";
-        }),
-        ManagedDatabaseStoreBoundaryError,
-      );
-      assert.equal(mutatorRan, false);
-    });
-  }
-});
-
-test("managed database URL hints reject through async store wrappers", async () => {
-  const url = "postgres://taskloom:secret@db.example.com/taskloom";
-  const cases: Array<Partial<Record<StoreEnvKey, string>>> = [
-    { DATABASE_URL: url },
-    { TASKLOOM_DATABASE_URL: url },
-    { TASKLOOM_MANAGED_DATABASE_URL: url },
-    { TASKLOOM_STORE: "sqlite", TASKLOOM_DB_PATH: join(tmpdir(), "taskloom-async-boundary.sqlite"), DATABASE_URL: url },
-  ];
-
-  for (const env of cases) {
-    await withStoreEnv(env, async () => {
-      await assert.rejects(
-        loadStoreAsync(),
-        (error) => {
-          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
-          assert.ok(error.message.startsWith(MANAGED_DATABASE_SYNC_ADAPTER_GAP_MESSAGE));
+          assert.ok(error instanceof ManagedPostgresStoreConfigurationError);
+          assert.match(error.message, /requires DATABASE_URL/);
           return true;
         },
       );
@@ -128,7 +92,7 @@ test("managed database URL hints reject through async store wrappers", async () 
           mutatorRan = true;
           return "should-not-run";
         }),
-        ManagedDatabaseStoreBoundaryError,
+        ManagedPostgresStoreConfigurationError,
       );
       assert.equal(mutatorRan, false);
     });

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { backfillActivationSignals, backfillActivities, backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillInvitationEmailDeliveries, backfillJobMetricSnapshots, backfillJobs, backfillProviderCalls, backupDatabase, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyActivationSignals, verifyActivities, verifyAgentRuns, verifyAlertEvents, verifyInvitationEmailDeliveries, verifyJobMetricSnapshots, verifyJobs, verifyProviderCalls } from "./cli";
-import type { ActivationSignalRecord, ActivityRecord, AgentRunRecord, AlertEventRecord, InvitationEmailDeliveryRecord, JobMetricSnapshotRecord, JobRecord, ProviderCallRecord } from "../taskloom-store";
+import { backfillActivationSignals, backfillActivities, backfillAgentRuns, backfillAlertEvents, backfillAppDatabase, backfillInvitationEmailDeliveries, backfillJobMetricSnapshots, backfillJobs, backfillManagedPostgres, backfillProviderCalls, backupDatabase, compareManagedPostgresStores, loadManagedPostgresSource, managedPostgresStoreStats, migrateDatabase, migrationStatus, readAppData, resetAppDatabase, resetDatabase, restoreDatabase, seedAppDatabase, seedDatabase, verifyActivationSignals, verifyActivities, verifyAgentRuns, verifyAlertEvents, verifyInvitationEmailDeliveries, verifyJobMetricSnapshots, verifyJobs, verifyManagedPostgres, verifyProviderCalls, type ManagedPostgresDocumentStoreDeps } from "./cli";
+import type { ActivationSignalRecord, ActivityRecord, AgentRunRecord, AlertEventRecord, InvitationEmailDeliveryRecord, JobMetricSnapshotRecord, JobRecord, ProviderCallRecord, TaskloomData } from "../taskloom-store";
 import { createSeedStore } from "../taskloom-store";
 
 const expectedMigrations = readdirSync(resolve(process.cwd(), "src", "db", "migrations"))
@@ -260,6 +260,140 @@ test("backfillAppDatabase reads a JSON store path into SQLite", () => {
     } finally {
       db.close();
     }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function managedPostgresDeps(target: TaskloomData): ManagedPostgresDocumentStoreDeps {
+  return {
+    async loadTargetStore() {
+      return structuredClone(target);
+    },
+    async mutateTargetStore(mutator) {
+      return mutator(target);
+    },
+  };
+}
+
+test("loadManagedPostgresSource falls back to the default seed when JSON is missing", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const result = loadManagedPostgresSource({ jsonPath: join(tempDir, "missing.json") });
+
+    assert.equal(result.source, "seed");
+    assert.equal(result.data.workspaces.some((workspace) => workspace.id === "alpha"), true);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("managed Postgres store comparison is order-insensitive and reports drift", () => {
+  const source = createSeedStore();
+  const target = structuredClone(source);
+  target.users = [...target.users].reverse();
+  target.workspaces[0] = { ...target.workspaces[0], name: "Drifted Workspace" };
+  target.shareTokens.push({
+    id: "share_extra",
+    workspaceId: "alpha",
+    token: "extra",
+    scope: "overview",
+    createdByUserId: "user_alpha",
+    readCount: 0,
+    createdAt: "2026-04-29T12:00:00.000Z",
+    expiresAt: "2026-05-29T12:00:00.000Z",
+  });
+
+  const stats = managedPostgresStoreStats(source);
+  const comparison = compareManagedPostgresStores(source, target);
+
+  assert.ok(stats.records > 0);
+  assert.equal(comparison.contentDrift, 1);
+  assert.equal(comparison.targetOnly, 1);
+  assert.equal(comparison.sourceOnly, 0);
+});
+
+test("backfillManagedPostgres dry-run reports differences without mutating the async target", async () => {
+  const source = createSeedStore();
+  const target = createSeedStore();
+  target.workspaces = [];
+
+  const result = await backfillManagedPostgres(
+    { dryRun: true, source: "json", jsonPath: "ignored.json" },
+    {
+      ...managedPostgresDeps(target),
+      loadJsonSource: () => source,
+    },
+  );
+
+  assert.equal(result.dryRun, true);
+  assert.equal(result.source, "json");
+  assert.equal(result.writtenRecords, 0);
+  assert.ok(result.wouldWriteRecords > 0);
+  assert.equal(target.workspaces.length, 0);
+});
+
+test("backfillManagedPostgres defaults to the managed async store boundary", async () => {
+  const envKeys = ["TASKLOOM_STORE", "DATABASE_URL", "TASKLOOM_DATABASE_URL", "TASKLOOM_MANAGED_DATABASE_URL"] as const;
+  const previous = new Map(envKeys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of envKeys) delete process.env[key];
+
+    await assert.rejects(
+      backfillManagedPostgres({ dryRun: true, source: "seed" }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.name, /Managed.*(?:Postgres|Database)/);
+        return true;
+      },
+    );
+    assert.equal(process.env.TASKLOOM_STORE, undefined);
+  } finally {
+    for (const key of envKeys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("backfillManagedPostgres writes JSON source data through the async target boundary", async () => {
+  const source = createSeedStore();
+  source.workspaces[0] = { ...source.workspaces[0], name: "Managed Backfill Workspace" };
+  const target = createSeedStore();
+
+  const result = await backfillManagedPostgres(
+    { source: "json", jsonPath: "ignored.json" },
+    {
+      ...managedPostgresDeps(target),
+      loadJsonSource: () => source,
+    },
+  );
+
+  assert.equal(result.writtenRecords, result.sourceRecords);
+  assert.equal(target.workspaces[0]?.name, "Managed Backfill Workspace");
+  assert.equal(result.targetCountsAfter?.workspaces, source.workspaces.length);
+});
+
+test("verifyManagedPostgres compares a SQLite hydrated source with the async target", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-db-"));
+  try {
+    const dbPath = join(tempDir, "taskloom.sqlite");
+    const source = createSeedStore();
+    seedAppDatabase({ dbPath }, source);
+    const target = structuredClone(source);
+
+    const result = await verifyManagedPostgres(
+      { dbPath, source: "sqlite" },
+      managedPostgresDeps(target),
+    );
+
+    assert.equal(result.source, "sqlite");
+    assert.equal(result.sourcePath, dbPath);
+    assert.equal(result.sourceOnly, 0);
+    assert.equal(result.targetOnly, 0);
+    assert.equal(result.contentDrift, 0);
+    assert.equal(result.matched, result.sourceRecords);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
