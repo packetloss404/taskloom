@@ -32,6 +32,38 @@ function fakeJob(type: string, status: JobRecord["status"], id: string): JobReco
   };
 }
 
+function completeMultiWriterPhase56Env(): NodeJS.ProcessEnv {
+  return {
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "artifacts/phase53/requirements.md",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "artifacts/phase53/design.md",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes plus idempotent async reconciliation",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE: "artifacts/phase54/failover-pitr.md",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE: "artifacts/phase54/migration-backfill.md",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE: "artifacts/phase54/observability.md",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE: "artifacts/phase54/rollback.md",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "artifacts/phase55/design-package-review.md",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "artifacts/phase55/implementation-auth.md",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "artifacts/phase56/implementation-readiness.md",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "artifacts/phase56/rollout-safety.md",
+  };
+}
+
+function completeMultiWriterPhase57Env(): NodeJS.ProcessEnv {
+  return {
+    ...completeMultiWriterPhase56Env(),
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "artifacts/phase57/implementation-scope-lock.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "artifacts/phase57/runtime-feature-flag.md",
+    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "artifacts/phase57/validation.md",
+    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "artifacts/phase57/migration-cutover-lock.md",
+    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "artifacts/phase57/release-owner-signoff.md",
+  };
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -690,6 +722,105 @@ test("multiWriterTopologyImplementationReadinessGate records readiness and rollo
   assert.deepEqual(status.multiWriterTopologyImplementationReadinessGate.missingEvidence, []);
   assert.match(status.multiWriterTopologyImplementationReadinessGate.summary, /runtime implementation remains blocked/i);
   assert.match(status.multiWriterTopologyImplementationReadinessGate.summary, /runtimeSupported=false/);
+});
+
+test("multiWriterTopologyImplementationScope is blocked until Phase 56 evidence is complete", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "artifacts/phase57/implementation-scope-lock.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "artifacts/phase57/runtime-feature-flag.md",
+      TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "artifacts/phase57/validation.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "artifacts/phase57/migration-cutover-lock.md",
+      TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "artifacts/phase57/release-owner-signoff.md",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterTopologyImplementationScope.phase, "57");
+  assert.equal(status.multiWriterTopologyImplementationScope.status, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScopeStatus, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationScope.phase56EvidenceComplete, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScope.configured, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeFeatureFlag.configured, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.validationEvidence.configured, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.migrationCutoverLock.configured, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseOwnerSignoff.configured, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScopeComplete, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+  assert.match(status.multiWriterTopologyImplementationScope.summary, /blocked until Phase 56/i);
+});
+
+test("multiWriterTopologyImplementationScope records scope evidence without enabling runtime", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase57Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterTopologyImplementationScope.phase, "57");
+  assert.equal(status.multiWriterTopologyImplementationScope.status, "scope-complete");
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScopeStatus, "complete");
+  assert.equal(status.multiWriterTopologyImplementationScope.phase56EvidenceComplete, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScopeComplete, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScope.status, "provided");
+  assert.equal(
+    status.multiWriterTopologyImplementationScope.implementationScope.value,
+    "artifacts/phase57/implementation-scope-lock.md",
+  );
+  assert.equal(status.multiWriterTopologyImplementationScope.evidence.runtimeFeatureFlag.status, "provided");
+  assert.equal(status.multiWriterTopologyImplementationScope.validationEvidence.status, "provided");
+  assert.equal(status.multiWriterTopologyImplementationScope.migrationCutoverLock.status, "provided");
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseOwnerSignoff.status, "provided");
+  assert.deepEqual(status.multiWriterTopologyImplementationScope.missingEvidence, []);
+  assert.match(status.multiWriterTopologyImplementationScope.summary, /runtime implementation remains blocked/i);
+  assert.match(status.multiWriterTopologyImplementationScope.summary, /releaseAllowed=false/);
+});
+
+test("multiWriterTopologyImplementationScope can derive scope evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase56Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({
+      phase57: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        implementationScopeLock: "artifacts/reports/phase57-scope-lock.md",
+        runtimeFeatureFlag: "artifacts/reports/phase57-runtime-feature-flag.md",
+        validationEvidence: "artifacts/reports/phase57-validation.md",
+        migrationCutoverLock: "artifacts/reports/phase57-migration-cutover-lock.md",
+        releaseOwnerSignoff: "artifacts/reports/phase57-release-owner-signoff.md",
+      },
+      checks: [],
+      blockers: [],
+      warnings: [],
+      nextSteps: [],
+    }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.multiWriterTopologyImplementationScope.status, "scope-complete");
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScope.source, "releaseReadiness");
+  assert.equal(
+    status.multiWriterTopologyImplementationScope.implementationScope.value,
+    "artifacts/reports/phase57-scope-lock.md",
+  );
+  assert.equal(
+    status.multiWriterTopologyImplementationScope.releaseOwnerSignoff.value,
+    "artifacts/reports/phase57-release-owner-signoff.md",
+  );
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

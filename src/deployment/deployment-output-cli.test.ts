@@ -374,3 +374,138 @@ test("formatDeploymentCliJson preserves nested Phase 56 readiness reports while 
   assert.equal(report.asyncStoreBoundary?.phase56MultiWriterRuntimeReadinessGate?.runtimeSupportBlocked, true);
   assert.doesNotMatch(output, /phase56-rollout-secret/);
 });
+
+test("formatDeploymentCliJson annotates Phase 57 implementation-scope gate", () => {
+  const output = formatDeploymentCliJson({
+    implementationScopeToken: "phase57-secret",
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "multi-writer" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    implementationScopeToken?: unknown;
+    phase57?: {
+      phase?: unknown;
+      required?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      implementationScopeEvidenceRequired?: unknown;
+      implementationScopeEvidenceAttached?: unknown;
+      implementationScopeApproved?: unknown;
+      implementationScopeGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.implementationScopeToken, "[redacted]");
+  assert.equal(report.phase57?.phase, "57");
+  assert.equal(report.phase57?.required, true);
+  assert.equal(report.phase57?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase57?.implementationScopeEvidenceRequired, true);
+  assert.equal(report.phase57?.implementationScopeEvidenceAttached, false);
+  assert.equal(report.phase57?.implementationScopeApproved, false);
+  assert.equal(report.phase57?.implementationScopeGatePassed, false);
+  assert.equal(report.phase57?.runtimeSupport, false);
+  assert.equal(report.phase57?.multiWriterSupported, false);
+  assert.equal(report.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.phase57?.releaseAllowed, false);
+  assert.equal(report.phase57?.strictBlocker, true);
+  assert.match(String(report.phase57?.summary), /Phase 57/);
+  assert.doesNotMatch(output, /phase57-secret/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 57 implementation-scope reports while blocking support claims", () => {
+  const output = formatDeploymentCliJson({
+    managedDatabaseRuntimeGuard: {
+      phase57MultiWriterImplementationScopeGate: {
+        phase: "57",
+        required: true,
+        implementationScopeEvidenceAttached: true,
+        implementationScopeApproved: true,
+        implementationScopeGatePassed: true,
+        approvedImplementationScope: "single-region-shadow-write-validation",
+        implementationOwner: "database-platform",
+        runtimeSupport: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        implementationScopeSecret: "phase57-scope-secret",
+        summary: "Phase 57 implementation scope is approved for non-production validation only.",
+      },
+    },
+    releaseEvidence: {
+      phase57: {
+        implementationScopeEvidenceAttached: true,
+        releaseAllowed: true,
+        evidenceToken: "phase57-evidence-secret",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "distributed" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    managedDatabaseRuntimeGuard?: {
+      phase57MultiWriterImplementationScopeGate?: {
+        implementationScopeSecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+      };
+    };
+    releaseEvidence?: { phase57?: { evidenceToken?: unknown; releaseAllowed?: unknown } };
+    phase57?: {
+      phase?: unknown;
+      required?: unknown;
+      implementationScopeEvidenceAttached?: unknown;
+      implementationScopeApproved?: unknown;
+      implementationScopeGatePassed?: unknown;
+      approvedImplementationScope?: unknown;
+      implementationOwner?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      implementationScopeSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase57?.phase, "57");
+  assert.equal(report.phase57?.required, true);
+  assert.equal(report.phase57?.implementationScopeEvidenceAttached, true);
+  assert.equal(report.phase57?.implementationScopeApproved, true);
+  assert.equal(report.phase57?.implementationScopeGatePassed, true);
+  assert.equal(report.phase57?.approvedImplementationScope, "single-region-shadow-write-validation");
+  assert.equal(report.phase57?.implementationOwner, "database-platform");
+  assert.equal(report.phase57?.runtimeSupport, false);
+  assert.equal(report.phase57?.multiWriterSupported, false);
+  assert.equal(report.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.phase57?.releaseAllowed, false);
+  assert.equal(report.phase57?.strictBlocker, false);
+  assert.equal(report.phase57?.implementationScopeSecret, "[redacted]");
+  assert.equal(report.phase57?.summary, "Phase 57 implementation scope is approved for non-production validation only.");
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase57MultiWriterImplementationScopeGate?.implementationScopeSecret,
+    "[redacted]",
+  );
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57MultiWriterImplementationScopeGate?.runtimeSupport, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57MultiWriterImplementationScopeGate?.multiWriterSupported, false);
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase57MultiWriterImplementationScopeGate?.runtimeImplementationBlocked,
+    true,
+  );
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57MultiWriterImplementationScopeGate?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57MultiWriterImplementationScopeGate?.releaseAllowed, false);
+  assert.equal(report.releaseEvidence?.phase57?.evidenceToken, "[redacted]");
+  assert.equal(report.releaseEvidence?.phase57?.releaseAllowed, false);
+  assert.doesNotMatch(output, /phase57-scope-secret/);
+  assert.doesNotMatch(output, /phase57-evidence-secret/);
+});

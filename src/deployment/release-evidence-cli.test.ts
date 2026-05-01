@@ -102,6 +102,90 @@ test("runReleaseEvidenceCli passes strict mode when the bundle is release-ready"
   assert.equal(exitCode, 0);
 });
 
+test("runReleaseEvidenceCli preserves Phase 57 implementation-scope evidence while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseEvidenceCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildReleaseEvidenceBundle: () => ({
+      readyForRelease: false,
+      releaseEvidence: {
+        phase57MultiWriterImplementationScopeGate: {
+          implementationScopeEvidenceAttached: true,
+          implementationScopeApproved: true,
+          implementationScopeGatePassed: true,
+          approvedImplementationScope: "single-region-shadow-write-validation",
+          implementationOwner: "database-platform",
+          runtimeSupport: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          implementationScopeSecret: "phase57-evidence-secret",
+          summary: "Phase 57 release evidence implementation scope is recorded.",
+        },
+      },
+    }),
+  });
+  const bundle = parseJsonOutput(output) as {
+    releaseEvidence?: {
+      phase57MultiWriterImplementationScopeGate?: {
+        implementationScopeSecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+      };
+    };
+    phase57?: {
+      phase?: unknown;
+      implementationScopeEvidenceAttached?: unknown;
+      implementationScopeApproved?: unknown;
+      implementationScopeGatePassed?: unknown;
+      approvedImplementationScope?: unknown;
+      implementationOwner?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      implementationScopeSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(bundle.phase57?.phase, "57");
+  assert.equal(bundle.phase57?.implementationScopeEvidenceAttached, true);
+  assert.equal(bundle.phase57?.implementationScopeApproved, true);
+  assert.equal(bundle.phase57?.implementationScopeGatePassed, true);
+  assert.equal(bundle.phase57?.approvedImplementationScope, "single-region-shadow-write-validation");
+  assert.equal(bundle.phase57?.implementationOwner, "database-platform");
+  assert.equal(bundle.phase57?.runtimeSupport, false);
+  assert.equal(bundle.phase57?.multiWriterSupported, false);
+  assert.equal(bundle.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(bundle.phase57?.runtimeSupportBlocked, true);
+  assert.equal(bundle.phase57?.releaseAllowed, false);
+  assert.equal(bundle.phase57?.strictBlocker, false);
+  assert.equal(bundle.phase57?.implementationScopeSecret, "[redacted]");
+  assert.equal(bundle.phase57?.summary, "Phase 57 release evidence implementation scope is recorded.");
+  assert.equal(bundle.releaseEvidence?.phase57MultiWriterImplementationScopeGate?.implementationScopeSecret, "[redacted]");
+  assert.equal(bundle.releaseEvidence?.phase57MultiWriterImplementationScopeGate?.runtimeSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase57MultiWriterImplementationScopeGate?.multiWriterSupported, false);
+  assert.equal(bundle.releaseEvidence?.phase57MultiWriterImplementationScopeGate?.runtimeImplementationBlocked, true);
+  assert.equal(bundle.releaseEvidence?.phase57MultiWriterImplementationScopeGate?.runtimeSupportBlocked, true);
+  assert.equal(bundle.releaseEvidence?.phase57MultiWriterImplementationScopeGate?.releaseAllowed, false);
+  assert.doesNotMatch(output[0] ?? "", /phase57-evidence-secret/);
+});
+
 test("runReleaseEvidenceCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

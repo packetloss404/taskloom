@@ -92,6 +92,20 @@ function blockMultiWriterRuntimeSupport(value: unknown): unknown {
         runtimeSupportBlocked: true,
         releaseAllowed: false,
       };
+    } else if (
+      (key === "phase57" ||
+        key === "phase57MultiWriterImplementationScopeGate" ||
+        key === "phase57MultiWriterImplementationScopeReport") &&
+      isReport(entry)
+    ) {
+      blocked[key] = {
+        ...entry,
+        runtimeSupport: false,
+        multiWriterSupported: false,
+        runtimeImplementationBlocked: true,
+        runtimeSupportBlocked: true,
+        releaseAllowed: false,
+      };
     } else {
       blocked[key] = blockMultiWriterRuntimeSupport(entry);
     }
@@ -248,9 +262,82 @@ function withPhase56Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function withPhase57Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
+    return report;
+  }
+
+  const nestedPhase57 = firstReportAt(report, [
+    ["phase57MultiWriterImplementationScopeGate"],
+    ["phase57MultiWriterImplementationScopeReport"],
+    ["managedDatabase", "phase57"],
+    ["managedDatabase", "phase57MultiWriterImplementationScopeGate"],
+    ["managedDatabaseTopology", "phase57"],
+    ["managedDatabaseTopology", "managedDatabase", "phase57"],
+    ["managedDatabaseTopology", "managedDatabase", "phase57MultiWriterImplementationScopeGate"],
+    ["managedDatabaseRuntimeGuard", "phase57"],
+    ["managedDatabaseRuntimeGuard", "phase57MultiWriterImplementationScopeGate"],
+    ["runtimeGuard", "phase57"],
+    ["runtimeGuard", "phase57MultiWriterImplementationScopeGate"],
+    ["releaseReadiness", "phase57"],
+    ["releaseReadiness", "phase57MultiWriterImplementationScopeGate"],
+    ["releaseReadiness", "managedDatabaseTopology", "managedDatabase", "phase57"],
+    ["releaseReadiness", "managedDatabaseRuntimeGuard", "phase57"],
+    ["releaseEvidence", "phase57"],
+    ["releaseEvidence", "phase57MultiWriterImplementationScopeGate"],
+    ["evidence", "phase57"],
+    ["evidence", "phase57MultiWriterImplementationScopeGate"],
+    ["asyncStoreBoundary", "phase57"],
+    ["asyncStoreBoundary", "phase57MultiWriterImplementationScopeGate"],
+  ]);
+  const existingPhase57 = reportAt(report, ["phase57"]) ?? nestedPhase57 ?? {};
+  const implementationScopeEvidenceRequired =
+    existingPhase57.implementationScopeEvidenceRequired ?? true;
+  const implementationScopeEvidenceAttached =
+    existingPhase57.implementationScopeEvidenceAttached ??
+    existingPhase57.implementationScopeGatePassed ??
+    existingPhase57.implementationScopeApproved ??
+    existingPhase57.implementationScopeDefined ??
+    existingPhase57.scopeEvidenceAttached ??
+    false;
+  const implementationScopeApproved =
+    existingPhase57.implementationScopeApproved ??
+    existingPhase57.implementationScopeGatePassed ??
+    implementationScopeEvidenceAttached === true;
+  const implementationScopeGatePassed =
+    existingPhase57.implementationScopeGatePassed ?? implementationScopeApproved === true;
+
+  return blockMultiWriterRuntimeSupport({
+    ...report,
+    phase57: {
+      ...existingPhase57,
+      phase: existingPhase57.phase ?? "57",
+      required: existingPhase57.required ?? true,
+      multiWriterTopologyRequested: existingPhase57.multiWriterTopologyRequested ?? true,
+      implementationScopeEvidenceRequired,
+      implementationScopeEvidenceAttached,
+      implementationScopeApproved,
+      implementationScopeGatePassed,
+      runtimeSupport: false,
+      multiWriterSupported: false,
+      runtimeImplementationBlocked: true,
+      runtimeSupportBlocked: true,
+      releaseAllowed: false,
+      strictBlocker: existingPhase57.strictBlocker ?? implementationScopeGatePassed !== true,
+      summary: existingPhase57.summary ??
+        "Phase 57 records explicitly scoped multi-writer implementation evidence before runtime or release support can be claimed; multi-writer runtime support remains blocked.",
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
-    redactValue(withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env)),
+    redactValue(
+      withPhase57Status(
+        withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+        env,
+      ),
+    ),
     null,
     2,
   );

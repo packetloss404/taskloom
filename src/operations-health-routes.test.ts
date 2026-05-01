@@ -79,6 +79,7 @@ test("operations health route returns the report shape for an admin-equivalent o
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterTopologyDesignPackageGate"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterTopologyImplementationAuthorizationGate"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterTopologyImplementationReadinessGate"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterTopologyImplementationScope"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
@@ -122,6 +123,10 @@ test("operations health surfaces supported single-writer managed Postgres topolo
   assert.equal(implementationReadinessGate.status, "disabled");
   assert.match(implementationReadinessGate.detail, /Phase 56 implementation readiness and rollout-safety gate is not required/i);
   assert.match(implementationReadinessGate.detail, /runtimeSupported=false/);
+  const implementationScope = findSubsystem(report, "multiWriterTopologyImplementationScope");
+  assert.equal(implementationScope.status, "disabled");
+  assert.match(implementationScope.detail, /Phase 57 implementation-scope status is not required/i);
+  assert.match(implementationScope.detail, /runtimeSupported=false/);
   assert.equal(report.overall, "ok");
 });
 
@@ -172,6 +177,12 @@ test("operations health degrades for blocked multi-writer topology intent", () =
   assert.match(implementationReadinessGate.detail, /Phase 56 implementation readiness and rollout-safety gate is blocked/i);
   assert.match(implementationReadinessGate.detail, /Phase 55 implementation authorization is recorded/i);
   assert.match(implementationReadinessGate.detail, /runtimeSupported=false/);
+  const implementationScope = findSubsystem(report, "multiWriterTopologyImplementationScope");
+  assert.equal(implementationScope.status, "degraded");
+  assert.match(implementationScope.detail, /Phase 57 implementation-scope status is blocked/i);
+  assert.match(implementationScope.detail, /until Phase 56 implementation readiness and rollout-safety evidence is complete/i);
+  assert.match(implementationScope.detail, /runtimeImplementationBlocked=true/);
+  assert.match(implementationScope.detail, /releaseAllowed=false/);
   assert.equal(report.overall, "degraded");
 });
 
@@ -309,5 +320,55 @@ test("operations health reports Phase 56 readiness and rollout safety without en
   assert.match(implementationReadinessGate.detail, /Phase 56 implementation readiness and rollout-safety evidence is complete/i);
   assert.match(implementationReadinessGate.detail, /runtime implementation remains blocked/i);
   assert.match(implementationReadinessGate.detail, /runtimeSupported=false/);
+  const implementationScope = findSubsystem(report, "multiWriterTopologyImplementationScope");
+  assert.equal(implementationScope.status, "degraded");
+  assert.match(implementationScope.detail, /Phase 57 implementation-scope status is blocked/i);
+  assert.match(implementationScope.detail, /implementation-scope lock/i);
+  assert.match(implementationScope.detail, /runtimeSupported=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("operations health reports Phase 57 implementation scope without enabling runtime", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "artifacts/phase53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "artifacts/phase53/design.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes plus async reconciliation",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE: "artifacts/phase54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE: "artifacts/phase54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE: "artifacts/phase54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE: "artifacts/phase54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "artifacts/phase55/design-package-review.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "artifacts/phase55/implementation-auth.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "artifacts/phase56/readiness.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "artifacts/phase56/rollout-safety.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "artifacts/phase57/implementation-scope-lock.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "artifacts/phase57/runtime-feature-flag.md",
+      TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "artifacts/phase57/validation.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "artifacts/phase57/migration-cutover-lock.md",
+      TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "artifacts/phase57/release-owner-signoff.md",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const implementationScope = findSubsystem(report, "multiWriterTopologyImplementationScope");
+  assert.equal(implementationScope.status, "degraded");
+  assert.match(implementationScope.detail, /Phase 57 implementation-scope evidence is complete/i);
+  assert.match(implementationScope.detail, /runtime implementation remains blocked and unsupported/i);
+  assert.match(implementationScope.detail, /runtimeImplementationBlocked=true/);
+  assert.match(implementationScope.detail, /runtimeSupported=false/);
+  assert.match(implementationScope.detail, /releaseAllowed=false/);
   assert.equal(report.overall, "degraded");
 });

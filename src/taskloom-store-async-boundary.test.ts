@@ -48,6 +48,11 @@ const STORE_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN",
   "TASKLOOM_MULTI_WRITER_CUTOVER_PLAN",
   "TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG",
+  "TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK",
+  "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -278,6 +283,65 @@ test("synchronous APIs stay guarded when multi-writer Phase 56 readiness and rol
       TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety-plan.md",
       TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover-plan.md",
       TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
+    }, () => {
+      assert.throws(
+        () => loadStore(),
+        (error) => {
+          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
+          assert.equal(error.code, "TASKLOOM_MANAGED_DATABASE_SYNC_ADAPTER_GAP");
+          assert.equal(error.storeMode, "postgres");
+          assert.deepEqual(error.managedDatabaseUrlKeys, ["TASKLOOM_MANAGED_DATABASE_URL"]);
+          return true;
+        },
+      );
+
+      let mutatorRan = false;
+      assert.throws(
+        () => mutateStore(() => {
+          mutatorRan = true;
+          return "should-not-run";
+        }),
+        ManagedDatabaseStoreBoundaryError,
+      );
+      assert.equal(mutatorRan, false);
+    });
+  }
+});
+
+test("synchronous APIs stay guarded when multi-writer Phase 57 implementation-scope evidence is configured", async () => {
+  const blockedTopologies = ["multi-writer", "distributed", "active-active"] as const;
+
+  for (const topology of blockedTopologies) {
+    await withStoreEnv({
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: topology,
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-54/multi-writer-requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-54/multi-writer-design-package.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes with explicit conflict handling review",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "release-owner",
+      TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+      TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "phase-55-design-package-review-only",
+      TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety-signoff.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "docs/phase-56/runtime-readiness.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "docs/phase-56/rollout-safety.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation-plan.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout-plan.md",
+      TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation-plan.md",
+      TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety-plan.md",
+      TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover-plan.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "docs/phase-57/implementation-scope-lock.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER=false",
+      TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "docs/phase-57/validation-evidence.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "docs/phase-57/migration-cutover-lock.md",
+      TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "docs/phase-57/release-owner-signoff.md",
     }, () => {
       assert.throws(
         () => loadStore(),

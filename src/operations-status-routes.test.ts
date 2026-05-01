@@ -117,6 +117,16 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
   assert.equal(multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
   assert.equal(multiWriterTopologyImplementationReadinessGate.releaseAllowed, false);
+  assert.ok(
+    body.multiWriterTopologyImplementationScope &&
+      typeof body.multiWriterTopologyImplementationScope === "object",
+  );
+  const multiWriterTopologyImplementationScope =
+    body.multiWriterTopologyImplementationScope as Record<string, unknown>;
+  assert.equal(multiWriterTopologyImplementationScope.phase, "57");
+  assert.equal(multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
+  assert.equal(multiWriterTopologyImplementationScope.releaseAllowed, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -166,6 +176,12 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
   assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "not-required");
   assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
   assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.phase, "57");
+  assert.equal(status.multiWriterTopologyImplementationScope.status, "not-required");
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScopeStatus, "not-required");
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
@@ -218,4 +234,47 @@ test("operations status report keeps multi-writer managed Postgres startup unsup
   assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "missing");
   assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.phase, "57");
+  assert.equal(status.multiWriterTopologyImplementationScope.status, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationScope.phase56EvidenceComplete, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+});
+
+test("operations status report surfaces Phase 57 scope complete but unsupported", () => {
+  const status = getOperationsStatus({
+    loadStore: () => ({ jobs: [] }) as never,
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "artifacts/phase53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "artifacts/phase53/design.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes plus async reconciliation",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE: "artifacts/phase54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE: "artifacts/phase54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE: "artifacts/phase54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE: "artifacts/phase54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "artifacts/phase55/design-package-review.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "artifacts/phase55/implementation-auth.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "artifacts/phase56/readiness.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "artifacts/phase56/rollout-safety.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "artifacts/phase57/implementation-scope-lock.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "artifacts/phase57/runtime-feature-flag.md",
+      TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "artifacts/phase57/validation.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "artifacts/phase57/migration-cutover-lock.md",
+      TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "artifacts/phase57/release-owner-signoff.md",
+    },
+  });
+
+  assert.equal(status.multiWriterTopologyImplementationScope.phase, "57");
+  assert.equal(status.multiWriterTopologyImplementationScope.status, "scope-complete");
+  assert.equal(status.multiWriterTopologyImplementationScope.implementationScopeStatus, "complete");
+  assert.equal(status.multiWriterTopologyImplementationScope.phase56EvidenceComplete, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
 });

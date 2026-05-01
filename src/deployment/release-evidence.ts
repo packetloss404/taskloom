@@ -14,6 +14,7 @@ import {
   type Phase53MultiWriterTopologyGateReport,
   type Phase55MultiWriterImplementationAuthorizationGateReport,
   type Phase56MultiWriterRuntimeReadinessGateReport,
+  type Phase57MultiWriterImplementationScopeGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -148,6 +149,22 @@ export interface ReleaseEvidenceBundle {
       phase56MultiWriterRuntimeReadinessComplete: boolean;
       phase56MultiWriterRuntimeSupportBlocked: boolean;
       phase56MultiWriterTopologyReleaseAllowed: boolean;
+      phase57MultiWriterImplementationScopeGateRequired: boolean;
+      phase57MultiWriterRuntimeReadinessRequired: boolean;
+      phase57MultiWriterRuntimeReadinessComplete: boolean;
+      phase57MultiWriterImplementationScopeLockRequired: boolean;
+      phase57MultiWriterImplementationScopeLockAttached: boolean;
+      phase57MultiWriterRuntimeFeatureFlagRequired: boolean;
+      phase57MultiWriterRuntimeFeatureFlagAttached: boolean;
+      phase57MultiWriterValidationEvidenceRequired: boolean;
+      phase57MultiWriterValidationEvidenceAttached: boolean;
+      phase57MultiWriterMigrationCutoverLockRequired: boolean;
+      phase57MultiWriterMigrationCutoverLockAttached: boolean;
+      phase57MultiWriterReleaseOwnerSignoffRequired: boolean;
+      phase57MultiWriterReleaseOwnerSignoffAttached: boolean;
+      phase57MultiWriterImplementationScopeComplete: boolean;
+      phase57MultiWriterRuntimeSupportBlocked: boolean;
+      phase57MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -251,6 +268,11 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION",
   "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG",
+  "TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK",
+  "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -525,6 +547,63 @@ function phase56MultiWriterRuntimeReadinessGate(
   };
 }
 
+function phase57MultiWriterImplementationScopeGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase56Gate: Phase56MultiWriterRuntimeReadinessGateReport,
+): Phase57MultiWriterImplementationScopeGateReport {
+  const fallbackRequired = asyncStoreBoundary.classification === "multi-writer-unsupported";
+  return asyncStoreBoundary.phase57MultiWriterImplementationScopeGate ?? {
+    phase: "57",
+    required: fallbackRequired,
+    runtimeReadinessRequired: fallbackRequired,
+    runtimeReadinessComplete: phase56Gate.runtimeReadinessComplete,
+    implementationScopeLockRequired: fallbackRequired,
+    implementationScopeLockAttached: false,
+    runtimeFeatureFlagRequired: fallbackRequired,
+    runtimeFeatureFlagAttached: false,
+    validationEvidenceRequired: fallbackRequired,
+    validationEvidenceAttached: false,
+    migrationCutoverLockRequired: fallbackRequired,
+    migrationCutoverLockAttached: false,
+    releaseOwnerSignoffRequired: fallbackRequired,
+    releaseOwnerSignoffAttached: false,
+    implementationScopeComplete: false,
+    runtimeSupportBlocked: fallbackRequired,
+    releaseAllowed: !fallbackRequired,
+    summary: fallbackRequired
+      ? phase56Gate.runtimeReadinessComplete
+        ? "Phase 57 multi-writer implementation-scope evidence is required before any multi-writer runtime implementation scope claim."
+        : "Phase 57 multi-writer implementation-scope gate requires Phase 56 runtime readiness and rollout-safety evidence first."
+      : "Phase 57 multi-writer implementation-scope gate is not required for this release posture.",
+    blockers: fallbackRequired
+      ? [
+        ...(!phase56Gate.runtimeReadinessComplete
+          ? ["Phase 57 multi-writer implementation scope requires Phase 56 runtime readiness complete first."]
+          : []),
+        "Phase 57 multi-writer implementation scope lock evidence is required before any runtime implementation scope claim.",
+        "Phase 57 multi-writer runtime feature-flag evidence is required before any runtime implementation scope claim.",
+        "Phase 57 multi-writer validation evidence is required before any runtime implementation scope claim.",
+        "Phase 57 multi-writer migration cutover lock evidence is required before any runtime implementation scope claim.",
+        "Phase 57 multi-writer release owner signoff evidence is required before any runtime implementation scope claim.",
+        "Phase 57 multi-writer runtime support remains blocked; implementation-scope evidence does not permit release until a later runtime implementation gate explicitly allows it.",
+      ]
+      : [],
+    nextSteps: fallbackRequired
+      ? [
+        ...(!phase56Gate.runtimeReadinessComplete
+          ? ["Complete Phase 56 multi-writer runtime readiness before treating Phase 57 implementation-scope evidence as complete."]
+          : []),
+        "Attach TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK before claiming multi-writer implementation scope.",
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG before claiming multi-writer implementation scope.",
+        "Attach TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE before claiming multi-writer implementation scope.",
+        "Attach TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK before claiming multi-writer implementation scope.",
+        "Attach TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF before claiming multi-writer implementation scope.",
+        "Keep multi-writer runtime release blocked after Phase 57 implementation-scope evidence until a later release gate explicitly allows it.",
+      ]
+      : ["Keep Phase 57 implementation-scope evidence ready before claiming multi-writer runtime implementation scope."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -611,6 +690,36 @@ function phase56RolloutSafetyAttachmentEvidence(
   };
 }
 
+function phase57ImplementationScopeLockAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK");
+}
+
+function phase57RuntimeFeatureFlagAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG");
+}
+
+function phase57ValidationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE");
+}
+
+function phase57MigrationCutoverLockAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK");
+}
+
+function phase57ReleaseOwnerSignoffAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -624,6 +733,7 @@ function buildAttachments(
   const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
   const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
   const phase56Gate = phase56MultiWriterRuntimeReadinessGate(asyncStoreBoundary, phase55Gate);
+  const phase57Gate = phase57MultiWriterImplementationScopeGate(asyncStoreBoundary, phase56Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -762,6 +872,56 @@ function buildAttachments(
       ...phase56RolloutSafetyAttachmentEvidence(env),
     },
     {
+      id: "phase-57-multi-writer-implementation-scope-lock",
+      label: "Phase 57 multi-writer implementation scope lock evidence",
+      format: "json",
+      required: phase57Gate.implementationScopeLockRequired,
+      summary: phase57Gate.implementationScopeLockAttached
+        ? "Phase 57 multi-writer implementation scope lock evidence is attached; runtime release remains blocked."
+        : "Phase 57 multi-writer implementation scope lock evidence is required before any runtime implementation scope claim.",
+      ...phase57ImplementationScopeLockAttachmentEvidence(env),
+    },
+    {
+      id: "phase-57-multi-writer-runtime-feature-flag",
+      label: "Phase 57 multi-writer runtime feature-flag evidence",
+      format: "json",
+      required: phase57Gate.runtimeFeatureFlagRequired,
+      summary: phase57Gate.runtimeFeatureFlagAttached
+        ? "Phase 57 multi-writer runtime feature-flag evidence is attached; runtime release remains blocked."
+        : "Phase 57 multi-writer runtime feature-flag evidence is required before any runtime implementation scope claim.",
+      ...phase57RuntimeFeatureFlagAttachmentEvidence(env),
+    },
+    {
+      id: "phase-57-multi-writer-validation-evidence",
+      label: "Phase 57 multi-writer validation evidence",
+      format: "json",
+      required: phase57Gate.validationEvidenceRequired,
+      summary: phase57Gate.validationEvidenceAttached
+        ? "Phase 57 multi-writer validation evidence is attached; runtime release remains blocked."
+        : "Phase 57 multi-writer validation evidence is required before any runtime implementation scope claim.",
+      ...phase57ValidationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-57-multi-writer-migration-cutover-lock",
+      label: "Phase 57 multi-writer migration cutover lock evidence",
+      format: "json",
+      required: phase57Gate.migrationCutoverLockRequired,
+      summary: phase57Gate.migrationCutoverLockAttached
+        ? "Phase 57 multi-writer migration cutover lock evidence is attached; runtime release remains blocked."
+        : "Phase 57 multi-writer migration cutover lock evidence is required before any runtime implementation scope claim.",
+      ...phase57MigrationCutoverLockAttachmentEvidence(env),
+    },
+    {
+      id: "phase-57-multi-writer-release-owner-signoff",
+      label: "Phase 57 multi-writer release owner signoff evidence",
+      format: "json",
+      required: phase57Gate.releaseOwnerSignoffRequired,
+      summary: phase57Gate.releaseOwnerSignoffAttached
+        ? "Phase 57 multi-writer release owner signoff evidence is attached; runtime release remains blocked."
+        : "Phase 57 multi-writer release owner signoff evidence is required before any runtime implementation scope claim.",
+      ...phase57ReleaseOwnerSignoffAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -881,6 +1041,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
   const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
   const phase56Gate = phase56MultiWriterRuntimeReadinessGate(asyncStoreBoundary, phase55Gate);
+  const phase57Gate = phase57MultiWriterImplementationScopeGate(asyncStoreBoundary, phase56Gate);
 
   return {
     phase: "44",
@@ -981,6 +1142,22 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase56MultiWriterRuntimeReadinessComplete: phase56Gate.runtimeReadinessComplete,
         phase56MultiWriterRuntimeSupportBlocked: phase56Gate.runtimeSupportBlocked,
         phase56MultiWriterTopologyReleaseAllowed: phase56Gate.releaseAllowed,
+        phase57MultiWriterImplementationScopeGateRequired: phase57Gate.required,
+        phase57MultiWriterRuntimeReadinessRequired: phase57Gate.runtimeReadinessRequired,
+        phase57MultiWriterRuntimeReadinessComplete: phase57Gate.runtimeReadinessComplete,
+        phase57MultiWriterImplementationScopeLockRequired: phase57Gate.implementationScopeLockRequired,
+        phase57MultiWriterImplementationScopeLockAttached: phase57Gate.implementationScopeLockAttached,
+        phase57MultiWriterRuntimeFeatureFlagRequired: phase57Gate.runtimeFeatureFlagRequired,
+        phase57MultiWriterRuntimeFeatureFlagAttached: phase57Gate.runtimeFeatureFlagAttached,
+        phase57MultiWriterValidationEvidenceRequired: phase57Gate.validationEvidenceRequired,
+        phase57MultiWriterValidationEvidenceAttached: phase57Gate.validationEvidenceAttached,
+        phase57MultiWriterMigrationCutoverLockRequired: phase57Gate.migrationCutoverLockRequired,
+        phase57MultiWriterMigrationCutoverLockAttached: phase57Gate.migrationCutoverLockAttached,
+        phase57MultiWriterReleaseOwnerSignoffRequired: phase57Gate.releaseOwnerSignoffRequired,
+        phase57MultiWriterReleaseOwnerSignoffAttached: phase57Gate.releaseOwnerSignoffAttached,
+        phase57MultiWriterImplementationScopeComplete: phase57Gate.implementationScopeComplete,
+        phase57MultiWriterRuntimeSupportBlocked: phase57Gate.runtimeSupportBlocked,
+        phase57MultiWriterTopologyReleaseAllowed: phase57Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

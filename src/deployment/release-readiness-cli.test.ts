@@ -97,6 +97,90 @@ test("runReleaseReadinessCli passes strict mode when the report is release-ready
   assert.equal(exitCode, 0);
 });
 
+test("runReleaseReadinessCli preserves Phase 57 implementation-scope fields while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-region",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseReadinessCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildReleaseReadinessReport: () => ({
+      readyForRelease: false,
+      managedDatabaseRuntimeGuard: {
+        phase57: {
+          implementationScopeEvidenceAttached: true,
+          implementationScopeApproved: true,
+          implementationScopeGatePassed: true,
+          approvedImplementationScope: "single-region-shadow-write-validation",
+          implementationOwner: "database-platform",
+          runtimeSupport: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          implementationScopeSecret: "phase57-readiness-secret",
+          summary: "Phase 57 release readiness implementation scope is recorded.",
+        },
+      },
+    }),
+  });
+  const report = parseJsonOutput(output) as {
+    managedDatabaseRuntimeGuard?: {
+      phase57?: {
+        implementationScopeSecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+      };
+    };
+    phase57?: {
+      phase?: unknown;
+      implementationScopeEvidenceAttached?: unknown;
+      implementationScopeApproved?: unknown;
+      implementationScopeGatePassed?: unknown;
+      approvedImplementationScope?: unknown;
+      implementationOwner?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      implementationScopeSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase57?.phase, "57");
+  assert.equal(report.phase57?.implementationScopeEvidenceAttached, true);
+  assert.equal(report.phase57?.implementationScopeApproved, true);
+  assert.equal(report.phase57?.implementationScopeGatePassed, true);
+  assert.equal(report.phase57?.approvedImplementationScope, "single-region-shadow-write-validation");
+  assert.equal(report.phase57?.implementationOwner, "database-platform");
+  assert.equal(report.phase57?.runtimeSupport, false);
+  assert.equal(report.phase57?.multiWriterSupported, false);
+  assert.equal(report.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.phase57?.releaseAllowed, false);
+  assert.equal(report.phase57?.strictBlocker, false);
+  assert.equal(report.phase57?.implementationScopeSecret, "[redacted]");
+  assert.equal(report.phase57?.summary, "Phase 57 release readiness implementation scope is recorded.");
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57?.implementationScopeSecret, "[redacted]");
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57?.runtimeSupport, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57?.multiWriterSupported, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase57?.releaseAllowed, false);
+  assert.doesNotMatch(output[0] ?? "", /phase57-readiness-secret/);
+});
+
 test("runReleaseReadinessCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

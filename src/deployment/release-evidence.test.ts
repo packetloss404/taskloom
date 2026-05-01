@@ -752,6 +752,74 @@ test("strict evidence records redacted Phase 56 runtime readiness attachments wh
   assert.ok(bundle.nextSteps.some((step) => step.includes("blocked even with Phase 56 runtime readiness and rollout-safety evidence attached")));
 });
 
+test("strict evidence records redacted Phase 57 implementation scope attachments while runtime stays blocked", () => {
+  const env = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "readiness://phase56",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "https://owner:secret@scope.internal/phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "validation://phase57",
+    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "cutover-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "signoff://phase57",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T00:30:00.000Z",
+    strict: true,
+  });
+  const scopeLockAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-57-multi-writer-implementation-scope-lock");
+  const featureFlagAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-57-multi-writer-runtime-feature-flag");
+  const validationAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-57-multi-writer-validation-evidence");
+  const cutoverAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-57-multi-writer-migration-cutover-lock");
+  const signoffAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-57-multi-writer-release-owner-signoff");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessComplete, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterImplementationScopeGateRequired, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterRuntimeReadinessComplete, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterImplementationScopeLockAttached, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterRuntimeFeatureFlagAttached, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterValidationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterMigrationCutoverLockAttached, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterReleaseOwnerSignoffAttached, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterImplementationScopeComplete, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase57MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase57MultiWriterImplementationScopeGate?.releaseAllowed, false);
+  assert.equal(scopeLockAttachment?.configured, true);
+  assert.equal(scopeLockAttachment?.redacted, true);
+  assert.equal(scopeLockAttachment?.value, "[redacted]");
+  assert.equal(featureFlagAttachment?.configured, true);
+  assert.equal(featureFlagAttachment?.value, "feature-flag://multi-writer-runtime-disabled");
+  assert.equal(validationAttachment?.configured, true);
+  assert.equal(cutoverAttachment?.configured, true);
+  assert.equal(signoffAttachment?.configured, true);
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK").value, "[redacted]");
+  assert.ok(bundle.nextSteps.some((step) => step.includes("blocked even with Phase 57 implementation-scope evidence attached")));
+});
+
 test("release readiness managed reports are reused when present", () => {
   const storageTopology = injectedStorageTopology();
   const managedDatabaseTopology = injectedManagedDatabaseTopology();

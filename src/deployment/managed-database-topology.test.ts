@@ -15,6 +15,50 @@ function observedEnvValue(
   return entry;
 }
 
+const distributedTopologyPhase55Env = {
+  TASKLOOM_STORE: "postgres",
+  TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+  TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
+  TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
+  TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
+  TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
+  TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
+  TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
+  TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
+  TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
+  TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "engineering-director",
+  TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+  TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "docs/phase-55/scope.md",
+  TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety.md",
+} as const;
+
+const distributedTopologyPhase56DetailedEnv = {
+  ...distributedTopologyPhase55Env,
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation.md",
+  TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout.md",
+  TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation.md",
+  TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety.md",
+  TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover.md",
+  TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
+} as const;
+
+const distributedTopologyPhase56BundledEnv = {
+  ...distributedTopologyPhase55Env,
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "docs/phase-56/readiness.md",
+  TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "docs/phase-56/rollout-safety.md",
+} as const;
+
+const distributedTopologyPhase57Env = {
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "docs/phase-57/scope-lock.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "multi-writer-runtime-disabled",
+  TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "docs/phase-57/validation.md",
+  TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "docs/phase-57/migration-cutover-lock.md",
+  TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "docs/phase-57/release-owner.md",
+} as const;
+
 test("local JSON reports current supported local mode", () => {
   const report = assessManagedDatabaseTopology({ env: {} });
 
@@ -67,6 +111,17 @@ test("local JSON reports current supported local mode", () => {
   assert.equal(report.managedDatabase.phase56?.implementationReadinessGatePassed, true);
   assert.equal(report.managedDatabase.phase56?.runtimeSupport, false);
   assert.equal(report.managedDatabase.phase56?.strictBlocker, false);
+  assert.equal(report.managedDatabase.phase57?.multiWriterTopologyRequested, false);
+  assert.equal(report.managedDatabase.phase57?.implementationReadinessGatePassed, true);
+  assert.equal(report.managedDatabase.phase57?.implementationScopeLockConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.runtimeFeatureFlagConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.validationEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.migrationCutoverLockConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.releaseOwnerSignoffConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.implementationScopeGatePassed, true);
+  assert.equal(report.managedDatabase.phase57?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase57?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase57?.strictBlocker, false);
   assert.equal(report.observed.store, "json");
   assert.equal(report.observed.dbPath, null);
   assert.ok(report.summary.includes("supported local JSON"));
@@ -471,31 +526,7 @@ test("distributed topology with Phase 55 authorization evidence still keeps runt
 
 test("distributed topology with Phase 56 rollout-safety evidence still keeps runtime support blocked", () => {
   const report = assessManagedDatabaseTopology({
-    env: {
-      TASKLOOM_STORE: "postgres",
-      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
-      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
-      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
-      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
-      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
-      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
-      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
-      TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
-      TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
-      TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
-      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "engineering-director",
-      TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
-      TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "docs/phase-55/scope.md",
-      TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety.md",
-      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation.md",
-      TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout.md",
-      TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation.md",
-      TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety.md",
-      TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover.md",
-      TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
-    },
+    env: distributedTopologyPhase56DetailedEnv,
   });
   const rollbackDrill = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE");
 
@@ -517,6 +548,17 @@ test("distributed topology with Phase 56 rollout-safety evidence still keeps run
   assert.equal(report.managedDatabase.phase56?.implementationReadinessGatePassed, true);
   assert.equal(report.managedDatabase.phase56?.runtimeSupport, false);
   assert.equal(report.managedDatabase.phase56?.strictBlocker, false);
+  assert.equal(report.managedDatabase.phase57?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase57?.implementationReadinessGatePassed, true);
+  assert.equal(report.managedDatabase.phase57?.implementationScopeLockConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.runtimeFeatureFlagConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.validationEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.migrationCutoverLockConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.releaseOwnerSignoffConfigured, false);
+  assert.equal(report.managedDatabase.phase57?.implementationScopeGatePassed, false);
+  assert.equal(report.managedDatabase.phase57?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase57?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase57?.strictBlocker, true);
   assert.equal(rollbackDrill.configured, true);
   assert.equal(rollbackDrill.value, "docs/phase-56/rollback-drill.md");
   assert.equal(rollbackDrill.redacted, false);
@@ -526,8 +568,65 @@ test("distributed topology with Phase 56 rollout-safety evidence still keeps run
     ),
   );
   assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 57 requires")));
+  assert.ok(
+    report.checks.some(
+      (check) => check.id === "phase57-multi-writer-implementation-scope" && check.status === "fail",
+    ),
+  );
   assert.ok(report.warnings.some((warning) => warning.includes("Phase 56")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 57 requires")));
   assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
+});
+
+test("distributed topology with Phase 57 implementation scope evidence still does not claim runtime support", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      ...distributedTopologyPhase56BundledEnv,
+      ...distributedTopologyPhase57Env,
+    },
+  });
+  const scopeLock = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK");
+  const bundledReadiness = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
+  );
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.managedDatabase.phase56?.implementationPlanConfigured, false);
+  assert.equal(report.managedDatabase.phase56?.implementationReadinessEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase56?.rolloutSafetyEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase56?.implementationReadinessGatePassed, true);
+  assert.equal(report.managedDatabase.phase56?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase57?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase57?.implementationReadinessGatePassed, true);
+  assert.equal(report.managedDatabase.phase57?.implementationScopeLockConfigured, true);
+  assert.equal(report.managedDatabase.phase57?.runtimeFeatureFlagConfigured, true);
+  assert.equal(report.managedDatabase.phase57?.validationEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase57?.migrationCutoverLockConfigured, true);
+  assert.equal(report.managedDatabase.phase57?.releaseOwnerSignoffConfigured, true);
+  assert.equal(report.managedDatabase.phase57?.implementationScopeGatePassed, true);
+  assert.equal(report.managedDatabase.phase57?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase57?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase57?.strictBlocker, false);
+  assert.equal(scopeLock.configured, true);
+  assert.equal(scopeLock.value, "docs/phase-57/scope-lock.md");
+  assert.equal(scopeLock.redacted, false);
+  assert.equal(bundledReadiness.configured, true);
+  assert.equal(bundledReadiness.value, "docs/phase-56/readiness.md");
+  assert.equal(bundledReadiness.redacted, false);
+  assert.ok(
+    report.checks.some(
+      (check) => check.id === "phase57-multi-writer-implementation-scope" && check.status === "pass",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 57")));
+  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
 });
 
 test("production SQLite remains single-node advisory-supported without managed database intent", () => {

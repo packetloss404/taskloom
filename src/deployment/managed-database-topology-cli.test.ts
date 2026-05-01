@@ -85,6 +85,20 @@ test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 a
       releaseAllowed?: unknown;
       strictBlocker?: unknown;
     };
+    phase57?: {
+      phase?: unknown;
+      required?: unknown;
+      implementationScopeEvidenceRequired?: unknown;
+      implementationScopeEvidenceAttached?: unknown;
+      implementationScopeApproved?: unknown;
+      implementationScopeGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+    };
     classification?: unknown;
     managedDatabase?: { supported?: unknown; phase54?: { designPackageGatePassed?: unknown; strictBlocker?: unknown } };
   };
@@ -120,12 +134,25 @@ test("runManagedDatabaseTopologyCli blocks multi-writer topology with Phase 53 a
   assert.equal(report.phase56?.runtimeSupportBlocked, true);
   assert.equal(report.phase56?.releaseAllowed, false);
   assert.equal(report.phase56?.strictBlocker, true);
+  assert.equal(report.phase57?.phase, "57");
+  assert.equal(report.phase57?.required, true);
+  assert.equal(report.phase57?.implementationScopeEvidenceRequired, true);
+  assert.equal(report.phase57?.implementationScopeEvidenceAttached, false);
+  assert.equal(report.phase57?.implementationScopeApproved, false);
+  assert.equal(report.phase57?.implementationScopeGatePassed, false);
+  assert.equal(report.phase57?.runtimeSupport, false);
+  assert.equal(report.phase57?.multiWriterSupported, false);
+  assert.equal(report.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.phase57?.releaseAllowed, false);
+  assert.equal(report.phase57?.strictBlocker, true);
   assert.equal(report.managedDatabase?.phase54?.designPackageGatePassed, false);
   assert.equal(report.managedDatabase?.phase54?.strictBlocker, true);
   assert.match(serializedReport, /Phase 53/);
   assert.match(serializedReport, /Phase 54/);
   assert.match(serializedReport, /Phase 55/);
   assert.match(serializedReport, /Phase 56/);
+  assert.match(serializedReport, /Phase 57/);
   assert.match(serializedReport, /multi-writer/);
   assert.doesNotMatch(serializedReport, /taskloom:secret/);
 });
@@ -283,6 +310,90 @@ test("runManagedDatabaseTopologyCli preserves Phase 56 readiness fields while bl
   assert.equal(report.managedDatabase?.phase56?.runtimeImplementationBlocked, true);
   assert.equal(report.managedDatabase?.phase56?.runtimeSupportBlocked, true);
   assert.doesNotMatch(output[0] ?? "", /phase56-cli-secret/);
+});
+
+test("runManagedDatabaseTopologyCli preserves Phase 57 implementation-scope fields while blocking support claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseTopologyCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseTopologyReport: () => ({
+      ready: false,
+      managedDatabase: {
+        phase57: {
+          implementationScopeEvidenceAttached: true,
+          implementationScopeApproved: true,
+          implementationScopeGatePassed: true,
+          approvedImplementationScope: "single-region-shadow-write-validation",
+          implementationOwner: "database-platform",
+          runtimeSupport: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          implementationScopeSecret: "phase57-topology-secret",
+          summary: "Phase 57 topology implementation scope is recorded.",
+        },
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase57?: {
+      phase?: unknown;
+      implementationScopeEvidenceAttached?: unknown;
+      implementationScopeApproved?: unknown;
+      implementationScopeGatePassed?: unknown;
+      approvedImplementationScope?: unknown;
+      implementationOwner?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      implementationScopeSecret?: unknown;
+      summary?: unknown;
+    };
+    managedDatabase?: {
+      phase57?: {
+        implementationScopeSecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+      };
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase57?.phase, "57");
+  assert.equal(report.phase57?.implementationScopeEvidenceAttached, true);
+  assert.equal(report.phase57?.implementationScopeApproved, true);
+  assert.equal(report.phase57?.implementationScopeGatePassed, true);
+  assert.equal(report.phase57?.approvedImplementationScope, "single-region-shadow-write-validation");
+  assert.equal(report.phase57?.implementationOwner, "database-platform");
+  assert.equal(report.phase57?.runtimeSupport, false);
+  assert.equal(report.phase57?.multiWriterSupported, false);
+  assert.equal(report.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.phase57?.releaseAllowed, false);
+  assert.equal(report.phase57?.strictBlocker, false);
+  assert.equal(report.phase57?.implementationScopeSecret, "[redacted]");
+  assert.equal(report.phase57?.summary, "Phase 57 topology implementation scope is recorded.");
+  assert.equal(report.managedDatabase?.phase57?.implementationScopeSecret, "[redacted]");
+  assert.equal(report.managedDatabase?.phase57?.runtimeSupport, false);
+  assert.equal(report.managedDatabase?.phase57?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase?.phase57?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabase?.phase57?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabase?.phase57?.releaseAllowed, false);
+  assert.doesNotMatch(output[0] ?? "", /phase57-topology-secret/);
 });
 
 test("runManagedDatabaseTopologyCli preserves detailed Phase 54 design-package reports from the builder", async () => {
