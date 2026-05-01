@@ -69,6 +69,22 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION?: string;
   TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE?: string;
   TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE?: string;
+  TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL?: string;
+  TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN?: string;
+  TASKLOOM_SCHEDULER_LEADER_MODE?: string;
+  TASKLOOM_SCHEDULER_LEADER_HTTP_URL?: string;
+  TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN?: string;
+  TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE?: string;
+  TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE?: string;
+  TASKLOOM_ACCESS_LOG_MODE?: string;
+  TASKLOOM_ACCESS_LOG_PATH?: string;
+  TASKLOOM_ACCESS_LOG_SHIPPING_ASSERTION?: string;
+  TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE?: string;
+  TASKLOOM_ALERT_EVALUATE_CRON?: string;
+  TASKLOOM_ALERT_WEBHOOK_URL?: string;
+  TASKLOOM_ALERT_DELIVERY_EVIDENCE?: string;
+  TASKLOOM_HEALTH_MONITORING_ASSERTION?: string;
+  TASKLOOM_HEALTH_MONITORING_EVIDENCE?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -294,6 +310,37 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase63?: {
+    required: boolean;
+    horizontalWriterTopologyRequested: boolean;
+    phase62HorizontalWriterRuntimeSupported: boolean;
+    distributedRateLimitConfigured: boolean;
+    distributedRateLimitFailClosed: boolean;
+    distributedRateLimitReady: boolean;
+    schedulerHttpLeaderConfigured: boolean;
+    schedulerHttpLeaderFailClosed: boolean;
+    schedulerCoordinationReady: boolean;
+    durableJobExecutionPostureReady: boolean;
+    accessLogShippingConfigured: boolean;
+    alertEvaluationConfigured: boolean;
+    alertDeliveryConfigured: boolean;
+    alertDeliveryReady: boolean;
+    healthMonitoringConfigured: boolean;
+    distributedDependencyEnforcementReady: boolean;
+    dependencyEnforcementReady: boolean;
+    missingDependencies: Array<
+      | "distributedRateLimiting"
+      | "schedulerCoordination"
+      | "durableJobExecution"
+      | "accessLogShipping"
+      | "alertDelivery"
+      | "healthMonitoring"
+    >;
+    activationAllowed: boolean;
+    releaseAllowed: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -375,6 +422,22 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
   "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
   "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
+  "TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL",
+  "TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN",
+  "TASKLOOM_SCHEDULER_LEADER_MODE",
+  "TASKLOOM_SCHEDULER_LEADER_HTTP_URL",
+  "TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN",
+  "TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE",
+  "TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE",
+  "TASKLOOM_ACCESS_LOG_MODE",
+  "TASKLOOM_ACCESS_LOG_PATH",
+  "TASKLOOM_ACCESS_LOG_SHIPPING_ASSERTION",
+  "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE",
+  "TASKLOOM_ALERT_EVALUATE_CRON",
+  "TASKLOOM_ALERT_WEBHOOK_URL",
+  "TASKLOOM_ALERT_DELIVERY_EVIDENCE",
+  "TASKLOOM_HEALTH_MONITORING_ASSERTION",
+  "TASKLOOM_HEALTH_MONITORING_EVIDENCE",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -394,6 +457,12 @@ const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
   "failover-pitr",
   "multi-region",
   "multi-writer",
+]);
+const DURABLE_JOB_EXECUTION_POSTURES = new Set([
+  "managed-postgres-transactional-queue",
+  "managed-postgres-durable-jobs",
+  "shared-managed-postgres",
+  "external-durable-queue",
 ]);
 const HORIZONTAL_WRITER_TOPOLOGY_HINTS = new Set([
   "horizontal-app-writers",
@@ -428,6 +497,10 @@ function normalize(value: string | undefined): string {
 
 function configured(value: string | undefined): boolean {
   return clean(value).length > 0;
+}
+
+function truthy(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(normalize(value));
 }
 
 function redactedValue(key: string, value: string | undefined): Pick<ManagedDatabaseRuntimeGuardObservedEnvValue, "value" | "redacted"> {
@@ -1031,6 +1104,90 @@ function phase62ManagedPostgresHorizontalWriterHardeningGate(
   };
 }
 
+function phase63DistributedDependencyEnforcementGate(
+  env: ManagedDatabaseRuntimeGuardEnv,
+  horizontalWriterTopologyRequested: boolean,
+  phase62: ReturnType<typeof phase62ManagedPostgresHorizontalWriterHardeningGate>,
+) {
+  const distributedRateLimitConfigured = configured(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL);
+  const distributedRateLimitFailClosed = !truthy(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN);
+  const distributedRateLimitReady = distributedRateLimitConfigured && distributedRateLimitFailClosed;
+  const schedulerLeaderMode = normalize(env.TASKLOOM_SCHEDULER_LEADER_MODE);
+  const schedulerHttpLeaderConfigured =
+    schedulerLeaderMode === "http" && configured(env.TASKLOOM_SCHEDULER_LEADER_HTTP_URL);
+  const schedulerHttpLeaderFailClosed = !truthy(env.TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN);
+  const schedulerCoordinationReady = schedulerHttpLeaderConfigured && schedulerHttpLeaderFailClosed;
+  const durableJobExecutionPosture = normalize(env.TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE);
+  const durableJobExecutionPostureReady =
+    phase62.horizontalWriterRuntimeSupported &&
+    DURABLE_JOB_EXECUTION_POSTURES.has(durableJobExecutionPosture) &&
+    configured(env.TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE);
+  const accessLogMode = normalize(env.TASKLOOM_ACCESS_LOG_MODE);
+  const accessLogShippingEvidenceConfigured =
+    configured(env.TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE) ||
+    configured(env.TASKLOOM_ACCESS_LOG_SHIPPING_ASSERTION);
+  const accessLogShippingConfigured =
+    (accessLogMode === "stdout" && accessLogShippingEvidenceConfigured) ||
+    (accessLogMode === "file" &&
+      configured(env.TASKLOOM_ACCESS_LOG_PATH) &&
+      accessLogShippingEvidenceConfigured);
+  const alertEvaluationConfigured = configured(env.TASKLOOM_ALERT_EVALUATE_CRON);
+  const alertDeliveryConfigured = configured(env.TASKLOOM_ALERT_WEBHOOK_URL);
+  const alertDeliveryEvidenceConfigured = configured(env.TASKLOOM_ALERT_DELIVERY_EVIDENCE);
+  const alertDeliveryReady = alertEvaluationConfigured && alertDeliveryConfigured && alertDeliveryEvidenceConfigured;
+  const healthMonitoringConfigured =
+    configured(env.TASKLOOM_HEALTH_MONITORING_EVIDENCE) ||
+    configured(env.TASKLOOM_HEALTH_MONITORING_ASSERTION);
+  const distributedDependencyEnforcementReady =
+    !horizontalWriterTopologyRequested ||
+    (phase62.horizontalWriterRuntimeSupported &&
+      distributedRateLimitReady &&
+      schedulerCoordinationReady &&
+      durableJobExecutionPostureReady &&
+      accessLogShippingConfigured &&
+      alertDeliveryReady &&
+      healthMonitoringConfigured);
+  const strictBlocker = horizontalWriterTopologyRequested && !distributedDependencyEnforcementReady;
+  const missingDependencies = [
+    ...(!distributedRateLimitReady ? ["distributedRateLimiting" as const] : []),
+    ...(!schedulerCoordinationReady ? ["schedulerCoordination" as const] : []),
+    ...(!durableJobExecutionPostureReady ? ["durableJobExecution" as const] : []),
+    ...(!accessLogShippingConfigured ? ["accessLogShipping" as const] : []),
+    ...(!alertDeliveryReady ? ["alertDelivery" as const] : []),
+    ...(!healthMonitoringConfigured ? ["healthMonitoring" as const] : []),
+  ];
+  const summary = horizontalWriterTopologyRequested
+    ? distributedDependencyEnforcementReady
+      ? "Phase 63 distributed dependency enforcement is configured; activation uses shared rate limiting, HTTP scheduler coordination, durable managed Postgres jobs, shipped access logs, alert delivery, and health monitoring."
+      : "Phase 63 requires production-safe distributed dependencies before horizontal app-writer activation: shared fail-closed rate limiting, HTTP scheduler coordination, durable managed Postgres job execution, shipped access logs, alert delivery, and health monitoring."
+    : "No managed Postgres horizontal app-writer topology requested for Phase 63 distributed dependency enforcement.";
+
+  return {
+    required: horizontalWriterTopologyRequested,
+    horizontalWriterTopologyRequested,
+    phase62HorizontalWriterRuntimeSupported: phase62.horizontalWriterRuntimeSupported,
+    distributedRateLimitConfigured,
+    distributedRateLimitFailClosed,
+    distributedRateLimitReady,
+    schedulerHttpLeaderConfigured,
+    schedulerHttpLeaderFailClosed,
+    schedulerCoordinationReady,
+    durableJobExecutionPostureReady,
+    accessLogShippingConfigured,
+    alertEvaluationConfigured,
+    alertDeliveryConfigured,
+    alertDeliveryReady,
+    healthMonitoringConfigured,
+    distributedDependencyEnforcementReady,
+    dependencyEnforcementReady: distributedDependencyEnforcementReady,
+    missingDependencies,
+    activationAllowed: horizontalWriterTopologyRequested && distributedDependencyEnforcementReady,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return (
     MANAGED_TOPOLOGY_HINTS.has(topology) ||
@@ -1070,6 +1227,7 @@ function buildNextSteps(
   phase60: ReturnType<typeof phase60MultiWriterRuntimeSupportPresenceAssertionGate>,
   phase61: ReturnType<typeof phase61MultiWriterRuntimeActivationControlsGate>,
   phase62: ReturnType<typeof phase62ManagedPostgresHorizontalWriterHardeningGate>,
+  phase63: ReturnType<typeof phase63DistributedDependencyEnforcementGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -1298,6 +1456,29 @@ function buildNextSteps(
         steps.add("Configure TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE with transaction retry or compare-and-swap evidence.");
       }
     }
+    if (check.id === "phase63-distributed-dependency-enforcement") {
+      if (!phase63.phase62HorizontalWriterRuntimeSupported) {
+        steps.add("Complete Phase 62 horizontal app-writer hardening before enabling Phase 63 distributed dependencies.");
+      }
+      if (!phase63.distributedRateLimitReady) {
+        steps.add("Configure TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL and keep TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN unset for fail-closed shared rate limiting.");
+      }
+      if (!phase63.schedulerCoordinationReady) {
+        steps.add("Configure TASKLOOM_SCHEDULER_LEADER_MODE=http and TASKLOOM_SCHEDULER_LEADER_HTTP_URL, with TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN unset.");
+      }
+      if (!phase63.durableJobExecutionPostureReady) {
+        steps.add("Keep durable job execution on the managed Postgres horizontal app-writer posture; local JSON/SQLite job coordination cannot activate horizontally.");
+      }
+      if (!phase63.accessLogShippingConfigured) {
+        steps.add("Configure TASKLOOM_ACCESS_LOG_MODE=stdout for supervisor shipping, or file mode with TASKLOOM_ACCESS_LOG_PATH and TASKLOOM_ACCESS_LOG_SHIPPING_ASSERTION.");
+      }
+      if (!phase63.alertDeliveryReady) {
+        steps.add("Configure TASKLOOM_ALERT_EVALUATE_CRON and TASKLOOM_ALERT_WEBHOOK_URL so subsystem health and job alerts are delivered.");
+      }
+      if (!phase63.healthMonitoringConfigured) {
+        steps.add("Configure TASKLOOM_HEALTH_MONITORING_ASSERTION with the external monitor or readiness-probe evidence for the activated deployment.");
+      }
+    }
   }
 
   if (bypassEnabled) {
@@ -1370,6 +1551,7 @@ export function assessManagedDatabaseRuntimeGuard(
     hasManagedPostgresStartupSupport,
     phase61,
   );
+  const phase63 = phase63DistributedDependencyEnforcementGate(env, hasHorizontalWriterIntent, phase62);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseRuntimeGuardCheck[] = [];
   const warnings: string[] = [];
@@ -1486,6 +1668,13 @@ export function assessManagedDatabaseRuntimeGuard(
     phase62.summary,
   );
 
+  pushCheck(
+    checks,
+    "phase63-distributed-dependency-enforcement",
+    phase63.strictBlocker ? "fail" : "pass",
+    phase63.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent && !hasHorizontalWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -1527,6 +1716,7 @@ export function assessManagedDatabaseRuntimeGuard(
   }
   if (hasHorizontalWriterIntent) {
     warnings.push(phase62.summary);
+    warnings.push(phase63.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -1534,7 +1724,10 @@ export function assessManagedDatabaseRuntimeGuard(
 
   const blockers = checks.filter((check) => check.status === "fail").map((check) => check.summary);
   const managedDatabaseRuntimeBlocked =
-    (hasManagedIntent && !hasManagedPostgresStartupSupport) || hasMultiWriterIntent || phase62.strictBlocker;
+    (hasManagedIntent && !hasManagedPostgresStartupSupport) ||
+    hasMultiWriterIntent ||
+    phase62.strictBlocker ||
+    phase63.strictBlocker;
   const allowed = blockers.length === 0 || bypassEnabled;
   const status = statusFromChecks(checks, bypassEnabled);
   let classification: ManagedDatabaseRuntimeGuardClassification;
@@ -1555,8 +1748,8 @@ export function assessManagedDatabaseRuntimeGuard(
   const summary = allowed
     ? bypassEnabled
       ? "Phase 46 managed database runtime guard was bypassed; unsupported runtime configuration remains present."
-      : hasHorizontalWriterIntent && phase62.horizontalWriterHardeningReady
-        ? "Phase 62 managed database runtime guard allows hardened managed Postgres horizontal app-writer posture."
+      : hasHorizontalWriterIntent && phase63.distributedDependencyEnforcementReady
+        ? "Phase 63 managed database runtime guard allows hardened managed Postgres horizontal app-writer posture with distributed dependency enforcement."
       : hasManagedIntent && hasManagedPostgresStartupSupport
         ? "Phase 52 managed database runtime guard allows single-writer managed Postgres startup."
         : store === "sqlite"
@@ -1590,6 +1783,7 @@ export function assessManagedDatabaseRuntimeGuard(
       phase60,
       phase61,
       phase62,
+      phase63,
     ),
     observed: {
       nodeEnv,
@@ -1616,6 +1810,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase60,
     phase61,
     phase62,
+    phase63,
   };
 }
 

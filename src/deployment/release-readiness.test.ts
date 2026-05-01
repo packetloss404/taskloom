@@ -98,6 +98,53 @@ function phase61CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
   };
 }
 
+function phase63CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
+  return {
+    ...phase61CompleteHorizontalWriterEnv(),
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "concurrency-test://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.example.com/taskloom/check",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE: "rate-limit://phase63/fail-closed",
+    TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+    TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://coord.example.com/taskloom/scheduler-leader",
+    TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE: "scheduler://phase63/http-coordinator",
+    TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+    TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63/durable",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63/stdout-shipper",
+    TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
+    TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.example.com/taskloom",
+    TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63/webhook",
+    TASKLOOM_HEALTH_MONITORING_EVIDENCE: "monitoring://phase63/health",
+  } as ReleaseReadinessEnv;
+}
+
+interface Phase63ReadinessGateContract {
+  phase: "63";
+  required: boolean;
+  phase62HorizontalWriterHardeningReady: boolean;
+  distributedRateLimitReady: boolean;
+  schedulerCoordinationReady: boolean;
+  durableJobExecutionReady: boolean;
+  accessLogShippingReady: boolean;
+  alertDeliveryReady: boolean;
+  healthMonitoringReady: boolean;
+  distributedDependencyEnforcementReady: boolean;
+  activationDependencyGatePassed: boolean;
+  strictActivationBlocked: boolean;
+  releaseAllowed: boolean;
+  blockers: string[];
+}
+
+function phase63Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase63ReadinessGateContract {
+  const gate = (report.asyncStoreBoundary as unknown as {
+    phase63DistributedDependencyEnforcementGate?: unknown;
+  }).phase63DistributedDependencyEnforcementGate;
+  assert.ok(gate && typeof gate === "object", "expected Phase 63 distributed dependency enforcement gate");
+  return gate as Phase63ReadinessGateContract;
+}
+
 test("local JSON development produces warnings instead of release blockers", () => {
   const report = assessReleaseReadiness({ env: {} });
 
@@ -983,6 +1030,71 @@ test("Phase 62 horizontal writer hardening completes only the supported managed 
   assert.equal(phase62Gate?.releaseAllowed, false);
   assert.ok(report.asyncStoreBoundary.summary.includes("Phase 62 concurrency hardening is complete"));
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 63 distributed dependency enforcement")));
+});
+
+test("Phase 63 distributed dependency enforcement is required after Phase 62 horizontal writer hardening", () => {
+  const env: ReleaseReadinessEnv = {
+    ...phase61CompleteHorizontalWriterEnv(),
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "concurrency-test://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+  };
+  const report = assessReleaseReadiness({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase63Gate(report);
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(gate.phase, "63");
+  assert.equal(gate.required, true);
+  assert.equal(gate.phase62HorizontalWriterHardeningReady, true);
+  assert.equal(gate.distributedRateLimitReady, false);
+  assert.equal(gate.schedulerCoordinationReady, false);
+  assert.equal(gate.durableJobExecutionReady, false);
+  assert.equal(gate.accessLogShippingReady, false);
+  assert.equal(gate.alertDeliveryReady, false);
+  assert.equal(gate.healthMonitoringReady, false);
+  assert.equal(gate.distributedDependencyEnforcementReady, false);
+  assert.equal(gate.activationDependencyGatePassed, false);
+  assert.equal(gate.strictActivationBlocked, true);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase63-distributed-dependency-enforcement"), "fail");
+  assert.ok(gate.blockers.some((blocker) => blocker.includes("distributed rate limiting")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 63")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL")));
+});
+
+test("Phase 63 dependency enforcement activation gate passes only when all six dependency areas are production-safe", () => {
+  const report = assessReleaseReadiness({
+    env: phase63CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase63Gate(report);
+
+  assert.equal(gate.required, true);
+  assert.equal(gate.phase62HorizontalWriterHardeningReady, true);
+  assert.equal(gate.distributedRateLimitReady, true);
+  assert.equal(gate.schedulerCoordinationReady, true);
+  assert.equal(gate.durableJobExecutionReady, true);
+  assert.equal(gate.accessLogShippingReady, true);
+  assert.equal(gate.alertDeliveryReady, true);
+  assert.equal(gate.healthMonitoringReady, true);
+  assert.equal(gate.distributedDependencyEnforcementReady, true);
+  assert.equal(gate.activationDependencyGatePassed, true);
+  assert.equal(gate.strictActivationBlocked, false);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase63-distributed-dependency-enforcement"), "pass");
+  assert.equal(report.readyForRelease, false);
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 63 distributed dependency enforcement is complete"));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 64 recovery validation")));
 });
 
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {

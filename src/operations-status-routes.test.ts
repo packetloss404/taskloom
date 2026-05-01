@@ -177,6 +177,18 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
   assert.equal(managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
   assert.equal(managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
+  assert.ok(
+    body.distributedDependencyEnforcement &&
+      typeof body.distributedDependencyEnforcement === "object",
+  );
+  const distributedDependencyEnforcement =
+    body.distributedDependencyEnforcement as Record<string, unknown>;
+  assert.equal(distributedDependencyEnforcement.phase, "63");
+  assert.equal(distributedDependencyEnforcement.strictActivationAllowed, false);
+  assert.ok(
+    distributedDependencyEnforcement.dependencies &&
+      typeof distributedDependencyEnforcement.dependencies === "object",
+  );
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);

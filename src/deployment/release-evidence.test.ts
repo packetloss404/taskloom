@@ -1269,6 +1269,60 @@ test("strict evidence records complete Phase 62 hardening without claiming activ
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 66 final release closure")));
 });
 
+test("strict evidence records complete Phase 63 dependency enforcement with redacted attachments", () => {
+  const env = {
+    ...phase61CompleteHorizontalWriterEvidenceEnv(),
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "concurrency://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.internal/taskloom",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE: "https://auditor:secret@evidence.internal/phase63-rate-limit",
+    TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+    TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://scheduler.internal/leader",
+    TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE: "scheduler://phase63",
+    TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+    TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63",
+    TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63",
+    TASKLOOM_ALERT_EVALUATE_CRON: "*/1 * * * *",
+    TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts:secret@hooks.internal/taskloom",
+    TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63",
+    TASKLOOM_HEALTH_MONITORING_EVIDENCE: "health://phase63",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T06:00:00.000Z",
+    strict: true,
+  });
+  const rateLimitAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-63-distributed-rate-limit-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase63DistributedDependencyEnforcementGateRequired, true);
+  assert.equal(bundle.evidence.config.phase63Phase62HorizontalWriterHardeningReady, true);
+  assert.equal(bundle.evidence.config.phase63DistributedRateLimitReady, true);
+  assert.equal(bundle.evidence.config.phase63SchedulerCoordinationReady, true);
+  assert.equal(bundle.evidence.config.phase63DurableJobExecutionReady, true);
+  assert.equal(bundle.evidence.config.phase63AccessLogShippingReady, true);
+  assert.equal(bundle.evidence.config.phase63AlertDeliveryReady, true);
+  assert.equal(bundle.evidence.config.phase63HealthMonitoringReady, true);
+  assert.equal(bundle.evidence.config.phase63ActivationDependencyGatePassed, true);
+  assert.equal(bundle.evidence.config.phase63StrictActivationBlocked, false);
+  assert.equal(bundle.evidence.config.phase63ActiveActiveSupported, false);
+  assert.deepEqual(bundle.evidence.config.phase63PendingPhases, ["64", "65", "66"]);
+  assert.equal(bundle.evidence.config.phase63TopologyReleaseAllowed, false);
+  assert.equal(rateLimitAttachment?.required, true);
+  assert.equal(rateLimitAttachment?.configured, true);
+  assert.equal(rateLimitAttachment?.redacted, true);
+  assert.equal(rateLimitAttachment?.value, "[redacted]");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_ALERT_WEBHOOK_URL").value, "[redacted]");
+  assert.ok(bundle.summary.includes("Phase 63 distributed dependency enforcement is complete"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 64 recovery validation")));
+});
+
 test("release readiness managed reports are reused when present", () => {
   const storageTopology = injectedStorageTopology();
   const managedDatabaseTopology = injectedManagedDatabaseTopology();

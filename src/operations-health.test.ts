@@ -197,3 +197,73 @@ test("disabled access log does not poison overall", () => {
   assert.equal(findSubsystem(report, "accessLog").status, "disabled");
   assert.equal(report.overall, "ok");
 });
+
+test("distributed dependency health explains blocked Phase 63 activation for local-only coordination", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: {
+        TASKLOOM_STORE: "postgres",
+        TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+        TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+        TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+          "artifacts/phase62/horizontal-writer-hardening.md",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+          "artifacts/phase62/concurrency-tests.tap",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+          "artifacts/phase62/transaction-retry.md",
+        TASKLOOM_SCHEDULER_LEADER_MODE: "file",
+        TASKLOOM_ACCESS_LOG_MODE: "file",
+        TASKLOOM_ACCESS_LOG_PATH: "data/access.log",
+      },
+    }),
+  );
+  const dependencies = findSubsystem(report, "distributedDependencyEnforcement");
+
+  assert.equal(dependencies.status, "degraded");
+  assert.match(dependencies.detail, /Phase 63/);
+  assert.match(dependencies.detail, /distributed rate limiting/);
+  assert.match(dependencies.detail, /scheduler coordination/);
+  assert.match(dependencies.detail, /durable job execution/);
+  assert.match(dependencies.detail, /access-log shipping/);
+  assert.match(dependencies.detail, /alert delivery/);
+  assert.match(dependencies.detail, /health monitoring/);
+  assert.match(dependencies.detail, /activationAllowed=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("distributed dependency health is ok when all Phase 63 dependencies are production-safe", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: {
+        TASKLOOM_STORE: "postgres",
+        TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+        TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+        TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+          "artifacts/phase62/horizontal-writer-hardening.md",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+          "artifacts/phase62/concurrency-tests.tap",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+          "artifacts/phase62/transaction-retry.md",
+        TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.example.com/taskloom/check",
+        TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+        TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://coord.example.com/taskloom/scheduler-leader",
+        TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+        TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63/durable",
+        TASKLOOM_ACCESS_LOG_MODE: "stdout",
+        TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63/stdout-shipper",
+        TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
+        TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.example.com/taskloom",
+        TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63/webhook",
+        TASKLOOM_HEALTH_MONITORING_EVIDENCE: "monitoring://phase63/health",
+      },
+    }),
+  );
+  const dependencies = findSubsystem(report, "distributedDependencyEnforcement");
+
+  assert.equal(dependencies.status, "ok");
+  assert.match(dependencies.detail, /Phase 63/);
+  assert.match(dependencies.detail, /activationAllowed=true/);
+  assert.match(dependencies.detail, /releaseAllowed=false/);
+});

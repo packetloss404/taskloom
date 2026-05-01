@@ -1,6 +1,6 @@
 # Taskloom Access-Log Shipping And Retention
 
-Phase 23 layers managed log shipping, retention, and SIEM integration on top of the Phase 20 access-log middleware. Phase 20 added an opt-in Hono middleware that writes redacted JSON access lines to stdout or a file based on `TASKLOOM_ACCESS_LOG_MODE`/`TASKLOOM_ACCESS_LOG_PATH`, plus reverse-proxy rewriting templates and a validator at `src/security/proxy-access-log-validator.ts`. Phase 23 fills the operator gap that came after: in-app size-based rotation, an out-of-band rotation CLI, and tested integration recipes for the common shipping paths to Vector, Fluent Bit, and Promtail/Loki. The goal is a redacted access-log surface that an operator can plug into the rest of their SIEM/object-store stack without holding raw token-bearing strings on local disk longer than necessary.
+Phase 23 layers managed log shipping, retention, and SIEM integration on top of the Phase 20 access-log middleware. Phase 20 added an opt-in Hono middleware that writes redacted JSON access lines to stdout or a file based on `TASKLOOM_ACCESS_LOG_MODE`/`TASKLOOM_ACCESS_LOG_PATH`, plus reverse-proxy rewriting templates and a validator at `src/security/proxy-access-log-validator.ts`. Phase 23 fills the operator gap that came after: in-app size-based rotation, an out-of-band rotation CLI, and tested integration recipes for the common shipping paths to Vector, Fluent Bit, and Promtail/Loki. Phase 63 makes the shipping posture activation-relevant: strict activation for a horizontally scaled managed Postgres deployment must not rely on disabled access logs or unshipped local files. The goal is a redacted access-log surface that an operator can plug into the rest of their SIEM/object-store stack without holding raw token-bearing strings on local disk longer than necessary.
 
 The doc covers two paths in parallel: the in-app rotation/retention knobs that bound disk usage when the middleware writes to a file, and the integration story for external shippers that tail those rotated files (or stdout, when running under a process supervisor). Both paths share the same Phase 19 + Phase 20 redaction posture, so the SIEM ingests the same masked path/query and identifier fields the app emits at the request boundary.
 
@@ -172,6 +172,15 @@ Retention guidance:
 - Configure compliance-grade retention on the SIEM or object-store side, not through Taskloom-side `MAX_FILES`. The in-app rotation is a disk-bound buffer; treat the shipped destination as the source of truth for retention windows, legal hold, and tamper evidence.
 - Size the local buffer (`MAX_BYTES * MAX_FILES`) generously enough to cover the worst-case shipper outage the operator is willing to absorb, then accept that older lines will roll off the local disk once the cap is reached.
 
+## Phase 63 Activation Dependency Posture
+
+For strict activation, access logging is considered production-safe when one of these is true:
+
+- `TASKLOOM_ACCESS_LOG_MODE=stdout` and the platform captures, retains, and ships stdout to the deployment log pipeline, with `TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE` attached.
+- `TASKLOOM_ACCESS_LOG_MODE=file` with `TASKLOOM_ACCESS_LOG_PATH`, rotation bounds, a configured shipper that tails the active file and rotated siblings, and `TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE` attached.
+
+`TASKLOOM_ACCESS_LOG_MODE=off`, a file path without a shipper, missing shipping evidence, or file-mode logs written only to ephemeral local disk should block strict activation for a horizontally scaled deployment. Operations status should show the selected mode/path/rotation envelope, and operations health should report whether the access-log dependency is ready, degraded, disabled, or down for activation purposes.
+
 PII and regulatory expectations:
 
 - Phase 19 + Phase 20 ensure tokens, bearer values, and token-bearing URLs are redacted at the source. The shipped JSON line should never contain a raw `whk_`, share, or invitation-accept token.
@@ -186,4 +195,5 @@ After enabling Phase 23 controls, walk through:
 - Confirm the configured shipper picks up rotated files within its `Rotate_Wait` (Fluent Bit), follow-renames (Vector), or inode-tracking (Promtail) window. Watch for "file truncated" or "file disappeared" warnings in the shipper log; those usually mean the rotation cascade outran the shipper's read cursor and `MAX_FILES` should be raised.
 - Confirm the SIEM ingests the JSON lines as structured events with parsed fields (not opaque strings). Each event should carry `ts`, `method`, `status`, `path`, `durationMs`, `userId`, `workspaceId`, and `requestId`.
 - Run `node --import tsx src/security/proxy-access-log-validator.ts <shipped-sample>` against a sample exported from the SIEM. Exit code `0` means no raw `whk_`, `Bearer `, share/invitation/webhook token segments, or sensitive query parameter values reached the SIEM. A non-zero exit code points at a redaction gap to fix at the source (proxy, app middleware, or shipper enrichment).
+- Phase 63 strict activation: confirm operations status/health reports access-log shipping ready only after stdout capture or file-mode shipping is configured, and reports disabled/degraded while logs are off or trapped on local disk.
 - Cross-link the rest of the production posture: `docs/deployment-export-redaction.md` for the workspace export pipeline and proxy templates, `docs/deployment-scheduler-coordination.md` for multi-process scheduler coordination, `docs/deployment-auth-hardening.md` for auth/invitation rate limits and CSRF behavior, `docs/deployment-sqlite-topology.md` for storage topology, and `docs/invitation-email-operations.md` for invitation webhook delivery and reconciliation expectations.

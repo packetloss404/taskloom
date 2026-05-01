@@ -70,6 +70,19 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION?: string;
   TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE?: string;
   TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE?: string;
+  TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL?: string;
+  TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN?: string;
+  TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE?: string;
+  TASKLOOM_SCHEDULER_LEADER_HTTP_URL?: string;
+  TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN?: string;
+  TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE?: string;
+  TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE?: string;
+  TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE?: string;
+  TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE?: string;
+  TASKLOOM_ALERT_EVALUATE_CRON?: string;
+  TASKLOOM_ALERT_WEBHOOK_URL?: string;
+  TASKLOOM_ALERT_DELIVERY_EVIDENCE?: string;
+  TASKLOOM_HEALTH_MONITORING_EVIDENCE?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -132,6 +145,7 @@ export interface AsyncStoreBoundaryReport {
   phase60MultiWriterRuntimeSupportPresenceAssertionGate?: Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport;
   phase61MultiWriterRuntimeActivationControlsGate?: Phase61MultiWriterRuntimeActivationControlsGateReport;
   phase62ManagedPostgresHorizontalWriterHardeningGate?: Phase62ManagedPostgresHorizontalWriterHardeningGateReport;
+  phase63DistributedDependencyEnforcementGate?: Phase63DistributedDependencyEnforcementGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -351,6 +365,57 @@ export interface Phase62ManagedPostgresHorizontalWriterHardeningGateReport {
   nextSteps: string[];
 }
 
+export interface Phase63DistributedDependencyEnforcementGateReport {
+  phase: "63";
+  required: boolean;
+  horizontalWriterTopologyRequested: boolean;
+  phase62HorizontalWriterHardeningReady: boolean;
+  distributedRateLimitRequired: boolean;
+  distributedRateLimitConfigured: boolean;
+  distributedRateLimitEvidenceAttached: boolean;
+  distributedRateLimitFailOpen: boolean;
+  distributedRateLimitReady: boolean;
+  schedulerCoordinationRequired: boolean;
+  schedulerLeaderMode: string;
+  schedulerCoordinationHttpUrlConfigured: boolean;
+  schedulerCoordinationEvidenceAttached: boolean;
+  schedulerCoordinationFailOpen: boolean;
+  schedulerCoordinationLocalOnly: boolean;
+  schedulerCoordinationReady: boolean;
+  durableJobExecutionRequired: boolean;
+  durableJobExecutionPosture: string;
+  durableJobExecutionPostureSafe: boolean;
+  durableJobExecutionEvidenceAttached: boolean;
+  durableJobExecutionReady: boolean;
+  accessLogShippingRequired: boolean;
+  accessLogMode: string;
+  accessLogShippingConfigured: boolean;
+  accessLogShippingEvidenceAttached: boolean;
+  accessLogShippingLocalOnly: boolean;
+  accessLogShippingReady: boolean;
+  alertDeliveryRequired: boolean;
+  alertEvaluateCronConfigured: boolean;
+  alertWebhookUrlConfigured: boolean;
+  alertDeliveryEvidenceAttached: boolean;
+  alertDeliveryReady: boolean;
+  healthMonitoringRequired: boolean;
+  healthMonitoringEvidenceAttached: boolean;
+  healthMonitoringReady: boolean;
+  distributedDependencyEnforcementReady: boolean;
+  activationDependencyGatePassed: boolean;
+  strictActivationBlocked: boolean;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  phases64To66Pending: boolean;
+  pendingPhases: string[];
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
 export interface Phase53MultiWriterTopologyEvidenceItem {
   id:
     | "topology-owner"
@@ -429,6 +494,12 @@ const HORIZONTAL_WRITER_TOPOLOGY_HINTS = new Set([
   "managed-postgres-horizontal-writers",
   "postgres-horizontal-app-writers",
   "postgres-horizontal-writers",
+]);
+const DURABLE_JOB_EXECUTION_POSTURES = new Set([
+  "managed-postgres-transactional-queue",
+  "managed-postgres-durable-jobs",
+  "shared-managed-postgres",
+  "external-durable-queue",
 ]);
 
 function parentPath(path: string): string | null {
@@ -1667,6 +1738,250 @@ function buildPhase62ManagedPostgresHorizontalWriterHardeningGate(
   };
 }
 
+function buildPhase63DistributedDependencyEnforcementGate(
+  horizontalWriterIntent: boolean,
+  phase62Gate: Phase62ManagedPostgresHorizontalWriterHardeningGateReport,
+  env: ReleaseReadinessEnv,
+): Phase63DistributedDependencyEnforcementGateReport {
+  const distributedRateLimitConfigured = clean(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL).length > 0;
+  const distributedRateLimitEvidenceAttached =
+    clean(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE).length > 0;
+  const distributedRateLimitFailOpen = truthy(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN);
+  const distributedRateLimitReady =
+    distributedRateLimitConfigured &&
+    distributedRateLimitEvidenceAttached &&
+    !distributedRateLimitFailOpen;
+  const schedulerLeaderMode = normalize(env.TASKLOOM_SCHEDULER_LEADER_MODE) || "off";
+  const schedulerCoordinationHttpUrlConfigured =
+    clean(env.TASKLOOM_SCHEDULER_LEADER_HTTP_URL).length > 0;
+  const schedulerCoordinationEvidenceAttached =
+    clean(env.TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE).length > 0;
+  const schedulerCoordinationFailOpen = truthy(env.TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN);
+  const schedulerCoordinationLocalOnly = schedulerLeaderMode !== "http";
+  const schedulerCoordinationReady =
+    schedulerLeaderMode === "http" &&
+    schedulerCoordinationHttpUrlConfigured &&
+    schedulerCoordinationEvidenceAttached &&
+    !schedulerCoordinationFailOpen;
+  const durableJobExecutionPosture = normalize(env.TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE);
+  const durableJobExecutionPostureSafe = DURABLE_JOB_EXECUTION_POSTURES.has(durableJobExecutionPosture);
+  const durableJobExecutionEvidenceAttached =
+    clean(env.TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE).length > 0;
+  const durableJobExecutionReady =
+    durableJobExecutionPostureSafe && durableJobExecutionEvidenceAttached;
+  const accessLogMode = normalize(env.TASKLOOM_ACCESS_LOG_MODE) || "off";
+  const accessLogShippingEvidenceAttached =
+    clean(env.TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE).length > 0;
+  const accessLogShippingConfigured = accessLogMode === "stdout" || accessLogMode === "file";
+  const accessLogShippingLocalOnly = accessLogMode !== "stdout" && accessLogMode !== "file";
+  const accessLogShippingReady = accessLogShippingConfigured && accessLogShippingEvidenceAttached;
+  const alertEvaluateCronConfigured = clean(env.TASKLOOM_ALERT_EVALUATE_CRON).length > 0;
+  const alertWebhookUrlConfigured = clean(env.TASKLOOM_ALERT_WEBHOOK_URL).length > 0;
+  const alertDeliveryEvidenceAttached = clean(env.TASKLOOM_ALERT_DELIVERY_EVIDENCE).length > 0;
+  const alertDeliveryReady =
+    alertEvaluateCronConfigured &&
+    alertWebhookUrlConfigured &&
+    alertDeliveryEvidenceAttached;
+  const healthMonitoringEvidenceAttached =
+    clean(env.TASKLOOM_HEALTH_MONITORING_EVIDENCE).length > 0;
+  const healthMonitoringReady = healthMonitoringEvidenceAttached;
+  const phase62HorizontalWriterHardeningReady = phase62Gate.horizontalWriterHardeningReady;
+  const distributedDependencyEnforcementReady =
+    distributedRateLimitReady &&
+    schedulerCoordinationReady &&
+    durableJobExecutionReady &&
+    accessLogShippingReady &&
+    alertDeliveryReady &&
+    healthMonitoringReady;
+  const activationDependencyGatePassed =
+    horizontalWriterIntent &&
+    phase62HorizontalWriterHardeningReady &&
+    distributedDependencyEnforcementReady;
+  const pendingPhases = horizontalWriterIntent ? ["64", "65", "66"] : [];
+
+  if (!horizontalWriterIntent) {
+    return {
+      phase: "63",
+      required: false,
+      horizontalWriterTopologyRequested: false,
+      phase62HorizontalWriterHardeningReady,
+      distributedRateLimitRequired: false,
+      distributedRateLimitConfigured,
+      distributedRateLimitEvidenceAttached,
+      distributedRateLimitFailOpen,
+      distributedRateLimitReady,
+      schedulerCoordinationRequired: false,
+      schedulerLeaderMode,
+      schedulerCoordinationHttpUrlConfigured,
+      schedulerCoordinationEvidenceAttached,
+      schedulerCoordinationFailOpen,
+      schedulerCoordinationLocalOnly,
+      schedulerCoordinationReady,
+      durableJobExecutionRequired: false,
+      durableJobExecutionPosture,
+      durableJobExecutionPostureSafe,
+      durableJobExecutionEvidenceAttached,
+      durableJobExecutionReady,
+      accessLogShippingRequired: false,
+      accessLogMode,
+      accessLogShippingConfigured,
+      accessLogShippingEvidenceAttached,
+      accessLogShippingLocalOnly,
+      accessLogShippingReady,
+      alertDeliveryRequired: false,
+      alertEvaluateCronConfigured,
+      alertWebhookUrlConfigured,
+      alertDeliveryEvidenceAttached,
+      alertDeliveryReady,
+      healthMonitoringRequired: false,
+      healthMonitoringEvidenceAttached,
+      healthMonitoringReady,
+      distributedDependencyEnforcementReady: false,
+      activationDependencyGatePassed: false,
+      strictActivationBlocked: false,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      phases64To66Pending: false,
+      pendingPhases,
+      releaseAllowed: true,
+      summary: "Phase 63 distributed dependency enforcement is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 63 distributed dependency evidence ready before any future horizontal writer activation claim."],
+    };
+  }
+
+  return {
+    phase: "63",
+    required: true,
+    horizontalWriterTopologyRequested: true,
+    phase62HorizontalWriterHardeningReady,
+    distributedRateLimitRequired: true,
+    distributedRateLimitConfigured,
+    distributedRateLimitEvidenceAttached,
+    distributedRateLimitFailOpen,
+    distributedRateLimitReady,
+    schedulerCoordinationRequired: true,
+    schedulerLeaderMode,
+    schedulerCoordinationHttpUrlConfigured,
+    schedulerCoordinationEvidenceAttached,
+    schedulerCoordinationFailOpen,
+    schedulerCoordinationLocalOnly,
+    schedulerCoordinationReady,
+    durableJobExecutionRequired: true,
+    durableJobExecutionPosture,
+    durableJobExecutionPostureSafe,
+    durableJobExecutionEvidenceAttached,
+    durableJobExecutionReady,
+    accessLogShippingRequired: true,
+    accessLogMode,
+    accessLogShippingConfigured,
+    accessLogShippingEvidenceAttached,
+    accessLogShippingLocalOnly,
+    accessLogShippingReady,
+    alertDeliveryRequired: true,
+    alertEvaluateCronConfigured,
+    alertWebhookUrlConfigured,
+    alertDeliveryEvidenceAttached,
+    alertDeliveryReady,
+    healthMonitoringRequired: true,
+    healthMonitoringEvidenceAttached,
+    healthMonitoringReady,
+    distributedDependencyEnforcementReady,
+    activationDependencyGatePassed,
+    strictActivationBlocked: !activationDependencyGatePassed,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    phases64To66Pending: true,
+    pendingPhases,
+    releaseAllowed: false,
+    summary: activationDependencyGatePassed
+      ? "Phase 63 distributed dependency enforcement is complete for managed Postgres horizontal app-writer activation; recovery validation, cutover automation, and final release closure remain blocked pending Phases 64-66."
+      : "Phase 63 distributed dependency enforcement requires production-safe shared rate limiting, scheduler coordination, durable job execution, access-log shipping, alert delivery, and health monitoring before activation.",
+    blockers: [
+      ...(!phase62HorizontalWriterHardeningReady
+        ? ["Phase 63 distributed dependency enforcement requires complete Phase 62 horizontal app-writer hardening first."]
+        : []),
+      ...(!distributedRateLimitConfigured
+        ? ["Phase 63 distributed rate limiting requires TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL."]
+        : []),
+      ...(!distributedRateLimitEvidenceAttached
+        ? ["Phase 63 distributed rate limiting evidence is required in TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE."]
+        : []),
+      ...(distributedRateLimitFailOpen
+        ? ["Phase 63 distributed rate limiting must fail closed; unset TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN for activation."]
+        : []),
+      ...(schedulerLeaderMode !== "http"
+        ? ["Phase 63 scheduler coordination requires TASKLOOM_SCHEDULER_LEADER_MODE=http; off/file modes are local-only activation blockers."]
+        : []),
+      ...(!schedulerCoordinationHttpUrlConfigured
+        ? ["Phase 63 scheduler coordination requires TASKLOOM_SCHEDULER_LEADER_HTTP_URL."]
+        : []),
+      ...(!schedulerCoordinationEvidenceAttached
+        ? ["Phase 63 scheduler coordination evidence is required in TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE."]
+        : []),
+      ...(schedulerCoordinationFailOpen
+        ? ["Phase 63 scheduler coordination must fail closed; unset TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN for activation."]
+        : []),
+      ...(!durableJobExecutionPostureSafe
+        ? ["Phase 63 durable job execution requires TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE to name a shared durable posture such as managed-postgres-transactional-queue."]
+        : []),
+      ...(!durableJobExecutionEvidenceAttached
+        ? ["Phase 63 durable job execution evidence is required in TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE."]
+        : []),
+      ...(!accessLogShippingConfigured
+        ? ["Phase 63 access-log shipping requires TASKLOOM_ACCESS_LOG_MODE=stdout or file with deployment-managed shipping."]
+        : []),
+      ...(!accessLogShippingEvidenceAttached
+        ? ["Phase 63 access-log shipping evidence is required in TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE."]
+        : []),
+      ...(!alertEvaluateCronConfigured
+        ? ["Phase 63 alert delivery requires TASKLOOM_ALERT_EVALUATE_CRON."]
+        : []),
+      ...(!alertWebhookUrlConfigured
+        ? ["Phase 63 alert delivery requires TASKLOOM_ALERT_WEBHOOK_URL."]
+        : []),
+      ...(!alertDeliveryEvidenceAttached
+        ? ["Phase 63 alert delivery evidence is required in TASKLOOM_ALERT_DELIVERY_EVIDENCE."]
+        : []),
+      ...(!healthMonitoringEvidenceAttached
+        ? ["Phase 63 health monitoring evidence is required in TASKLOOM_HEALTH_MONITORING_EVIDENCE."]
+        : []),
+      ...(activationDependencyGatePassed
+        ? ["Phases 64-66 remain pending before release activation can be approved for the supported managed Postgres horizontal app-writer posture."]
+        : []),
+      "Phase 63 does not enable active-active, regional failover, PITR runtime, distributed SQLite, cutover automation, final release closure, or release approval.",
+    ],
+    nextSteps: [
+      ...(!phase62HorizontalWriterHardeningReady
+        ? ["Complete Phase 62 horizontal app-writer hardening before claiming Phase 63 distributed dependency enforcement."]
+        : []),
+      ...(!distributedRateLimitReady
+        ? ["Configure TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL, keep rate limiting fail-closed, and attach TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE."]
+        : []),
+      ...(!schedulerCoordinationReady
+        ? ["Configure TASKLOOM_SCHEDULER_LEADER_MODE=http with TASKLOOM_SCHEDULER_LEADER_HTTP_URL, keep scheduler coordination fail-closed, and attach TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE."]
+        : []),
+      ...(!durableJobExecutionReady
+        ? ["Set TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE to a shared durable posture and attach TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE."]
+        : []),
+      ...(!accessLogShippingReady
+        ? ["Configure access-log shipping through stdout or a managed file shipper and attach TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE."]
+        : []),
+      ...(!alertDeliveryReady
+        ? ["Configure TASKLOOM_ALERT_EVALUATE_CRON and TASKLOOM_ALERT_WEBHOOK_URL, then attach TASKLOOM_ALERT_DELIVERY_EVIDENCE."]
+        : []),
+      ...(!healthMonitoringReady
+        ? ["Attach TASKLOOM_HEALTH_MONITORING_EVIDENCE proving the liveness, readiness, operations status, and operations health endpoints are externally monitored."]
+        : []),
+      "Keep activation/release blocked until Phase 64 recovery validation, Phase 65 cutover/rollback automation, and Phase 66 final release closure complete.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -1857,6 +2172,12 @@ export function buildAsyncStoreBoundaryReport(
       phase61MultiWriterRuntimeActivationControlsGate,
       env,
     );
+  const phase63DistributedDependencyEnforcementGate =
+    buildPhase63DistributedDependencyEnforcementGate(
+      horizontalWriterIntent,
+      phase62ManagedPostgresHorizontalWriterHardeningGate,
+      env,
+    );
   const effectivePhase52ManagedStartupSupported =
     managedStartupSupported && !multiWriterIntent && !unsupportedStore;
   const bypassed =
@@ -1875,6 +2196,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase60MultiWriterRuntimeSupportPresenceAssertionGate.blockers,
     ...phase61MultiWriterRuntimeActivationControlsGate.blockers,
     ...phase62ManagedPostgresHorizontalWriterHardeningGate.blockers,
+    ...phase63DistributedDependencyEnforcementGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -1894,6 +2216,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase60MultiWriterRuntimeSupportPresenceAssertionGate.nextSteps,
     ...phase61MultiWriterRuntimeActivationControlsGate.nextSteps,
     ...phase62ManagedPostgresHorizontalWriterHardeningGate.nextSteps,
+    ...phase63DistributedDependencyEnforcementGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -1954,8 +2277,10 @@ export function buildAsyncStoreBoundaryReport(
     }
   }
   if (horizontalWriterIntent) {
-    if (phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady) {
-      nextSteps.add("Treat Phase 62 as concurrency hardening for managed Postgres horizontal app writers only; keep activation/release blocked until Phases 63-66 finish.");
+    if (phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed) {
+      nextSteps.add("Treat Phase 63 as distributed dependency enforcement for managed Postgres horizontal app writers only; keep activation/release blocked until Phases 64-66 finish.");
+    } else if (phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady) {
+      nextSteps.add("Treat Phase 62 as concurrency hardening for managed Postgres horizontal app writers only; keep activation/release blocked until Phase 63 distributed dependency enforcement and Phases 64-66 finish.");
     } else {
       nextSteps.add("Keep managed Postgres horizontal app-writer activation blocked until Phase 62 concurrency hardening evidence is complete.");
     }
@@ -1974,6 +2299,7 @@ export function buildAsyncStoreBoundaryReport(
     phase60MultiWriterRuntimeSupportPresenceAssertionGate.releaseAllowed &&
     phase61MultiWriterRuntimeActivationControlsGate.releaseAllowed &&
     phase62ManagedPostgresHorizontalWriterHardeningGate.releaseAllowed &&
+    phase63DistributedDependencyEnforcementGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -1982,8 +2308,10 @@ export function buildAsyncStoreBoundaryReport(
     : "fail";
   let summary: string;
   if (horizontalWriterIntent) {
-    summary = phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady
-      ? "Phase 49 async-store boundary exists as foundation and Phase 62 concurrency hardening is complete for managed Postgres horizontal app writers, but activation/release remains blocked pending Phases 63-66."
+    summary = phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed
+      ? "Phase 49 async-store boundary exists as foundation and Phase 63 distributed dependency enforcement is complete for managed Postgres horizontal app writers, but activation/release remains blocked pending Phases 64-66."
+      : phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady
+      ? "Phase 49 async-store boundary exists as foundation and Phase 62 concurrency hardening is complete for managed Postgres horizontal app writers, but Phase 63 distributed dependency enforcement is incomplete."
       : "Phase 49 async-store boundary exists as foundation, but Phase 62 managed Postgres horizontal app-writer concurrency hardening is incomplete."
   } else if (managedIntent && effectivePhase52ManagedStartupSupported) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
@@ -2044,6 +2372,7 @@ export function buildAsyncStoreBoundaryReport(
     phase60MultiWriterRuntimeSupportPresenceAssertionGate,
     phase61MultiWriterRuntimeActivationControlsGate,
     phase62ManagedPostgresHorizontalWriterHardeningGate,
+    phase63DistributedDependencyEnforcementGate,
     classification,
     summary,
     blockers,
@@ -2076,7 +2405,7 @@ function buildNextSteps(
     if (check.id === "managed-database-runtime-boundary") {
       for (const step of managedDatabaseRuntimeBoundary.nextSteps) steps.add(step);
     }
-    if (check.id === "async-store-boundary") {
+    if (check.id === "async-store-boundary" || check.id === "phase63-distributed-dependency-enforcement") {
       for (const step of asyncStoreBoundary.nextSteps) steps.add(step);
     }
     if (check.id === "backup-dir") {
@@ -2183,6 +2512,24 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
       ? `Async store boundary foundation allows current release posture: ${asyncStoreBoundary.summary}`
       : `Async store boundary foundation does not allow managed DB release: ${asyncStoreBoundary.summary}`,
   );
+
+  const phase63Gate = asyncStoreBoundary.phase63DistributedDependencyEnforcementGate;
+  if (phase63Gate) {
+    pushCheck(
+      checks,
+      "phase63-distributed-dependency-enforcement",
+      phase63Gate.required
+        ? phase63Gate.activationDependencyGatePassed
+          ? "pass"
+          : chooseBlockingStatus(isGated)
+        : "pass",
+      phase63Gate.required
+        ? phase63Gate.activationDependencyGatePassed
+          ? `Phase 63 distributed dependency enforcement is complete: ${phase63Gate.summary}`
+          : `Phase 63 distributed dependency enforcement blocks activation: ${phase63Gate.summary}`
+        : phase63Gate.summary,
+    );
+  }
 
   const dbPath = clean(env.TASKLOOM_DB_PATH);
   if (storageTopology.mode === "sqlite") {

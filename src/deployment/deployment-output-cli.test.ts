@@ -1256,3 +1256,96 @@ test("formatDeploymentCliJson synthesizes Phase 62 horizontal writer hardening w
   assert.equal(report.phase62?.strictBlocker, false);
   assert.doesNotMatch(output, /tests:secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 63 distributed dependency enforcement", () => {
+  const output = formatDeploymentCliJson({
+    asyncStoreBoundary: {
+      phase52ManagedStartupSupported: true,
+    },
+    phase61: {
+      activationReady: true,
+    },
+    runtimeClaims: {
+      activeActiveSupport: true,
+      regionalFailoverSupported: true,
+      pitrRuntimeSupported: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "concurrency://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.internal/taskloom",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE: "https://auditor:secret@evidence.internal/phase63-rate-limit",
+    TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+    TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://scheduler.internal/leader",
+    TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE: "scheduler://phase63",
+    TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+    TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63",
+    TASKLOOM_ALERT_EVALUATE_CRON: "*/1 * * * *",
+    TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts:secret@hooks.internal/taskloom",
+    TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63",
+    TASKLOOM_HEALTH_MONITORING_EVIDENCE: "health://phase63",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    runtimeClaims?: {
+      activeActiveSupport?: unknown;
+      regionalFailoverSupported?: unknown;
+      pitrRuntimeSupported?: unknown;
+    };
+    phase63?: {
+      phase?: unknown;
+      required?: unknown;
+      horizontalWriterTopologyRequested?: unknown;
+      phase62HorizontalWriterHardeningReady?: unknown;
+      distributedRateLimitEvidence?: unknown;
+      distributedRateLimitReady?: unknown;
+      schedulerCoordinationReady?: unknown;
+      durableJobExecutionReady?: unknown;
+      accessLogShippingReady?: unknown;
+      alertDeliveryReady?: unknown;
+      healthMonitoringReady?: unknown;
+      distributedDependencyEnforcementReady?: unknown;
+      activationDependencyGatePassed?: unknown;
+      strictActivationBlocked?: unknown;
+      activeActiveSupported?: unknown;
+      regionalFailoverSupported?: unknown;
+      pitrRuntimeSupported?: unknown;
+      distributedSqliteSupported?: unknown;
+      pendingPhases?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.runtimeClaims?.activeActiveSupport, false);
+  assert.equal(report.runtimeClaims?.regionalFailoverSupported, false);
+  assert.equal(report.runtimeClaims?.pitrRuntimeSupported, false);
+  assert.equal(report.phase63?.phase, "63");
+  assert.equal(report.phase63?.required, true);
+  assert.equal(report.phase63?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.phase63?.phase62HorizontalWriterHardeningReady, true);
+  assert.equal(report.phase63?.distributedRateLimitEvidence, "[redacted]");
+  assert.equal(report.phase63?.distributedRateLimitReady, true);
+  assert.equal(report.phase63?.schedulerCoordinationReady, true);
+  assert.equal(report.phase63?.durableJobExecutionReady, true);
+  assert.equal(report.phase63?.accessLogShippingReady, true);
+  assert.equal(report.phase63?.alertDeliveryReady, true);
+  assert.equal(report.phase63?.healthMonitoringReady, true);
+  assert.equal(report.phase63?.distributedDependencyEnforcementReady, true);
+  assert.equal(report.phase63?.activationDependencyGatePassed, true);
+  assert.equal(report.phase63?.strictActivationBlocked, false);
+  assert.equal(report.phase63?.activeActiveSupported, false);
+  assert.equal(report.phase63?.regionalFailoverSupported, false);
+  assert.equal(report.phase63?.pitrRuntimeSupported, false);
+  assert.equal(report.phase63?.distributedSqliteSupported, false);
+  assert.deepEqual(report.phase63?.pendingPhases, ["64", "65", "66"]);
+  assert.equal(report.phase63?.releaseAllowed, false);
+  assert.equal(report.phase63?.strictBlocker, false);
+  assert.match(String(report.phase63?.summary), /Phase 63/);
+  assert.doesNotMatch(output, /auditor:secret/);
+  assert.doesNotMatch(output, /alerts:secret/);
+});

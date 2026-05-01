@@ -19,6 +19,7 @@ const PHASE59_REPORT_KEY_PATTERN = /^phase59/i;
 const PHASE60_REPORT_KEY_PATTERN = /^phase60/i;
 const PHASE61_REPORT_KEY_PATTERN = /^phase61/i;
 const PHASE62_REPORT_KEY_PATTERN = /^phase62/i;
+const PHASE63_REPORT_KEY_PATTERN = /^phase63/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 const PHASE60_URL_REDACTION_KEY_PATTERN =
@@ -27,6 +28,8 @@ const PHASE61_URL_REDACTION_KEY_PATTERN =
   /(active|regional|pitr|sqlite|distributed|support|claim|evidence|ticket|approval|url)/i;
 const PHASE62_URL_REDACTION_KEY_PATTERN =
   /(implementation|hardening|concurrency|transaction|retry|compare|swap|evidence|url)/i;
+const PHASE63_URL_REDACTION_KEY_PATTERN =
+  /(rate|limit|scheduler|coordination|durable|job|access|log|shipping|alert|delivery|health|monitoring|evidence|url)/i;
 const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
   /(activeactive|active_active|active-active).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
   /(support|supported|releaseallowed|releasesupported|runtimesupport).*(activeactive|active_active|active-active)/i,
@@ -43,6 +46,12 @@ const HORIZONTAL_WRITER_TOPOLOGY_HINTS = new Set([
   "postgres-horizontal-app-writers",
   "postgres-horizontal-writers",
 ]);
+const DURABLE_JOB_EXECUTION_POSTURES = new Set([
+  "managed-postgres-transactional-queue",
+  "managed-postgres-durable-jobs",
+  "shared-managed-postgres",
+  "external-durable-queue",
+]);
 
 function clean(value: string | undefined): string {
   return (value ?? "").trim();
@@ -50,6 +59,10 @@ function clean(value: string | undefined): string {
 
 function normalize(value: string | undefined): string {
   return clean(value).toLowerCase();
+}
+
+function truthy(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(normalize(value));
 }
 
 function hasMultiWriterTopologyIntent(env: NodeJS.ProcessEnv): boolean {
@@ -133,17 +146,20 @@ function redactValue(
         PHASE59_REPORT_KEY_PATTERN.test(key) ||
         PHASE60_REPORT_KEY_PATTERN.test(key) ||
         PHASE61_REPORT_KEY_PATTERN.test(key) ||
-        PHASE62_REPORT_KEY_PATTERN.test(key);
+        PHASE62_REPORT_KEY_PATTERN.test(key) ||
+        PHASE63_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase61Report = inPhase61Report || PHASE61_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase62Report = PHASE62_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase63Report = PHASE63_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase60Report && PHASE60_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase61Report && PHASE61_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase62Report && PHASE62_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase63Report && PHASE63_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -1081,16 +1097,240 @@ function withPhase62Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function withPhase63Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!isReport(report)) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const nestedPhase63 = firstReportAt(report, [
+    ["phase63DistributedDependencyEnforcementGate"],
+    ["phase63DistributedDependencyEnforcementReport"],
+    ["managedDatabase", "phase63"],
+    ["managedDatabase", "phase63DistributedDependencyEnforcementGate"],
+    ["managedDatabaseTopology", "phase63"],
+    ["managedDatabaseTopology", "managedDatabase", "phase63"],
+    ["managedDatabaseRuntimeGuard", "phase63"],
+    ["managedDatabaseRuntimeGuard", "phase63DistributedDependencyEnforcementGate"],
+    ["releaseReadiness", "phase63"],
+    ["releaseReadiness", "phase63DistributedDependencyEnforcementGate"],
+    ["releaseEvidence", "phase63"],
+    ["releaseEvidence", "phase63DistributedDependencyEnforcementGate"],
+    ["evidence", "phase63"],
+    ["evidence", "phase63DistributedDependencyEnforcementGate"],
+    ["asyncStoreBoundary", "phase63"],
+    ["asyncStoreBoundary", "phase63DistributedDependencyEnforcementGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE63_REPORT_KEY_PATTERN.test(key));
+  const existingPhase63 = reportAt(report, ["phase63"]) ?? nestedPhase63 ?? {};
+  const phase62 = reportAt(report, ["phase62"]) ?? {};
+  const horizontalWriterIntent =
+    existingPhase63.horizontalWriterTopologyRequested === true ||
+    existingPhase63.required === true ||
+    phase62.horizontalWriterTopologyRequested === true ||
+    hasHorizontalWriterTopologyIntent(env);
+  const hasPhase63EnvEvidence =
+    phase62EnvValue(env, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ALERT_DELIVERY_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_HEALTH_MONITORING_EVIDENCE") !== undefined;
+
+  if (!horizontalWriterIntent && !nestedPhase63 && !reportAt(report, ["phase63"]) && !hasPhase63EnvEvidence) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const distributedRateLimitEvidence =
+    existingPhase63.distributedRateLimitEvidence ??
+    phase62EnvValue(env, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE");
+  const schedulerCoordinationEvidence =
+    existingPhase63.schedulerCoordinationEvidence ??
+    phase62EnvValue(env, "TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE");
+  const durableJobExecutionEvidence =
+    existingPhase63.durableJobExecutionEvidence ??
+    phase62EnvValue(env, "TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE");
+  const accessLogShippingEvidence =
+    existingPhase63.accessLogShippingEvidence ??
+    phase62EnvValue(env, "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE");
+  const alertDeliveryEvidence =
+    existingPhase63.alertDeliveryEvidence ??
+    phase62EnvValue(env, "TASKLOOM_ALERT_DELIVERY_EVIDENCE");
+  const healthMonitoringEvidence =
+    existingPhase63.healthMonitoringEvidence ??
+    phase62EnvValue(env, "TASKLOOM_HEALTH_MONITORING_EVIDENCE");
+  const schedulerLeaderMode =
+    existingPhase63.schedulerLeaderMode ?? (normalize(env.TASKLOOM_SCHEDULER_LEADER_MODE) || "off");
+  const durableJobExecutionPosture =
+    existingPhase63.durableJobExecutionPosture ?? normalize(env.TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE);
+  const accessLogMode = existingPhase63.accessLogMode ?? (normalize(env.TASKLOOM_ACCESS_LOG_MODE) || "off");
+  const phase62HorizontalWriterHardeningReady =
+    existingPhase63.phase62HorizontalWriterHardeningReady ??
+    phase62.horizontalWriterHardeningReady ??
+    false;
+  const distributedRateLimitConfigured =
+    existingPhase63.distributedRateLimitConfigured ??
+    (phase62EnvValue(env, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL") !== undefined);
+  const distributedRateLimitEvidenceAttached =
+    existingPhase63.distributedRateLimitEvidenceAttached ??
+    distributedRateLimitEvidence !== undefined;
+  const distributedRateLimitFailOpen =
+    existingPhase63.distributedRateLimitFailOpen ?? truthy(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN);
+  const distributedRateLimitReady =
+    existingPhase63.distributedRateLimitReady ??
+    (distributedRateLimitConfigured === true &&
+      distributedRateLimitEvidenceAttached === true &&
+      distributedRateLimitFailOpen !== true);
+  const schedulerCoordinationHttpUrlConfigured =
+    existingPhase63.schedulerCoordinationHttpUrlConfigured ??
+    (phase62EnvValue(env, "TASKLOOM_SCHEDULER_LEADER_HTTP_URL") !== undefined);
+  const schedulerCoordinationEvidenceAttached =
+    existingPhase63.schedulerCoordinationEvidenceAttached ??
+    schedulerCoordinationEvidence !== undefined;
+  const schedulerCoordinationFailOpen =
+    existingPhase63.schedulerCoordinationFailOpen ?? truthy(env.TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN);
+  const schedulerCoordinationLocalOnly =
+    existingPhase63.schedulerCoordinationLocalOnly ?? schedulerLeaderMode !== "http";
+  const schedulerCoordinationReady =
+    existingPhase63.schedulerCoordinationReady ??
+    (schedulerLeaderMode === "http" &&
+      schedulerCoordinationHttpUrlConfigured === true &&
+      schedulerCoordinationEvidenceAttached === true &&
+      schedulerCoordinationFailOpen !== true);
+  const durableJobExecutionPostureSafe =
+    existingPhase63.durableJobExecutionPostureSafe ??
+    DURABLE_JOB_EXECUTION_POSTURES.has(String(durableJobExecutionPosture));
+  const durableJobExecutionEvidenceAttached =
+    existingPhase63.durableJobExecutionEvidenceAttached ??
+    durableJobExecutionEvidence !== undefined;
+  const durableJobExecutionReady =
+    existingPhase63.durableJobExecutionReady ??
+    (durableJobExecutionPostureSafe === true && durableJobExecutionEvidenceAttached === true);
+  const accessLogShippingConfigured =
+    existingPhase63.accessLogShippingConfigured ??
+    (accessLogMode === "stdout" || accessLogMode === "file");
+  const accessLogShippingEvidenceAttached =
+    existingPhase63.accessLogShippingEvidenceAttached ??
+    accessLogShippingEvidence !== undefined;
+  const accessLogShippingLocalOnly =
+    existingPhase63.accessLogShippingLocalOnly ??
+    (accessLogMode !== "stdout" && accessLogMode !== "file");
+  const accessLogShippingReady =
+    existingPhase63.accessLogShippingReady ??
+    (accessLogShippingConfigured === true && accessLogShippingEvidenceAttached === true);
+  const alertEvaluateCronConfigured =
+    existingPhase63.alertEvaluateCronConfigured ??
+    (phase62EnvValue(env, "TASKLOOM_ALERT_EVALUATE_CRON") !== undefined);
+  const alertWebhookUrlConfigured =
+    existingPhase63.alertWebhookUrlConfigured ??
+    (phase62EnvValue(env, "TASKLOOM_ALERT_WEBHOOK_URL") !== undefined);
+  const alertDeliveryEvidenceAttached =
+    existingPhase63.alertDeliveryEvidenceAttached ??
+    alertDeliveryEvidence !== undefined;
+  const alertDeliveryReady =
+    existingPhase63.alertDeliveryReady ??
+    (alertEvaluateCronConfigured === true &&
+      alertWebhookUrlConfigured === true &&
+      alertDeliveryEvidenceAttached === true);
+  const healthMonitoringEvidenceAttached =
+    existingPhase63.healthMonitoringEvidenceAttached ??
+    healthMonitoringEvidence !== undefined;
+  const healthMonitoringReady =
+    existingPhase63.healthMonitoringReady ?? healthMonitoringEvidenceAttached === true;
+  const distributedDependencyEnforcementReady =
+    existingPhase63.distributedDependencyEnforcementReady ??
+    (
+      distributedRateLimitReady === true &&
+      schedulerCoordinationReady === true &&
+      durableJobExecutionReady === true &&
+      accessLogShippingReady === true &&
+      alertDeliveryReady === true &&
+      healthMonitoringReady === true
+    );
+  const activationDependencyGatePassed =
+    existingPhase63.activationDependencyGatePassed ??
+    (
+      horizontalWriterIntent &&
+      phase62HorizontalWriterHardeningReady === true &&
+      distributedDependencyEnforcementReady === true
+    );
+
+  return blockUnsupportedRuntimeReleaseClaims({
+    ...report,
+    phase63: {
+      ...existingPhase63,
+      phase: existingPhase63.phase ?? "63",
+      required: existingPhase63.required ?? horizontalWriterIntent,
+      horizontalWriterTopologyRequested: horizontalWriterIntent,
+      phase62HorizontalWriterHardeningReady,
+      distributedRateLimitRequired: existingPhase63.distributedRateLimitRequired ?? horizontalWriterIntent,
+      distributedRateLimitConfigured,
+      distributedRateLimitEvidence,
+      distributedRateLimitEvidenceAttached,
+      distributedRateLimitFailOpen,
+      distributedRateLimitReady,
+      schedulerCoordinationRequired: existingPhase63.schedulerCoordinationRequired ?? horizontalWriterIntent,
+      schedulerLeaderMode,
+      schedulerCoordinationHttpUrlConfigured,
+      schedulerCoordinationEvidence,
+      schedulerCoordinationEvidenceAttached,
+      schedulerCoordinationFailOpen,
+      schedulerCoordinationLocalOnly,
+      schedulerCoordinationReady,
+      durableJobExecutionRequired: existingPhase63.durableJobExecutionRequired ?? horizontalWriterIntent,
+      durableJobExecutionPosture,
+      durableJobExecutionPostureSafe,
+      durableJobExecutionEvidence,
+      durableJobExecutionEvidenceAttached,
+      durableJobExecutionReady,
+      accessLogShippingRequired: existingPhase63.accessLogShippingRequired ?? horizontalWriterIntent,
+      accessLogMode,
+      accessLogShippingConfigured,
+      accessLogShippingEvidence,
+      accessLogShippingEvidenceAttached,
+      accessLogShippingLocalOnly,
+      accessLogShippingReady,
+      alertDeliveryRequired: existingPhase63.alertDeliveryRequired ?? horizontalWriterIntent,
+      alertEvaluateCronConfigured,
+      alertWebhookUrlConfigured,
+      alertDeliveryEvidence,
+      alertDeliveryEvidenceAttached,
+      alertDeliveryReady,
+      healthMonitoringRequired: existingPhase63.healthMonitoringRequired ?? horizontalWriterIntent,
+      healthMonitoringEvidence,
+      healthMonitoringEvidenceAttached,
+      healthMonitoringReady,
+      distributedDependencyEnforcementReady,
+      activationDependencyGatePassed,
+      strictActivationBlocked: existingPhase63.strictActivationBlocked ?? activationDependencyGatePassed !== true,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      phases64To66Pending: horizontalWriterIntent,
+      pendingPhases: horizontalWriterIntent ? ["64", "65", "66"] : [],
+      releaseAllowed: existingPhase63.releaseAllowed ?? !horizontalWriterIntent,
+      strictBlocker: existingPhase63.strictBlocker ?? (horizontalWriterIntent && activationDependencyGatePassed !== true),
+      summary: existingPhase63.summary ?? (
+        activationDependencyGatePassed
+          ? "Phase 63 records distributed dependency enforcement for managed Postgres horizontal app writers; recovery validation, cutover automation, final release closure, and release approval remain blocked pending Phases 64-66."
+          : "Phase 63 requires production-safe shared dependencies before managed Postgres horizontal app-writer activation can proceed."
+      ),
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
     redactValue(
-      withPhase62Status(
-        withPhase61Status(
-          withPhase60Status(
-            withPhase59Status(
-              withPhase58Status(
-                withPhase57Status(
-                  withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+      withPhase63Status(
+        withPhase62Status(
+          withPhase61Status(
+            withPhase60Status(
+              withPhase59Status(
+                withPhase58Status(
+                  withPhase57Status(
+                    withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+                    env,
+                  ),
                   env,
                 ),
                 env,

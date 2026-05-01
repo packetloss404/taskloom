@@ -1,6 +1,6 @@
 # Taskloom Scheduler Coordination
 
-Phase 21 introduces an opt-in leader-election gate for the local job scheduler so multi-process and multi-host Taskloom deployments stop double-executing queued jobs. Operators running more than one Node process today share the same persisted `jobs` rows but each scheduler tick polls and dequeues independently, so two processes can both claim the same `agent.run` or `invitation.email` job, run it twice, and double-write retry/dead-letter records. The leader-election gate makes only one process at a time eligible to dequeue, while every process keeps draining in-flight jobs it already claimed.
+Phase 21 introduces an opt-in leader-election gate for the local job scheduler so multi-process and multi-host Taskloom deployments stop double-executing queued jobs. Operators running more than one Node process today share the same persisted `jobs` rows but each scheduler tick polls and dequeues independently, so two processes can both claim the same `agent.run` or `invitation.email` job, run it twice, and double-write retry/dead-letter records. The leader-election gate makes only one process at a time eligible to dequeue, while every process keeps draining in-flight jobs it already claimed. Phase 63 makes this posture activation-relevant: local-only scheduler coordination is acceptable for local development and single-node deployments, but strict activation for a horizontally scaled managed Postgres deployment must use production-safe scheduler coordination and durable job execution posture.
 
 The gate is implemented through a `SchedulerLeaderLock` interface with three methods:
 
@@ -81,6 +81,7 @@ Sizing guidance:
 
 - Use `TASKLOOM_SCHEDULER_LEADER_MODE=file` for two-to-four Node processes on the same host or hosts sharing a local filesystem.
 - Use `TASKLOOM_SCHEDULER_LEADER_MODE=http` once schedulers cross hosts, regions, or filesystems without shared atomic rename semantics.
+- For Phase 63 strict activation, treat `off` and `file` modes as local-only activation blockers. Horizontally scaled production must use `TASKLOOM_SCHEDULER_LEADER_MODE=http` with `TASKLOOM_SCHEDULER_LEADER_HTTP_URL`, fail-closed coordinator behavior, and `TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE`.
 
 Handoff latency:
 
@@ -92,6 +93,15 @@ Job semantics across handoff:
 - Cron jobs are unaffected by handoff. `enqueueRecurringJob` only runs after a successful execution, and the next leader picks up the same persisted queue from the local store.
 - The scheduler already runs a stale-running-job sweep on `start()`. A new leader sweeps any runs that were in-flight when the prior leader died and re-queues them according to the existing retry policy.
 - In-flight jobs in non-leader processes continue to run to completion. The leader gate only affects which process is allowed to dequeue new work; it does not interrupt or migrate running jobs.
+
+## Phase 63 Activation Dependency Posture
+
+The scheduler dependency has two parts:
+
+- Coordination: exactly one scheduler-active process should dequeue new work for a shared queue at a time.
+- Durability: queued jobs, retry state, dead-letter state, metrics snapshots, and alert delivery work must live in the shared durable store used by the activated deployment.
+
+Strict activation should fail when a horizontally scaled deployment leaves `TASKLOOM_SCHEDULER_LEADER_MODE=off`, uses file mode, omits `TASKLOOM_SCHEDULER_LEADER_HTTP_URL`, enables HTTP fail-open, omits `TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE`, or keeps job state on a local-only store that another app process cannot see. Operations status and health should surface the selected leader mode, lock target, local leader state, and Phase 63 `distributedDependencyEnforcement` result so operators can tell whether scheduler coordination is blocking activation.
 
 ## Configuration Reference
 
@@ -117,5 +127,6 @@ After enabling the leader gate, walk through:
 - HTTP mode without a secret: confirm no `Authorization` header is sent.
 - HTTP mode: configure the coordinator to return `401`, confirm the scheduler stops dequeuing and no new jobs run while the configuration is broken.
 - HTTP mode: simulate a coordinator outage and confirm the default fail-closed posture skips ticks; toggle `TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN=true` only if the deployment has accepted the duplicate-execution risk.
+- Phase 63 strict activation: with two scheduler-active processes, confirm `off` or `file` configuration is reported as activation-blocking, then switch to HTTP coordination with evidence and confirm the dependency posture becomes ready.
 - File mode: confirm the chosen `TASKLOOM_SCHEDULER_LEADER_FILE_PATH` is on a local filesystem, not NFS/SMB/EFS, and that backups exclude the leader file (it is recovery-irrelevant runtime state).
 - Cross-link the rest of the production posture: `docs/deployment-auth-hardening.md` for auth/invitation rate limits and CSRF behavior, `docs/deployment-sqlite-topology.md` for storage topology, `docs/invitation-email-operations.md` for invitation webhook delivery and dead-letter expectations, and `docs/deployment-export-redaction.md` for access-log and export redaction.

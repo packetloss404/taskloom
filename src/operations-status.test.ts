@@ -134,6 +134,53 @@ function completeManagedPostgresHorizontalWriterEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function completeDistributedDependencyEnv(): NodeJS.ProcessEnv {
+  return {
+    ...completeManagedPostgresHorizontalWriterEnv(),
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.example.com/taskloom/check",
+    TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+    TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://coord.example.com/taskloom/scheduler-leader",
+    TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+    TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63/durable",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63/stdout-shipper",
+    TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
+    TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.example.com/taskloom",
+    TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63/webhook",
+    TASKLOOM_HEALTH_MONITORING_EVIDENCE: "https://monitoring.example.com/taskloom/health",
+  };
+}
+
+type DistributedDependencyKey =
+  | "distributedRateLimiting"
+  | "schedulerCoordination"
+  | "durableJobExecution"
+  | "accessLogShipping"
+  | "alertDelivery"
+  | "healthMonitoring";
+
+interface DistributedDependencyStatusContract {
+  phase: "63";
+  status: "not-required" | "blocked" | "dependencies-ready";
+  enforcementStatus: "not-required" | "blocked" | "ready";
+  required: boolean;
+  strictActivationBlocked: boolean;
+  strictActivationAllowed: boolean;
+  localOnlyDependencies: DistributedDependencyKey[];
+  dependencies: Record<DistributedDependencyKey, { status: "ready" | "blocked" | "local-only" | "not-required"; productionSafe: boolean }>;
+}
+
+function distributedDependencyStatus(status: ReturnType<typeof getOperationsStatus>): DistributedDependencyStatusContract {
+  const dependencyStatus = (status as unknown as { distributedDependencyEnforcement?: unknown })
+    .distributedDependencyEnforcement;
+  assert.ok(
+    dependencyStatus && typeof dependencyStatus === "object",
+    "expected operations status to expose Phase 63 distributedDependencyEnforcement",
+  );
+  return dependencyStatus as DistributedDependencyStatusContract;
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -1637,6 +1684,60 @@ test("managedPostgresHorizontalWriterConcurrency can derive Phase 62 evidence fr
   assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, true);
   assert.equal(status.managedPostgresHorizontalWriterConcurrency.multiWriterDatabaseSupported, false);
   assert.equal(status.managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
+});
+
+test("distributedDependencyEnforcement surfaces local-only and missing dependencies after horizontal writer hardening", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeManagedPostgresHorizontalWriterEnv(),
+      TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+      TASKLOOM_SCHEDULER_LEADER_MODE: "file",
+      TASKLOOM_ACCESS_LOG_MODE: "file",
+      TASKLOOM_ACCESS_LOG_PATH: "data/access.log",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+  const dependencies = distributedDependencyStatus(status);
+
+  assert.equal(dependencies.phase, "63");
+  assert.equal(dependencies.required, true);
+  assert.equal(dependencies.status, "blocked");
+  assert.equal(dependencies.enforcementStatus, "blocked");
+  assert.equal(dependencies.strictActivationBlocked, true);
+  assert.equal(dependencies.strictActivationAllowed, false);
+  assert.equal(dependencies.dependencies.schedulerCoordination.status, "blocked");
+  assert.equal(dependencies.dependencies.accessLogShipping.status, "blocked");
+  assert.ok(dependencies.localOnlyDependencies.includes("distributedRateLimiting"));
+  assert.ok(dependencies.localOnlyDependencies.includes("schedulerCoordination"));
+  assert.ok(dependencies.localOnlyDependencies.includes("accessLogShipping"));
+  assert.ok(dependencies.localOnlyDependencies.includes("alertDelivery"));
+  assert.ok(dependencies.localOnlyDependencies.includes("healthMonitoring"));
+});
+
+test("distributedDependencyEnforcement reports activation allowed only when all six dependencies are production-safe", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeDistributedDependencyEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+  const dependencies = distributedDependencyStatus(status);
+
+  assert.equal(dependencies.phase, "63");
+  assert.equal(dependencies.required, true);
+  assert.equal(dependencies.status, "dependencies-ready");
+  assert.equal(dependencies.enforcementStatus, "ready");
+  assert.deepEqual(dependencies.localOnlyDependencies, []);
+  assert.equal(
+    Object.values(dependencies.dependencies).every((entry) => entry.productionSafe && entry.status === "ready"),
+    true,
+  );
+  assert.equal(dependencies.strictActivationBlocked, false);
+  assert.equal(dependencies.strictActivationAllowed, true);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

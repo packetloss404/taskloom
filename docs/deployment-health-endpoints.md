@@ -1,6 +1,6 @@
 # Taskloom Health And Operational Status Endpoints
 
-Phase 24 adds two public health probes plus an admin-scoped operator-status endpoint that summarizes runtime configuration in a single call. The probes give container orchestrators and load balancers the standard `live`/`ready` split they expect, while the operator-status endpoint surfaces store mode, managed database runtime boundary, Phase 49 async store boundary foundation, Phase 50 managed Postgres capability, Phase 52 managed Postgres startup support, scheduler leader configuration, jobs queue depth, access-log knobs, and Node version without requiring an SSH session into the host. Phase 50 adds the managed Postgres adapter/backfill foundation, Phase 51 tracks runtime call-site migration separately, and Phase 52 reports whether single-writer managed Postgres startup support is asserted. Phase 53 keeps multi-writer/distributed topology blocked, Phase 54 requires an owned design package before implementation planning, Phase 55 requires design-package review plus implementation-authorization evidence before runtime implementation can start, Phase 56 requires implementation-readiness plus rollout-safety evidence before runtime support can be claimed, Phase 57 requires implementation scope lock, runtime feature flag/deployment gate, validation evidence, migration/cutover lock, and release-owner signoff before implementation claims can proceed, Phase 58 validates runtime implementation evidence after Phase 57, Phase 59 records release-enable approval evidence after Phase 58, Phase 60 records support-presence assertion evidence after Phase 59, Phase 61 records runtime activation controls plus activation-ready reporting after Phase 60, and Phase 62 completes managed Postgres horizontal app-writer concurrency hardening. Local JSON and single-node SQLite remain supported postures; active-active multi-region writes, regional failover, PITR runtime support, distributed SQLite, distributed dependency enforcement, recovery validation, cutover automation, final release closure, runtime activation, and release approval remain unsupported until Phases 63 through 66 complete. Phase 63 distributed dependency enforcement is next. Pair this phase with Phase 21 scheduler coordination, Phase 23 access-log shipping, and the existing rate-limit and SQLite/topology guidance in `docs/deployment-auth-hardening.md` and `docs/deployment-sqlite-topology.md` to round out the production posture.
+Phase 24 adds two public health probes plus an admin-scoped operator-status endpoint that summarizes runtime configuration in a single call. The probes give container orchestrators and load balancers the standard `live`/`ready` split they expect, while the operator-status endpoint surfaces store mode, managed database runtime boundary, Phase 49 async store boundary foundation, Phase 50 managed Postgres capability, Phase 52 managed Postgres startup support, scheduler leader configuration, jobs queue depth, access-log knobs, Phase 63 distributed dependency state, and Node version without requiring an SSH session into the host. Phase 50 adds the managed Postgres adapter/backfill foundation, Phase 51 tracks runtime call-site migration separately, and Phase 52 reports whether single-writer managed Postgres startup support is asserted. Phase 53 keeps multi-writer/distributed topology blocked, Phase 54 requires an owned design package before implementation planning, Phase 55 requires design-package review plus implementation-authorization evidence before runtime implementation can start, Phase 56 requires implementation-readiness plus rollout-safety evidence before runtime support can be claimed, Phase 57 requires implementation scope lock, runtime feature flag/deployment gate, validation evidence, migration/cutover lock, and release-owner signoff before implementation claims can proceed, Phase 58 validates runtime implementation evidence after Phase 57, Phase 59 records release-enable approval evidence after Phase 58, Phase 60 records support-presence assertion evidence after Phase 59, Phase 61 records runtime activation controls plus activation-ready reporting after Phase 60, Phase 62 completes managed Postgres horizontal app-writer concurrency hardening, and Phase 63 enforces distributed dependency posture before strict activation. Local JSON and single-node SQLite remain supported postures; active-active multi-region writes, regional failover, PITR runtime support, distributed SQLite, recovery validation, cutover automation, final release closure, runtime activation, and release approval remain unsupported until Phases 64 through 66 complete. Phase 64 recovery validation is next. Pair this phase with Phase 21 scheduler coordination, Phase 23 access-log shipping, and the existing rate-limit and SQLite/topology guidance in `docs/deployment-auth-hardening.md` and `docs/deployment-sqlite-topology.md` to round out the production posture.
 
 Before Phase 24, Taskloom exposed a single `GET /api/health` route returning `{ "ok": true }` and no operator-visibility endpoint other than the per-resource jobs/agents/runs surfaces under `/api/app`. That covered the smoke-test case but did not match the live/ready split orchestrators expect, did not give load balancers a way to detect store-level degradation, and did not give operators a single call to confirm scheduler leader mode, store mode, and access-log envelope are configured the way the deployment intends. Phase 24 closes those gaps without changing the existing endpoint, so older consumers continue to work unchanged.
 
@@ -161,6 +161,23 @@ Sample 200 response:
     "multiWriterIntentDetected": false,
     "source": "managedDatabaseRuntimeGuard"
   },
+  "distributedDependencyEnforcement": {
+    "phase": "63",
+    "status": "blocked",
+    "enforcementStatus": "blocked",
+    "strictActivationBlocked": true,
+    "strictActivationAllowed": false,
+    "activationAllowed": false,
+    "releaseAllowed": false,
+    "missingDependencies": ["distributedRateLimiting", "alertDelivery"],
+    "localOnlyDependencies": ["distributedRateLimiting"],
+    "distributedRateLimiting": { "status": "blocked", "mode": "local-store" },
+    "schedulerCoordination": { "status": "ready", "mode": "http-fail-closed" },
+    "durableJobExecution": { "status": "ready", "mode": "managed-postgres-horizontal-writers" },
+    "accessLogShipping": { "status": "ready", "mode": "stdout" },
+    "alertDelivery": { "status": "blocked", "mode": "disabled" },
+    "healthMonitoring": { "status": "ready", "mode": "external-monitoring-asserted" }
+  },
   "runtime": { "nodeVersion": "v22.5.0" }
 }
 ```
@@ -190,14 +207,16 @@ Field-by-field notes:
 - `accessLog` mirrors the Phase 20 and Phase 23 environment knobs: `mode` (`stdout`, `file`, or `off`), `path` (when mode is `file`), and the rotation envelope `maxBytes`/`maxFiles`.
 - `asyncStoreBoundary` summarizes the Phase 49 async store boundary foundation. `foundationPresent`/`foundationAvailable` means the async boundary exists; this field should not be read as Phase 50 adapter/backfill support or Phase 52 startup support.
 - `managedPostgresCapability` summarizes Phase 50. It reports adapter package availability, whether managed Postgres hints are configured, and the backfill command evidence. Recognized env inputs include `TASKLOOM_MANAGED_DATABASE_ADAPTER` plus one of `TASKLOOM_MANAGED_DATABASE_URL`, `TASKLOOM_DATABASE_URL`, or `DATABASE_URL`; the shipped CLI commands are `npm run db:backfill-managed-postgres` and `npm run db:verify-managed-postgres`.
-- `managedPostgresStartupSupport` summarizes Phase 52. `startupSupported: true` means single-writer managed Postgres startup support is asserted/configured by the runtime guard. Phase 62 completes managed Postgres horizontal app-writer concurrency hardening for the supported topology. `multiWriterIntentDetected: true` still reports `multi-writer`, `multi-region`, `active-active`, or `distributed` topology as unsupported when the requested posture goes beyond that supported managed Postgres app-writer shape. Phase 62 does not enable active-active multi-region writes, regional failover, PITR runtime support, distributed SQLite, distributed dependency enforcement, recovery validation, cutover automation, final release closure, runtime activation, or release approval; Phases 63 through 66 remain pending.
+- `managedPostgresStartupSupport` summarizes Phase 52. `startupSupported: true` means single-writer managed Postgres startup support is asserted/configured by the runtime guard. Phase 62 completes managed Postgres horizontal app-writer concurrency hardening for the supported topology. `multiWriterIntentDetected: true` still reports `multi-writer`, `multi-region`, `active-active`, or `distributed` topology as unsupported when the requested posture goes beyond that supported managed Postgres app-writer shape.
+- `distributedDependencyEnforcement` summarizes Phase 63. `strictActivationAllowed: true` means distributed rate limiting, scheduler coordination, durable job execution posture, access-log shipping, alert delivery, and health monitoring are all production-safe for strict activation. `missingDependencies` and `localOnlyDependencies` explain why a horizontally scaled deployment cannot activate yet. Local-only modes remain acceptable for local development and single-node postures, but not for strict activation.
+- Phase 63 does not enable active-active multi-region writes, regional failover, PITR runtime support, distributed SQLite, recovery validation, cutover automation, final release closure, runtime activation, or release approval; Phases 64 through 66 remain pending.
 - `runtime.nodeVersion` is `process.versions.node`, useful for confirming the runtime version in place after a rolling deploy.
 
 The endpoint is intentionally read-only. It does not mutate any state, schedule any jobs, or reach out to external services.
 
 ## Operator Subsystem Health (/api/app/operations/health)
 
-`GET /api/app/operations/health` is admin-scoped and returns per-subsystem health classifications with diagnostic detail. It complements the binary public readiness probe by giving operators actionable per-subsystem status without log-scraping.
+`GET /api/app/operations/health` is admin-scoped and returns per-subsystem health classifications with diagnostic detail. It complements the binary public readiness probe by giving operators actionable per-subsystem status without log-scraping. Phase 63 also uses this surface to report `distributedDependencyEnforcement` posture so operators can see whether strict activation is blocked by local-only rate limiting, scheduler coordination, job execution, log shipping, alert delivery, or monitoring.
 
 Auth: standard Taskloom session + RBAC `admin`/`owner`. Returns 401 to unauthenticated requests, 403 to authenticated non-admins. Returns 200 regardless of subsystem statuses — the consumer decides what to alert on.
 
@@ -210,7 +229,8 @@ Response body shape:
   "subsystems": [
     { "name": "store", "status": "ok", "detail": "loaded successfully", "checkedAt": "2026-04-26T12:00:00.000Z" },
     { "name": "scheduler", "status": "ok", "detail": "last tick 12ms ago, ticksSinceStart=4321", "checkedAt": "2026-04-26T12:00:00.000Z", "observedAt": "2026-04-26T11:59:59.988Z" },
-    { "name": "accessLog", "status": "disabled", "detail": "access log is off", "checkedAt": "2026-04-26T12:00:00.000Z" }
+    { "name": "accessLog", "status": "disabled", "detail": "access log is off", "checkedAt": "2026-04-26T12:00:00.000Z" },
+    { "name": "distributedDependencyEnforcement", "status": "degraded", "detail": "Phase 63 distributed dependency enforcement blocks strict activation; missing production-safe distributed rate limiting and alert delivery; activationAllowed=false; releaseAllowed=false; strictActivationBlocked=true", "checkedAt": "2026-04-26T12:00:00.000Z" }
   ]
 }
 ```
@@ -229,6 +249,10 @@ Subsystem classification:
   - `ok` — mode `stdout`, OR mode `file` with path file present.
   - `degraded` — mode `file` with path file absent but parent dir present (normal before the first request).
   - `down` — mode `file` with no `TASKLOOM_ACCESS_LOG_PATH`, OR mode `file` with parent directory absent.
+- **distributedDependencyEnforcement**:
+  - `ok` — Phase 63 strict activation dependency posture is production-safe.
+  - `degraded` — one or more required dependencies are missing, local-only, fail-open, or otherwise unsuitable for horizontally scaled activation.
+  - `disabled` — no horizontal app-writer activation posture is being requested, so dependency enforcement is informational only.
 
 `overall` is the worst-of subsystem status with one important rule: `disabled` never poisons overall. A perfectly healthy deployment with access logging off therefore reports `overall: "ok"`.
 
@@ -321,17 +345,17 @@ The `OperationsStatus.jobMetricsSnapshots` field (`{ total, lastCapturedAt }`) a
 | Kubernetes `readinessProbe` | `GET /api/health/ready` | Public, no auth. Returns `503` when `loadStore()` fails. |
 | AWS ALB / GCP LB health check | `GET /api/health/ready` | Pulls a backend out of rotation when the store is unreachable. |
 | Nginx/Caddy upstream health check | `GET /api/health/ready` | Same readiness semantics as the cloud load balancers. |
-| Internal monitoring dashboards (Datadog/Grafana/etc.) | `GET /api/app/operations/status` | Admin-scoped; requires an authenticated session with admin or owner RBAC. |
+| Internal monitoring dashboards (Datadog/Grafana/etc.) | `GET /api/app/operations/status` and `GET /api/app/operations/health` | Admin-scoped; requires an authenticated session with admin or owner RBAC. Include Phase 63 `distributedDependencyEnforcement` state in activation dashboards. |
 
 The operator-status endpoint requires session auth and is therefore not directly suitable for unattended monitoring without an authenticated session. For now, dashboards that need a long-running unattended scrape should instead consume the per-resource jobs and operations APIs (which are also admin-scoped) or scrape access-log/queue depth out of band through the Phase 23 shipping pipeline. A dedicated service-token surface for the operator-status endpoint remains future work; until then, treat the endpoint as an operator-triage tool rather than a continuous metrics source.
 
 ## Frontend Operations Page
 
-The Operations page now displays the operator-status payload as an admin-gated "Production Status" tile. Admins and owners see the rendered tile with store mode, managed database/runtime boundary posture, Phase 49 async store boundary foundation, Phase 50 managed Postgres capability, scheduler leader configuration, jobs queue summary, access-log mode, and Node version; non-admin members do not see the tile, matching the route-level RBAC on the underlying endpoint. Phase 50's adapter/backfill foundation should not be read as a green light to bypass that boundary tile or the startup guard. The tile is the recommended way for operators to spot store/scheduler/access-log misconfiguration without SSHing into the host. The frontend wiring lives in `web/src/pages/Operations.tsx`.
+The Operations page now displays the operator-status payload as an admin-gated "Production Status" tile. Admins and owners see the rendered tile with store mode, managed database/runtime boundary posture, Phase 49 async store boundary foundation, Phase 50 managed Postgres capability, scheduler leader configuration, jobs queue summary, access-log mode, Phase 63 distributed dependency enforcement posture, and Node version; non-admin members do not see the tile, matching the route-level RBAC on the underlying endpoint. Phase 50's adapter/backfill foundation should not be read as a green light to bypass that boundary tile or the startup guard. The tile is the recommended way for operators to spot store/scheduler/access-log/dependency misconfiguration without SSHing into the host. The frontend wiring lives in `web/src/pages/Operations.tsx`.
 
 ## Frontend Subsystem Health Tile
 
-The Operations page additionally renders a "Subsystem health" sub-section inside the same admin-gated tile, fed by `GET /api/app/operations/health`. Each subsystem (store, scheduler, accessLog) is shown as a colored status badge (`ok`/`degraded`/`down`/`disabled`) alongside its human-readable detail string, with an overall summary badge above the per-subsystem rows. The sub-section follows the same RBAC as the parent tile, so non-admin members do not see it. The frontend wiring lives in `web/src/pages/Operations.tsx`.
+The Operations page additionally renders a "Subsystem health" sub-section inside the same admin-gated tile, fed by `GET /api/app/operations/health`. Each subsystem (store, scheduler, accessLog, distributedDependencyEnforcement) is shown as a colored status badge (`ok`/`degraded`/`down`/`disabled`) alongside its human-readable detail string, with an overall summary badge above the per-subsystem rows. The sub-section follows the same RBAC as the parent tile, so non-admin members do not see it. The frontend wiring lives in `web/src/pages/Operations.tsx`.
 
 ## Validation Checklist
 
@@ -341,12 +365,13 @@ After deploying Phase 24, walk through:
 - `curl http://localhost:8484/api/health/ready` returns `200` with `{ "status": "ready" }` against a healthy store. Force a store failure (for example, point `TASKLOOM_DB_PATH` at an unreadable path) and confirm the response becomes `503` with `{ "status": "not_ready", "error": "<redacted>" }`.
 - `curl http://localhost:8484/api/app/operations/status` without a session cookie returns `401`.
 - `curl` with a non-admin member session cookie returns `403`.
-- `curl` with an admin or owner session cookie returns `200` with the expected JSON shape: `generatedAt`, `store.mode`, `scheduler.{leaderMode, leaderTtlMs, leaderHeldLocally, lockSummary}`, `jobs[]`, `accessLog.{mode, path, maxBytes, maxFiles}`, `asyncStoreBoundary.{phase, foundationPresent}`, `managedPostgresCapability.{phase, adapterAvailable, backfillAvailable}`, `managedPostgresStartupSupport.{phase, startupSupported, multiWriterSupported, multiWriterIntentDetected}`, and `runtime.nodeVersion`.
+- `curl` with an admin or owner session cookie returns `200` with the expected JSON shape: `generatedAt`, `store.mode`, `scheduler.{leaderMode, leaderTtlMs, leaderHeldLocally, lockSummary}`, `jobs[]`, `accessLog.{mode, path, maxBytes, maxFiles}`, `asyncStoreBoundary.{phase, foundationPresent}`, `managedPostgresCapability.{phase, adapterAvailable, backfillAvailable}`, `managedPostgresStartupSupport.{phase, startupSupported, multiWriterSupported, multiWriterIntentDetected}`, `distributedDependencyEnforcement.{phase, status, strictActivationBlocked, strictActivationAllowed, missingDependencies, localOnlyDependencies, dependencies}`, and `runtime.nodeVersion`.
 - The `scheduler.lockSummary` field never contains a secret. Confirm `"local"` for `off` mode, the configured file path for `file` mode, and the URL with any query string stripped for `http` mode (even when `TASKLOOM_SCHEDULER_LEADER_HTTP_SECRET` is set).
 - The Operations page renders the "Production Status" tile for admins and owners and omits it for member/viewer roles.
 - After kicking off a manual job (e.g., `npm run jobs:recompute-activation`), `GET /api/app/operations/status` shows a `jobMetrics` entry for the job type with `totalRuns >= 1` and `lastDurationMs` populated.
 - `curl http://localhost:8484/api/app/operations/health` without a session returns `401`.
-- With an admin session cookie, `GET /api/app/operations/health` returns the expected `OperationsHealthReport` shape with at least the `store`, `scheduler`, and `accessLog` subsystems.
+- With an admin session cookie, `GET /api/app/operations/health` returns the expected `OperationsHealthReport` shape with at least the `store`, `scheduler`, `accessLog`, and `distributedDependencyEnforcement` subsystems.
+- For a strict activation rehearsal, remove or localize one Phase 63 dependency and confirm `distributedDependencyEnforcement` reports `degraded`/blocked in operations health and `strictActivationBlocked: true` in operations status.
 - After the scheduler has run for >60s without completing a tick (e.g., simulated by suspending the process), the `scheduler` subsystem reports `degraded`.
 - After running `npm run jobs:snapshot-metrics`, `GET /api/app/operations/job-metrics/history?limit=5` returns a non-empty `snapshots` array.
 - Snapshots are sorted ascending by `capturedAt`.

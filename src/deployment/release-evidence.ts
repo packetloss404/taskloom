@@ -20,6 +20,7 @@ import {
   type Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport,
   type Phase61MultiWriterRuntimeActivationControlsGateReport,
   type Phase62ManagedPostgresHorizontalWriterHardeningGateReport,
+  type Phase63DistributedDependencyEnforcementGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -264,6 +265,50 @@ export interface ReleaseEvidenceBundle {
       phase62Phases63To66Pending: boolean;
       phase62PendingPhases: string[];
       phase62TopologyReleaseAllowed: boolean;
+      phase63DistributedDependencyEnforcementGateRequired: boolean;
+      phase63HorizontalWriterTopologyRequested: boolean;
+      phase63Phase62HorizontalWriterHardeningReady: boolean;
+      phase63DistributedRateLimitRequired: boolean;
+      phase63DistributedRateLimitConfigured: boolean;
+      phase63DistributedRateLimitEvidenceAttached: boolean;
+      phase63DistributedRateLimitFailOpen: boolean;
+      phase63DistributedRateLimitReady: boolean;
+      phase63SchedulerCoordinationRequired: boolean;
+      phase63SchedulerLeaderMode: string;
+      phase63SchedulerCoordinationHttpUrlConfigured: boolean;
+      phase63SchedulerCoordinationEvidenceAttached: boolean;
+      phase63SchedulerCoordinationFailOpen: boolean;
+      phase63SchedulerCoordinationLocalOnly: boolean;
+      phase63SchedulerCoordinationReady: boolean;
+      phase63DurableJobExecutionRequired: boolean;
+      phase63DurableJobExecutionPosture: string;
+      phase63DurableJobExecutionPostureSafe: boolean;
+      phase63DurableJobExecutionEvidenceAttached: boolean;
+      phase63DurableJobExecutionReady: boolean;
+      phase63AccessLogShippingRequired: boolean;
+      phase63AccessLogMode: string;
+      phase63AccessLogShippingConfigured: boolean;
+      phase63AccessLogShippingEvidenceAttached: boolean;
+      phase63AccessLogShippingLocalOnly: boolean;
+      phase63AccessLogShippingReady: boolean;
+      phase63AlertDeliveryRequired: boolean;
+      phase63AlertEvaluateCronConfigured: boolean;
+      phase63AlertWebhookUrlConfigured: boolean;
+      phase63AlertDeliveryEvidenceAttached: boolean;
+      phase63AlertDeliveryReady: boolean;
+      phase63HealthMonitoringRequired: boolean;
+      phase63HealthMonitoringEvidenceAttached: boolean;
+      phase63HealthMonitoringReady: boolean;
+      phase63DistributedDependencyEnforcementReady: boolean;
+      phase63ActivationDependencyGatePassed: boolean;
+      phase63StrictActivationBlocked: boolean;
+      phase63ActiveActiveSupported: false;
+      phase63RegionalFailoverSupported: false;
+      phase63PitrRuntimeSupported: false;
+      phase63DistributedSqliteSupported: false;
+      phase63Phases64To66Pending: boolean;
+      phase63PendingPhases: string[];
+      phase63TopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -398,6 +443,18 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
   "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
   "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
+  "TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN",
+  "TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE",
+  "TASKLOOM_SCHEDULER_LEADER_HTTP_URL",
+  "TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN",
+  "TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE",
+  "TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE",
+  "TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE",
+  "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE",
+  "TASKLOOM_ALERT_EVALUATE_CRON",
+  "TASKLOOM_ALERT_WEBHOOK_URL",
+  "TASKLOOM_ALERT_DELIVERY_EVIDENCE",
+  "TASKLOOM_HEALTH_MONITORING_EVIDENCE",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -1004,6 +1061,62 @@ function phase62ManagedPostgresHorizontalWriterHardeningGate(
   };
 }
 
+function phase63DistributedDependencyEnforcementGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase62Gate: Phase62ManagedPostgresHorizontalWriterHardeningGateReport,
+): Phase63DistributedDependencyEnforcementGateReport {
+  return asyncStoreBoundary.phase63DistributedDependencyEnforcementGate ?? {
+    phase: "63",
+    required: false,
+    horizontalWriterTopologyRequested: false,
+    phase62HorizontalWriterHardeningReady: phase62Gate.horizontalWriterHardeningReady,
+    distributedRateLimitRequired: false,
+    distributedRateLimitConfigured: false,
+    distributedRateLimitEvidenceAttached: false,
+    distributedRateLimitFailOpen: false,
+    distributedRateLimitReady: false,
+    schedulerCoordinationRequired: false,
+    schedulerLeaderMode: "off",
+    schedulerCoordinationHttpUrlConfigured: false,
+    schedulerCoordinationEvidenceAttached: false,
+    schedulerCoordinationFailOpen: false,
+    schedulerCoordinationLocalOnly: true,
+    schedulerCoordinationReady: false,
+    durableJobExecutionRequired: false,
+    durableJobExecutionPosture: "",
+    durableJobExecutionPostureSafe: false,
+    durableJobExecutionEvidenceAttached: false,
+    durableJobExecutionReady: false,
+    accessLogShippingRequired: false,
+    accessLogMode: "off",
+    accessLogShippingConfigured: false,
+    accessLogShippingEvidenceAttached: false,
+    accessLogShippingLocalOnly: true,
+    accessLogShippingReady: false,
+    alertDeliveryRequired: false,
+    alertEvaluateCronConfigured: false,
+    alertWebhookUrlConfigured: false,
+    alertDeliveryEvidenceAttached: false,
+    alertDeliveryReady: false,
+    healthMonitoringRequired: false,
+    healthMonitoringEvidenceAttached: false,
+    healthMonitoringReady: false,
+    distributedDependencyEnforcementReady: false,
+    activationDependencyGatePassed: false,
+    strictActivationBlocked: false,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    phases64To66Pending: false,
+    pendingPhases: [],
+    releaseAllowed: true,
+    summary: "Phase 63 distributed dependency enforcement is not required for this release posture.",
+    blockers: [],
+    nextSteps: ["Keep Phase 63 distributed dependency evidence ready before any future horizontal writer activation claim."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -1276,6 +1389,42 @@ function phase62HorizontalWriterTransactionRetryAttachmentEvidence(
   return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE");
 }
 
+function phase63DistributedRateLimitAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE");
+}
+
+function phase63SchedulerCoordinationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE");
+}
+
+function phase63DurableJobExecutionAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE");
+}
+
+function phase63AccessLogShippingAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE");
+}
+
+function phase63AlertDeliveryAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_ALERT_DELIVERY_EVIDENCE");
+}
+
+function phase63HealthMonitoringAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_HEALTH_MONITORING_EVIDENCE");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -1295,6 +1444,7 @@ function buildAttachments(
   const phase60Gate = phase60MultiWriterRuntimeSupportPresenceAssertionGate(asyncStoreBoundary, phase59Gate);
   const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
   const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
+  const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -1743,6 +1893,66 @@ function buildAttachments(
       ...phase62HorizontalWriterTransactionRetryAttachmentEvidence(env),
     },
     {
+      id: "phase-63-distributed-rate-limit-evidence",
+      label: "Phase 63 distributed rate limiting evidence",
+      format: "json",
+      required: phase63Gate.distributedRateLimitRequired,
+      summary: phase63Gate.distributedRateLimitReady
+        ? "Phase 63 distributed rate limiting is configured fail-closed with evidence attached."
+        : "Phase 63 distributed rate limiting requires a shared limiter URL, fail-closed posture, and evidence before activation.",
+      ...phase63DistributedRateLimitAttachmentEvidence(env),
+    },
+    {
+      id: "phase-63-scheduler-coordination-evidence",
+      label: "Phase 63 scheduler coordination evidence",
+      format: "json",
+      required: phase63Gate.schedulerCoordinationRequired,
+      summary: phase63Gate.schedulerCoordinationReady
+        ? "Phase 63 scheduler coordination is configured through an HTTP coordinator with evidence attached."
+        : "Phase 63 scheduler coordination requires http mode, coordinator URL, fail-closed posture, and evidence before activation.",
+      ...phase63SchedulerCoordinationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-63-durable-job-execution-evidence",
+      label: "Phase 63 durable job execution evidence",
+      format: "json",
+      required: phase63Gate.durableJobExecutionRequired,
+      summary: phase63Gate.durableJobExecutionReady
+        ? "Phase 63 durable job execution posture is production-safe with evidence attached."
+        : "Phase 63 durable job execution requires a shared durable posture and evidence before activation.",
+      ...phase63DurableJobExecutionAttachmentEvidence(env),
+    },
+    {
+      id: "phase-63-access-log-shipping-evidence",
+      label: "Phase 63 access-log shipping evidence",
+      format: "json",
+      required: phase63Gate.accessLogShippingRequired,
+      summary: phase63Gate.accessLogShippingReady
+        ? "Phase 63 access-log shipping is configured with evidence attached."
+        : "Phase 63 access-log shipping requires stdout or file shipping with evidence before activation.",
+      ...phase63AccessLogShippingAttachmentEvidence(env),
+    },
+    {
+      id: "phase-63-alert-delivery-evidence",
+      label: "Phase 63 alert delivery evidence",
+      format: "json",
+      required: phase63Gate.alertDeliveryRequired,
+      summary: phase63Gate.alertDeliveryReady
+        ? "Phase 63 alert delivery is configured with scheduled evaluation, webhook delivery, and evidence attached."
+        : "Phase 63 alert delivery requires scheduled evaluation, webhook delivery, and evidence before activation.",
+      ...phase63AlertDeliveryAttachmentEvidence(env),
+    },
+    {
+      id: "phase-63-health-monitoring-evidence",
+      label: "Phase 63 health monitoring evidence",
+      format: "json",
+      required: phase63Gate.healthMonitoringRequired,
+      summary: phase63Gate.healthMonitoringReady
+        ? "Phase 63 health monitoring evidence is attached."
+        : "Phase 63 health monitoring evidence is required before activation.",
+      ...phase63HealthMonitoringAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -1868,6 +2078,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase60Gate = phase60MultiWriterRuntimeSupportPresenceAssertionGate(asyncStoreBoundary, phase59Gate);
   const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
   const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
+  const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
 
   return {
     phase: "44",
@@ -2078,6 +2289,50 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase62Phases63To66Pending: phase62Gate.phases63To66Pending,
         phase62PendingPhases: phase62Gate.pendingPhases,
         phase62TopologyReleaseAllowed: phase62Gate.releaseAllowed,
+        phase63DistributedDependencyEnforcementGateRequired: phase63Gate.required,
+        phase63HorizontalWriterTopologyRequested: phase63Gate.horizontalWriterTopologyRequested,
+        phase63Phase62HorizontalWriterHardeningReady: phase63Gate.phase62HorizontalWriterHardeningReady,
+        phase63DistributedRateLimitRequired: phase63Gate.distributedRateLimitRequired,
+        phase63DistributedRateLimitConfigured: phase63Gate.distributedRateLimitConfigured,
+        phase63DistributedRateLimitEvidenceAttached: phase63Gate.distributedRateLimitEvidenceAttached,
+        phase63DistributedRateLimitFailOpen: phase63Gate.distributedRateLimitFailOpen,
+        phase63DistributedRateLimitReady: phase63Gate.distributedRateLimitReady,
+        phase63SchedulerCoordinationRequired: phase63Gate.schedulerCoordinationRequired,
+        phase63SchedulerLeaderMode: phase63Gate.schedulerLeaderMode,
+        phase63SchedulerCoordinationHttpUrlConfigured: phase63Gate.schedulerCoordinationHttpUrlConfigured,
+        phase63SchedulerCoordinationEvidenceAttached: phase63Gate.schedulerCoordinationEvidenceAttached,
+        phase63SchedulerCoordinationFailOpen: phase63Gate.schedulerCoordinationFailOpen,
+        phase63SchedulerCoordinationLocalOnly: phase63Gate.schedulerCoordinationLocalOnly,
+        phase63SchedulerCoordinationReady: phase63Gate.schedulerCoordinationReady,
+        phase63DurableJobExecutionRequired: phase63Gate.durableJobExecutionRequired,
+        phase63DurableJobExecutionPosture: phase63Gate.durableJobExecutionPosture,
+        phase63DurableJobExecutionPostureSafe: phase63Gate.durableJobExecutionPostureSafe,
+        phase63DurableJobExecutionEvidenceAttached: phase63Gate.durableJobExecutionEvidenceAttached,
+        phase63DurableJobExecutionReady: phase63Gate.durableJobExecutionReady,
+        phase63AccessLogShippingRequired: phase63Gate.accessLogShippingRequired,
+        phase63AccessLogMode: phase63Gate.accessLogMode,
+        phase63AccessLogShippingConfigured: phase63Gate.accessLogShippingConfigured,
+        phase63AccessLogShippingEvidenceAttached: phase63Gate.accessLogShippingEvidenceAttached,
+        phase63AccessLogShippingLocalOnly: phase63Gate.accessLogShippingLocalOnly,
+        phase63AccessLogShippingReady: phase63Gate.accessLogShippingReady,
+        phase63AlertDeliveryRequired: phase63Gate.alertDeliveryRequired,
+        phase63AlertEvaluateCronConfigured: phase63Gate.alertEvaluateCronConfigured,
+        phase63AlertWebhookUrlConfigured: phase63Gate.alertWebhookUrlConfigured,
+        phase63AlertDeliveryEvidenceAttached: phase63Gate.alertDeliveryEvidenceAttached,
+        phase63AlertDeliveryReady: phase63Gate.alertDeliveryReady,
+        phase63HealthMonitoringRequired: phase63Gate.healthMonitoringRequired,
+        phase63HealthMonitoringEvidenceAttached: phase63Gate.healthMonitoringEvidenceAttached,
+        phase63HealthMonitoringReady: phase63Gate.healthMonitoringReady,
+        phase63DistributedDependencyEnforcementReady: phase63Gate.distributedDependencyEnforcementReady,
+        phase63ActivationDependencyGatePassed: phase63Gate.activationDependencyGatePassed,
+        phase63StrictActivationBlocked: phase63Gate.strictActivationBlocked,
+        phase63ActiveActiveSupported: phase63Gate.activeActiveSupported,
+        phase63RegionalFailoverSupported: phase63Gate.regionalFailoverSupported,
+        phase63PitrRuntimeSupported: phase63Gate.pitrRuntimeSupported,
+        phase63DistributedSqliteSupported: phase63Gate.distributedSqliteSupported,
+        phase63Phases64To66Pending: phase63Gate.phases64To66Pending,
+        phase63PendingPhases: phase63Gate.pendingPhases,
+        phase63TopologyReleaseAllowed: phase63Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

@@ -108,6 +108,21 @@ const managedPostgresHorizontalWriterPhase62Env = {
     "docs/phase-62/transaction-retry.md",
 } as const;
 
+const managedPostgresHorizontalWriterPhase63Env = {
+  ...managedPostgresHorizontalWriterPhase62Env,
+  TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.internal/check",
+  TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+  TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://scheduler.internal/leader",
+  TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+  TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "docs/phase-63/durable-jobs.md",
+  TASKLOOM_ACCESS_LOG_MODE: "stdout",
+  TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "docs/phase-63/access-log-shipping.md",
+  TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
+  TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.internal/taskloom",
+  TASKLOOM_ALERT_DELIVERY_EVIDENCE: "docs/phase-63/alert-delivery.md",
+  TASKLOOM_HEALTH_MONITORING_ASSERTION: "monitor://taskloom-ready-live",
+} as const;
+
 test("local JSON reports current supported local mode", () => {
   const report = assessManagedDatabaseTopology({ env: {} });
 
@@ -1176,7 +1191,7 @@ test("managed Postgres horizontal app-writer topology requires Phase 61 controls
   );
 });
 
-test("managed Postgres horizontal app-writer topology reports hardened Phase 62 posture", () => {
+test("managed Postgres horizontal app-writer topology requires Phase 63 distributed dependencies after Phase 62", () => {
   const report = assessManagedDatabaseTopology({ env: managedPostgresHorizontalWriterPhase62Env });
   const hardeningImplementation = observedEnvValue(
     report,
@@ -1187,9 +1202,9 @@ test("managed Postgres horizontal app-writer topology reports hardened Phase 62 
     "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
   );
 
-  assert.equal(report.status, "pass");
+  assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.ready, true);
+  assert.equal(report.ready, false);
   assert.equal(report.managedDatabase.supported, true);
   assert.equal(report.managedDatabase.syncStartupSupported, true);
   assert.equal(report.managedDatabase.phase62?.horizontalWriterTopologyRequested, true);
@@ -1207,16 +1222,78 @@ test("managed Postgres horizontal app-writer topology reports hardened Phase 62 
   assert.equal(report.managedDatabase.phase62?.regionalFailoverSupported, false);
   assert.equal(report.managedDatabase.phase62?.pitrRuntimeSupported, false);
   assert.equal(report.managedDatabase.phase62?.distributedSqliteSupported, false);
+  assert.equal(report.managedDatabase.phase62?.strictBlocker, false);
+  assert.equal(report.managedDatabase.phase63?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase63?.phase62HorizontalWriterRuntimeSupported, true);
+  assert.equal(report.managedDatabase.phase63?.distributedRateLimitReady, false);
+  assert.equal(report.managedDatabase.phase63?.schedulerCoordinationReady, false);
+  assert.equal(report.managedDatabase.phase63?.durableJobExecutionPostureReady, false);
+  assert.equal(report.managedDatabase.phase63?.accessLogShippingConfigured, false);
+  assert.equal(report.managedDatabase.phase63?.alertDeliveryReady, false);
+  assert.equal(report.managedDatabase.phase63?.healthMonitoringConfigured, false);
+  assert.equal(report.managedDatabase.phase63?.distributedDependencyEnforcementReady, false);
+  assert.equal(report.managedDatabase.phase63?.activationAllowed, false);
+  assert.equal(report.managedDatabase.phase63?.strictBlocker, true);
   assert.equal(hardeningImplementation.value, "docs/phase-62/horizontal-writer-hardening.md");
   assert.equal(hardeningImplementation.redacted, false);
   assert.equal(retryEvidence.value, "docs/phase-62/transaction-retry.md");
   assert.equal(retryEvidence.redacted, false);
-  assert.ok(report.summary.includes("Phase 62"));
+  assert.ok(report.summary.includes("Phase 63"));
   assert.ok(report.warnings.some((warning) => warning.includes("horizontal app-writer")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 63")));
   assert.ok(
     report.checks.some(
       (check) =>
         check.id === "phase62-managed-postgres-horizontal-writer-hardening" &&
+        check.status === "pass",
+    ),
+  );
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase63-distributed-dependency-enforcement" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 63")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL")));
+});
+
+test("managed Postgres horizontal app-writer topology passes Phase 63 distributed dependency enforcement", () => {
+  const report = assessManagedDatabaseTopology({ env: managedPostgresHorizontalWriterPhase63Env });
+  const limiterUrl = observedEnvValue(report, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL");
+  const healthMonitoring = observedEnvValue(report, "TASKLOOM_HEALTH_MONITORING_ASSERTION");
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.phase62?.horizontalWriterRuntimeSupported, true);
+  assert.equal(report.managedDatabase.phase63?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase63?.phase62HorizontalWriterRuntimeSupported, true);
+  assert.equal(report.managedDatabase.phase63?.distributedRateLimitConfigured, true);
+  assert.equal(report.managedDatabase.phase63?.distributedRateLimitFailClosed, true);
+  assert.equal(report.managedDatabase.phase63?.distributedRateLimitReady, true);
+  assert.equal(report.managedDatabase.phase63?.schedulerHttpLeaderConfigured, true);
+  assert.equal(report.managedDatabase.phase63?.schedulerHttpLeaderFailClosed, true);
+  assert.equal(report.managedDatabase.phase63?.schedulerCoordinationReady, true);
+  assert.equal(report.managedDatabase.phase63?.durableJobExecutionPostureReady, true);
+  assert.equal(report.managedDatabase.phase63?.accessLogShippingConfigured, true);
+  assert.equal(report.managedDatabase.phase63?.alertEvaluationConfigured, true);
+  assert.equal(report.managedDatabase.phase63?.alertDeliveryConfigured, true);
+  assert.equal(report.managedDatabase.phase63?.alertDeliveryReady, true);
+  assert.equal(report.managedDatabase.phase63?.healthMonitoringConfigured, true);
+  assert.equal(report.managedDatabase.phase63?.distributedDependencyEnforcementReady, true);
+  assert.equal(report.managedDatabase.phase63?.activationAllowed, true);
+  assert.equal(report.managedDatabase.phase63?.strictBlocker, false);
+  assert.equal(limiterUrl.value, "https://limits.internal/check");
+  assert.equal(limiterUrl.redacted, false);
+  assert.equal(healthMonitoring.value, "monitor://taskloom-ready-live");
+  assert.equal(healthMonitoring.redacted, false);
+  assert.ok(report.summary.includes("Phase 63"));
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase63-distributed-dependency-enforcement" &&
         check.status === "pass",
     ),
   );

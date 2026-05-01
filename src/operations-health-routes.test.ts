@@ -85,6 +85,7 @@ test("operations health route returns the report shape for an admin-equivalent o
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeSupportPresenceAssertion"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeActivationControls"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "managedPostgresHorizontalWriterConcurrency"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "distributedDependencyEnforcement"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
@@ -327,7 +328,11 @@ test("operations health reports Phase 62 horizontal app-writer hardening separat
   assert.match(horizontalWriterConcurrency.detail, /multiple Taskloom app processes writing to one managed Postgres primary/i);
   assert.match(horizontalWriterConcurrency.detail, /multi-writer database support remain unsupported/i);
   assert.match(horizontalWriterConcurrency.detail, /releaseAllowed=false/);
-  assert.equal(report.overall, "ok");
+  const distributedDependencyEnforcement = findSubsystem(report, "distributedDependencyEnforcement");
+  assert.equal(distributedDependencyEnforcement.status, "degraded");
+  assert.match(distributedDependencyEnforcement.detail, /Phase 63 distributed dependency enforcement blocks strict activation/i);
+  assert.match(distributedDependencyEnforcement.detail, /activationAllowed=false/);
+  assert.equal(report.overall, "degraded");
 });
 
 test("operations health accepts canonical Phase 62 release evidence env keys", () => {

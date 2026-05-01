@@ -553,6 +553,51 @@ export interface ManagedPostgresHorizontalWriterConcurrencyStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type DistributedDependencyEnforcementKey =
+  | "distributedRateLimiting"
+  | "schedulerCoordination"
+  | "durableJobExecution"
+  | "accessLogShipping"
+  | "alertDelivery"
+  | "healthMonitoring";
+
+export interface DistributedDependencyStatus {
+  key: DistributedDependencyEnforcementKey;
+  label: string;
+  status: "ready" | "blocked" | "not-required";
+  required: boolean;
+  productionSafe: boolean;
+  mode: string;
+  summary: string;
+  blockers: string[];
+  source: "env" | "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
+export interface DistributedDependencyEnforcementStatus {
+  phase: "63";
+  status: "dependencies-ready" | "blocked" | "not-required";
+  enforcementStatus: "ready" | "blocked" | "not-required";
+  summary: string;
+  required: boolean;
+  horizontalAppWriterIntentDetected: boolean;
+  multiWriterIntentDetected: boolean;
+  strictActivationBlocked: boolean;
+  strictActivationAllowed: boolean;
+  activationAllowed: boolean;
+  releaseAllowed: false;
+  missingDependencies: DistributedDependencyEnforcementKey[];
+  localOnlyDependencies: DistributedDependencyEnforcementKey[];
+  blockers: string[];
+  dependencies: Record<DistributedDependencyEnforcementKey, DistributedDependencyStatus>;
+  distributedRateLimiting: DistributedDependencyStatus;
+  schedulerCoordination: DistributedDependencyStatus;
+  durableJobExecution: DistributedDependencyStatus;
+  accessLogShipping: DistributedDependencyStatus;
+  alertDelivery: DistributedDependencyStatus;
+  healthMonitoring: DistributedDependencyStatus;
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -586,6 +631,7 @@ export interface OperationsStatus {
   multiWriterRuntimeSupportPresenceAssertion: MultiWriterRuntimeSupportPresenceAssertionStatus;
   multiWriterRuntimeActivationControls: MultiWriterRuntimeActivationControlsStatus;
   managedPostgresHorizontalWriterConcurrency: ManagedPostgresHorizontalWriterConcurrencyStatus;
+  distributedDependencyEnforcement: DistributedDependencyEnforcementStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -643,6 +689,7 @@ const MANAGED_POSTGRES_TOPOLOGY_HINTS = new Set([
   "managed",
   "managed-db",
   "managed-database",
+  "managed-postgres-horizontal-app-writers",
   "postgres",
   "postgresql",
 ]);
@@ -1191,6 +1238,48 @@ const MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_EVIDENCE = [
   envKeys?: readonly string[];
   reportKeys: readonly string[];
 }>;
+const DISTRIBUTED_DEPENDENCY_DEFINITIONS = [
+  {
+    key: "distributedRateLimiting",
+    label: "distributed rate limiting",
+    reportKeys: ["distributedRateLimiting", "rateLimiting", "rateLimit"],
+  },
+  {
+    key: "schedulerCoordination",
+    label: "scheduler coordination",
+    reportKeys: ["schedulerCoordination", "schedulerLeader", "leaderElection"],
+  },
+  {
+    key: "durableJobExecution",
+    label: "durable job execution",
+    reportKeys: ["durableJobExecution", "durableJobs", "jobExecution"],
+  },
+  {
+    key: "accessLogShipping",
+    label: "access-log shipping",
+    reportKeys: ["accessLogShipping", "accessLogs", "logShipping"],
+  },
+  {
+    key: "alertDelivery",
+    label: "alert delivery",
+    reportKeys: ["alertDelivery", "alerts", "alerting"],
+  },
+  {
+    key: "healthMonitoring",
+    label: "health monitoring",
+    reportKeys: ["healthMonitoring", "monitoring", "healthChecks"],
+  },
+] as const satisfies ReadonlyArray<{
+  key: DistributedDependencyEnforcementKey;
+  label: string;
+  reportKeys: readonly string[];
+}>;
+const DURABLE_JOB_EXECUTION_POSTURES = new Set([
+  "managed-postgres-transactional-queue",
+  "managed-postgres-durable-jobs",
+  "shared-managed-postgres",
+  "external-durable-queue",
+]);
 const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
   "approved",
   "authorized",
@@ -1744,6 +1833,47 @@ function horizontalWriterConcurrencyRecord(
       report,
       ["releaseReadiness", "asyncStoreBoundary", "managedPostgresHorizontalWriterConcurrency"],
     );
+}
+
+function distributedDependencyEnforcementRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase63"]) ??
+    findNestedRecord(report, ["distributedDependencyEnforcement"]) ??
+    findNestedRecord(report, ["distributedDependencyEnforcementGate"]) ??
+    findNestedRecord(report, ["distributedDependencies"]) ??
+    findNestedRecord(report, ["productionDependencies"]) ??
+    findNestedRecord(report, ["runtimeGuard", "phase63"]) ??
+    findNestedRecord(report, ["runtimeGuard", "distributedDependencyEnforcement"]) ??
+    findNestedRecord(report, ["releaseReadiness", "phase63"]) ??
+    findNestedRecord(report, ["releaseReadiness", "distributedDependencyEnforcement"]) ??
+    findNestedRecord(report, ["releaseReadiness", "distributedDependencies"]);
+}
+
+function distributedDependencyRecord(
+  phase63: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> | null {
+  for (const key of keys) {
+    const direct = phase63[key];
+    if (isRecord(direct)) return direct;
+  }
+  for (const containerKey of ["dependencies", "dependencyStates", "checks"] as const) {
+    const container = phase63[containerKey];
+    if (isRecord(container)) {
+      for (const key of keys) {
+        const nested = container[key];
+        if (isRecord(nested)) return nested;
+      }
+    }
+    if (Array.isArray(container)) {
+      for (const entry of container) {
+        if (!isRecord(entry)) continue;
+        const id = stringValue(entry.key) || stringValue(entry.id) || stringValue(entry.name);
+        if (keys.includes(id)) return entry;
+      }
+    }
+  }
+  return null;
 }
 
 function deriveManagedPostgresCapability(
@@ -2924,6 +3054,7 @@ function deriveMultiWriterRuntimeActivationControls(
 
 function horizontalAppWriterIntentFromEnv(env: NodeJS.ProcessEnv): boolean {
   const topology = stringValue(env.TASKLOOM_APP_WRITER_TOPOLOGY).toLowerCase();
+  const databaseTopology = stringValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
   const horizontalWriterMode = stringValue(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_MODE).toLowerCase();
   const horizontalWriterFlag = stringValue(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_APP_WRITERS).toLowerCase();
   return [
@@ -2934,7 +3065,9 @@ function horizontalAppWriterIntentFromEnv(env: NodeJS.ProcessEnv): boolean {
     "horizontal-app-writers",
     "multi-process",
     "multi-process-writers",
+    "managed-postgres-horizontal-app-writers",
   ].includes(topology) ||
+    databaseTopology === "managed-postgres-horizontal-app-writers" ||
     ["enabled", "required", "supported", "hardened"].includes(horizontalWriterMode) ||
     ["1", "true", "yes", "enabled", "required"].includes(horizontalWriterFlag);
 }
@@ -3108,6 +3241,279 @@ function deriveManagedPostgresHorizontalWriterConcurrency(
     releaseAssertion: evidenceByKey.releaseAssertion,
     missingEvidence,
     source: phase62?.source ?? "derived",
+  };
+}
+
+function trueEnvValue(value: unknown): boolean {
+  return ["1", "true", "yes", "enabled"].includes(stringValue(value).toLowerCase());
+}
+
+function reportDependencyReady(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  const explicit = booleanValue(record.productionSafe) ??
+    booleanValue(record.ready) ??
+    booleanValue(record.configured) ??
+    booleanValue(record.ok) ??
+    booleanValue(record.pass);
+  if (explicit !== undefined) return explicit;
+  const status = stringValue(record.status).toLowerCase();
+  if (["ready", "ok", "pass", "passed", "production-safe", "shared", "distributed"].includes(status)) return true;
+  if (["blocked", "fail", "failed", "missing", "local-only", "disabled"].includes(status)) return false;
+  return null;
+}
+
+function reportDependencyMode(record: Record<string, unknown> | null): string {
+  if (!record) return "";
+  return stringValue(record.mode) ||
+    stringValue(record.posture) ||
+    stringValue(record.classification) ||
+    stringValue(record.status);
+}
+
+function reportDependencyBlockers(record: Record<string, unknown> | null): string[] {
+  if (!record) return [];
+  const blockers = record.blockers;
+  if (Array.isArray(blockers)) {
+    return blockers.map((entry) => stringValue(entry)).filter(Boolean);
+  }
+  const blocker = stringValue(record.blocker) || stringValue(record.detail) || stringValue(record.summary);
+  return blocker ? [blocker] : [];
+}
+
+function reportPhase63Required(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  return booleanValue(record.required) ??
+    booleanValue(record.phase63Required) ??
+    booleanValue(record.distributedDependencyEnforcementRequired) ??
+    booleanValue(record.strictActivationRequired) ??
+    null;
+}
+
+function deriveDistributedDependencyEnforcement(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  multiWriterRuntimeActivationControls: MultiWriterRuntimeActivationControlsStatus,
+  managedPostgresHorizontalWriterConcurrency: ManagedPostgresHorizontalWriterConcurrencyStatus,
+): DistributedDependencyEnforcementStatus {
+  const reportSources: Array<{
+    source: Exclude<DistributedDependencyEnforcementStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = distributedDependencyEnforcementRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase63 = reportSources[0] ?? null;
+  const reportRequired = reportSources.reduce<boolean | null>((result, source) => {
+    if (result !== null) return result;
+    return reportPhase63Required(source.record);
+  }, null);
+  const multiWriterIntentDetected = multiWriterRuntimeActivationControls.multiWriterIntentDetected;
+  const horizontalAppWriterIntentDetected =
+    managedPostgresHorizontalWriterConcurrency.horizontalAppWriterIntentDetected;
+  const required = reportRequired === true ||
+    horizontalAppWriterIntentDetected ||
+    multiWriterRuntimeActivationControls.runtimeActivationControlsComplete;
+  const schedulerMode = resolveLeaderMode(env);
+  const schedulerHttpUrl = stringValue(env.TASKLOOM_SCHEDULER_LEADER_HTTP_URL);
+  const schedulerFailOpen = trueEnvValue(env.TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN);
+  const limiterUrl = stringValue(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL);
+  const limiterFailOpen = trueEnvValue(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN);
+  const accessLogMode = resolveAccessLogMode(env);
+  const accessLogPath = resolveAccessLogPath(env);
+  const accessLogShipping = valueFromEnvKeys(env, [
+    "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE",
+    "TASKLOOM_ACCESS_LOG_SHIPPING_MODE",
+    "TASKLOOM_ACCESS_LOG_SHIPPING_ASSERTION",
+    "TASKLOOM_ACCESS_LOG_SHIPPING",
+    "TASKLOOM_ACCESS_LOG_SHIPPER",
+  ]);
+  const alertCron = stringValue(env.TASKLOOM_ALERT_EVALUATE_CRON);
+  const alertWebhookUrl = stringValue(env.TASKLOOM_ALERT_WEBHOOK_URL);
+  const alertDeliveryEvidence = stringValue(env.TASKLOOM_ALERT_DELIVERY_EVIDENCE);
+  const healthMonitoring = valueFromEnvKeys(env, [
+    "TASKLOOM_HEALTH_MONITORING_EVIDENCE",
+    "TASKLOOM_HEALTH_MONITORING_ASSERTION",
+    "TASKLOOM_HEALTH_MONITORING_URL",
+    "TASKLOOM_HEALTHCHECK_MONITORING_ASSERTION",
+  ]);
+  const durableJobExecutionPosture = stringValue(env.TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE).toLowerCase();
+  const durableJobExecutionEvidence = stringValue(env.TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE);
+  const durableJobExecutionReady =
+    managedPostgresHorizontalWriterConcurrency.managedPostgresHorizontalWriterHardeningComplete &&
+    DURABLE_JOB_EXECUTION_POSTURES.has(durableJobExecutionPosture) &&
+    Boolean(durableJobExecutionEvidence);
+  const accessLogShippingReady =
+    (accessLogMode === "stdout" && Boolean(accessLogShipping)) ||
+    (accessLogMode === "file" && Boolean(accessLogPath) && Boolean(accessLogShipping));
+  const alertDeliveryReady = Boolean(alertCron) && Boolean(alertWebhookUrl) && Boolean(alertDeliveryEvidence);
+
+  const envStates: Record<DistributedDependencyEnforcementKey, {
+    ready: boolean;
+    mode: string;
+    summary: string;
+    blockers: string[];
+  }> = {
+    distributedRateLimiting: {
+      ready: Boolean(limiterUrl) && !limiterFailOpen,
+      mode: limiterUrl ? (limiterFailOpen ? "http-fail-open" : "http-fail-closed") : "local-store",
+      summary: limiterUrl
+        ? limiterFailOpen
+          ? "distributed limiter URL is configured but fail-open would allow local-only abuse counters during outages"
+          : "distributed limiter URL is configured fail-closed"
+        : "distributed limiter URL is not configured; rate-limit buckets remain local to the app store",
+      blockers: limiterUrl
+        ? limiterFailOpen ? ["Set TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN to fail closed before strict activation."] : []
+        : ["Set TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL for shared abuse-counter coordination."],
+    },
+    schedulerCoordination: {
+      ready: schedulerMode === "http" && Boolean(schedulerHttpUrl) && !schedulerFailOpen,
+      mode: schedulerMode === "http"
+        ? schedulerFailOpen ? "http-fail-open" : "http-fail-closed"
+        : schedulerMode,
+      summary: schedulerMode === "http" && schedulerHttpUrl
+        ? schedulerFailOpen
+          ? "HTTP scheduler coordination is configured but fail-open can duplicate execution during coordinator outages"
+          : "HTTP scheduler coordination is configured fail-closed"
+        : "scheduler leader mode is local-only for horizontal app writers",
+      blockers: schedulerMode === "http" && schedulerHttpUrl
+        ? schedulerFailOpen ? ["Set TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN to fail closed before strict activation."] : []
+        : ["Set TASKLOOM_SCHEDULER_LEADER_MODE=http with TASKLOOM_SCHEDULER_LEADER_HTTP_URL."],
+    },
+    durableJobExecution: {
+      ready: durableJobExecutionReady,
+      mode: durableJobExecutionPosture || "local-store-jobs",
+      summary: durableJobExecutionReady
+        ? "managed Postgres horizontal-writer hardening and durable job execution posture are configured"
+        : "job execution is not confirmed for horizontally scaled managed Postgres writers",
+      blockers: durableJobExecutionReady
+        ? []
+        : ["Set TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE to a shared durable posture and attach TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE after Phase 62 hardening is complete."],
+    },
+    accessLogShipping: {
+      ready: accessLogShippingReady,
+      mode: accessLogMode === "stdout"
+        ? accessLogShipping ? `stdout:${accessLogShipping}` : "stdout-no-shipping-evidence"
+        : accessLogMode === "file"
+          ? accessLogShipping ? `file:${accessLogShipping}` : "file-local-buffer"
+          : "off",
+      summary: accessLogMode === "stdout" && accessLogShipping
+        ? "access logs write to stdout with shipping evidence configured"
+        : accessLogMode === "file" && accessLogPath && accessLogShipping
+          ? "file access logs have shipping evidence configured"
+          : "access-log shipping is not configured for strict activation",
+      blockers: accessLogShippingReady
+        ? []
+        : ["Set TASKLOOM_ACCESS_LOG_MODE=stdout or file with TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE."],
+    },
+    alertDelivery: {
+      ready: alertDeliveryReady,
+      mode: alertDeliveryReady ? "scheduled-webhook-with-evidence" : alertCron ? "scheduled-incomplete" : "disabled",
+      summary: alertDeliveryReady
+        ? "scheduled alert evaluation, webhook delivery, and delivery evidence are configured"
+        : "alert evaluation or webhook delivery is missing",
+      blockers: alertDeliveryReady
+        ? []
+        : ["Set TASKLOOM_ALERT_EVALUATE_CRON, TASKLOOM_ALERT_WEBHOOK_URL, and TASKLOOM_ALERT_DELIVERY_EVIDENCE."],
+    },
+    healthMonitoring: {
+      ready: Boolean(healthMonitoring),
+      mode: healthMonitoring ? "external-monitoring-asserted" : "endpoints-only",
+      summary: healthMonitoring
+        ? "external health monitoring evidence is configured"
+        : "health endpoints exist, but external monitoring evidence is missing",
+      blockers: healthMonitoring
+        ? []
+        : ["Set TASKLOOM_HEALTH_MONITORING_EVIDENCE for external health monitoring coverage."],
+    },
+  };
+
+  const dependencies = Object.fromEntries(DISTRIBUTED_DEPENDENCY_DEFINITIONS.map((definition) => {
+    let source: DistributedDependencyStatus["source"] = "env";
+    let reportRecord: Record<string, unknown> | null = null;
+    for (const candidate of reportSources) {
+      const record = distributedDependencyRecord(candidate.record, definition.reportKeys);
+      if (record) {
+        reportRecord = record;
+        source = candidate.source;
+        break;
+      }
+    }
+    const reportReadyValue = reportDependencyReady(reportRecord);
+    const state = envStates[definition.key];
+    const productionSafe = reportReadyValue ?? state.ready;
+    const status: DistributedDependencyStatus["status"] = required
+      ? productionSafe ? "ready" : "blocked"
+      : "not-required";
+    const blockers = productionSafe ? [] : reportDependencyBlockers(reportRecord).concat(state.blockers);
+    return [definition.key, {
+      key: definition.key,
+      label: definition.label,
+      status,
+      required,
+      productionSafe,
+      mode: reportDependencyMode(reportRecord) || state.mode,
+      summary: stringValue(reportRecord?.summary) || stringValue(reportRecord?.detail) || state.summary,
+      blockers,
+      source,
+    }];
+  })) as Record<DistributedDependencyEnforcementKey, DistributedDependencyStatus>;
+
+  const blockers = Object.values(dependencies).flatMap((dependency) =>
+      dependency.status === "blocked"
+      ? dependency.blockers.length > 0
+        ? dependency.blockers
+        : [`${dependency.label} is not production-safe for strict activation.`]
+      : [],
+  );
+  const localOnlyDependencies = Object.values(dependencies)
+    .filter((dependency) => dependency.status === "blocked")
+    .map((dependency) => dependency.key);
+  const dependenciesReady = required && blockers.length === 0;
+  const enforcementStatus: DistributedDependencyEnforcementStatus["enforcementStatus"] = required
+    ? dependenciesReady ? "ready" : "blocked"
+    : "not-required";
+  const status: DistributedDependencyEnforcementStatus["status"] = required
+    ? dependenciesReady ? "dependencies-ready" : "blocked"
+    : "not-required";
+  const summary = required
+    ? dependenciesReady
+      ? "Phase 63 distributed dependency enforcement is ready for strict activation; shared rate limiting, scheduler coordination, durable jobs, access-log shipping, alert delivery, and health monitoring are production-safe for horizontal app writers."
+      : `Phase 63 distributed dependency enforcement blocks strict activation; missing production-safe ${localOnlyDependencies.join(", ")}.`
+    : "Phase 63 distributed dependency enforcement is not required without horizontal app-writer activation intent.";
+
+  return {
+    phase: "63",
+    status,
+    enforcementStatus,
+    summary,
+    required,
+    horizontalAppWriterIntentDetected,
+    multiWriterIntentDetected,
+    strictActivationBlocked: required && !dependenciesReady,
+    strictActivationAllowed: required && dependenciesReady,
+    activationAllowed: required && dependenciesReady,
+    releaseAllowed: false,
+    missingDependencies: localOnlyDependencies,
+    localOnlyDependencies,
+    blockers,
+    dependencies,
+    distributedRateLimiting: dependencies.distributedRateLimiting,
+    schedulerCoordination: dependencies.schedulerCoordination,
+    durableJobExecution: dependencies.durableJobExecution,
+    accessLogShipping: dependencies.accessLogShipping,
+    alertDelivery: dependencies.alertDelivery,
+    healthMonitoring: dependencies.healthMonitoring,
+    source: phase63?.source ?? "derived",
   };
 }
 
@@ -3291,6 +3697,15 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       managedPostgresStartupSupport,
       managedPostgresTopologyGate,
     );
+  const distributedDependencyEnforcement = deriveDistributedDependencyEnforcement(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+    multiWriterRuntimeActivationControls,
+    managedPostgresHorizontalWriterConcurrency,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -3339,6 +3754,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     multiWriterRuntimeSupportPresenceAssertion,
     multiWriterRuntimeActivationControls,
     managedPostgresHorizontalWriterConcurrency,
+    distributedDependencyEnforcement,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -3478,6 +3894,15 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
       managedPostgresStartupSupport,
       managedPostgresTopologyGate,
     );
+  const distributedDependencyEnforcement = deriveDistributedDependencyEnforcement(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+    multiWriterRuntimeActivationControls,
+    managedPostgresHorizontalWriterConcurrency,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -3526,6 +3951,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     multiWriterRuntimeSupportPresenceAssertion,
     multiWriterRuntimeActivationControls,
     managedPostgresHorizontalWriterConcurrency,
+    distributedDependencyEnforcement,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

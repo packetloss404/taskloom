@@ -77,6 +77,7 @@ const MANAGED_POSTGRES_TOPOLOGY_HINTS = new Set([
   "managed",
   "managed-db",
   "managed-database",
+  "managed-postgres-horizontal-app-writers",
   "postgres",
   "postgresql",
   "single-writer",
@@ -327,6 +328,44 @@ const MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_EVIDENCE = [
     ],
   },
 ] as const;
+const DISTRIBUTED_DEPENDENCY_DEFINITIONS = [
+  {
+    key: "distributedRateLimiting",
+    label: "distributed rate limiting",
+    reportKeys: ["distributedRateLimiting", "rateLimiting", "rateLimit"],
+  },
+  {
+    key: "schedulerCoordination",
+    label: "scheduler coordination",
+    reportKeys: ["schedulerCoordination", "schedulerLeader", "leaderElection"],
+  },
+  {
+    key: "durableJobExecution",
+    label: "durable job execution",
+    reportKeys: ["durableJobExecution", "durableJobs", "jobExecution"],
+  },
+  {
+    key: "accessLogShipping",
+    label: "access-log shipping",
+    reportKeys: ["accessLogShipping", "accessLogs", "logShipping"],
+  },
+  {
+    key: "alertDelivery",
+    label: "alert delivery",
+    reportKeys: ["alertDelivery", "alerts", "alerting"],
+  },
+  {
+    key: "healthMonitoring",
+    label: "health monitoring",
+    reportKeys: ["healthMonitoring", "monitoring", "healthChecks"],
+  },
+] as const;
+const DURABLE_JOB_EXECUTION_POSTURES = new Set([
+  "managed-postgres-transactional-queue",
+  "managed-postgres-durable-jobs",
+  "shared-managed-postgres",
+  "external-durable-queue",
+]);
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -426,6 +465,47 @@ function horizontalWriterConcurrencyRecord(report: unknown): Record<string, unkn
     findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase62"]) ??
     findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase62ManagedPostgresHorizontalWriterHardeningGate"]) ??
     findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "managedPostgresHorizontalWriterConcurrency"]);
+}
+
+function distributedDependencyEnforcementRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase63"]) ??
+    findNestedRecord(report, ["distributedDependencyEnforcement"]) ??
+    findNestedRecord(report, ["distributedDependencyEnforcementGate"]) ??
+    findNestedRecord(report, ["distributedDependencies"]) ??
+    findNestedRecord(report, ["productionDependencies"]) ??
+    findNestedRecord(report, ["runtimeGuard", "phase63"]) ??
+    findNestedRecord(report, ["runtimeGuard", "distributedDependencyEnforcement"]) ??
+    findNestedRecord(report, ["releaseReadiness", "phase63"]) ??
+    findNestedRecord(report, ["releaseReadiness", "distributedDependencyEnforcement"]) ??
+    findNestedRecord(report, ["releaseReadiness", "distributedDependencies"]);
+}
+
+function distributedDependencyRecord(
+  phase63: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> | null {
+  for (const key of keys) {
+    const direct = phase63[key];
+    if (isRecord(direct)) return direct;
+  }
+  for (const containerKey of ["dependencies", "dependencyStates", "checks"] as const) {
+    const container = phase63[containerKey];
+    if (isRecord(container)) {
+      for (const key of keys) {
+        const nested = container[key];
+        if (isRecord(nested)) return nested;
+      }
+    }
+    if (Array.isArray(container)) {
+      for (const entry of container) {
+        if (!isRecord(entry)) continue;
+        const id = cleanEnvValue(entry.key) || cleanEnvValue(entry.id) || cleanEnvValue(entry.name);
+        if (keys.includes(id)) return entry;
+      }
+    }
+  }
+  return null;
 }
 
 function checkStore(loadStore: () => unknown, checkedAt: string): SubsystemHealth {
@@ -797,6 +877,7 @@ function topologyIntentFromReports(deploymentReports: DeploymentReportSources): 
 
 function horizontalAppWriterIntentFromEnv(env: NodeJS.ProcessEnv): boolean {
   const topology = cleanEnvValue(env.TASKLOOM_APP_WRITER_TOPOLOGY).toLowerCase();
+  const databaseTopology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
   const horizontalWriterMode = cleanEnvValue(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_MODE).toLowerCase();
   const horizontalWriterFlag = cleanEnvValue(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_APP_WRITERS).toLowerCase();
   return [
@@ -807,7 +888,9 @@ function horizontalAppWriterIntentFromEnv(env: NodeJS.ProcessEnv): boolean {
     "horizontal-app-writers",
     "multi-process",
     "multi-process-writers",
+    "managed-postgres-horizontal-app-writers",
   ].includes(topology) ||
+    databaseTopology === "managed-postgres-horizontal-app-writers" ||
     ["enabled", "required", "supported", "hardened"].includes(horizontalWriterMode) ||
     ["1", "true", "yes", "enabled", "required"].includes(horizontalWriterFlag);
 }
@@ -872,6 +955,139 @@ function supportedManagedPostgresTopology(env: NodeJS.ProcessEnv, deploymentRepo
     if (booleanFromRecord(record, "supportedManagedPostgresTopology") === true) return true;
   }
   return false;
+}
+
+function trueEnvValue(value: unknown): boolean {
+  return ["1", "true", "yes", "enabled"].includes(cleanEnvValue(value).toLowerCase());
+}
+
+function reportDependencyReady(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  const explicit =
+    booleanFromRecord(record, "productionSafe") ??
+    booleanFromRecord(record, "ready") ??
+    booleanFromRecord(record, "configured") ??
+    booleanFromRecord(record, "ok") ??
+    booleanFromRecord(record, "pass");
+  if (explicit !== undefined) return explicit;
+  const status = cleanEnvValue(record.status).toLowerCase();
+  if (["ready", "ok", "pass", "passed", "production-safe", "shared", "distributed"].includes(status)) return true;
+  if (["blocked", "fail", "failed", "missing", "local-only", "disabled"].includes(status)) return false;
+  return null;
+}
+
+function reportPhase63Required(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  return booleanFromRecord(record, "required") ??
+    booleanFromRecord(record, "phase63Required") ??
+    booleanFromRecord(record, "distributedDependencyEnforcementRequired") ??
+    booleanFromRecord(record, "strictActivationRequired") ??
+    null;
+}
+
+function phase62HardeningComplete(env: NodeJS.ProcessEnv, deploymentReports: DeploymentReportSources): boolean {
+  const phase62Records = Object.values(deploymentReports)
+    .map((report) => horizontalWriterConcurrencyRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  if (phase62ReportHardeningComplete(phase62Records)) return true;
+  return managedPostgresIntentDetected(env, deploymentReports) &&
+    managedPostgresStartupSupported(env, deploymentReports) &&
+    supportedManagedPostgresTopology(env, deploymentReports) &&
+    MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_EVIDENCE.every(
+      (entry) => valueFromEnvKeys(env, entry.envKeys ?? [entry.envKey]).length > 0,
+    );
+}
+
+function checkDistributedDependencyEnforcement(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+  deploymentReports: DeploymentReportSources,
+): SubsystemHealth {
+  const phase63Records = Object.values(deploymentReports)
+    .map((report) => distributedDependencyEnforcementRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  const reportRequired = phase63Records.reduce<boolean | null>((result, record) => {
+    if (result !== null) return result;
+    return reportPhase63Required(record);
+  }, null);
+  const hasHorizontalIntent =
+    horizontalAppWriterIntentFromEnv(env) || horizontalAppWriterIntentFromReports(deploymentReports);
+  const required = reportRequired === true || hasHorizontalIntent;
+  if (!required) {
+    return {
+      name: "distributedDependencyEnforcement",
+      status: "disabled",
+      detail: "Phase 63 distributed dependency enforcement is not required without horizontal app-writer activation intent",
+      checkedAt,
+    };
+  }
+
+  const schedulerMode = cleanEnvValue(env.TASKLOOM_SCHEDULER_LEADER_MODE).toLowerCase() || "off";
+  const accessLogMode = cleanEnvValue(env.TASKLOOM_ACCESS_LOG_MODE).toLowerCase() || "off";
+  const accessLogShipping = valueFromEnvKeys(env, [
+    "TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE",
+    "TASKLOOM_ACCESS_LOG_SHIPPING_MODE",
+    "TASKLOOM_ACCESS_LOG_SHIPPING_ASSERTION",
+    "TASKLOOM_ACCESS_LOG_SHIPPING",
+    "TASKLOOM_ACCESS_LOG_SHIPPER",
+  ]);
+  const healthMonitoring = valueFromEnvKeys(env, [
+    "TASKLOOM_HEALTH_MONITORING_EVIDENCE",
+    "TASKLOOM_HEALTH_MONITORING_ASSERTION",
+    "TASKLOOM_HEALTH_MONITORING_URL",
+    "TASKLOOM_HEALTHCHECK_MONITORING_ASSERTION",
+  ]);
+  const durableJobExecutionPosture = cleanEnvValue(env.TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE).toLowerCase();
+  const durableJobExecutionEvidence = cleanEnvValue(env.TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE);
+  const alertDeliveryEvidence = cleanEnvValue(env.TASKLOOM_ALERT_DELIVERY_EVIDENCE);
+  const envReady: Record<string, boolean> = {
+    distributedRateLimiting:
+      cleanEnvValue(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL).length > 0 &&
+      !trueEnvValue(env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN),
+    schedulerCoordination:
+      schedulerMode === "http" &&
+      cleanEnvValue(env.TASKLOOM_SCHEDULER_LEADER_HTTP_URL).length > 0 &&
+      !trueEnvValue(env.TASKLOOM_SCHEDULER_LEADER_HTTP_FAIL_OPEN),
+    durableJobExecution:
+      phase62HardeningComplete(env, deploymentReports) &&
+      DURABLE_JOB_EXECUTION_POSTURES.has(durableJobExecutionPosture) &&
+      durableJobExecutionEvidence.length > 0,
+    accessLogShipping:
+      (accessLogMode === "stdout" && accessLogShipping.length > 0) ||
+      (accessLogMode === "file" &&
+        cleanEnvValue(env.TASKLOOM_ACCESS_LOG_PATH).length > 0 &&
+        accessLogShipping.length > 0),
+    alertDelivery:
+      cleanEnvValue(env.TASKLOOM_ALERT_EVALUATE_CRON).length > 0 &&
+      cleanEnvValue(env.TASKLOOM_ALERT_WEBHOOK_URL).length > 0 &&
+      alertDeliveryEvidence.length > 0,
+    healthMonitoring: healthMonitoring.length > 0,
+  };
+
+  const missing = DISTRIBUTED_DEPENDENCY_DEFINITIONS.filter((definition) => {
+    for (const phase63 of phase63Records) {
+      const record = distributedDependencyRecord(phase63, definition.reportKeys);
+      const ready = reportDependencyReady(record);
+      if (ready !== null) return !ready;
+    }
+    return !envReady[definition.key];
+  }).map((definition) => definition.label);
+
+  if (missing.length > 0) {
+    return {
+      name: "distributedDependencyEnforcement",
+      status: "degraded",
+      detail: `Phase 63 distributed dependency enforcement blocks strict activation; missing production-safe ${missing.join(", ")}; activationAllowed=false; releaseAllowed=false; strictActivationBlocked=true`,
+      checkedAt,
+    };
+  }
+
+  return {
+    name: "distributedDependencyEnforcement",
+    status: "ok",
+    detail: "Phase 63 distributed dependency enforcement is ready for strict activation; local-only coordination paths are blocked for horizontal app writers; activationAllowed=true; releaseAllowed=false; strictActivationAllowed=true",
+    checkedAt,
+  };
 }
 
 function checkMultiWriterTopologyImplementationScope(
@@ -1193,6 +1409,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkMultiWriterRuntimeSupportPresenceAssertion(env, checkedAt),
     checkMultiWriterRuntimeActivationControls(env, checkedAt, deploymentReports),
     checkManagedPostgresHorizontalWriterConcurrency(env, checkedAt, deploymentReports),
+    checkDistributedDependencyEnforcement(env, checkedAt, deploymentReports),
   ];
 
   return {
@@ -1226,6 +1443,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkMultiWriterRuntimeSupportPresenceAssertion(env, checkedAt),
     checkMultiWriterRuntimeActivationControls(env, checkedAt, deploymentReports),
     checkManagedPostgresHorizontalWriterConcurrency(env, checkedAt, deploymentReports),
+    checkDistributedDependencyEnforcement(env, checkedAt, deploymentReports),
   ];
 
   return {
