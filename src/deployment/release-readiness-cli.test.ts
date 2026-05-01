@@ -181,6 +181,98 @@ test("runReleaseReadinessCli preserves Phase 57 implementation-scope fields whil
   assert.doesNotMatch(output[0] ?? "", /phase57-readiness-secret/);
 });
 
+test("runReleaseReadinessCli preserves Phase 58 validation fields while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-region",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseReadinessCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildReleaseReadinessReport: () => ({
+      readyForRelease: false,
+      managedDatabaseRuntimeGuard: {
+        phase58: {
+          runtimeImplementationValidationEvidenceAttached: true,
+          runtimeImplementationValidated: true,
+          runtimeImplementationValidationGatePassed: true,
+          validationOwner: "release-engineering",
+          evidenceUrl: "https://evidence.example.com/phase58/release-readiness-validation",
+          runtimeSupport: true,
+          runtimeSupported: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          validationSecret: "phase58-readiness-secret",
+          summary: "Phase 58 release readiness validation evidence is recorded.",
+        },
+      },
+    }),
+  });
+  const report = parseJsonOutput(output) as {
+    managedDatabaseRuntimeGuard?: {
+      phase58?: {
+        evidenceUrl?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        validationSecret?: unknown;
+      };
+    };
+    phase58?: {
+      phase?: unknown;
+      runtimeImplementationValidationEvidenceAttached?: unknown;
+      runtimeImplementationValidated?: unknown;
+      runtimeImplementationValidationGatePassed?: unknown;
+      validationOwner?: unknown;
+      evidenceUrl?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      validationSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase58?.phase, "58");
+  assert.equal(report.phase58?.runtimeImplementationValidationEvidenceAttached, true);
+  assert.equal(report.phase58?.runtimeImplementationValidated, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
+  assert.equal(report.phase58?.validationOwner, "release-engineering");
+  assert.equal(report.phase58?.evidenceUrl, "[redacted]");
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.runtimeSupported, false);
+  assert.equal(report.phase58?.multiWriterSupported, false);
+  assert.equal(report.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase58?.runtimeSupportBlocked, true);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, false);
+  assert.equal(report.phase58?.validationSecret, "[redacted]");
+  assert.equal(report.phase58?.summary, "Phase 58 release readiness validation evidence is recorded.");
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.evidenceUrl, "[redacted]");
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.runtimeSupport, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.runtimeSupported, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.multiWriterSupported, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.releaseAllowed, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase58?.validationSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase58-readiness-secret/);
+});
+
 test("runReleaseReadinessCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

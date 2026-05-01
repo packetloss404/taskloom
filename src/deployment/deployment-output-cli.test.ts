@@ -509,3 +509,167 @@ test("formatDeploymentCliJson preserves nested Phase 57 implementation-scope rep
   assert.doesNotMatch(output, /phase57-scope-secret/);
   assert.doesNotMatch(output, /phase57-evidence-secret/);
 });
+
+test("formatDeploymentCliJson annotates Phase 58 runtime implementation validation gate", () => {
+  const output = formatDeploymentCliJson({
+    runtimeImplementationValidationToken: "phase58-secret",
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "multi-writer" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    runtimeImplementationValidationToken?: unknown;
+    phase58?: {
+      phase?: unknown;
+      required?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      runtimeImplementationValidationEvidenceRequired?: unknown;
+      runtimeImplementationValidationEvidenceAttached?: unknown;
+      runtimeImplementationValidated?: unknown;
+      runtimeImplementationValidationGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.runtimeImplementationValidationToken, "[redacted]");
+  assert.equal(report.phase58?.phase, "58");
+  assert.equal(report.phase58?.required, true);
+  assert.equal(report.phase58?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationEvidenceRequired, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationEvidenceAttached, false);
+  assert.equal(report.phase58?.runtimeImplementationValidated, false);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, false);
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.runtimeSupported, false);
+  assert.equal(report.phase58?.multiWriterSupported, false);
+  assert.equal(report.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase58?.runtimeSupportBlocked, true);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, true);
+  assert.match(String(report.phase58?.summary), /Phase 58/);
+  assert.doesNotMatch(output, /phase58-secret/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 58 validation reports while blocking support claims", () => {
+  const output = formatDeploymentCliJson({
+    managedDatabaseRuntimeGuard: {
+      phase58MultiWriterRuntimeImplementationValidationGate: {
+        phase: "58",
+        required: true,
+        runtimeImplementationValidationEvidenceAttached: true,
+        runtimeImplementationValidated: true,
+        runtimeImplementationValidationGatePassed: true,
+        validationOwner: "database-platform",
+        evidenceUrl: "https://evidence.example.com/phase58/runtime-validation",
+        evidenceNote: "validation evidence recorded",
+        documentationUrl: "https://docs.example.com/phase58",
+        runtimeSupport: true,
+        runtimeSupported: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        validationSecret: "phase58-validation-secret",
+        summary: "Phase 58 runtime implementation validation evidence is recorded.",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "distributed" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    managedDatabaseRuntimeGuard?: {
+      phase58MultiWriterRuntimeImplementationValidationGate?: {
+        evidenceUrl?: unknown;
+        documentationUrl?: unknown;
+        validationSecret?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+      };
+    };
+    phase58?: {
+      phase?: unknown;
+      required?: unknown;
+      runtimeImplementationValidationEvidenceAttached?: unknown;
+      runtimeImplementationValidated?: unknown;
+      runtimeImplementationValidationGatePassed?: unknown;
+      validationOwner?: unknown;
+      evidenceUrl?: unknown;
+      evidenceNote?: unknown;
+      documentationUrl?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      validationSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase58?.phase, "58");
+  assert.equal(report.phase58?.required, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationEvidenceAttached, true);
+  assert.equal(report.phase58?.runtimeImplementationValidated, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
+  assert.equal(report.phase58?.validationOwner, "database-platform");
+  assert.equal(report.phase58?.evidenceUrl, "[redacted]");
+  assert.equal(report.phase58?.evidenceNote, "validation evidence recorded");
+  assert.equal(report.phase58?.documentationUrl, "https://docs.example.com/phase58");
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.runtimeSupported, false);
+  assert.equal(report.phase58?.multiWriterSupported, false);
+  assert.equal(report.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase58?.runtimeSupportBlocked, true);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, false);
+  assert.equal(report.phase58?.validationSecret, "[redacted]");
+  assert.equal(report.phase58?.summary, "Phase 58 runtime implementation validation evidence is recorded.");
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.evidenceUrl,
+    "[redacted]",
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.documentationUrl,
+    "https://docs.example.com/phase58",
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.validationSecret,
+    "[redacted]",
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeSupport,
+    false,
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeSupported,
+    false,
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.multiWriterSupported,
+    false,
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate
+      ?.runtimeImplementationBlocked,
+    true,
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeSupportBlocked,
+    true,
+  );
+  assert.equal(
+    report.managedDatabaseRuntimeGuard?.phase58MultiWriterRuntimeImplementationValidationGate?.releaseAllowed,
+    false,
+  );
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+  assert.doesNotMatch(output, /phase58-validation-secret/);
+});

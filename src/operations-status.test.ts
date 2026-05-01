@@ -64,6 +64,18 @@ function completeMultiWriterPhase57Env(): NodeJS.ProcessEnv {
   };
 }
 
+function completeMultiWriterPhase58Env(): NodeJS.ProcessEnv {
+  return {
+    ...completeMultiWriterPhase57Env(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "artifacts/phase58/runtime-implementation.md",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "artifacts/phase58/consistency-validation.md",
+    TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "artifacts/phase58/failover-validation.md",
+    TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "artifacts/phase58/data-integrity-validation.md",
+    TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "artifacts/phase58/operations-runbook.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "artifacts/phase58/runtime-release-signoff.md",
+  };
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -93,6 +105,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.managedPostgresCapability.adapterAvailable, false);
   assert.equal(status.managedPostgresCapability.backfillAvailable, false);
   assert.equal(status.managedPostgresCapability.syncRuntimeGuarded, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "not-required");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -821,6 +838,151 @@ test("multiWriterTopologyImplementationScope can derive scope evidence from depl
   );
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
   assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeImplementationValidation is not required without multi-writer intent", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "not-required");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.validationStatus, "not-required");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.required, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.status, "not-required");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeImplementationValidation is blocked until Phase 57 implementation scope is complete", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeMultiWriterPhase56Env(),
+      TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "artifacts/phase58/runtime-implementation.md",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "artifacts/phase58/consistency-validation.md",
+      TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "artifacts/phase58/failover-validation.md",
+      TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "artifacts/phase58/data-integrity-validation.md",
+      TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "artifacts/phase58/operations-runbook.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "artifacts/phase58/runtime-release-signoff.md",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "blocked");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.validationStatus, "blocked");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase57ImplementationScopeComplete, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationValidationComplete, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.configured, true);
+  assert.deepEqual(status.multiWriterRuntimeImplementationValidation.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeImplementationValidation.summary, /blocked until Phase 57/i);
+});
+
+test("multiWriterRuntimeImplementationValidation reports missing Phase 58 evidence", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase57Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "blocked");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.validationStatus, "missing");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase57ImplementationScopeComplete, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationValidationComplete, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.status, "missing");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.operationsRunbook.status, "missing");
+  assert.deepEqual(status.multiWriterRuntimeImplementationValidation.missingEvidence, [
+    "runtimeImplementationEvidence",
+    "consistencyValidationEvidence",
+    "failoverValidationEvidence",
+    "dataIntegrityValidationEvidence",
+    "operationsRunbook",
+    "runtimeReleaseSignoff",
+  ]);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeImplementationValidation.summary, /blocked pending runtimeImplementationEvidence/i);
+});
+
+test("multiWriterRuntimeImplementationValidation records complete evidence without enabling runtime", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase58Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "validation-complete");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.validationStatus, "complete");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase57ImplementationScopeComplete, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationValidationComplete, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.status, "provided");
+  assert.equal(
+    status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.value,
+    "artifacts/phase58/runtime-implementation.md",
+  );
+  assert.equal(status.multiWriterRuntimeImplementationValidation.consistencyValidationEvidence.status, "provided");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.failoverValidationEvidence.status, "provided");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.dataIntegrityValidationEvidence.status, "provided");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.operationsRunbook.status, "provided");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeReleaseSignoff.status, "provided");
+  assert.deepEqual(status.multiWriterRuntimeImplementationValidation.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeImplementationValidation.summary, /runtime implementation remains blocked/i);
+  assert.match(status.multiWriterRuntimeImplementationValidation.summary, /releaseAllowed=false/);
+});
+
+test("multiWriterRuntimeImplementationValidation can derive evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase57Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({
+      phase58: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        runtimeImplementationEvidence: "artifacts/reports/phase58-runtime-implementation.md",
+        consistencyValidationEvidence: "artifacts/reports/phase58-consistency-validation.md",
+        failoverValidationEvidence: "artifacts/reports/phase58-failover-validation.md",
+        dataIntegrityValidationEvidence: "artifacts/reports/phase58-data-integrity-validation.md",
+        operationsRunbook: "artifacts/reports/phase58-operations-runbook.md",
+        runtimeReleaseSignoff: "artifacts/reports/phase58-runtime-release-signoff.md",
+      },
+      checks: [],
+      blockers: [],
+      warnings: [],
+      nextSteps: [],
+    }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "validation-complete");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.source, "releaseReadiness");
+  assert.equal(
+    status.multiWriterRuntimeImplementationValidation.runtimeImplementationEvidence.value,
+    "artifacts/reports/phase58-runtime-implementation.md",
+  );
+  assert.equal(
+    status.multiWriterRuntimeImplementationValidation.runtimeReleaseSignoff.value,
+    "artifacts/reports/phase58-runtime-release-signoff.md",
+  );
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

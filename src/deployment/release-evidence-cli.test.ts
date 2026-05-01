@@ -186,6 +186,101 @@ test("runReleaseEvidenceCli preserves Phase 57 implementation-scope evidence whi
   assert.doesNotMatch(output[0] ?? "", /phase57-evidence-secret/);
 });
 
+test("runReleaseEvidenceCli preserves Phase 58 validation evidence while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseEvidenceCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildReleaseEvidenceBundle: () => ({
+      readyForRelease: false,
+      releaseEvidence: {
+        phase58MultiWriterRuntimeImplementationValidationGate: {
+          runtimeImplementationValidationEvidenceAttached: true,
+          runtimeImplementationValidated: true,
+          runtimeImplementationValidationGatePassed: true,
+          validationOwner: "release-engineering",
+          evidenceUrl: "https://evidence.example.com/phase58/release-evidence-validation",
+          runtimeSupport: true,
+          runtimeSupported: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          validationSecret: "phase58-evidence-secret",
+          summary: "Phase 58 release evidence validation is recorded.",
+        },
+      },
+    }),
+  });
+  const bundle = parseJsonOutput(output) as {
+    releaseEvidence?: {
+      phase58MultiWriterRuntimeImplementationValidationGate?: {
+        evidenceUrl?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        validationSecret?: unknown;
+      };
+    };
+    phase58?: {
+      phase?: unknown;
+      runtimeImplementationValidationEvidenceAttached?: unknown;
+      runtimeImplementationValidated?: unknown;
+      runtimeImplementationValidationGatePassed?: unknown;
+      validationOwner?: unknown;
+      evidenceUrl?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      validationSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(bundle.phase58?.phase, "58");
+  assert.equal(bundle.phase58?.runtimeImplementationValidationEvidenceAttached, true);
+  assert.equal(bundle.phase58?.runtimeImplementationValidated, true);
+  assert.equal(bundle.phase58?.runtimeImplementationValidationGatePassed, true);
+  assert.equal(bundle.phase58?.validationOwner, "release-engineering");
+  assert.equal(bundle.phase58?.evidenceUrl, "[redacted]");
+  assert.equal(bundle.phase58?.runtimeSupport, false);
+  assert.equal(bundle.phase58?.runtimeSupported, false);
+  assert.equal(bundle.phase58?.multiWriterSupported, false);
+  assert.equal(bundle.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(bundle.phase58?.runtimeSupportBlocked, true);
+  assert.equal(bundle.phase58?.releaseAllowed, false);
+  assert.equal(bundle.phase58?.strictBlocker, false);
+  assert.equal(bundle.phase58?.validationSecret, "[redacted]");
+  assert.equal(bundle.phase58?.summary, "Phase 58 release evidence validation is recorded.");
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.evidenceUrl, "[redacted]");
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeSupported, false);
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.multiWriterSupported, false);
+  assert.equal(
+    bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeImplementationBlocked,
+    true,
+  );
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.runtimeSupportBlocked, true);
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.releaseAllowed, false);
+  assert.equal(bundle.releaseEvidence?.phase58MultiWriterRuntimeImplementationValidationGate?.validationSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase58-evidence-secret/);
+});
+
 test("runReleaseEvidenceCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

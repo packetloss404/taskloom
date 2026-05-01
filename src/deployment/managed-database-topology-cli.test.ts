@@ -396,6 +396,98 @@ test("runManagedDatabaseTopologyCli preserves Phase 57 implementation-scope fiel
   assert.doesNotMatch(output[0] ?? "", /phase57-topology-secret/);
 });
 
+test("runManagedDatabaseTopologyCli preserves Phase 58 validation fields while blocking support claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseTopologyCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseTopologyReport: () => ({
+      ready: false,
+      managedDatabase: {
+        phase58: {
+          runtimeImplementationValidationEvidenceAttached: true,
+          runtimeImplementationValidated: true,
+          runtimeImplementationValidationGatePassed: true,
+          validationOwner: "database-platform",
+          evidenceUrl: "https://evidence.example.com/phase58/topology-validation",
+          runtimeSupport: true,
+          runtimeSupported: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          validationSecret: "phase58-topology-secret",
+          summary: "Phase 58 topology runtime implementation validation is recorded.",
+        },
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase58?: {
+      phase?: unknown;
+      runtimeImplementationValidationEvidenceAttached?: unknown;
+      runtimeImplementationValidated?: unknown;
+      runtimeImplementationValidationGatePassed?: unknown;
+      validationOwner?: unknown;
+      evidenceUrl?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      validationSecret?: unknown;
+      summary?: unknown;
+    };
+    managedDatabase?: {
+      phase58?: {
+        evidenceUrl?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        validationSecret?: unknown;
+      };
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase58?.phase, "58");
+  assert.equal(report.phase58?.runtimeImplementationValidationEvidenceAttached, true);
+  assert.equal(report.phase58?.runtimeImplementationValidated, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
+  assert.equal(report.phase58?.validationOwner, "database-platform");
+  assert.equal(report.phase58?.evidenceUrl, "[redacted]");
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.runtimeSupported, false);
+  assert.equal(report.phase58?.multiWriterSupported, false);
+  assert.equal(report.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase58?.runtimeSupportBlocked, true);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, false);
+  assert.equal(report.phase58?.validationSecret, "[redacted]");
+  assert.equal(report.phase58?.summary, "Phase 58 topology runtime implementation validation is recorded.");
+  assert.equal(report.managedDatabase?.phase58?.evidenceUrl, "[redacted]");
+  assert.equal(report.managedDatabase?.phase58?.runtimeSupport, false);
+  assert.equal(report.managedDatabase?.phase58?.runtimeSupported, false);
+  assert.equal(report.managedDatabase?.phase58?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase?.phase58?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabase?.phase58?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabase?.phase58?.releaseAllowed, false);
+  assert.equal(report.managedDatabase?.phase58?.validationSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase58-topology-secret/);
+});
+
 test("runManagedDatabaseTopologyCli preserves detailed Phase 54 design-package reports from the builder", async () => {
   const output: string[] = [];
   const env = {

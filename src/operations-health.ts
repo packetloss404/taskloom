@@ -108,6 +108,38 @@ const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_SCOPE_EVIDENCE = [
     envKey: "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF",
   },
 ] as const;
+const MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE = [
+  {
+    key: "runtimeImplementationEvidence",
+    label: "runtime implementation evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE",
+  },
+  {
+    key: "consistencyValidationEvidence",
+    label: "consistency validation evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE",
+  },
+  {
+    key: "failoverValidationEvidence",
+    label: "failover validation evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE",
+  },
+  {
+    key: "dataIntegrityValidationEvidence",
+    label: "data integrity validation evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+  },
+  {
+    key: "operationsRunbook",
+    label: "operations runbook",
+    envKey: "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK",
+  },
+  {
+    key: "runtimeReleaseSignoff",
+    label: "runtime release signoff",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF",
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -408,6 +440,13 @@ function phase56EvidenceComplete(env: NodeJS.ProcessEnv): boolean {
   return (coarseReadiness || detailedReadiness) && (coarseRollout || detailedRollout);
 }
 
+function phase57ImplementationScopeComplete(env: NodeJS.ProcessEnv): boolean {
+  return phase56EvidenceComplete(env) &&
+    MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_SCOPE_EVIDENCE.every(
+      (entry) => cleanEnvValue(env[entry.envKey]).length > 0,
+    );
+}
+
 function checkMultiWriterTopologyImplementationScope(
   env: NodeJS.ProcessEnv,
   checkedAt: string,
@@ -445,6 +484,43 @@ function checkMultiWriterTopologyImplementationScope(
   };
 }
 
+function checkMultiWriterRuntimeImplementationValidation(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+): SubsystemHealth {
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  const hasMultiWriterIntent = MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+  if (!hasMultiWriterIntent) {
+    return {
+      name: "multiWriterRuntimeImplementationValidation",
+      status: "disabled",
+      detail: "Phase 58 runtime implementation validation is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false",
+      checkedAt,
+    };
+  }
+
+  const phase57Complete = phase57ImplementationScopeComplete(env);
+  const missingValidationEvidence = MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+
+  let detail: string;
+  if (!phase57Complete) {
+    detail = `Phase 58 runtime implementation validation is blocked for ${topology} intent until Phase 57 implementation scope is complete; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  } else if (missingValidationEvidence.length > 0) {
+    detail = `Phase 58 runtime implementation validation is blocked for ${topology} intent; missing ${missingValidationEvidence.join(", ")}; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  } else {
+    detail = `Phase 58 runtime implementation validation evidence is complete for ${topology} intent; multi-writer runtime implementation remains blocked and unsupported; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  }
+
+  return {
+    name: "multiWriterRuntimeImplementationValidation",
+    status: "degraded",
+    detail,
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -472,6 +548,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkMultiWriterTopologyImplementationAuthorizationGate(env, checkedAt),
     checkMultiWriterTopologyImplementationReadinessGate(env, checkedAt),
     checkMultiWriterTopologyImplementationScope(env, checkedAt),
+    checkMultiWriterRuntimeImplementationValidation(env, checkedAt),
   ];
 
   return {
@@ -499,6 +576,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkMultiWriterTopologyImplementationAuthorizationGate(env, checkedAt),
     checkMultiWriterTopologyImplementationReadinessGate(env, checkedAt),
     checkMultiWriterTopologyImplementationScope(env, checkedAt),
+    checkMultiWriterRuntimeImplementationValidation(env, checkedAt),
   ];
 
   return {

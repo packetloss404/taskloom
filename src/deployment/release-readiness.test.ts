@@ -554,6 +554,126 @@ test("Phase 57 implementation scope evidence attaches but still blocks multi-wri
   assert.ok(report.nextSteps.some((step) => step.includes("blocked even with Phase 57 implementation-scope evidence attached")));
 });
 
+test("Phase 58 runtime implementation validation evidence is required after Phase 57 scope completion", () => {
+  const env: ReleaseReadinessEnv = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "readiness://phase56",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "scope-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "validation://phase57",
+    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "cutover-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "signoff://phase57",
+  };
+  const report = assessReleaseReadiness({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase58Gate = report.asyncStoreBoundary.phase58MultiWriterRuntimeImplementationValidationGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.phase57MultiWriterImplementationScopeGate?.implementationScopeComplete, true);
+  assert.equal(phase58Gate?.required, true);
+  assert.equal(phase58Gate?.implementationScopeComplete, true);
+  assert.equal(phase58Gate?.runtimeImplementationEvidenceRequired, true);
+  assert.equal(phase58Gate?.runtimeImplementationEvidenceAttached, false);
+  assert.equal(phase58Gate?.consistencyValidationEvidenceAttached, false);
+  assert.equal(phase58Gate?.failoverValidationEvidenceAttached, false);
+  assert.equal(phase58Gate?.dataIntegrityValidationEvidenceAttached, false);
+  assert.equal(phase58Gate?.operationsRunbookAttached, false);
+  assert.equal(phase58Gate?.runtimeReleaseSignoffAttached, false);
+  assert.equal(phase58Gate?.runtimeImplementationValidationComplete, false);
+  assert.equal(phase58Gate?.runtimeSupportBlocked, true);
+  assert.equal(phase58Gate?.releaseAllowed, false);
+  assert.ok(phase58Gate?.blockers.some((blocker) => blocker.includes("runtime implementation evidence")));
+  assert.ok(phase58Gate?.blockers.some((blocker) => blocker.includes("runtime release signoff")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE")));
+});
+
+test("Phase 58 runtime implementation validation evidence attaches but still blocks multi-writer runtime release", () => {
+  const env: ReleaseReadinessEnv = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "readiness://phase56",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "scope-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "validation://phase57",
+    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "cutover-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "signoff://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "runtime-implementation://phase58",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "consistency-validation://phase58",
+    TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "failover-validation://phase58",
+    TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "data-integrity-validation://phase58",
+    TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "operations-runbook://phase58",
+    TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "runtime-signoff://phase58",
+  };
+  const report = assessReleaseReadiness({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase58Gate = report.asyncStoreBoundary.phase58MultiWriterRuntimeImplementationValidationGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(phase58Gate?.required, true);
+  assert.equal(phase58Gate?.implementationScopeComplete, true);
+  assert.equal(phase58Gate?.runtimeImplementationEvidenceAttached, true);
+  assert.equal(phase58Gate?.consistencyValidationEvidenceAttached, true);
+  assert.equal(phase58Gate?.failoverValidationEvidenceAttached, true);
+  assert.equal(phase58Gate?.dataIntegrityValidationEvidenceAttached, true);
+  assert.equal(phase58Gate?.operationsRunbookAttached, true);
+  assert.equal(phase58Gate?.runtimeReleaseSignoffAttached, true);
+  assert.equal(phase58Gate?.runtimeImplementationValidationComplete, true);
+  assert.equal(phase58Gate?.runtimeSupportBlocked, true);
+  assert.equal(phase58Gate?.releaseAllowed, false);
+  assert.ok(phase58Gate?.blockers.some((blocker) => blocker.includes("runtime support remains blocked")));
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 58 runtime implementation validation evidence is attached"));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 58 runtime implementation validation evidence attached")));
+});
+
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {
   const env: ReleaseReadinessEnv = {
     NODE_ENV: "production",

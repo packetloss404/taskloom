@@ -127,6 +127,16 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(multiWriterTopologyImplementationScope.runtimeSupported, false);
   assert.equal(multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
   assert.equal(multiWriterTopologyImplementationScope.releaseAllowed, false);
+  assert.ok(
+    body.multiWriterRuntimeImplementationValidation &&
+      typeof body.multiWriterRuntimeImplementationValidation === "object",
+  );
+  const multiWriterRuntimeImplementationValidation =
+    body.multiWriterRuntimeImplementationValidation as Record<string, unknown>;
+  assert.equal(multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(multiWriterRuntimeImplementationValidation.releaseAllowed, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -182,6 +192,12 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "not-required");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.validationStatus, "not-required");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
@@ -240,6 +256,12 @@ test("operations status report keeps multi-writer managed Postgres startup unsup
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
   assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "blocked");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase57ImplementationScopeComplete, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
 });
 
 test("operations status report surfaces Phase 57 scope complete but unsupported", () => {
@@ -267,6 +289,12 @@ test("operations status report surfaces Phase 57 scope complete but unsupported"
       TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "artifacts/phase57/validation.md",
       TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "artifacts/phase57/migration-cutover-lock.md",
       TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "artifacts/phase57/release-owner-signoff.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "artifacts/phase58/runtime-implementation.md",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "artifacts/phase58/consistency-validation.md",
+      TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "artifacts/phase58/failover-validation.md",
+      TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "artifacts/phase58/data-integrity-validation.md",
+      TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "artifacts/phase58/operations-runbook.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "artifacts/phase58/runtime-release-signoff.md",
     },
   });
 
@@ -277,4 +305,11 @@ test("operations status report surfaces Phase 57 scope complete but unsupported"
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterTopologyImplementationScope.runtimeSupported, false);
   assert.equal(status.multiWriterTopologyImplementationScope.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.status, "validation-complete");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.validationStatus, "complete");
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationValidationComplete, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
 });

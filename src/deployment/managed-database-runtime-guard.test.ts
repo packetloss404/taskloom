@@ -61,6 +61,15 @@ const distributedRuntimePhase57Env = {
   TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "docs/phase-57/release-owner.md",
 } as const;
 
+const distributedRuntimePhase58Env = {
+  TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "docs/phase-58/runtime-implementation.md",
+  TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "docs/phase-58/consistency-validation.md",
+  TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "docs/phase-58/failover-validation.md",
+  TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "docs/phase-58/data-integrity.md",
+  TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "docs/phase-58/operations-runbook.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "docs/phase-58/runtime-release-signoff.md",
+} as const;
+
 test("local JSON runtime is allowed by default", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: {} });
 
@@ -127,6 +136,18 @@ test("local JSON runtime is allowed by default", () => {
   assert.equal(report.phase57?.runtimeSupport, false);
   assert.equal(report.phase57?.releaseAllowed, false);
   assert.equal(report.phase57?.strictBlocker, false);
+  assert.equal(report.phase58?.multiWriterTopologyRequested, false);
+  assert.equal(report.phase58?.implementationScopeGatePassed, true);
+  assert.equal(report.phase58?.runtimeImplementationEvidenceConfigured, false);
+  assert.equal(report.phase58?.consistencyValidationEvidenceConfigured, false);
+  assert.equal(report.phase58?.failoverValidationEvidenceConfigured, false);
+  assert.equal(report.phase58?.dataIntegrityValidationEvidenceConfigured, false);
+  assert.equal(report.phase58?.operationsRunbookConfigured, false);
+  assert.equal(report.phase58?.runtimeReleaseSignoffConfigured, false);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("local JSON"));
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
@@ -663,6 +684,18 @@ test("distributed topology with Phase 57 implementation scope evidence still doe
   assert.equal(report.phase57?.runtimeSupport, false);
   assert.equal(report.phase57?.releaseAllowed, false);
   assert.equal(report.phase57?.strictBlocker, false);
+  assert.equal(report.phase58?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase58?.implementationScopeGatePassed, true);
+  assert.equal(report.phase58?.runtimeImplementationEvidenceConfigured, false);
+  assert.equal(report.phase58?.consistencyValidationEvidenceConfigured, false);
+  assert.equal(report.phase58?.failoverValidationEvidenceConfigured, false);
+  assert.equal(report.phase58?.dataIntegrityValidationEvidenceConfigured, false);
+  assert.equal(report.phase58?.operationsRunbookConfigured, false);
+  assert.equal(report.phase58?.runtimeReleaseSignoffConfigured, false);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, false);
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, true);
   assert.equal(scopeLock.configured, true);
   assert.equal(scopeLock.value, "docs/phase-57/scope-lock.md");
   assert.equal(scopeLock.redacted, false);
@@ -675,7 +708,21 @@ test("distributed topology with Phase 57 implementation scope evidence still doe
     ),
   );
   assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 58 requires")));
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase58-multi-writer-runtime-implementation-validation" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE"),
+    ),
+  );
   assert.ok(report.warnings.some((warning) => warning.includes("Phase 57")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 58 requires")));
   assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
   assert.throws(
     () =>
@@ -685,6 +732,62 @@ test("distributed topology with Phase 57 implementation scope evidence still doe
       }),
     ManagedDatabaseRuntimeGuardError,
   );
+});
+
+test("distributed topology with Phase 58 runtime implementation evidence records validation but remains blocked", () => {
+  const env = {
+    ...distributedRuntimePhase56BundledEnv,
+    ...distributedRuntimePhase57Env,
+    ...distributedRuntimePhase58Env,
+  };
+  const report = assessManagedDatabaseRuntimeGuard({ env });
+  const runtimeEvidence = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE",
+  );
+  const releaseSignoff = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF");
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "multi-writer-blocked");
+  assert.equal(report.phase57?.implementationScopeGatePassed, true);
+  assert.equal(report.phase57?.runtimeSupport, false);
+  assert.equal(report.phase57?.releaseAllowed, false);
+  assert.equal(report.phase58?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase58?.implementationScopeGatePassed, true);
+  assert.equal(report.phase58?.runtimeImplementationEvidenceConfigured, true);
+  assert.equal(report.phase58?.consistencyValidationEvidenceConfigured, true);
+  assert.equal(report.phase58?.failoverValidationEvidenceConfigured, true);
+  assert.equal(report.phase58?.dataIntegrityValidationEvidenceConfigured, true);
+  assert.equal(report.phase58?.operationsRunbookConfigured, true);
+  assert.equal(report.phase58?.runtimeReleaseSignoffConfigured, true);
+  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.equal(report.phase58?.strictBlocker, true);
+  assert.equal(runtimeEvidence.configured, true);
+  assert.equal(runtimeEvidence.value, "docs/phase-58/runtime-implementation.md");
+  assert.equal(runtimeEvidence.redacted, false);
+  assert.equal(releaseSignoff.configured, true);
+  assert.equal(releaseSignoff.value, "docs/phase-58/runtime-release-signoff.md");
+  assert.equal(releaseSignoff.redacted, false);
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase58-multi-writer-runtime-implementation-validation" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 58")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 58")));
+  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("Phase 58 records implementation validation evidence only"),
+    ),
+  );
+  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
 });
 
 test("unsupported store is blocked", () => {

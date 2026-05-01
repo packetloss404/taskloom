@@ -820,6 +820,85 @@ test("strict evidence records redacted Phase 57 implementation scope attachments
   assert.ok(bundle.nextSteps.some((step) => step.includes("blocked even with Phase 57 implementation-scope evidence attached")));
 });
 
+test("strict evidence records redacted Phase 58 runtime validation attachments while runtime stays blocked", () => {
+  const env = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "readiness://phase56",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "scope-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "validation://phase57",
+    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "cutover-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "signoff://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "https://validator:secret@runtime.internal/phase58",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "consistency-validation://phase58",
+    TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "https://failover:secret@validation.internal/phase58",
+    TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "data-integrity-validation://phase58",
+    TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "operations-runbook://phase58",
+    TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "runtime-signoff://phase58",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T01:00:00.000Z",
+    strict: true,
+  });
+  const runtimeImplementationAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-58-multi-writer-runtime-implementation-evidence");
+  const consistencyAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-58-multi-writer-consistency-validation");
+  const failoverAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-58-multi-writer-failover-validation");
+  const dataIntegrityAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-58-multi-writer-data-integrity-validation");
+  const operationsRunbookAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-58-multi-writer-operations-runbook");
+  const runtimeSignoffAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-58-multi-writer-runtime-release-signoff");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase57MultiWriterImplementationScopeComplete, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterRuntimeImplementationValidationGateRequired, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterImplementationScopeComplete, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterRuntimeImplementationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterConsistencyValidationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterFailoverValidationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterDataIntegrityValidationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterOperationsRunbookAttached, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterRuntimeReleaseSignoffAttached, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterRuntimeImplementationValidationComplete, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase58MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase58MultiWriterRuntimeImplementationValidationGate?.releaseAllowed, false);
+  assert.equal(runtimeImplementationAttachment?.required, true);
+  assert.equal(runtimeImplementationAttachment?.configured, true);
+  assert.equal(runtimeImplementationAttachment?.redacted, true);
+  assert.equal(runtimeImplementationAttachment?.value, "[redacted]");
+  assert.equal(consistencyAttachment?.configured, true);
+  assert.equal(consistencyAttachment?.value, "consistency-validation://phase58");
+  assert.equal(failoverAttachment?.redacted, true);
+  assert.equal(dataIntegrityAttachment?.configured, true);
+  assert.equal(operationsRunbookAttachment?.configured, true);
+  assert.equal(runtimeSignoffAttachment?.configured, true);
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE").value, "[redacted]");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE").value, "[redacted]");
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 58 runtime implementation validation evidence attached")));
+});
+
 test("release readiness managed reports are reused when present", () => {
   const storageTopology = injectedStorageTopology();
   const managedDatabaseTopology = injectedManagedDatabaseTopology();

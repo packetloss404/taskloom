@@ -15,6 +15,7 @@ import {
   type Phase55MultiWriterImplementationAuthorizationGateReport,
   type Phase56MultiWriterRuntimeReadinessGateReport,
   type Phase57MultiWriterImplementationScopeGateReport,
+  type Phase58MultiWriterRuntimeImplementationValidationGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -165,6 +166,24 @@ export interface ReleaseEvidenceBundle {
       phase57MultiWriterImplementationScopeComplete: boolean;
       phase57MultiWriterRuntimeSupportBlocked: boolean;
       phase57MultiWriterTopologyReleaseAllowed: boolean;
+      phase58MultiWriterRuntimeImplementationValidationGateRequired: boolean;
+      phase58MultiWriterImplementationScopeRequired: boolean;
+      phase58MultiWriterImplementationScopeComplete: boolean;
+      phase58MultiWriterRuntimeImplementationEvidenceRequired: boolean;
+      phase58MultiWriterRuntimeImplementationEvidenceAttached: boolean;
+      phase58MultiWriterConsistencyValidationEvidenceRequired: boolean;
+      phase58MultiWriterConsistencyValidationEvidenceAttached: boolean;
+      phase58MultiWriterFailoverValidationEvidenceRequired: boolean;
+      phase58MultiWriterFailoverValidationEvidenceAttached: boolean;
+      phase58MultiWriterDataIntegrityValidationEvidenceRequired: boolean;
+      phase58MultiWriterDataIntegrityValidationEvidenceAttached: boolean;
+      phase58MultiWriterOperationsRunbookRequired: boolean;
+      phase58MultiWriterOperationsRunbookAttached: boolean;
+      phase58MultiWriterRuntimeReleaseSignoffRequired: boolean;
+      phase58MultiWriterRuntimeReleaseSignoffAttached: boolean;
+      phase58MultiWriterRuntimeImplementationValidationComplete: boolean;
+      phase58MultiWriterRuntimeSupportBlocked: boolean;
+      phase58MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -273,6 +292,12 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK",
   "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -604,6 +629,67 @@ function phase57MultiWriterImplementationScopeGate(
   };
 }
 
+function phase58MultiWriterRuntimeImplementationValidationGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase57Gate: Phase57MultiWriterImplementationScopeGateReport,
+): Phase58MultiWriterRuntimeImplementationValidationGateReport {
+  const fallbackRequired = asyncStoreBoundary.classification === "multi-writer-unsupported";
+  return asyncStoreBoundary.phase58MultiWriterRuntimeImplementationValidationGate ?? {
+    phase: "58",
+    required: fallbackRequired,
+    implementationScopeRequired: fallbackRequired,
+    implementationScopeComplete: phase57Gate.implementationScopeComplete,
+    runtimeImplementationEvidenceRequired: fallbackRequired,
+    runtimeImplementationEvidenceAttached: false,
+    consistencyValidationEvidenceRequired: fallbackRequired,
+    consistencyValidationEvidenceAttached: false,
+    failoverValidationEvidenceRequired: fallbackRequired,
+    failoverValidationEvidenceAttached: false,
+    dataIntegrityValidationEvidenceRequired: fallbackRequired,
+    dataIntegrityValidationEvidenceAttached: false,
+    operationsRunbookRequired: fallbackRequired,
+    operationsRunbookAttached: false,
+    runtimeReleaseSignoffRequired: fallbackRequired,
+    runtimeReleaseSignoffAttached: false,
+    runtimeImplementationValidationComplete: false,
+    runtimeSupportBlocked: fallbackRequired,
+    releaseAllowed: !fallbackRequired,
+    summary: fallbackRequired
+      ? phase57Gate.implementationScopeComplete
+        ? "Phase 58 multi-writer runtime implementation validation evidence is required before any multi-writer runtime validation claim."
+        : "Phase 58 multi-writer runtime implementation validation requires Phase 57 implementation-scope completion first."
+      : "Phase 58 multi-writer runtime implementation validation gate is not required for this release posture.",
+    blockers: fallbackRequired
+      ? [
+        ...(!phase57Gate.implementationScopeComplete
+          ? ["Phase 58 multi-writer runtime implementation validation requires complete Phase 57 implementation-scope evidence first."]
+          : []),
+        "Phase 58 multi-writer runtime implementation evidence is required before any runtime validation claim.",
+        "Phase 58 multi-writer consistency validation evidence is required before any runtime validation claim.",
+        "Phase 58 multi-writer failover validation evidence is required before any runtime validation claim.",
+        "Phase 58 multi-writer data integrity validation evidence is required before any runtime validation claim.",
+        "Phase 58 multi-writer operations runbook evidence is required before any runtime validation claim.",
+        "Phase 58 multi-writer runtime release signoff evidence is required before any runtime validation claim.",
+        "Phase 58 multi-writer runtime support remains blocked; runtime implementation validation evidence does not permit distributed, active-active, or multi-writer release.",
+      ]
+      : [],
+    nextSteps: fallbackRequired
+      ? [
+        ...(!phase57Gate.implementationScopeComplete
+          ? ["Complete Phase 57 multi-writer implementation-scope evidence before treating Phase 58 runtime implementation validation as complete."]
+          : []),
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE before claiming multi-writer runtime implementation validation.",
+        "Attach TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE before claiming multi-writer consistency validation.",
+        "Attach TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE before claiming multi-writer failover validation.",
+        "Attach TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE before claiming multi-writer data integrity validation.",
+        "Attach TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK before claiming multi-writer operations readiness.",
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF before claiming multi-writer runtime release signoff.",
+        "Keep multi-writer runtime release blocked after Phase 58 validation evidence; this phase does not enable distributed, active-active, or multi-writer runtime support.",
+      ]
+      : ["Keep Phase 58 runtime implementation validation evidence ready before claiming multi-writer runtime validation."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -720,6 +806,42 @@ function phase57ReleaseOwnerSignoffAttachmentEvidence(
   return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF");
 }
 
+function phase58RuntimeImplementationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE");
+}
+
+function phase58ConsistencyValidationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE");
+}
+
+function phase58FailoverValidationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE");
+}
+
+function phase58DataIntegrityValidationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE");
+}
+
+function phase58OperationsRunbookAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK");
+}
+
+function phase58RuntimeReleaseSignoffAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -734,6 +856,7 @@ function buildAttachments(
   const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
   const phase56Gate = phase56MultiWriterRuntimeReadinessGate(asyncStoreBoundary, phase55Gate);
   const phase57Gate = phase57MultiWriterImplementationScopeGate(asyncStoreBoundary, phase56Gate);
+  const phase58Gate = phase58MultiWriterRuntimeImplementationValidationGate(asyncStoreBoundary, phase57Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -922,6 +1045,66 @@ function buildAttachments(
       ...phase57ReleaseOwnerSignoffAttachmentEvidence(env),
     },
     {
+      id: "phase-58-multi-writer-runtime-implementation-evidence",
+      label: "Phase 58 multi-writer runtime implementation evidence",
+      format: "json",
+      required: phase58Gate.runtimeImplementationEvidenceRequired,
+      summary: phase58Gate.runtimeImplementationEvidenceAttached
+        ? "Phase 58 multi-writer runtime implementation evidence is attached; runtime release remains blocked."
+        : "Phase 58 multi-writer runtime implementation evidence is required before any runtime validation claim.",
+      ...phase58RuntimeImplementationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-58-multi-writer-consistency-validation",
+      label: "Phase 58 multi-writer consistency validation evidence",
+      format: "json",
+      required: phase58Gate.consistencyValidationEvidenceRequired,
+      summary: phase58Gate.consistencyValidationEvidenceAttached
+        ? "Phase 58 multi-writer consistency validation evidence is attached; runtime release remains blocked."
+        : "Phase 58 multi-writer consistency validation evidence is required before any runtime validation claim.",
+      ...phase58ConsistencyValidationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-58-multi-writer-failover-validation",
+      label: "Phase 58 multi-writer failover validation evidence",
+      format: "json",
+      required: phase58Gate.failoverValidationEvidenceRequired,
+      summary: phase58Gate.failoverValidationEvidenceAttached
+        ? "Phase 58 multi-writer failover validation evidence is attached; runtime release remains blocked."
+        : "Phase 58 multi-writer failover validation evidence is required before any runtime validation claim.",
+      ...phase58FailoverValidationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-58-multi-writer-data-integrity-validation",
+      label: "Phase 58 multi-writer data integrity validation evidence",
+      format: "json",
+      required: phase58Gate.dataIntegrityValidationEvidenceRequired,
+      summary: phase58Gate.dataIntegrityValidationEvidenceAttached
+        ? "Phase 58 multi-writer data integrity validation evidence is attached; runtime release remains blocked."
+        : "Phase 58 multi-writer data integrity validation evidence is required before any runtime validation claim.",
+      ...phase58DataIntegrityValidationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-58-multi-writer-operations-runbook",
+      label: "Phase 58 multi-writer operations runbook evidence",
+      format: "json",
+      required: phase58Gate.operationsRunbookRequired,
+      summary: phase58Gate.operationsRunbookAttached
+        ? "Phase 58 multi-writer operations runbook evidence is attached; runtime release remains blocked."
+        : "Phase 58 multi-writer operations runbook evidence is required before any runtime validation claim.",
+      ...phase58OperationsRunbookAttachmentEvidence(env),
+    },
+    {
+      id: "phase-58-multi-writer-runtime-release-signoff",
+      label: "Phase 58 multi-writer runtime release signoff evidence",
+      format: "json",
+      required: phase58Gate.runtimeReleaseSignoffRequired,
+      summary: phase58Gate.runtimeReleaseSignoffAttached
+        ? "Phase 58 multi-writer runtime release signoff evidence is attached; runtime release remains blocked."
+        : "Phase 58 multi-writer runtime release signoff evidence is required before any runtime validation claim.",
+      ...phase58RuntimeReleaseSignoffAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -1042,6 +1225,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
   const phase56Gate = phase56MultiWriterRuntimeReadinessGate(asyncStoreBoundary, phase55Gate);
   const phase57Gate = phase57MultiWriterImplementationScopeGate(asyncStoreBoundary, phase56Gate);
+  const phase58Gate = phase58MultiWriterRuntimeImplementationValidationGate(asyncStoreBoundary, phase57Gate);
 
   return {
     phase: "44",
@@ -1158,6 +1342,24 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase57MultiWriterImplementationScopeComplete: phase57Gate.implementationScopeComplete,
         phase57MultiWriterRuntimeSupportBlocked: phase57Gate.runtimeSupportBlocked,
         phase57MultiWriterTopologyReleaseAllowed: phase57Gate.releaseAllowed,
+        phase58MultiWriterRuntimeImplementationValidationGateRequired: phase58Gate.required,
+        phase58MultiWriterImplementationScopeRequired: phase58Gate.implementationScopeRequired,
+        phase58MultiWriterImplementationScopeComplete: phase58Gate.implementationScopeComplete,
+        phase58MultiWriterRuntimeImplementationEvidenceRequired: phase58Gate.runtimeImplementationEvidenceRequired,
+        phase58MultiWriterRuntimeImplementationEvidenceAttached: phase58Gate.runtimeImplementationEvidenceAttached,
+        phase58MultiWriterConsistencyValidationEvidenceRequired: phase58Gate.consistencyValidationEvidenceRequired,
+        phase58MultiWriterConsistencyValidationEvidenceAttached: phase58Gate.consistencyValidationEvidenceAttached,
+        phase58MultiWriterFailoverValidationEvidenceRequired: phase58Gate.failoverValidationEvidenceRequired,
+        phase58MultiWriterFailoverValidationEvidenceAttached: phase58Gate.failoverValidationEvidenceAttached,
+        phase58MultiWriterDataIntegrityValidationEvidenceRequired: phase58Gate.dataIntegrityValidationEvidenceRequired,
+        phase58MultiWriterDataIntegrityValidationEvidenceAttached: phase58Gate.dataIntegrityValidationEvidenceAttached,
+        phase58MultiWriterOperationsRunbookRequired: phase58Gate.operationsRunbookRequired,
+        phase58MultiWriterOperationsRunbookAttached: phase58Gate.operationsRunbookAttached,
+        phase58MultiWriterRuntimeReleaseSignoffRequired: phase58Gate.runtimeReleaseSignoffRequired,
+        phase58MultiWriterRuntimeReleaseSignoffAttached: phase58Gate.runtimeReleaseSignoffAttached,
+        phase58MultiWriterRuntimeImplementationValidationComplete: phase58Gate.runtimeImplementationValidationComplete,
+        phase58MultiWriterRuntimeSupportBlocked: phase58Gate.runtimeSupportBlocked,
+        phase58MultiWriterTopologyReleaseAllowed: phase58Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

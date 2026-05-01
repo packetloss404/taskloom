@@ -42,6 +42,12 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE?: string;
   TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK?: string;
   TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF?: string;
 }
 
 export interface ManagedDatabaseTopologyObservedEnvValue {
@@ -162,6 +168,21 @@ export interface ManagedDatabaseTopologyReport {
       strictBlocker: boolean;
       summary: string;
     };
+    phase58?: {
+      multiWriterTopologyRequested: boolean;
+      implementationScopeGatePassed: boolean;
+      runtimeImplementationEvidenceConfigured: boolean;
+      consistencyValidationEvidenceConfigured: boolean;
+      failoverValidationEvidenceConfigured: boolean;
+      dataIntegrityValidationEvidenceConfigured: boolean;
+      operationsRunbookConfigured: boolean;
+      runtimeReleaseSignoffConfigured: boolean;
+      runtimeImplementationValidationGatePassed: boolean;
+      runtimeSupport: false;
+      releaseAllowed: false;
+      strictBlocker: boolean;
+      summary: string;
+    };
   };
 }
 
@@ -209,6 +230,12 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK",
   "TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
 const MANAGED_TOPOLOGY_HINTS = new Set([
@@ -559,6 +586,60 @@ function phase57MultiWriterImplementationScopeGate(
   };
 }
 
+function phase58MultiWriterRuntimeImplementationValidationGate(
+  env: ManagedDatabaseTopologyEnv,
+  hasMultiWriterIntent: boolean,
+  implementationScopeGatePassed: boolean,
+) {
+  const runtimeImplementationEvidenceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE,
+  );
+  const consistencyValidationEvidenceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE,
+  );
+  const failoverValidationEvidenceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE,
+  );
+  const dataIntegrityValidationEvidenceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE,
+  );
+  const operationsRunbookConfigured = configured(env.TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK);
+  const runtimeReleaseSignoffConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF,
+  );
+  const runtimeImplementationValidationGatePassed =
+    !hasMultiWriterIntent ||
+    (implementationScopeGatePassed &&
+      runtimeImplementationEvidenceConfigured &&
+      consistencyValidationEvidenceConfigured &&
+      failoverValidationEvidenceConfigured &&
+      dataIntegrityValidationEvidenceConfigured &&
+      operationsRunbookConfigured &&
+      runtimeReleaseSignoffConfigured);
+  const strictBlocker = hasMultiWriterIntent;
+  const summary = hasMultiWriterIntent
+    ? runtimeImplementationValidationGatePassed
+      ? "Phase 58 multi-writer runtime implementation validation evidence is configured; runtime support and release remain blocked."
+      : "Phase 58 requires Phase 57 implementation scope plus runtime implementation evidence, consistency validation evidence, failover validation evidence, data integrity validation evidence, operations runbook, and runtime release signoff before implementation validation can be recorded."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 58.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    implementationScopeGatePassed,
+    runtimeImplementationEvidenceConfigured,
+    consistencyValidationEvidenceConfigured,
+    failoverValidationEvidenceConfigured,
+    dataIntegrityValidationEvidenceConfigured,
+    operationsRunbookConfigured,
+    runtimeReleaseSignoffConfigured,
+    runtimeImplementationValidationGatePassed,
+    runtimeSupport: false as const,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -574,6 +655,7 @@ function buildNextSteps(
   phase55: ReturnType<typeof phase55MultiWriterImplementationAuthorizationGate>,
   phase56: ReturnType<typeof phase56MultiWriterImplementationReadinessGate>,
   phase57: ReturnType<typeof phase57MultiWriterImplementationScopeGate>,
+  phase58: ReturnType<typeof phase58MultiWriterRuntimeImplementationValidationGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -682,6 +764,32 @@ function buildNextSteps(
         steps.add("Configure TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF with the release owner signoff evidence.");
       }
     }
+    if (check.id === "phase58-multi-writer-runtime-implementation-validation") {
+      if (!phase57.implementationScopeGatePassed) {
+        steps.add("Complete Phase 57 multi-writer implementation scope before recording runtime implementation validation.");
+      }
+      if (!phase58.runtimeImplementationEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE with the Phase 58 runtime implementation evidence.");
+      }
+      if (!phase58.consistencyValidationEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE with the consistency validation evidence.");
+      }
+      if (!phase58.failoverValidationEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE with the failover validation evidence.");
+      }
+      if (!phase58.dataIntegrityValidationEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE with the data integrity validation evidence.");
+      }
+      if (!phase58.operationsRunbookConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK with the operations runbook evidence.");
+      }
+      if (!phase58.runtimeReleaseSignoffConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF with the runtime release signoff evidence.");
+      }
+      if (phase58.runtimeImplementationValidationGatePassed) {
+        steps.add("Keep multi-writer runtime support and release disabled; Phase 58 records implementation validation evidence only.");
+      }
+    }
   }
 
   if (steps.size === 0) {
@@ -721,6 +829,11 @@ export function assessManagedDatabaseTopology(
     env,
     hasMultiWriterIntent,
     phase56.implementationReadinessGatePassed,
+  );
+  const phase58 = phase58MultiWriterRuntimeImplementationValidationGate(
+    env,
+    hasMultiWriterIntent,
+    phase57.implementationScopeGatePassed,
   );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -806,6 +919,13 @@ export function assessManagedDatabaseTopology(
 
   pushCheck(
     checks,
+    "phase58-multi-writer-runtime-implementation-validation",
+    phase58.strictBlocker ? "fail" : "pass",
+    phase58.summary,
+  );
+
+  pushCheck(
+    checks,
     "production-topology",
     isProductionEnv && store === "json" ? "fail" : "pass",
     isProductionEnv && store === "json"
@@ -842,6 +962,7 @@ export function assessManagedDatabaseTopology(
     warnings.push(phase55.summary);
     warnings.push(phase56.summary);
     warnings.push(phase57.summary);
+    warnings.push(phase58.summary);
   }
 
   const status = statusFromChecks(checks);
@@ -880,7 +1001,7 @@ export function assessManagedDatabaseTopology(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, phase53, phase54, phase55, phase56, phase57),
+    nextSteps: buildNextSteps(checks, phase53, phase54, phase55, phase56, phase57, phase58),
     observed: {
       nodeEnv,
       isProductionEnv,
@@ -905,6 +1026,7 @@ export function assessManagedDatabaseTopology(
       phase55,
       phase56,
       phase57,
+      phase58,
     },
   };
 }
