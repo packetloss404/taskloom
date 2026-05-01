@@ -198,6 +198,12 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.equal(bundle.evidence.config.phase55MultiWriterImplementationAuthorized, false);
   assert.equal(bundle.evidence.config.phase55MultiWriterRuntimeSupportBlocked, false);
   assert.equal(bundle.evidence.config.phase55MultiWriterTopologyReleaseAllowed, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessGateRequired, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterImplementationReadinessEvidenceRequired, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRolloutSafetyEvidenceRequired, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessComplete, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeSupportBlocked, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterTopologyReleaseAllowed, true);
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_STORE").configured, false);
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-42-storage-topology"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-43-release-readiness"));
@@ -211,6 +217,8 @@ test("local JSON development evidence embeds Phase 42 and Phase 43 reports", () 
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-53-multi-writer-topology-requirements-design"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-55-multi-writer-topology-design-package-review"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-55-multi-writer-topology-implementation-authorization"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-56-multi-writer-runtime-implementation-readiness"));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-56-multi-writer-rollout-safety"));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-44-release-evidence"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_STORE=sqlite")));
 });
@@ -533,6 +541,14 @@ test("strict evidence blocks multi-writer topology on the Phase 53 requirements 
   assert.equal(bundle.evidence.config.phase55MultiWriterImplementationAuthorized, false);
   assert.equal(bundle.evidence.config.phase55MultiWriterRuntimeSupportBlocked, true);
   assert.equal(bundle.evidence.config.phase55MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessGateRequired, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterImplementationReadinessEvidenceRequired, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterImplementationReadinessEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRolloutSafetyEvidenceRequired, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRolloutSafetyEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessComplete, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterTopologyReleaseAllowed, false);
   assert.equal(bundle.asyncStoreBoundary.phase53MultiWriterTopologyGate?.required, true);
   assert.equal(phase53Attachment?.required, true);
   assert.match(phase53Attachment?.summary ?? "", /Phase 53 multi-writer topology requirements\/design evidence/);
@@ -540,6 +556,8 @@ test("strict evidence blocks multi-writer topology on the Phase 53 requirements 
   assert.match(phase54Attachment?.summary ?? "", /Phase 54 multi-writer topology design-package evidence/);
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-55-multi-writer-topology-design-package-review" && attachment.required));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-55-multi-writer-topology-implementation-authorization" && attachment.required));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-56-multi-writer-runtime-implementation-readiness" && attachment.required));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-56-multi-writer-rollout-safety" && attachment.required));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-54-multi-writer-topology-topology-owner" && attachment.required));
   assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-54-multi-writer-topology-rollback-plan" && attachment.required));
   assert.match(bundle.summary, /Phase 54 design-package gate/);
@@ -669,6 +687,69 @@ test("strict evidence records redacted Phase 55 review and implementation author
   assert.equal(authorizationAttachment?.value, "[redacted]");
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION").value, "[redacted]");
   assert.ok(bundle.nextSteps.some((step) => step.includes("blocked even with Phase 55 review and implementation authorization attached")));
+});
+
+test("strict evidence records redacted Phase 56 runtime readiness attachments while runtime stays blocked", () => {
+  const env = {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "https://reviewer:secret@readiness.internal/phase56",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
+  };
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);
+  const managedDatabaseRuntimeGuard = buildManagedDatabaseRuntimeGuardReport(env, {
+    phase51: {
+      managedPostgresStartupSupported: true,
+    },
+  });
+  const bundle = assessReleaseEvidence({
+    env,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T00:30:00.000Z",
+    strict: true,
+  });
+  const readinessAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-56-multi-writer-runtime-implementation-readiness");
+  const rolloutAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-56-multi-writer-rollout-safety");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessGateRequired, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterImplementationReadinessEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRolloutSafetyEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeImplementationReady, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRolloutSafetyReady, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeReadinessComplete, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase56MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase56MultiWriterRuntimeReadinessGate?.releaseAllowed, false);
+  assert.equal(readinessAttachment?.configured, true);
+  assert.equal(readinessAttachment?.redacted, true);
+  assert.equal(readinessAttachment?.value, "[redacted]");
+  assert.equal(rolloutAttachment?.configured, true);
+  assert.equal(rolloutAttachment?.redacted, false);
+  assert.equal(rolloutAttachment?.value, "rollout-safety://phase56");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE").value, "[redacted]");
+  assert.ok(bundle.nextSteps.some((step) => step.includes("blocked even with Phase 56 runtime readiness and rollout-safety evidence attached")));
 });
 
 test("release readiness managed reports are reused when present", () => {

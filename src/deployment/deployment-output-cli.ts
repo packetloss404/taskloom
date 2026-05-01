@@ -66,9 +66,9 @@ function redactValue(value: unknown, force = false): unknown {
   return value;
 }
 
-function blockPhase55RuntimeSupport(value: unknown): unknown {
+function blockMultiWriterRuntimeSupport(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => blockPhase55RuntimeSupport(entry));
+    return value.map((entry) => blockMultiWriterRuntimeSupport(entry));
   }
   if (!isReport(value)) {
     return value;
@@ -83,8 +83,17 @@ function blockPhase55RuntimeSupport(value: unknown): unknown {
         multiWriterSupported: false,
         runtimeImplementationBlocked: true,
       };
+    } else if ((key === "phase56" || key === "phase56MultiWriterRuntimeReadinessGate") && isReport(entry)) {
+      blocked[key] = {
+        ...entry,
+        runtimeSupport: false,
+        multiWriterSupported: false,
+        runtimeImplementationBlocked: true,
+        runtimeSupportBlocked: true,
+        releaseAllowed: false,
+      };
     } else {
-      blocked[key] = blockPhase55RuntimeSupport(entry);
+      blocked[key] = blockMultiWriterRuntimeSupport(entry);
     }
   }
   return blocked;
@@ -156,7 +165,7 @@ function withPhase55Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   const implementationAuthorized =
     existingPhase55.implementationAuthorized ?? existingPhase55.implementationAuthorizationGranted ?? false;
 
-  return blockPhase55RuntimeSupport({
+  return blockMultiWriterRuntimeSupport({
     ...report,
     phase55: {
       ...existingPhase55,
@@ -175,6 +184,74 @@ function withPhase55Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function withPhase56Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
+    return report;
+  }
+
+  const nestedPhase56 = firstReportAt(report, [
+    ["phase56MultiWriterRuntimeReadinessGate"],
+    ["managedDatabase", "phase56"],
+    ["managedDatabaseTopology", "managedDatabase", "phase56"],
+    ["releaseReadiness", "managedDatabaseTopology", "managedDatabase", "phase56"],
+    ["asyncStoreBoundary", "phase56"],
+    ["asyncStoreBoundary", "phase56MultiWriterRuntimeReadinessGate"],
+    ["releaseReadiness", "asyncStoreBoundary", "phase56"],
+    ["releaseReadiness", "asyncStoreBoundary", "phase56MultiWriterRuntimeReadinessGate"],
+  ]);
+  const existingPhase56 = reportAt(report, ["phase56"]) ?? nestedPhase56 ?? {};
+  const implementationReadinessEvidenceRequired =
+    existingPhase56.implementationReadinessEvidenceRequired ?? true;
+  const implementationReadinessEvidenceAttached =
+    existingPhase56.implementationReadinessEvidenceAttached ??
+    existingPhase56.implementationReadinessGatePassed ??
+    existingPhase56.runtimeImplementationReady ??
+    false;
+  const rolloutSafetyEvidenceRequired = existingPhase56.rolloutSafetyEvidenceRequired ?? true;
+  const rolloutSafetyEvidenceAttached =
+    existingPhase56.rolloutSafetyEvidenceAttached ??
+    existingPhase56.rolloutSafetyGatePassed ??
+    existingPhase56.rolloutSafetyReady ??
+    false;
+  const runtimeImplementationReady =
+    existingPhase56.runtimeImplementationReady ?? implementationReadinessEvidenceAttached === true;
+  const rolloutSafetyReady = existingPhase56.rolloutSafetyReady ?? rolloutSafetyEvidenceAttached === true;
+  const runtimeReadinessComplete =
+    existingPhase56.runtimeReadinessComplete ??
+    existingPhase56.implementationReadinessGatePassed ??
+    (runtimeImplementationReady === true && rolloutSafetyReady === true);
+
+  return blockMultiWriterRuntimeSupport({
+    ...report,
+    phase56: {
+      ...existingPhase56,
+      phase: existingPhase56.phase ?? "56",
+      required: existingPhase56.required ?? true,
+      multiWriterTopologyRequested: existingPhase56.multiWriterTopologyRequested ?? true,
+      implementationReadinessEvidenceRequired,
+      implementationReadinessEvidenceAttached,
+      rolloutSafetyEvidenceRequired,
+      rolloutSafetyEvidenceAttached,
+      runtimeImplementationReady,
+      rolloutSafetyReady,
+      runtimeReadinessComplete,
+      implementationReadinessGatePassed: runtimeReadinessComplete,
+      runtimeSupport: false,
+      multiWriterSupported: false,
+      runtimeImplementationBlocked: true,
+      runtimeSupportBlocked: true,
+      releaseAllowed: false,
+      strictBlocker: existingPhase56.strictBlocker ?? runtimeReadinessComplete !== true,
+      summary: existingPhase56.summary ??
+        "Phase 56 requires multi-writer runtime implementation-readiness and rollout-safety evidence before runtime support can be claimed; runtime support remains blocked.",
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
-  return JSON.stringify(redactValue(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env)), null, 2);
+  return JSON.stringify(
+    redactValue(withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env)),
+    null,
+    2,
+  );
 }

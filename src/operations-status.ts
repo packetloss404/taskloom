@@ -191,6 +191,49 @@ export interface MultiWriterTopologyImplementationAuthorizationGateStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type MultiWriterTopologyImplementationReadinessEvidenceKey =
+  | "implementationReadiness"
+  | "rolloutSafety";
+
+export interface MultiWriterTopologyImplementationReadinessEvidenceStatus {
+  key: MultiWriterTopologyImplementationReadinessEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source:
+    | "env"
+    | "managedDatabaseRuntimeGuard"
+    | "managedDatabaseTopology"
+    | "releaseReadiness"
+    | "releaseEvidence"
+    | "derived";
+}
+
+export interface MultiWriterTopologyImplementationReadinessGateStatus {
+  phase: "56";
+  status: "evidence-complete" | "blocked" | "not-required";
+  implementationReadinessStatus: "complete" | "missing" | "not-required";
+  rolloutSafetyStatus: "complete" | "missing" | "not-required";
+  summary: string;
+  required: boolean;
+  implementationAuthorized: boolean;
+  implementationReadinessComplete: boolean;
+  rolloutSafetyComplete: boolean;
+  runtimeImplementationBlocked: true;
+  runtimeSupported: false;
+  releaseAllowed: false;
+  multiWriterIntentDetected: boolean;
+  topologyIntent: string | null;
+  implementationAuthorizationStatus: MultiWriterTopologyImplementationAuthorizationGateStatus["status"];
+  implementationReadiness: MultiWriterTopologyImplementationReadinessEvidenceStatus;
+  rolloutSafety: MultiWriterTopologyImplementationReadinessEvidenceStatus;
+  missingEvidence: MultiWriterTopologyImplementationReadinessEvidenceKey[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -217,6 +260,7 @@ export interface OperationsStatus {
   managedPostgresTopologyGate: ManagedPostgresTopologyGateStatus;
   multiWriterTopologyDesignPackageGate: MultiWriterTopologyDesignPackageGateStatus;
   multiWriterTopologyImplementationAuthorizationGate: MultiWriterTopologyImplementationAuthorizationGateStatus;
+  multiWriterTopologyImplementationReadinessGate: MultiWriterTopologyImplementationReadinessGateStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -364,6 +408,37 @@ const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE = [
   },
 ] as const satisfies ReadonlyArray<{
   key: MultiWriterTopologyImplementationAuthorizationEvidenceKey;
+  label: string;
+  envKey: string;
+  reportKeys: readonly string[];
+}>;
+const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_READINESS_EVIDENCE = [
+  {
+    key: "implementationReadiness",
+    label: "Implementation readiness evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
+    reportKeys: [
+      "implementationReadiness",
+      "implementationReadinessEvidence",
+      "runtimeImplementationReadiness",
+      "runtimeImplementationReadinessEvidence",
+      "readinessEvidence",
+    ],
+  },
+  {
+    key: "rolloutSafety",
+    label: "Rollout-safety evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE",
+    reportKeys: [
+      "rolloutSafety",
+      "rolloutSafetyEvidence",
+      "rolloutPlan",
+      "rolloutSafetyPlan",
+      "safetyEvidence",
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  key: MultiWriterTopologyImplementationReadinessEvidenceKey;
   label: string;
   envKey: string;
   reportKeys: readonly string[];
@@ -711,6 +786,38 @@ function phase55DetailedAuthorizationEvidenceFromRecord(record: Record<string, u
   return "implementation-authorized";
 }
 
+function phase56DetailedImplementationReadinessEvidenceFromEnv(env: NodeJS.ProcessEnv): string {
+  const implementation = stringValue(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN);
+  const validation = stringValue(env.TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN);
+  const dataSafety = stringValue(env.TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN);
+  if (!implementation || !validation || !dataSafety) return "";
+  return `${implementation}; validation=${validation}; dataSafety=${dataSafety}`;
+}
+
+function phase56DetailedRolloutSafetyEvidenceFromEnv(env: NodeJS.ProcessEnv): string {
+  const rollout = stringValue(env.TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN);
+  const cutover = stringValue(env.TASKLOOM_MULTI_WRITER_CUTOVER_PLAN);
+  const rollbackDrill = stringValue(env.TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE);
+  if (!rollout || !cutover || !rollbackDrill) return "";
+  return `${rollout}; cutover=${cutover}; rollbackDrill=${rollbackDrill}`;
+}
+
+function phase56DetailedImplementationReadinessEvidenceFromRecord(record: Record<string, unknown>): string {
+  const implementation = booleanValue(record.implementationPlanConfigured);
+  const validation = booleanValue(record.testValidationPlanConfigured);
+  const dataSafety = booleanValue(record.dataSafetyPlanConfigured);
+  if (implementation !== true || validation !== true || dataSafety !== true) return "";
+  return "detailed-implementation-readiness";
+}
+
+function phase56DetailedRolloutSafetyEvidenceFromRecord(record: Record<string, unknown>): string {
+  const rollout = booleanValue(record.rolloutPlanConfigured);
+  const cutover = booleanValue(record.cutoverPlanConfigured);
+  const rollbackDrill = booleanValue(record.rollbackDrillEvidenceConfigured);
+  if (rollout !== true || cutover !== true || rollbackDrill !== true) return "";
+  return "detailed-rollout-safety";
+}
+
 function phase53EvidenceAttached(
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -758,6 +865,24 @@ function topologyImplementationAuthorizationRecord(
     findNestedRecord(
       report,
       ["releaseReadiness", "asyncStoreBoundary", "multiWriterTopologyImplementationAuthorizationGate"],
+    );
+}
+
+function topologyImplementationReadinessRecord(
+  report: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase56"]) ??
+    findNestedRecord(report, ["multiWriterTopologyImplementationReadinessGate"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeImplementationReadinessGate"]) ??
+    findNestedRecord(report, ["multiWriterTopologyRolloutSafetyGate"]) ??
+    findNestedRecord(report, ["multiWriterTopologyImplementationReadiness"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase56"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterTopologyImplementationReadinessGate"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase56"]) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "multiWriterTopologyImplementationReadinessGate"],
     );
 }
 
@@ -1201,6 +1326,140 @@ function deriveMultiWriterTopologyImplementationAuthorizationGate(
   };
 }
 
+function deriveMultiWriterTopologyImplementationReadinessGate(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  multiWriterTopologyImplementationAuthorizationGate: MultiWriterTopologyImplementationAuthorizationGateStatus,
+): MultiWriterTopologyImplementationReadinessGateStatus {
+  const reportSources: Array<{
+    source: Exclude<MultiWriterTopologyImplementationReadinessGateStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = topologyImplementationReadinessRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase56 = reportSources[0];
+  const multiWriterIntentDetected = booleanValue(phase56?.record.multiWriterIntentDetected) ??
+    multiWriterTopologyImplementationAuthorizationGate.multiWriterIntentDetected;
+  const topologyIntent = stringValue(phase56?.record.topologyIntent) ||
+    multiWriterTopologyImplementationAuthorizationGate.topologyIntent ||
+    null;
+  const implementationAuthorized = booleanValue(phase56?.record.implementationAuthorized) ??
+    multiWriterTopologyImplementationAuthorizationGate.implementationAuthorized;
+  const required = multiWriterIntentDetected;
+
+  const evidenceEntries = MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_READINESS_EVIDENCE.map((definition) => {
+    let value = stringValue(env[definition.envKey]);
+    let source: MultiWriterTopologyImplementationReadinessEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value && definition.key === "implementationReadiness") {
+      value = phase56DetailedImplementationReadinessEvidenceFromEnv(env);
+      if (value) source = "env";
+    }
+    if (!value && definition.key === "rolloutSafety") {
+      value = phase56DetailedRolloutSafetyEvidenceFromEnv(env);
+      if (value) source = "env";
+    }
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys);
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        let detailed = "";
+        if (definition.key === "implementationReadiness") {
+          detailed = phase56DetailedImplementationReadinessEvidenceFromRecord(candidate.record);
+        }
+        if (definition.key === "rolloutSafety") {
+          detailed = phase56DetailedRolloutSafetyEvidenceFromRecord(candidate.record);
+        }
+        value = direct || nested || detailed;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+    const configured = value.length > 0;
+    const status: MultiWriterTopologyImplementationReadinessEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<
+    MultiWriterTopologyImplementationReadinessEvidenceKey,
+    MultiWriterTopologyImplementationReadinessEvidenceStatus
+  >;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const implementationReadinessComplete = required && evidenceByKey.implementationReadiness.configured;
+  const rolloutSafetyComplete = required && evidenceByKey.rolloutSafety.configured;
+  const implementationReadinessStatus:
+    MultiWriterTopologyImplementationReadinessGateStatus["implementationReadinessStatus"] = required
+      ? implementationReadinessComplete ? "complete" : "missing"
+      : "not-required";
+  const rolloutSafetyStatus: MultiWriterTopologyImplementationReadinessGateStatus["rolloutSafetyStatus"] = required
+    ? rolloutSafetyComplete ? "complete" : "missing"
+    : "not-required";
+  const readinessEvidenceComplete = implementationAuthorized &&
+    implementationReadinessComplete &&
+    rolloutSafetyComplete;
+  const status: MultiWriterTopologyImplementationReadinessGateStatus["status"] = required
+    ? readinessEvidenceComplete ? "evidence-complete" : "blocked"
+    : "not-required";
+  const summary = required
+    ? !implementationAuthorized
+      ? "Phase 56 multi-writer implementation readiness and rollout-safety gate is blocked until Phase 55 implementation authorization is recorded; runtimeSupported=false."
+      : readinessEvidenceComplete
+        ? "Phase 56 multi-writer implementation readiness and rollout-safety evidence is complete; runtime implementation remains blocked until a future runtime phase; runtimeSupported=false."
+        : `Phase 56 multi-writer implementation readiness and rollout-safety gate is blocked pending ${missingEvidence.join(", ") || "readiness/rollout safety evidence"}; runtimeSupported=false.`
+    : "Phase 56 multi-writer implementation readiness and rollout-safety gate is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false.";
+
+  return {
+    phase: "56",
+    status,
+    implementationReadinessStatus,
+    rolloutSafetyStatus,
+    summary,
+    required,
+    implementationAuthorized,
+    implementationReadinessComplete,
+    rolloutSafetyComplete,
+    runtimeImplementationBlocked: true,
+    runtimeSupported: false,
+    releaseAllowed: false,
+    multiWriterIntentDetected,
+    topologyIntent,
+    implementationAuthorizationStatus: multiWriterTopologyImplementationAuthorizationGate.status,
+    implementationReadiness: evidenceByKey.implementationReadiness,
+    rolloutSafety: evidenceByKey.rolloutSafety,
+    missingEvidence,
+    source: phase56?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -1316,6 +1575,15 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       releaseEvidence,
       multiWriterTopologyDesignPackageGate,
     );
+  const multiWriterTopologyImplementationReadinessGate =
+    deriveMultiWriterTopologyImplementationReadinessGate(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterTopologyImplementationAuthorizationGate,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -1357,6 +1625,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     managedPostgresTopologyGate,
     multiWriterTopologyDesignPackageGate,
     multiWriterTopologyImplementationAuthorizationGate,
+    multiWriterTopologyImplementationReadinessGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -1431,6 +1700,15 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
       releaseEvidence,
       multiWriterTopologyDesignPackageGate,
     );
+  const multiWriterTopologyImplementationReadinessGate =
+    deriveMultiWriterTopologyImplementationReadinessGate(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterTopologyImplementationAuthorizationGate,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -1472,6 +1750,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     managedPostgresTopologyGate,
     multiWriterTopologyDesignPackageGate,
     multiWriterTopologyImplementationAuthorizationGate,
+    multiWriterTopologyImplementationReadinessGate,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

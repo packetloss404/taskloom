@@ -69,6 +69,18 @@ const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE = [
     envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION",
   },
 ] as const;
+const MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_READINESS_EVIDENCE = [
+  {
+    key: "implementationReadiness",
+    label: "implementation readiness evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
+  },
+  {
+    key: "rolloutSafety",
+    label: "rollout-safety evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE",
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -306,6 +318,54 @@ function checkMultiWriterTopologyImplementationAuthorizationGate(
   };
 }
 
+function checkMultiWriterTopologyImplementationReadinessGate(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+): SubsystemHealth {
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  const hasMultiWriterIntent = MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+  if (!hasMultiWriterIntent) {
+    return {
+      name: "multiWriterTopologyImplementationReadinessGate",
+      status: "disabled",
+      detail: "Phase 56 implementation readiness and rollout-safety gate is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false",
+      checkedAt,
+    };
+  }
+
+  const phase53RequirementsAttached = cleanEnvValue(env.TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE).length > 0;
+  const phase53DesignAttached = cleanEnvValue(env.TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE).length > 0;
+  const phase54MissingEvidence: string[] = MULTI_WRITER_TOPOLOGY_DESIGN_PACKAGE_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+  if (!phase53RequirementsAttached) phase54MissingEvidence.unshift("Phase 53 requirements evidence");
+  if (!phase53DesignAttached) phase54MissingEvidence.unshift("Phase 53 design evidence");
+  const designPackageComplete = phase54MissingEvidence.length === 0;
+  const missingAuthorizationEvidence = MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_AUTHORIZATION_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+  const implementationAuthorized = designPackageComplete && missingAuthorizationEvidence.length === 0;
+  const missingReadinessEvidence = MULTI_WRITER_TOPOLOGY_IMPLEMENTATION_READINESS_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+
+  let detail: string;
+  if (!implementationAuthorized) {
+    detail = `Phase 56 implementation readiness and rollout-safety gate is blocked for ${topology} intent until Phase 55 implementation authorization is recorded; runtimeSupported=false`;
+  } else if (missingReadinessEvidence.length > 0) {
+    detail = `Phase 56 implementation readiness and rollout-safety gate is blocked for ${topology} intent; missing ${missingReadinessEvidence.join(", ")}; runtimeSupported=false`;
+  } else {
+    detail = `Phase 56 implementation readiness and rollout-safety evidence is complete for ${topology} intent; runtime implementation remains blocked until a future runtime phase; runtimeSupported=false`;
+  }
+
+  return {
+    name: "multiWriterTopologyImplementationReadinessGate",
+    status: "degraded",
+    detail,
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -331,6 +391,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkManagedPostgresTopologyGate(env, checkedAt),
     checkMultiWriterTopologyDesignPackageGate(env, checkedAt),
     checkMultiWriterTopologyImplementationAuthorizationGate(env, checkedAt),
+    checkMultiWriterTopologyImplementationReadinessGate(env, checkedAt),
   ];
 
   return {
@@ -356,6 +417,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkManagedPostgresTopologyGate(env, checkedAt),
     checkMultiWriterTopologyDesignPackageGate(env, checkedAt),
     checkMultiWriterTopologyImplementationAuthorizationGate(env, checkedAt),
+    checkMultiWriterTopologyImplementationReadinessGate(env, checkedAt),
   ];
 
   return {

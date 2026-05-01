@@ -37,6 +37,14 @@ const STORE_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
   "TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE",
   "TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN",
+  "TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN",
+  "TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN",
+  "TASKLOOM_MULTI_WRITER_CUTOVER_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -301,6 +309,56 @@ test("single-writer managed Postgres remains supported when Phase 55 review and 
     }, "2026-04-30T17:00:00.000Z").id);
 
     assert.equal(requirementId, "req_single_writer_with_design_evidence");
+    assert.equal(client.storedData().requirements.some((entry) => entry.id === requirementId), true);
+    assert.equal(configs[0]?.envKey, "TASKLOOM_DATABASE_URL");
+    assert.equal(configs[0]?.resolution.mode, "postgres");
+
+    const queries = client.normalizedQueries();
+    assert.equal(queries.some((query) => query.startsWith("select pg_advisory_xact_lock")), true);
+    assert.equal(queries.some((query) => query.includes("for update")), true);
+    assert.equal(queries.includes("commit"), true);
+  });
+});
+
+test("single-writer managed Postgres remains supported when Phase 56 readiness and rollout-safety evidence is configured", async () => {
+  const client = new FakeManagedPostgresClient();
+
+  await withManagedStoreEnv({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "single-writer",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-54/multi-writer-requirements.md",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-54/multi-writer-design-package.md",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes with explicit conflict handling review",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
+    TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "release-owner",
+    TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+    TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "phase-55-design-package-review-only",
+    TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety-signoff.md",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "docs/phase-56/runtime-readiness.md",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "docs/phase-56/rollout-safety.md",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation-plan.md",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout-plan.md",
+    TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation-plan.md",
+    TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety-plan.md",
+    TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover-plan.md",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
+  }, client, async (configs) => {
+    const requirementId = await mutateStoreAsync((data) => upsertRequirement(data, {
+      id: "req_single_writer_with_phase56_readiness_evidence",
+      workspaceId: "alpha",
+      title: "Single-writer with Phase 56 readiness evidence",
+      priority: "must",
+      status: "approved",
+      createdByUserId: "user_alpha",
+    }, "2026-04-30T18:00:00.000Z").id);
+
+    assert.equal(requirementId, "req_single_writer_with_phase56_readiness_evidence");
     assert.equal(client.storedData().requirements.some((entry) => entry.id === requirementId), true);
     assert.equal(configs[0]?.envKey, "TASKLOOM_DATABASE_URL");
     assert.equal(configs[0]?.resolution.mode, "postgres");

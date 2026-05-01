@@ -29,6 +29,14 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_MULTI_WRITER_REVIEW_STATUS?: string;
   TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE?: string;
   TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_CUTOVER_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE?: string;
 }
 
 export interface ManagedDatabaseTopologyObservedEnvValue {
@@ -119,6 +127,22 @@ export interface ManagedDatabaseTopologyReport {
       strictBlocker: boolean;
       summary: string;
     };
+    phase56?: {
+      multiWriterTopologyRequested: boolean;
+      implementationAuthorizationGatePassed: boolean;
+      implementationPlanConfigured: boolean;
+      rolloutPlanConfigured: boolean;
+      testValidationPlanConfigured: boolean;
+      dataSafetyPlanConfigured: boolean;
+      cutoverPlanConfigured: boolean;
+      rollbackDrillEvidenceConfigured: boolean;
+      implementationReadinessEvidenceConfigured: boolean;
+      rolloutSafetyEvidenceConfigured: boolean;
+      implementationReadinessGatePassed: boolean;
+      runtimeSupport: false;
+      strictBlocker: boolean;
+      summary: string;
+    };
   };
 }
 
@@ -153,6 +177,14 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
   "TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE",
   "TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN",
+  "TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN",
+  "TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN",
+  "TASKLOOM_MULTI_WRITER_CUTOVER_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
 const MANAGED_TOPOLOGY_HINTS = new Set([
@@ -407,6 +439,59 @@ function phase55MultiWriterImplementationAuthorizationGate(
   };
 }
 
+function phase56MultiWriterImplementationReadinessGate(
+  env: ManagedDatabaseTopologyEnv,
+  hasMultiWriterIntent: boolean,
+  implementationAuthorizationGatePassed: boolean,
+) {
+  const implementationPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN);
+  const rolloutPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN);
+  const testValidationPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN);
+  const dataSafetyPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN);
+  const cutoverPlanConfigured = configured(env.TASKLOOM_MULTI_WRITER_CUTOVER_PLAN);
+  const rollbackDrillEvidenceConfigured = configured(env.TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE);
+  const implementationReadinessEvidenceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE,
+  );
+  const rolloutSafetyEvidenceConfigured = configured(env.TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE);
+  const detailedEvidenceConfigured =
+    implementationPlanConfigured &&
+    rolloutPlanConfigured &&
+    testValidationPlanConfigured &&
+    dataSafetyPlanConfigured &&
+    cutoverPlanConfigured &&
+    rollbackDrillEvidenceConfigured;
+  const bundledEvidenceConfigured =
+    implementationReadinessEvidenceConfigured &&
+    rolloutSafetyEvidenceConfigured;
+  const implementationReadinessGatePassed =
+    !hasMultiWriterIntent ||
+    (implementationAuthorizationGatePassed && (detailedEvidenceConfigured || bundledEvidenceConfigured));
+  const strictBlocker = hasMultiWriterIntent && !implementationReadinessGatePassed;
+  const summary = hasMultiWriterIntent
+    ? implementationReadinessGatePassed
+      ? "Phase 56 multi-writer implementation readiness and rollout-safety evidence are configured; runtime support remains blocked."
+      : "Phase 56 requires Phase 55 implementation authorization plus implementation plan, rollout plan, test/validation plan, data safety plan, cutover plan, and rollback drill evidence before any multi-writer runtime support can be claimed."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 56.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    implementationAuthorizationGatePassed,
+    implementationPlanConfigured,
+    rolloutPlanConfigured,
+    testValidationPlanConfigured,
+    dataSafetyPlanConfigured,
+    cutoverPlanConfigured,
+    rollbackDrillEvidenceConfigured,
+    implementationReadinessEvidenceConfigured,
+    rolloutSafetyEvidenceConfigured,
+    implementationReadinessGatePassed,
+    runtimeSupport: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -420,6 +505,7 @@ function buildNextSteps(
   phase53: ReturnType<typeof phase53MultiWriterTopologyGate>,
   phase54: ReturnType<typeof phase54MultiWriterTopologyDesignPackageGate>,
   phase55: ReturnType<typeof phase55MultiWriterImplementationAuthorizationGate>,
+  phase56: ReturnType<typeof phase56MultiWriterImplementationReadinessGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -485,6 +571,29 @@ function buildNextSteps(
         steps.add("Configure TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF with the explicit safety signoff evidence.");
       }
     }
+    if (check.id === "phase56-multi-writer-implementation-readiness") {
+      if (!phase55.implementationAuthorizationGatePassed) {
+        steps.add("Complete Phase 55 multi-writer implementation authorization before claiming implementation readiness.");
+      }
+      if (!phase56.implementationPlanConfigured && !phase56.implementationReadinessEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN with the approved implementation plan evidence.");
+      }
+      if (!phase56.rolloutPlanConfigured && !phase56.rolloutSafetyEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN with the rollout plan evidence.");
+      }
+      if (!phase56.testValidationPlanConfigured && !phase56.implementationReadinessEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN with the test and validation plan evidence.");
+      }
+      if (!phase56.dataSafetyPlanConfigured && !phase56.implementationReadinessEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN with the data safety plan evidence.");
+      }
+      if (!phase56.cutoverPlanConfigured && !phase56.rolloutSafetyEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_CUTOVER_PLAN with the cutover plan evidence.");
+      }
+      if (!phase56.rollbackDrillEvidenceConfigured && !phase56.rolloutSafetyEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE with rollback drill evidence.");
+      }
+    }
   }
 
   if (steps.size === 0) {
@@ -514,6 +623,11 @@ export function assessManagedDatabaseTopology(
     env,
     hasMultiWriterIntent,
     phase54.designPackageGatePassed,
+  );
+  const phase56 = phase56MultiWriterImplementationReadinessGate(
+    env,
+    hasMultiWriterIntent,
+    phase55.implementationAuthorizationGatePassed,
   );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -585,6 +699,13 @@ export function assessManagedDatabaseTopology(
 
   pushCheck(
     checks,
+    "phase56-multi-writer-implementation-readiness",
+    phase56.strictBlocker ? "fail" : "pass",
+    phase56.summary,
+  );
+
+  pushCheck(
+    checks,
     "production-topology",
     isProductionEnv && store === "json" ? "fail" : "pass",
     isProductionEnv && store === "json"
@@ -619,6 +740,7 @@ export function assessManagedDatabaseTopology(
     warnings.push(phase53.summary);
     warnings.push(phase54.summary);
     warnings.push(phase55.summary);
+    warnings.push(phase56.summary);
   }
 
   const status = statusFromChecks(checks);
@@ -657,7 +779,7 @@ export function assessManagedDatabaseTopology(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, phase53, phase54, phase55),
+    nextSteps: buildNextSteps(checks, phase53, phase54, phase55, phase56),
     observed: {
       nodeEnv,
       isProductionEnv,
@@ -680,6 +802,7 @@ export function assessManagedDatabaseTopology(
       phase53,
       phase54,
       phase55,
+      phase56,
     },
   };
 }

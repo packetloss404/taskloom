@@ -533,6 +533,14 @@ test("managedPostgresTopologyGate blocks multi-writer intent without changing Ph
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.runtimeSupported, false);
   assert.match(status.multiWriterTopologyImplementationAuthorizationGate.summary, /runtimeSupported=false/);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.status, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationAuthorized, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
+  assert.match(status.multiWriterTopologyImplementationReadinessGate.summary, /Phase 55 implementation authorization/i);
 });
 
 test("multiWriterTopologyDesignPackageGate reports a complete design package while runtime remains unsupported", () => {
@@ -585,6 +593,12 @@ test("multiWriterTopologyDesignPackageGate reports a complete design package whi
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.runtimeSupported, false);
   assert.equal(status.managedPostgresTopologyGate.status, "blocked");
   assert.equal(status.managedPostgresTopologyGate.multiWriterSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.status, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationAuthorized, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
 });
 
 test("multiWriterTopologyImplementationAuthorizationGate records review authorization without enabling runtime", () => {
@@ -623,6 +637,59 @@ test("multiWriterTopologyImplementationAuthorizationGate records review authoriz
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.releaseAllowed, false);
   assert.deepEqual(status.multiWriterTopologyImplementationAuthorizationGate.missingEvidence, []);
   assert.match(status.multiWriterTopologyImplementationAuthorizationGate.summary, /runtime implementation remains blocked/i);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.status, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationAuthorized, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
+  assert.match(status.multiWriterTopologyImplementationReadinessGate.summary, /Phase 56/i);
+});
+
+test("multiWriterTopologyImplementationReadinessGate records readiness and rollout safety without enabling runtime", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "artifacts/phase53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "artifacts/phase53/design.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes plus idempotent async reconciliation",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE: "artifacts/phase54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE: "artifacts/phase54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE: "artifacts/phase54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE: "artifacts/phase54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "artifacts/phase55/design-package-review.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "artifacts/phase55/implementation-auth.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "artifacts/phase56/implementation-readiness.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "artifacts/phase56/rollout-safety.md",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.status, "evidence-complete");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessStatus, "complete");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "complete");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationAuthorized, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessComplete, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyComplete, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.releaseAllowed, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadiness.status, "provided");
+  assert.equal(
+    status.multiWriterTopologyImplementationReadinessGate.implementationReadiness.value,
+    "artifacts/phase56/implementation-readiness.md",
+  );
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafety.status, "provided");
+  assert.deepEqual(status.multiWriterTopologyImplementationReadinessGate.missingEvidence, []);
+  assert.match(status.multiWriterTopologyImplementationReadinessGate.summary, /runtime implementation remains blocked/i);
+  assert.match(status.multiWriterTopologyImplementationReadinessGate.summary, /runtimeSupported=false/);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

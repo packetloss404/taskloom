@@ -13,6 +13,7 @@ import {
   type Phase53MultiWriterTopologyEvidenceItem,
   type Phase53MultiWriterTopologyGateReport,
   type Phase55MultiWriterImplementationAuthorizationGateReport,
+  type Phase56MultiWriterRuntimeReadinessGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -137,6 +138,16 @@ export interface ReleaseEvidenceBundle {
       phase55MultiWriterImplementationAuthorized: boolean;
       phase55MultiWriterRuntimeSupportBlocked: boolean;
       phase55MultiWriterTopologyReleaseAllowed: boolean;
+      phase56MultiWriterRuntimeReadinessGateRequired: boolean;
+      phase56MultiWriterImplementationReadinessEvidenceRequired: boolean;
+      phase56MultiWriterImplementationReadinessEvidenceAttached: boolean;
+      phase56MultiWriterRolloutSafetyEvidenceRequired: boolean;
+      phase56MultiWriterRolloutSafetyEvidenceAttached: boolean;
+      phase56MultiWriterRuntimeImplementationReady: boolean;
+      phase56MultiWriterRolloutSafetyReady: boolean;
+      phase56MultiWriterRuntimeReadinessComplete: boolean;
+      phase56MultiWriterRuntimeSupportBlocked: boolean;
+      phase56MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -230,8 +241,16 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_REVIEW_STATUS",
   "TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE",
   "TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN",
+  "TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN",
+  "TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN",
+  "TASKLOOM_MULTI_WRITER_CUTOVER_PLAN",
+  "TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW",
   "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION",
+  "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -461,6 +480,51 @@ function phase55MultiWriterImplementationAuthorizationGate(
   };
 }
 
+function phase56MultiWriterRuntimeReadinessGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase55Gate: Phase55MultiWriterImplementationAuthorizationGateReport,
+): Phase56MultiWriterRuntimeReadinessGateReport {
+  const fallbackRequired = asyncStoreBoundary.classification === "multi-writer-unsupported";
+  return asyncStoreBoundary.phase56MultiWriterRuntimeReadinessGate ?? {
+    phase: "56",
+    required: fallbackRequired,
+    implementationReadinessEvidenceRequired: fallbackRequired,
+    implementationReadinessEvidenceAttached: false,
+    rolloutSafetyEvidenceRequired: fallbackRequired,
+    rolloutSafetyEvidenceAttached: false,
+    runtimeImplementationReady: false,
+    rolloutSafetyReady: false,
+    runtimeReadinessComplete: false,
+    runtimeSupportBlocked: fallbackRequired,
+    releaseAllowed: !fallbackRequired,
+    summary: fallbackRequired
+      ? phase55Gate.implementationAuthorized
+        ? "Phase 56 multi-writer runtime implementation readiness and rollout-safety evidence is required before any multi-writer runtime support claim."
+        : "Phase 56 multi-writer runtime readiness requires Phase 55 review and implementation authorization before readiness evidence can support a runtime claim."
+      : "Phase 56 multi-writer runtime implementation readiness and rollout-safety gate is not required for this release posture.",
+    blockers: fallbackRequired
+      ? [
+        ...(!phase55Gate.implementationAuthorized
+          ? ["Phase 56 multi-writer runtime readiness requires attached Phase 55 review and implementation authorization evidence first."]
+          : []),
+        "Phase 56 multi-writer runtime implementation readiness evidence is required before any runtime support claim.",
+        "Phase 56 multi-writer rollout-safety evidence is required before any runtime support claim.",
+        "Phase 56 multi-writer runtime support remains blocked; readiness and rollout-safety evidence does not permit release until a later runtime implementation gate explicitly allows it.",
+      ]
+      : [],
+    nextSteps: fallbackRequired
+      ? [
+        ...(!phase55Gate.implementationAuthorized
+          ? ["Complete Phase 55 multi-writer review and implementation authorization before treating Phase 56 runtime readiness evidence as complete."]
+          : []),
+        "Attach Phase 56 multi-writer runtime implementation readiness evidence before claiming multi-writer runtime support.",
+        "Attach Phase 56 multi-writer rollout-safety evidence before claiming multi-writer runtime support.",
+        "Keep multi-writer runtime release blocked after Phase 56 readiness evidence until a later release gate explicitly allows it.",
+      ]
+      : ["Keep Phase 56 runtime readiness and rollout-safety evidence ready before claiming multi-writer runtime support."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -509,6 +573,44 @@ function phase55AuthorizationAttachmentEvidence(
   };
 }
 
+function phase56ImplementationReadinessAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  if (configured(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE)) {
+    return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE");
+  }
+
+  const implementation = stringValue(env.TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN);
+  const validation = stringValue(env.TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN);
+  const dataSafety = stringValue(env.TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN);
+  const configuredFromDetails = implementation.length > 0 && validation.length > 0 && dataSafety.length > 0;
+  return {
+    envKey: "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN,TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN,TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN",
+    configured: configuredFromDetails,
+    value: configuredFromDetails ? "detailed Phase 56 implementation readiness evidence package" : null,
+    redacted: false,
+  };
+}
+
+function phase56RolloutSafetyAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  if (configured(env.TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE)) {
+    return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE");
+  }
+
+  const rollout = stringValue(env.TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN);
+  const cutover = stringValue(env.TASKLOOM_MULTI_WRITER_CUTOVER_PLAN);
+  const rollbackDrill = stringValue(env.TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE);
+  const configuredFromDetails = rollout.length > 0 && cutover.length > 0 && rollbackDrill.length > 0;
+  return {
+    envKey: "TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN,TASKLOOM_MULTI_WRITER_CUTOVER_PLAN,TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE",
+    configured: configuredFromDetails,
+    value: configuredFromDetails ? "detailed Phase 56 rollout-safety evidence package" : null,
+    redacted: false,
+  };
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -521,6 +623,7 @@ function buildAttachments(
 ): ReleaseEvidenceAttachment[] {
   const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
   const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
+  const phase56Gate = phase56MultiWriterRuntimeReadinessGate(asyncStoreBoundary, phase55Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -637,6 +740,26 @@ function buildAttachments(
         ? "Phase 55 multi-writer implementation authorization evidence is attached; runtime release remains blocked."
         : "Phase 55 multi-writer implementation authorization evidence is required before runtime implementation work.",
       ...phase55AuthorizationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-56-multi-writer-runtime-implementation-readiness",
+      label: "Phase 56 multi-writer runtime implementation readiness evidence",
+      format: "json",
+      required: phase56Gate.implementationReadinessEvidenceRequired,
+      summary: phase56Gate.implementationReadinessEvidenceAttached
+        ? "Phase 56 multi-writer runtime implementation readiness evidence is attached; runtime release remains blocked."
+        : "Phase 56 multi-writer runtime implementation readiness evidence is required before any runtime support claim.",
+      ...phase56ImplementationReadinessAttachmentEvidence(env),
+    },
+    {
+      id: "phase-56-multi-writer-rollout-safety",
+      label: "Phase 56 multi-writer rollout-safety evidence",
+      format: "json",
+      required: phase56Gate.rolloutSafetyEvidenceRequired,
+      summary: phase56Gate.rolloutSafetyEvidenceAttached
+        ? "Phase 56 multi-writer rollout-safety evidence is attached; runtime release remains blocked."
+        : "Phase 56 multi-writer rollout-safety evidence is required before any runtime support claim.",
+      ...phase56RolloutSafetyAttachmentEvidence(env),
     },
     {
       id: "phase-44-release-evidence",
@@ -757,6 +880,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   };
   const phase53Gate = phase53MultiWriterTopologyGate(asyncStoreBoundary);
   const phase55Gate = phase55MultiWriterImplementationAuthorizationGate(asyncStoreBoundary, phase53Gate);
+  const phase56Gate = phase56MultiWriterRuntimeReadinessGate(asyncStoreBoundary, phase55Gate);
 
   return {
     phase: "44",
@@ -847,6 +971,16 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase55MultiWriterImplementationAuthorized: phase55Gate.implementationAuthorized,
         phase55MultiWriterRuntimeSupportBlocked: phase55Gate.runtimeSupportBlocked,
         phase55MultiWriterTopologyReleaseAllowed: phase55Gate.releaseAllowed,
+        phase56MultiWriterRuntimeReadinessGateRequired: phase56Gate.required,
+        phase56MultiWriterImplementationReadinessEvidenceRequired: phase56Gate.implementationReadinessEvidenceRequired,
+        phase56MultiWriterImplementationReadinessEvidenceAttached: phase56Gate.implementationReadinessEvidenceAttached,
+        phase56MultiWriterRolloutSafetyEvidenceRequired: phase56Gate.rolloutSafetyEvidenceRequired,
+        phase56MultiWriterRolloutSafetyEvidenceAttached: phase56Gate.rolloutSafetyEvidenceAttached,
+        phase56MultiWriterRuntimeImplementationReady: phase56Gate.runtimeImplementationReady,
+        phase56MultiWriterRolloutSafetyReady: phase56Gate.rolloutSafetyReady,
+        phase56MultiWriterRuntimeReadinessComplete: phase56Gate.runtimeReadinessComplete,
+        phase56MultiWriterRuntimeSupportBlocked: phase56Gate.runtimeSupportBlocked,
+        phase56MultiWriterTopologyReleaseAllowed: phase56Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

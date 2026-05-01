@@ -239,3 +239,138 @@ test("formatDeploymentCliJson preserves nested Phase 55 review reports while kee
   assert.equal(report.managedDatabase?.phase55?.runtimeImplementationBlocked, true);
   assert.doesNotMatch(output, /phase55-authorization-secret/);
 });
+
+test("formatDeploymentCliJson annotates Phase 56 implementation-readiness and rollout-safety gate", () => {
+  const output = formatDeploymentCliJson({
+    rolloutSafetyToken: "phase56-secret",
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "multi-writer" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    rolloutSafetyToken?: unknown;
+    phase56?: {
+      phase?: unknown;
+      required?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      implementationReadinessEvidenceRequired?: unknown;
+      implementationReadinessEvidenceAttached?: unknown;
+      rolloutSafetyEvidenceRequired?: unknown;
+      rolloutSafetyEvidenceAttached?: unknown;
+      runtimeImplementationReady?: unknown;
+      rolloutSafetyReady?: unknown;
+      runtimeReadinessComplete?: unknown;
+      implementationReadinessGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.rolloutSafetyToken, "[redacted]");
+  assert.equal(report.phase56?.phase, "56");
+  assert.equal(report.phase56?.required, true);
+  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase56?.implementationReadinessEvidenceRequired, true);
+  assert.equal(report.phase56?.implementationReadinessEvidenceAttached, false);
+  assert.equal(report.phase56?.rolloutSafetyEvidenceRequired, true);
+  assert.equal(report.phase56?.rolloutSafetyEvidenceAttached, false);
+  assert.equal(report.phase56?.runtimeImplementationReady, false);
+  assert.equal(report.phase56?.rolloutSafetyReady, false);
+  assert.equal(report.phase56?.runtimeReadinessComplete, false);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.multiWriterSupported, false);
+  assert.equal(report.phase56?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase56?.runtimeSupportBlocked, true);
+  assert.equal(report.phase56?.releaseAllowed, false);
+  assert.equal(report.phase56?.strictBlocker, true);
+  assert.match(String(report.phase56?.summary), /Phase 56/);
+  assert.doesNotMatch(output, /phase56-secret/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 56 readiness reports while keeping runtime support blocked", () => {
+  const output = formatDeploymentCliJson({
+    asyncStoreBoundary: {
+      phase56MultiWriterRuntimeReadinessGate: {
+        phase: "56",
+        required: true,
+        implementationReadinessEvidenceRequired: true,
+        implementationReadinessEvidenceAttached: true,
+        rolloutSafetyEvidenceRequired: true,
+        rolloutSafetyEvidenceAttached: true,
+        runtimeImplementationReady: true,
+        rolloutSafetyReady: true,
+        runtimeReadinessComplete: true,
+        rolloutOwner: "release-engineering",
+        runtimeSupport: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        rolloutSafetySecret: "phase56-rollout-secret",
+        summary: "Phase 56 implementation-readiness and rollout-safety evidence is recorded.",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "distributed" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    asyncStoreBoundary?: {
+      phase56MultiWriterRuntimeReadinessGate?: {
+        rolloutSafetySecret?: unknown;
+        runtimeSupport?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+      };
+    };
+    phase56?: {
+      phase?: unknown;
+      required?: unknown;
+      implementationReadinessEvidenceRequired?: unknown;
+      implementationReadinessEvidenceAttached?: unknown;
+      rolloutSafetyEvidenceRequired?: unknown;
+      rolloutSafetyEvidenceAttached?: unknown;
+      runtimeImplementationReady?: unknown;
+      rolloutSafetyReady?: unknown;
+      runtimeReadinessComplete?: unknown;
+      implementationReadinessGatePassed?: unknown;
+      rolloutOwner?: unknown;
+      runtimeSupport?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      rolloutSafetySecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase56?.phase, "56");
+  assert.equal(report.phase56?.required, true);
+  assert.equal(report.phase56?.implementationReadinessEvidenceRequired, true);
+  assert.equal(report.phase56?.implementationReadinessEvidenceAttached, true);
+  assert.equal(report.phase56?.rolloutSafetyEvidenceRequired, true);
+  assert.equal(report.phase56?.rolloutSafetyEvidenceAttached, true);
+  assert.equal(report.phase56?.runtimeImplementationReady, true);
+  assert.equal(report.phase56?.rolloutSafetyReady, true);
+  assert.equal(report.phase56?.runtimeReadinessComplete, true);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, true);
+  assert.equal(report.phase56?.rolloutOwner, "release-engineering");
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.multiWriterSupported, false);
+  assert.equal(report.phase56?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase56?.runtimeSupportBlocked, true);
+  assert.equal(report.phase56?.releaseAllowed, false);
+  assert.equal(report.phase56?.strictBlocker, false);
+  assert.equal(report.phase56?.rolloutSafetySecret, "[redacted]");
+  assert.equal(report.phase56?.summary, "Phase 56 implementation-readiness and rollout-safety evidence is recorded.");
+  assert.equal(report.asyncStoreBoundary?.phase56MultiWriterRuntimeReadinessGate?.rolloutSafetySecret, "[redacted]");
+  assert.equal(report.asyncStoreBoundary?.phase56MultiWriterRuntimeReadinessGate?.runtimeSupport, false);
+  assert.equal(report.asyncStoreBoundary?.phase56MultiWriterRuntimeReadinessGate?.multiWriterSupported, false);
+  assert.equal(report.asyncStoreBoundary?.phase56MultiWriterRuntimeReadinessGate?.runtimeImplementationBlocked, true);
+  assert.equal(report.asyncStoreBoundary?.phase56MultiWriterRuntimeReadinessGate?.runtimeSupportBlocked, true);
+  assert.doesNotMatch(output, /phase56-rollout-secret/);
+});

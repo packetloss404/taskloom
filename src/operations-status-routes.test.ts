@@ -107,6 +107,16 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(multiWriterTopologyImplementationAuthorizationGate.runtimeSupported, false);
   assert.equal(multiWriterTopologyImplementationAuthorizationGate.runtimeImplementationBlocked, true);
   assert.equal(multiWriterTopologyImplementationAuthorizationGate.releaseAllowed, false);
+  assert.ok(
+    body.multiWriterTopologyImplementationReadinessGate &&
+      typeof body.multiWriterTopologyImplementationReadinessGate === "object",
+  );
+  const multiWriterTopologyImplementationReadinessGate =
+    body.multiWriterTopologyImplementationReadinessGate as Record<string, unknown>;
+  assert.equal(multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
+  assert.equal(multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
+  assert.equal(multiWriterTopologyImplementationReadinessGate.releaseAllowed, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -150,6 +160,12 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
     "not-required",
   );
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.status, "not-required");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessStatus, "not-required");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "not-required");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
@@ -196,4 +212,10 @@ test("operations status report keeps multi-writer managed Postgres startup unsup
   );
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterTopologyImplementationAuthorizationGate.runtimeSupported, false);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.phase, "56");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.status, "blocked");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.implementationReadinessStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.rolloutSafetyStatus, "missing");
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterTopologyImplementationReadinessGate.runtimeSupported, false);
 });

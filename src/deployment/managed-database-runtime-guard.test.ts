@@ -61,6 +61,17 @@ test("local JSON runtime is allowed by default", () => {
   assert.equal(report.phase55?.implementationAuthorizationGatePassed, true);
   assert.equal(report.phase55?.runtimeSupport, false);
   assert.equal(report.phase55?.strictBlocker, false);
+  assert.equal(report.phase56?.multiWriterTopologyRequested, false);
+  assert.equal(report.phase56?.implementationAuthorizationGatePassed, true);
+  assert.equal(report.phase56?.implementationPlanConfigured, false);
+  assert.equal(report.phase56?.rolloutPlanConfigured, false);
+  assert.equal(report.phase56?.testValidationPlanConfigured, false);
+  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
+  assert.equal(report.phase56?.cutoverPlanConfigured, false);
+  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, true);
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.strictBlocker, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("local JSON"));
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
@@ -308,12 +319,28 @@ test("multi-writer topology is blocked", () => {
   assert.equal(report.phase55?.implementationAuthorizationGatePassed, false);
   assert.equal(report.phase55?.runtimeSupport, false);
   assert.equal(report.phase55?.strictBlocker, true);
+  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase56?.implementationAuthorizationGatePassed, false);
+  assert.equal(report.phase56?.implementationPlanConfigured, false);
+  assert.equal(report.phase56?.rolloutPlanConfigured, false);
+  assert.equal(report.phase56?.testValidationPlanConfigured, false);
+  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
+  assert.equal(report.phase56?.cutoverPlanConfigured, false);
+  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.strictBlocker, true);
   assert.ok(report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"));
   assert.ok(report.checks.some((check) => check.id === "phase53-multi-writer-design" && check.status === "fail"));
   assert.ok(report.checks.some((check) => check.id === "phase54-multi-writer-design-package" && check.status === "fail"));
   assert.ok(
     report.checks.some(
       (check) => check.id === "phase55-multi-writer-implementation-authorization" && check.status === "fail",
+    ),
+  );
+  assert.ok(
+    report.checks.some(
+      (check) => check.id === "phase56-multi-writer-implementation-readiness" && check.status === "fail",
     ),
   );
   assert.ok(report.nextSteps.some((step) => step.includes("multi-writer runtime support")));
@@ -323,6 +350,8 @@ test("multi-writer topology is blocked", () => {
   assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN")));
   assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER")));
   assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE")));
 });
 
 test("active-active topology is blocked even with managed Postgres startup support", () => {
@@ -396,6 +425,17 @@ test("distributed topology with Phase 53 and Phase 54 evidence remains blocked f
   assert.equal(report.phase55?.implementationAuthorizationGatePassed, false);
   assert.equal(report.phase55?.runtimeSupport, false);
   assert.equal(report.phase55?.strictBlocker, true);
+  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase56?.implementationAuthorizationGatePassed, false);
+  assert.equal(report.phase56?.implementationPlanConfigured, false);
+  assert.equal(report.phase56?.rolloutPlanConfigured, false);
+  assert.equal(report.phase56?.testValidationPlanConfigured, false);
+  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
+  assert.equal(report.phase56?.cutoverPlanConfigured, false);
+  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.strictBlocker, true);
   assert.equal(owner.configured, true);
   assert.equal(owner.value, "database-platform");
   assert.equal(owner.redacted, false);
@@ -445,6 +485,17 @@ test("distributed topology with Phase 55 authorization evidence still keeps runt
   assert.equal(report.phase55?.implementationAuthorizationGatePassed, true);
   assert.equal(report.phase55?.runtimeSupport, false);
   assert.equal(report.phase55?.strictBlocker, false);
+  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase56?.implementationAuthorizationGatePassed, true);
+  assert.equal(report.phase56?.implementationPlanConfigured, false);
+  assert.equal(report.phase56?.rolloutPlanConfigured, false);
+  assert.equal(report.phase56?.testValidationPlanConfigured, false);
+  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
+  assert.equal(report.phase56?.cutoverPlanConfigured, false);
+  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.strictBlocker, true);
   assert.equal(approver.configured, true);
   assert.equal(approver.value, "engineering-director");
   assert.equal(approver.redacted, false);
@@ -453,8 +504,101 @@ test("distributed topology with Phase 55 authorization evidence still keeps runt
       (check) => check.id === "phase55-multi-writer-implementation-authorization" && check.status === "pass",
     ),
   );
+  assert.ok(
+    report.checks.some(
+      (check) => check.id === "phase56-multi-writer-implementation-readiness" && check.status === "fail",
+    ),
+  );
   assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 56 requires")));
   assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
+});
+
+test("distributed topology with Phase 56 rollout-safety evidence still keeps runtime support blocked", () => {
+  const report = assessManagedDatabaseRuntimeGuard({
+    env: {
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "engineering-director",
+      TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+      TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "docs/phase-55/scope.md",
+      TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout.md",
+      TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation.md",
+      TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety.md",
+      TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
+    },
+  });
+  const implementationPlan = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN");
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "multi-writer-blocked");
+  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.phase55?.implementationAuthorizationGatePassed, true);
+  assert.equal(report.phase55?.runtimeSupport, false);
+  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase56?.implementationAuthorizationGatePassed, true);
+  assert.equal(report.phase56?.implementationPlanConfigured, true);
+  assert.equal(report.phase56?.rolloutPlanConfigured, true);
+  assert.equal(report.phase56?.testValidationPlanConfigured, true);
+  assert.equal(report.phase56?.dataSafetyPlanConfigured, true);
+  assert.equal(report.phase56?.cutoverPlanConfigured, true);
+  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, true);
+  assert.equal(report.phase56?.implementationReadinessGatePassed, true);
+  assert.equal(report.phase56?.runtimeSupport, false);
+  assert.equal(report.phase56?.strictBlocker, false);
+  assert.equal(implementationPlan.configured, true);
+  assert.equal(implementationPlan.value, "docs/phase-56/implementation.md");
+  assert.equal(implementationPlan.redacted, false);
+  assert.ok(
+    report.checks.some(
+      (check) => check.id === "phase56-multi-writer-implementation-readiness" && check.status === "pass",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 56")));
+  assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
+  assert.throws(
+    () =>
+      assertManagedDatabaseRuntimeSupported({
+        TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+        TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
+        TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
+        TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
+        TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
+        TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
+        TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
+        TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
+        TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
+        TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
+        TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "engineering-director",
+        TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
+        TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "docs/phase-55/scope.md",
+        TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety.md",
+        TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation.md",
+        TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout.md",
+        TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation.md",
+        TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety.md",
+        TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover.md",
+        TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
+      }),
+    ManagedDatabaseRuntimeGuardError,
+  );
 });
 
 test("unsupported store is blocked", () => {
