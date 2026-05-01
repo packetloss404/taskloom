@@ -89,6 +89,20 @@ function completeMultiWriterPhase59Env(): NodeJS.ProcessEnv {
   };
 }
 
+function completeMultiWriterPhase60Env(): NodeJS.ProcessEnv {
+  return {
+    ...completeMultiWriterPhase59Env(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "artifacts/phase60/implementation-present.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT:
+      "artifacts/phase60/explicit-support-statement.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "artifacts/phase60/compatibility-matrix.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "artifacts/phase60/cutover-evidence.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL:
+      "artifacts/phase60/release-automation-approval.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "artifacts/phase60/owner-acceptance.md",
+  };
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -128,6 +142,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "not-required");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -1142,6 +1161,147 @@ test("multiWriterRuntimeReleaseEnablementApproval can derive evidence from deplo
   );
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeSupportPresenceAssertion is not required without multi-writer intent", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "not-required");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "not-required");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.required, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.status, "not-required");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeSupportPresenceAssertion is blocked until Phase 59 approval is complete", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeMultiWriterPhase58Env(),
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "artifacts/phase60/implementation-present.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT:
+        "artifacts/phase60/explicit-support-statement.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "artifacts/phase60/compatibility-matrix.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "artifacts/phase60/cutover-evidence.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL:
+        "artifacts/phase60/release-automation-approval.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "artifacts/phase60/owner-acceptance.md",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "blocked");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "blocked");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase59ReleaseEnablementApprovalComplete, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupportPresenceAssertionComplete, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.configured, true);
+  assert.deepEqual(status.multiWriterRuntimeSupportPresenceAssertion.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeSupportPresenceAssertion.summary, /blocked until Phase 59/i);
+});
+
+test("multiWriterRuntimeSupportPresenceAssertion reports missing Phase 60 support evidence", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase59Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "blocked");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "missing");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase59ReleaseEnablementApprovalComplete, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupportPresenceAssertionComplete, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.status, "missing");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.ownerAcceptance.status, "missing");
+  assert.deepEqual(status.multiWriterRuntimeSupportPresenceAssertion.missingEvidence, [
+    "implementationPresent",
+    "explicitSupportStatement",
+    "compatibilityMatrix",
+    "cutoverEvidence",
+    "releaseAutomationApproval",
+    "ownerAcceptance",
+  ]);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeSupportPresenceAssertion.summary, /blocked pending implementationPresent/i);
+});
+
+test("multiWriterRuntimeSupportPresenceAssertion records complete evidence without enabling runtime release", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase60Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "assertion-complete");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "complete");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase59ReleaseEnablementApprovalComplete, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupportPresenceAssertionComplete, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.status, "provided");
+  assert.equal(
+    status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.value,
+    "artifacts/phase60/implementation-present.md",
+  );
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.explicitSupportStatement.status, "provided");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.compatibilityMatrix.status, "provided");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.cutoverEvidence.status, "provided");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAutomationApproval.status, "provided");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.ownerAcceptance.status, "provided");
+  assert.deepEqual(status.multiWriterRuntimeSupportPresenceAssertion.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeSupportPresenceAssertion.summary, /visible for support audit/i);
+  assert.match(status.multiWriterRuntimeSupportPresenceAssertion.summary, /runtimeSupported=false/);
+  assert.match(status.multiWriterRuntimeSupportPresenceAssertion.summary, /releaseAllowed=false/);
+});
+
+test("multiWriterRuntimeSupportPresenceAssertion can derive evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase59Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseEvidenceBundle: () => ({
+      phase60: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        implementationPresent: "artifacts/reports/phase60-implementation-present.md",
+        explicitSupportStatement: "artifacts/reports/phase60-explicit-support-statement.md",
+        compatibilityMatrix: "artifacts/reports/phase60-compatibility-matrix.md",
+        cutoverEvidence: "artifacts/reports/phase60-cutover-evidence.md",
+        releaseAutomationApproval: "artifacts/reports/phase60-release-automation-approval.md",
+        ownerAcceptance: "artifacts/reports/phase60-owner-acceptance.md",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "assertion-complete");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.source, "releaseEvidence");
+  assert.equal(
+    status.multiWriterRuntimeSupportPresenceAssertion.implementationPresent.value,
+    "artifacts/reports/phase60-implementation-present.md",
+  );
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

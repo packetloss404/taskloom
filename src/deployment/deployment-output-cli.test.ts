@@ -836,3 +836,171 @@ test("formatDeploymentCliJson preserves nested Phase 59 enablement reports while
   assert.doesNotMatch(output, /evidence\.example\.com/);
   assert.doesNotMatch(output, /phase59-approval-secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 60 support-presence fields while blocking release claims", () => {
+  const output = formatDeploymentCliJson({
+    phase60EvidenceUrl: "https://evidence.example.com/phase60/support-presence",
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "implementation-asserted",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT:
+      "runtime support remains blocked pending owner acceptance",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX:
+      "https://evidence.example.com/phase60/compatibility-matrix",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE:
+      "https://evidence.example.com/phase60/cutover-evidence",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL:
+      "https://approvals.example.com/phase60/release-automation",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "owner-acceptance-recorded",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase60EvidenceUrl?: unknown;
+    phase60?: {
+      phase?: unknown;
+      required?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      runtimeSupportImplementationPresent?: unknown;
+      runtimeSupportExplicitSupportStatement?: unknown;
+      runtimeSupportCompatibilityMatrix?: unknown;
+      runtimeSupportCutoverEvidence?: unknown;
+      runtimeSupportReleaseAutomationApproval?: unknown;
+      runtimeSupportOwnerAcceptance?: unknown;
+      runtimeSupportPresenceAssertionComplete?: unknown;
+      runtimeSupportPresenceAssertionGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase60EvidenceUrl, "[redacted]");
+  assert.equal(report.phase60?.phase, "60");
+  assert.equal(report.phase60?.required, true);
+  assert.equal(report.phase60?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase60?.runtimeSupportImplementationPresent, "implementation-asserted");
+  assert.equal(
+    report.phase60?.runtimeSupportExplicitSupportStatement,
+    "runtime support remains blocked pending owner acceptance",
+  );
+  assert.equal(report.phase60?.runtimeSupportCompatibilityMatrix, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportCutoverEvidence, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportReleaseAutomationApproval, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportOwnerAcceptance, "owner-acceptance-recorded");
+  assert.equal(report.phase60?.runtimeSupportPresenceAssertionComplete, true);
+  assert.equal(report.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
+  assert.equal(report.phase60?.runtimeSupport, false);
+  assert.equal(report.phase60?.runtimeSupported, false);
+  assert.equal(report.phase60?.multiWriterSupported, false);
+  assert.equal(report.phase60?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase60?.runtimeSupportBlocked, true);
+  assert.equal(report.phase60?.releaseAllowed, false);
+  assert.equal(report.phase60?.strictBlocker, false);
+  assert.match(String(report.phase60?.summary), /Phase 60/);
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+  assert.doesNotMatch(output, /approvals\.example\.com/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 60 support-presence reports while blocking support claims", () => {
+  const output = formatDeploymentCliJson({
+    releaseEvidence: {
+      phase60MultiWriterRuntimeSupportPresenceAssertionGate: {
+        implementationPresent: "implementation-present",
+        explicitSupportStatement: "explicit support statement captured",
+        compatibilityMatrix: "https://evidence.example.com/phase60/nested-matrix",
+        cutoverEvidence: "https://evidence.example.com/phase60/nested-cutover",
+        releaseAutomationApproval: "https://approvals.example.com/phase60/nested-release-automation",
+        ownerAcceptance: "owner-accepted",
+        runtimeSupportPresenceAssertionComplete: true,
+        runtimeSupport: true,
+        runtimeSupported: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        assertionSecret: "phase60-assertion-secret",
+        summary: "Phase 60 support presence assertion evidence is recorded.",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "distributed" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    releaseEvidence?: {
+      phase60MultiWriterRuntimeSupportPresenceAssertionGate?: {
+        compatibilityMatrix?: unknown;
+        cutoverEvidence?: unknown;
+        releaseAutomationApproval?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        assertionSecret?: unknown;
+      };
+    };
+    phase60?: {
+      phase?: unknown;
+      runtimeSupportImplementationPresent?: unknown;
+      runtimeSupportExplicitSupportStatement?: unknown;
+      runtimeSupportCompatibilityMatrix?: unknown;
+      runtimeSupportCutoverEvidence?: unknown;
+      runtimeSupportReleaseAutomationApproval?: unknown;
+      runtimeSupportOwnerAcceptance?: unknown;
+      runtimeSupportPresenceAssertionComplete?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      assertionSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase60?.phase, "60");
+  assert.equal(report.phase60?.runtimeSupportImplementationPresent, "implementation-present");
+  assert.equal(report.phase60?.runtimeSupportExplicitSupportStatement, "explicit support statement captured");
+  assert.equal(report.phase60?.runtimeSupportCompatibilityMatrix, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportCutoverEvidence, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportReleaseAutomationApproval, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportOwnerAcceptance, "owner-accepted");
+  assert.equal(report.phase60?.runtimeSupportPresenceAssertionComplete, true);
+  assert.equal(report.phase60?.runtimeSupport, false);
+  assert.equal(report.phase60?.runtimeSupported, false);
+  assert.equal(report.phase60?.multiWriterSupported, false);
+  assert.equal(report.phase60?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase60?.runtimeSupportBlocked, true);
+  assert.equal(report.phase60?.releaseAllowed, false);
+  assert.equal(report.phase60?.strictBlocker, false);
+  assert.equal(report.phase60?.assertionSecret, "[redacted]");
+  assert.equal(report.phase60?.summary, "Phase 60 support presence assertion evidence is recorded.");
+  assert.equal(
+    report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.compatibilityMatrix,
+    "[redacted]",
+  );
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.cutoverEvidence, "[redacted]");
+  assert.equal(
+    report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.releaseAutomationApproval,
+    "[redacted]",
+  );
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.runtimeSupport, false);
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.runtimeSupported, false);
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.multiWriterSupported, false);
+  assert.equal(
+    report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.runtimeImplementationBlocked,
+    true,
+  );
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.runtimeSupportBlocked, true);
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.releaseAllowed, false);
+  assert.equal(report.releaseEvidence?.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.assertionSecret, "[redacted]");
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+  assert.doesNotMatch(output, /approvals\.example\.com/);
+  assert.doesNotMatch(output, /phase60-assertion-secret/);
+});

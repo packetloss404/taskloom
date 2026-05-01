@@ -392,6 +392,59 @@ export interface MultiWriterRuntimeReleaseEnablementApprovalStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type MultiWriterRuntimeSupportPresenceAssertionEvidenceKey =
+  | "implementationPresent"
+  | "explicitSupportStatement"
+  | "compatibilityMatrix"
+  | "cutoverEvidence"
+  | "releaseAutomationApproval"
+  | "ownerAcceptance";
+
+export interface MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus {
+  key: MultiWriterRuntimeSupportPresenceAssertionEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source:
+    | "env"
+    | "managedDatabaseRuntimeGuard"
+    | "managedDatabaseTopology"
+    | "releaseReadiness"
+    | "releaseEvidence"
+    | "derived";
+}
+
+export interface MultiWriterRuntimeSupportPresenceAssertionStatus {
+  phase: "60";
+  status: "assertion-complete" | "blocked" | "not-required";
+  assertionStatus: "complete" | "blocked" | "missing" | "not-required";
+  summary: string;
+  required: boolean;
+  phase59ReleaseEnablementApprovalComplete: boolean;
+  runtimeSupportPresenceAssertionComplete: boolean;
+  runtimeImplementationBlocked: true;
+  runtimeSupported: false;
+  releaseAllowed: false;
+  multiWriterIntentDetected: boolean;
+  topologyIntent: string | null;
+  releaseEnablementApprovalStatus: MultiWriterRuntimeReleaseEnablementApprovalStatus["status"];
+  evidence: Record<
+    MultiWriterRuntimeSupportPresenceAssertionEvidenceKey,
+    MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus
+  >;
+  implementationPresent: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus;
+  explicitSupportStatement: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus;
+  compatibilityMatrix: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus;
+  cutoverEvidence: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus;
+  releaseAutomationApproval: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus;
+  ownerAcceptance: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus;
+  missingEvidence: MultiWriterRuntimeSupportPresenceAssertionEvidenceKey[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -422,6 +475,7 @@ export interface OperationsStatus {
   multiWriterTopologyImplementationScope: MultiWriterTopologyImplementationScopeStatus;
   multiWriterRuntimeImplementationValidation: MultiWriterRuntimeImplementationValidationStatus;
   multiWriterRuntimeReleaseEnablementApproval: MultiWriterRuntimeReleaseEnablementApprovalStatus;
+  multiWriterRuntimeSupportPresenceAssertion: MultiWriterRuntimeSupportPresenceAssertionStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -802,6 +856,76 @@ const MULTI_WRITER_RUNTIME_RELEASE_ENABLEMENT_APPROVAL_EVIDENCE = [
   },
 ] as const satisfies ReadonlyArray<{
   key: MultiWriterRuntimeReleaseEnablementApprovalEvidenceKey;
+  label: string;
+  envKey: string;
+  reportKeys: readonly string[];
+}>;
+const MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE = [
+  {
+    key: "implementationPresent",
+    label: "runtime support implementation presence",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT",
+    reportKeys: [
+      "implementationPresent",
+      "runtimeSupportImplementationPresent",
+      "supportImplementationPresent",
+      "implementationPresence",
+    ],
+  },
+  {
+    key: "explicitSupportStatement",
+    label: "explicit runtime support statement",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT",
+    reportKeys: [
+      "explicitSupportStatement",
+      "runtimeSupportStatement",
+      "supportStatement",
+      "explicitRuntimeSupportStatement",
+    ],
+  },
+  {
+    key: "compatibilityMatrix",
+    label: "runtime support compatibility matrix",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX",
+    reportKeys: [
+      "compatibilityMatrix",
+      "runtimeSupportCompatibilityMatrix",
+      "supportCompatibilityMatrix",
+    ],
+  },
+  {
+    key: "cutoverEvidence",
+    label: "runtime support cutover evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
+    reportKeys: [
+      "cutoverEvidence",
+      "runtimeSupportCutoverEvidence",
+      "supportCutoverEvidence",
+    ],
+  },
+  {
+    key: "releaseAutomationApproval",
+    label: "runtime support release automation approval",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
+    reportKeys: [
+      "releaseAutomationApproval",
+      "runtimeSupportReleaseAutomationApproval",
+      "automationApproval",
+    ],
+  },
+  {
+    key: "ownerAcceptance",
+    label: "runtime support owner acceptance",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+    reportKeys: [
+      "ownerAcceptance",
+      "runtimeSupportOwnerAcceptance",
+      "supportOwnerAcceptance",
+      "acceptance",
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  key: MultiWriterRuntimeSupportPresenceAssertionEvidenceKey;
   label: string;
   envKey: string;
   reportKeys: readonly string[];
@@ -1296,6 +1420,24 @@ function runtimeReleaseEnablementApprovalRecord(
     findNestedRecord(
       report,
       ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeReleaseEnablementApproval"],
+    );
+}
+
+function runtimeSupportPresenceAssertionRecord(
+  report: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase60"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupportPresenceAssertion"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupportPresenceAssertionGate"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupportPresence"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupport"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase60"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterRuntimeSupportPresenceAssertion"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase60"]) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeSupportPresenceAssertion"],
     );
 }
 
@@ -2234,6 +2376,127 @@ function deriveMultiWriterRuntimeReleaseEnablementApproval(
   };
 }
 
+function deriveMultiWriterRuntimeSupportPresenceAssertion(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  multiWriterRuntimeReleaseEnablementApproval: MultiWriterRuntimeReleaseEnablementApprovalStatus,
+): MultiWriterRuntimeSupportPresenceAssertionStatus {
+  const reportSources: Array<{
+    source: Exclude<MultiWriterRuntimeSupportPresenceAssertionStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = runtimeSupportPresenceAssertionRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase60 = reportSources[0];
+  const multiWriterIntentDetected = booleanValue(phase60?.record.multiWriterIntentDetected) ??
+    multiWriterRuntimeReleaseEnablementApproval.multiWriterIntentDetected;
+  const topologyIntent = stringValue(phase60?.record.topologyIntent) ||
+    multiWriterRuntimeReleaseEnablementApproval.topologyIntent ||
+    null;
+  const required = multiWriterIntentDetected;
+  const phase59ReleaseEnablementApprovalComplete =
+    multiWriterRuntimeReleaseEnablementApproval.status === "approval-complete";
+
+  const evidenceEntries = MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE.map((definition) => {
+    let value = stringValue(env[definition.envKey]);
+    let source: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys);
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        value = direct || nested;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+
+    const configured = value.length > 0;
+    const status: MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<
+    MultiWriterRuntimeSupportPresenceAssertionEvidenceKey,
+    MultiWriterRuntimeSupportPresenceAssertionEvidenceStatus
+  >;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const allAssertionEvidenceConfigured = evidenceEntries.every((entry) => entry.configured);
+  const runtimeSupportPresenceAssertionComplete =
+    required && phase59ReleaseEnablementApprovalComplete && allAssertionEvidenceConfigured;
+  const assertionStatus: MultiWriterRuntimeSupportPresenceAssertionStatus["assertionStatus"] = required
+    ? runtimeSupportPresenceAssertionComplete
+      ? "complete"
+      : allAssertionEvidenceConfigured && !phase59ReleaseEnablementApprovalComplete
+        ? "blocked"
+        : "missing"
+    : "not-required";
+  const status: MultiWriterRuntimeSupportPresenceAssertionStatus["status"] = required
+    ? runtimeSupportPresenceAssertionComplete ? "assertion-complete" : "blocked"
+    : "not-required";
+  const missingEvidenceSummary = missingEvidence.join(", ") || "Phase 60 runtime support presence assertion evidence";
+  const summary = required
+    ? !phase59ReleaseEnablementApprovalComplete
+      ? "Phase 60 multi-writer runtime support presence assertion is blocked until Phase 59 release-enable approval is complete; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false."
+      : runtimeSupportPresenceAssertionComplete
+        ? "Phase 60 multi-writer runtime support presence assertion evidence is complete and visible for support audit, but runtime support and release remain blocked in this repo; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false."
+        : `Phase 60 multi-writer runtime support presence assertion is blocked pending ${missingEvidenceSummary}; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false.`
+    : "Phase 60 multi-writer runtime support presence assertion is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false.";
+
+  return {
+    phase: "60",
+    status,
+    assertionStatus,
+    summary,
+    required,
+    phase59ReleaseEnablementApprovalComplete,
+    runtimeSupportPresenceAssertionComplete,
+    runtimeImplementationBlocked: true,
+    runtimeSupported: false,
+    releaseAllowed: false,
+    multiWriterIntentDetected,
+    topologyIntent,
+    releaseEnablementApprovalStatus: multiWriterRuntimeReleaseEnablementApproval.status,
+    evidence: evidenceByKey,
+    implementationPresent: evidenceByKey.implementationPresent,
+    explicitSupportStatement: evidenceByKey.explicitSupportStatement,
+    compatibilityMatrix: evidenceByKey.compatibilityMatrix,
+    cutoverEvidence: evidenceByKey.cutoverEvidence,
+    releaseAutomationApproval: evidenceByKey.releaseAutomationApproval,
+    ownerAcceptance: evidenceByKey.ownerAcceptance,
+    missingEvidence,
+    source: phase60?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -2385,6 +2648,15 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       releaseEvidence,
       multiWriterRuntimeImplementationValidation,
     );
+  const multiWriterRuntimeSupportPresenceAssertion =
+    deriveMultiWriterRuntimeSupportPresenceAssertion(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterRuntimeReleaseEnablementApproval,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -2430,6 +2702,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     multiWriterTopologyImplementationScope,
     multiWriterRuntimeImplementationValidation,
     multiWriterRuntimeReleaseEnablementApproval,
+    multiWriterRuntimeSupportPresenceAssertion,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -2540,6 +2813,15 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
       releaseEvidence,
       multiWriterRuntimeImplementationValidation,
     );
+  const multiWriterRuntimeSupportPresenceAssertion =
+    deriveMultiWriterRuntimeSupportPresenceAssertion(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterRuntimeReleaseEnablementApproval,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -2585,6 +2867,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     multiWriterTopologyImplementationScope,
     multiWriterRuntimeImplementationValidation,
     multiWriterRuntimeReleaseEnablementApproval,
+    multiWriterRuntimeSupportPresenceAssertion,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

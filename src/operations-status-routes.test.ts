@@ -147,6 +147,16 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
   assert.equal(multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.ok(
+    body.multiWriterRuntimeSupportPresenceAssertion &&
+      typeof body.multiWriterRuntimeSupportPresenceAssertion === "object",
+  );
+  const multiWriterRuntimeSupportPresenceAssertion =
+    body.multiWriterRuntimeSupportPresenceAssertion as Record<string, unknown>;
+  assert.equal(multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -214,6 +224,12 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "not-required");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "not-required");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {
@@ -284,6 +300,12 @@ test("operations status report keeps multi-writer managed Postgres startup unsup
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "blocked");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase59ReleaseEnablementApprovalComplete, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
 });
 
 test("operations status report surfaces Phase 57 scope complete but unsupported", () => {
@@ -341,6 +363,13 @@ test("operations status report surfaces Phase 57 scope complete but unsupported"
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "blocked");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "missing");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase59ReleaseEnablementApprovalComplete, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
 });
 
 test("operations status report surfaces Phase 59 release-enable approval complete but runtime release blocked", () => {
@@ -395,4 +424,11 @@ test("operations status report surfaces Phase 59 release-enable approval complet
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
   assert.match(status.multiWriterRuntimeReleaseEnablementApproval.summary, /actual multi-writer runtime exists/i);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase, "60");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.status, "blocked");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.assertionStatus, "missing");
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.phase59ReleaseEnablementApprovalComplete, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
 });

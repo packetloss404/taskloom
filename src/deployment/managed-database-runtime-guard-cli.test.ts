@@ -311,6 +311,89 @@ test("runManagedDatabaseRuntimeGuardCli preserves Phase 59 enablement fields whi
   assert.doesNotMatch(output[0] ?? "", /phase59-runtime-secret/);
 });
 
+test("runManagedDatabaseRuntimeGuardCli preserves Phase 60 support-presence fields while blocking support claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseRuntimeGuardCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseRuntimeGuardReport: () => ({
+      allowed: false,
+      phase60MultiWriterRuntimeSupportPresenceAssertionGate: {
+        implementationPresent: "implementation-present",
+        explicitSupportStatement: "support statement captured",
+        compatibilityMatrix: "https://evidence.example.com/phase60/runtime-matrix",
+        cutoverEvidence: "https://evidence.example.com/phase60/runtime-cutover",
+        releaseAutomationApproval: "https://approvals.example.com/phase60/runtime-release-automation",
+        ownerAcceptance: "owner-accepted",
+        runtimeSupportPresenceAssertionComplete: true,
+        runtimeSupport: true,
+        runtimeSupported: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        assertionSecret: "phase60-runtime-secret",
+        summary: "Phase 60 runtime guard support presence assertion is recorded.",
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase60MultiWriterRuntimeSupportPresenceAssertionGate?: {
+      compatibilityMatrix?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      releaseAllowed?: unknown;
+      assertionSecret?: unknown;
+    };
+    phase60?: {
+      phase?: unknown;
+      runtimeSupportCompatibilityMatrix?: unknown;
+      runtimeSupportCutoverEvidence?: unknown;
+      runtimeSupportReleaseAutomationApproval?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      assertionSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase60?.phase, "60");
+  assert.equal(report.phase60?.runtimeSupportCompatibilityMatrix, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportCutoverEvidence, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupportReleaseAutomationApproval, "[redacted]");
+  assert.equal(report.phase60?.runtimeSupport, false);
+  assert.equal(report.phase60?.runtimeSupported, false);
+  assert.equal(report.phase60?.multiWriterSupported, false);
+  assert.equal(report.phase60?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase60?.runtimeSupportBlocked, true);
+  assert.equal(report.phase60?.releaseAllowed, false);
+  assert.equal(report.phase60?.strictBlocker, false);
+  assert.equal(report.phase60?.assertionSecret, "[redacted]");
+  assert.equal(report.phase60?.summary, "Phase 60 runtime guard support presence assertion is recorded.");
+  assert.equal(report.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.compatibilityMatrix, "[redacted]");
+  assert.equal(report.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.runtimeSupport, false);
+  assert.equal(report.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.runtimeSupported, false);
+  assert.equal(report.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.multiWriterSupported, false);
+  assert.equal(report.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.releaseAllowed, false);
+  assert.equal(report.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.assertionSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /approvals\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase60-runtime-secret/);
+});
+
 test("runManagedDatabaseRuntimeGuardCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

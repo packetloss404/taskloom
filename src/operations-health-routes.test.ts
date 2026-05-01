@@ -82,6 +82,7 @@ test("operations health route returns the report shape for an admin-equivalent o
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterTopologyImplementationScope"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeImplementationValidation"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeReleaseEnablementApproval"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeSupportPresenceAssertion"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
@@ -137,6 +138,10 @@ test("operations health surfaces supported single-writer managed Postgres topolo
   assert.equal(releaseEnablementApproval.status, "disabled");
   assert.match(releaseEnablementApproval.detail, /Phase 59 runtime release-enable approval is not required/i);
   assert.match(releaseEnablementApproval.detail, /runtimeSupported=false/);
+  const supportPresenceAssertion = findSubsystem(report, "multiWriterRuntimeSupportPresenceAssertion");
+  assert.equal(supportPresenceAssertion.status, "disabled");
+  assert.match(supportPresenceAssertion.detail, /Phase 60 runtime support presence assertion is not required/i);
+  assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
   assert.equal(report.overall, "ok");
 });
 
@@ -207,6 +212,13 @@ test("operations health degrades for blocked multi-writer topology intent", () =
   assert.match(releaseEnablementApproval.detail, /runtimeImplementationBlocked=true/);
   assert.match(releaseEnablementApproval.detail, /runtimeSupported=false/);
   assert.match(releaseEnablementApproval.detail, /releaseAllowed=false/);
+  const supportPresenceAssertion = findSubsystem(report, "multiWriterRuntimeSupportPresenceAssertion");
+  assert.equal(supportPresenceAssertion.status, "degraded");
+  assert.match(supportPresenceAssertion.detail, /Phase 60 runtime support presence assertion is blocked/i);
+  assert.match(supportPresenceAssertion.detail, /until Phase 59 release-enable approval is complete/i);
+  assert.match(supportPresenceAssertion.detail, /runtimeImplementationBlocked=true/);
+  assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
+  assert.match(supportPresenceAssertion.detail, /releaseAllowed=false/);
   assert.equal(report.overall, "degraded");
 });
 
@@ -520,5 +532,84 @@ test("operations health reports Phase 59 release-enable approval complete but st
   assert.match(releaseEnablementApproval.detail, /runtimeImplementationBlocked=true/);
   assert.match(releaseEnablementApproval.detail, /runtimeSupported=false/);
   assert.match(releaseEnablementApproval.detail, /releaseAllowed=false/);
+  const supportPresenceAssertion = findSubsystem(report, "multiWriterRuntimeSupportPresenceAssertion");
+  assert.equal(supportPresenceAssertion.status, "degraded");
+  assert.match(supportPresenceAssertion.detail, /Phase 60 runtime support presence assertion is blocked/i);
+  assert.match(supportPresenceAssertion.detail, /runtime support implementation presence/i);
+  assert.match(supportPresenceAssertion.detail, /runtime support owner acceptance/i);
+  assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
+  assert.match(supportPresenceAssertion.detail, /releaseAllowed=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("operations health reports Phase 60 support presence assertion complete but still blocked", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "artifacts/phase53/requirements.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "artifacts/phase53/design.md",
+      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "platform-ops",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "read-your-writes plus async reconciliation",
+      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_EVIDENCE: "artifacts/phase54/failover-pitr.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_EVIDENCE: "artifacts/phase54/migration-backfill.md",
+      TASKLOOM_MULTI_WRITER_OBSERVABILITY_EVIDENCE: "artifacts/phase54/observability.md",
+      TASKLOOM_MULTI_WRITER_ROLLBACK_EVIDENCE: "artifacts/phase54/rollback.md",
+      TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "artifacts/phase55/design-package-review.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "artifacts/phase55/implementation-auth.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "artifacts/phase56/readiness.md",
+      TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "artifacts/phase56/rollout-safety.md",
+      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "artifacts/phase57/implementation-scope-lock.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "artifacts/phase57/runtime-feature-flag.md",
+      TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "artifacts/phase57/validation.md",
+      TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "artifacts/phase57/migration-cutover-lock.md",
+      TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "artifacts/phase57/release-owner-signoff.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "artifacts/phase58/runtime-implementation.md",
+      TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "artifacts/phase58/consistency-validation.md",
+      TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "artifacts/phase58/failover-validation.md",
+      TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "artifacts/phase58/data-integrity-validation.md",
+      TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "artifacts/phase58/operations-runbook.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "artifacts/phase58/runtime-release-signoff.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-release-gate-only",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "platform-release-owner",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW:
+        "2026-05-02T02:00:00Z/2026-05-02T04:00:00Z",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF:
+        "artifacts/phase59/monitoring-signoff.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "artifacts/phase59/abort-plan.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "TASKLOOM-59",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT:
+        "artifacts/phase60/implementation-present.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT:
+        "artifacts/phase60/explicit-support-statement.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX:
+        "artifacts/phase60/compatibility-matrix.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE:
+        "artifacts/phase60/cutover-evidence.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL:
+        "artifacts/phase60/release-automation-approval.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE:
+        "artifacts/phase60/owner-acceptance.md",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const supportPresenceAssertion = findSubsystem(report, "multiWriterRuntimeSupportPresenceAssertion");
+  assert.equal(supportPresenceAssertion.status, "degraded");
+  assert.match(supportPresenceAssertion.detail, /Phase 60 runtime support presence assertion evidence is complete/i);
+  assert.match(supportPresenceAssertion.detail, /visible for support audit/i);
+  assert.match(supportPresenceAssertion.detail, /runtime support and release remain blocked in this repo/i);
+  assert.match(supportPresenceAssertion.detail, /runtimeImplementationBlocked=true/);
+  assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
+  assert.match(supportPresenceAssertion.detail, /releaseAllowed=false/);
   assert.equal(report.overall, "degraded");
 });

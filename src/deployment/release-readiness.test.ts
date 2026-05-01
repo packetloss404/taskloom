@@ -56,6 +56,18 @@ function phase58CompleteMultiWriterEnv(): ReleaseReadinessEnv {
   };
 }
 
+function phase59CompleteMultiWriterEnv(): ReleaseReadinessEnv {
+  return {
+    ...phase58CompleteMultiWriterEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "decision://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "release-owner",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-04T16:00:00Z/2026-05-04T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "monitoring-signoff://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "abort-plan://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "release-ticket://phase59",
+  };
+}
+
 test("local JSON development produces warnings instead of release blockers", () => {
   const report = assessReleaseReadiness({ env: {} });
 
@@ -742,6 +754,72 @@ test("Phase 59 release-enable approval evidence attaches but still blocks multi-
   assert.ok(phase59Gate?.blockers.some((blocker) => blocker.includes("approval evidence does not permit")));
   assert.ok(report.asyncStoreBoundary.summary.includes("Phase 59 release-enable approval evidence is attached"));
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 59 release-enable approval evidence attached")));
+});
+
+test("Phase 60 runtime support presence assertion evidence is required after Phase 59 completion", () => {
+  const report = assessReleaseReadiness({
+    env: phase59CompleteMultiWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase60Gate = report.asyncStoreBoundary.phase60MultiWriterRuntimeSupportPresenceAssertionGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(report.asyncStoreBoundary.phase59MultiWriterRuntimeEnablementApprovalGate?.runtimeEnablementApprovalComplete, true);
+  assert.equal(phase60Gate?.required, true);
+  assert.equal(phase60Gate?.runtimeEnablementApprovalComplete, true);
+  assert.equal(phase60Gate?.implementationPresentEvidenceAttached, false);
+  assert.equal(phase60Gate?.explicitSupportStatementAttached, false);
+  assert.equal(phase60Gate?.compatibilityMatrixAttached, false);
+  assert.equal(phase60Gate?.cutoverEvidenceAttached, false);
+  assert.equal(phase60Gate?.releaseAutomationApprovalAttached, false);
+  assert.equal(phase60Gate?.ownerAcceptanceAttached, false);
+  assert.equal(phase60Gate?.runtimeSupportPresenceAssertionComplete, false);
+  assert.equal(phase60Gate?.runtimeSupportBlocked, true);
+  assert.equal(phase60Gate?.releaseAllowed, false);
+  assert.ok(phase60Gate?.blockers.some((blocker) => blocker.includes("implementation-present evidence")));
+  assert.ok(phase60Gate?.blockers.some((blocker) => blocker.includes("owner acceptance evidence")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT")));
+});
+
+test("Phase 60 runtime support presence assertion evidence attaches but still blocks multi-writer runtime release", () => {
+  const env: ReleaseReadinessEnv = {
+    ...phase59CompleteMultiWriterEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "implementation-present://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT: "support-statement://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "compatibility-matrix://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "cutover-evidence://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL: "release-automation://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "owner-acceptance://phase60",
+  };
+  const report = assessReleaseReadiness({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase60Gate = report.asyncStoreBoundary.phase60MultiWriterRuntimeSupportPresenceAssertionGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(phase60Gate?.required, true);
+  assert.equal(phase60Gate?.runtimeEnablementApprovalComplete, true);
+  assert.equal(phase60Gate?.implementationPresentEvidenceAttached, true);
+  assert.equal(phase60Gate?.explicitSupportStatementAttached, true);
+  assert.equal(phase60Gate?.compatibilityMatrixAttached, true);
+  assert.equal(phase60Gate?.cutoverEvidenceAttached, true);
+  assert.equal(phase60Gate?.releaseAutomationApprovalAttached, true);
+  assert.equal(phase60Gate?.ownerAcceptanceAttached, true);
+  assert.equal(phase60Gate?.runtimeSupportPresenceAssertionComplete, true);
+  assert.equal(phase60Gate?.runtimeSupportBlocked, true);
+  assert.equal(phase60Gate?.releaseAllowed, false);
+  assert.ok(phase60Gate?.blockers.some((blocker) => blocker.includes("support presence assertion evidence does not permit")));
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 60 runtime support presence assertion evidence is attached"));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 60 runtime support presence assertion evidence attached")));
 });
 
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {

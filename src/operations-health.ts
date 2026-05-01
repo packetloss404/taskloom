@@ -172,6 +172,38 @@ const MULTI_WRITER_RUNTIME_RELEASE_ENABLEMENT_APPROVAL_EVIDENCE = [
     envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET",
   },
 ] as const;
+const MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE = [
+  {
+    key: "implementationPresent",
+    label: "runtime support implementation presence",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT",
+  },
+  {
+    key: "explicitSupportStatement",
+    label: "explicit runtime support statement",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT",
+  },
+  {
+    key: "compatibilityMatrix",
+    label: "runtime support compatibility matrix",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX",
+  },
+  {
+    key: "cutoverEvidence",
+    label: "runtime support cutover evidence",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
+  },
+  {
+    key: "releaseAutomationApproval",
+    label: "runtime support release automation approval",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
+  },
+  {
+    key: "ownerAcceptance",
+    label: "runtime support owner acceptance",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -486,6 +518,13 @@ function phase58RuntimeValidationComplete(env: NodeJS.ProcessEnv): boolean {
     );
 }
 
+function phase59ReleaseEnablementApprovalComplete(env: NodeJS.ProcessEnv): boolean {
+  return phase58RuntimeValidationComplete(env) &&
+    MULTI_WRITER_RUNTIME_RELEASE_ENABLEMENT_APPROVAL_EVIDENCE.every(
+      (entry) => cleanEnvValue(env[entry.envKey]).length > 0,
+    );
+}
+
 function checkMultiWriterTopologyImplementationScope(
   env: NodeJS.ProcessEnv,
   checkedAt: string,
@@ -597,6 +636,43 @@ function checkMultiWriterRuntimeReleaseEnablementApproval(
   };
 }
 
+function checkMultiWriterRuntimeSupportPresenceAssertion(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+): SubsystemHealth {
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase();
+  const hasMultiWriterIntent = MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+  if (!hasMultiWriterIntent) {
+    return {
+      name: "multiWriterRuntimeSupportPresenceAssertion",
+      status: "disabled",
+      detail: "Phase 60 runtime support presence assertion is not required without multi-writer, distributed, or active-active intent; runtimeSupported=false",
+      checkedAt,
+    };
+  }
+
+  const phase59Complete = phase59ReleaseEnablementApprovalComplete(env);
+  const missingAssertionEvidence = MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE
+    .filter((entry) => cleanEnvValue(env[entry.envKey]).length === 0)
+    .map((entry) => entry.label);
+
+  let detail: string;
+  if (!phase59Complete) {
+    detail = `Phase 60 runtime support presence assertion is blocked for ${topology} intent until Phase 59 release-enable approval is complete; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  } else if (missingAssertionEvidence.length > 0) {
+    detail = `Phase 60 runtime support presence assertion is blocked for ${topology} intent; missing ${missingAssertionEvidence.join(", ")}; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  } else {
+    detail = `Phase 60 runtime support presence assertion evidence is complete for ${topology} intent and visible for support audit; multi-writer runtime support and release remain blocked in this repo; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  }
+
+  return {
+    name: "multiWriterRuntimeSupportPresenceAssertion",
+    status: "degraded",
+    detail,
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -626,6 +702,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkMultiWriterTopologyImplementationScope(env, checkedAt),
     checkMultiWriterRuntimeImplementationValidation(env, checkedAt),
     checkMultiWriterRuntimeReleaseEnablementApproval(env, checkedAt),
+    checkMultiWriterRuntimeSupportPresenceAssertion(env, checkedAt),
   ];
 
   return {
@@ -655,6 +732,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkMultiWriterTopologyImplementationScope(env, checkedAt),
     checkMultiWriterRuntimeImplementationValidation(env, checkedAt),
     checkMultiWriterRuntimeReleaseEnablementApproval(env, checkedAt),
+    checkMultiWriterRuntimeSupportPresenceAssertion(env, checkedAt),
   ];
 
   return {

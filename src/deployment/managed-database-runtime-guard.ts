@@ -55,6 +55,12 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -223,6 +229,25 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase60?: {
+    multiWriterTopologyRequested: boolean;
+    runtimeReleaseEnablementApprovalGatePassed: boolean;
+    runtimeSupportImplementationPresentConfigured: boolean;
+    runtimeSupportExplicitSupportStatementConfigured: boolean;
+    runtimeSupportCompatibilityMatrixConfigured: boolean;
+    runtimeSupportCutoverEvidenceConfigured: boolean;
+    runtimeSupportReleaseAutomationApprovalConfigured: boolean;
+    runtimeSupportOwnerAcceptanceConfigured: boolean;
+    runtimeSupportPresenceAssertionGatePassed: boolean;
+    runtimeSupport: false;
+    runtimeSupported: false;
+    multiWriterSupported: false;
+    runtimeImplementationBlocked: true;
+    runtimeSupportBlocked: true;
+    releaseAllowed: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -290,6 +315,12 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF",
   "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN",
   "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -772,6 +803,66 @@ function phase59MultiWriterRuntimeReleaseEnablementApprovalGate(
   };
 }
 
+function phase60MultiWriterRuntimeSupportPresenceAssertionGate(
+  env: ManagedDatabaseRuntimeGuardEnv,
+  hasMultiWriterIntent: boolean,
+  runtimeReleaseEnablementApprovalGatePassed: boolean,
+) {
+  const runtimeSupportImplementationPresentConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT,
+  );
+  const runtimeSupportExplicitSupportStatementConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT,
+  );
+  const runtimeSupportCompatibilityMatrixConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX,
+  );
+  const runtimeSupportCutoverEvidenceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE,
+  );
+  const runtimeSupportReleaseAutomationApprovalConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL,
+  );
+  const runtimeSupportOwnerAcceptanceConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE,
+  );
+  const runtimeSupportPresenceAssertionGatePassed =
+    !hasMultiWriterIntent ||
+    (runtimeReleaseEnablementApprovalGatePassed &&
+      runtimeSupportImplementationPresentConfigured &&
+      runtimeSupportExplicitSupportStatementConfigured &&
+      runtimeSupportCompatibilityMatrixConfigured &&
+      runtimeSupportCutoverEvidenceConfigured &&
+      runtimeSupportReleaseAutomationApprovalConfigured &&
+      runtimeSupportOwnerAcceptanceConfigured);
+  const strictBlocker = hasMultiWriterIntent;
+  const summary = hasMultiWriterIntent
+    ? runtimeSupportPresenceAssertionGatePassed
+      ? "Phase 60 multi-writer runtime support presence assertion evidence is configured; runtime support and release remain blocked."
+      : "Phase 60 requires complete Phase 59 release-enable approval plus runtime support implementation presence, explicit support statement, compatibility matrix, cutover evidence, release automation approval, and owner acceptance before runtime support presence assertion evidence can be recorded."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 60.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    runtimeReleaseEnablementApprovalGatePassed,
+    runtimeSupportImplementationPresentConfigured,
+    runtimeSupportExplicitSupportStatementConfigured,
+    runtimeSupportCompatibilityMatrixConfigured,
+    runtimeSupportCutoverEvidenceConfigured,
+    runtimeSupportReleaseAutomationApprovalConfigured,
+    runtimeSupportOwnerAcceptanceConfigured,
+    runtimeSupportPresenceAssertionGatePassed,
+    runtimeSupport: false as const,
+    runtimeSupported: false as const,
+    multiWriterSupported: false as const,
+    runtimeImplementationBlocked: true as const,
+    runtimeSupportBlocked: true as const,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -800,6 +891,7 @@ function buildNextSteps(
   phase57: ReturnType<typeof phase57MultiWriterImplementationScopeGate>,
   phase58: ReturnType<typeof phase58MultiWriterRuntimeImplementationValidationGate>,
   phase59: ReturnType<typeof phase59MultiWriterRuntimeReleaseEnablementApprovalGate>,
+  phase60: ReturnType<typeof phase60MultiWriterRuntimeSupportPresenceAssertionGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -962,6 +1054,32 @@ function buildNextSteps(
         steps.add("Keep multi-writer runtime support and release disabled; Phase 59 records release-enable approval evidence only.");
       }
     }
+    if (check.id === "phase60-multi-writer-runtime-support-presence-assertion") {
+      if (!phase59.runtimeReleaseEnablementApprovalGatePassed) {
+        steps.add("Complete Phase 59 multi-writer runtime release-enable approval before recording runtime support presence assertion evidence.");
+      }
+      if (!phase60.runtimeSupportImplementationPresentConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT with the Phase 60 runtime support implementation presence evidence.");
+      }
+      if (!phase60.runtimeSupportExplicitSupportStatementConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT with the explicit runtime support statement evidence.");
+      }
+      if (!phase60.runtimeSupportCompatibilityMatrixConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX with the runtime support compatibility matrix evidence.");
+      }
+      if (!phase60.runtimeSupportCutoverEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE with the runtime support cutover evidence.");
+      }
+      if (!phase60.runtimeSupportReleaseAutomationApprovalConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL with release automation approval evidence.");
+      }
+      if (!phase60.runtimeSupportOwnerAcceptanceConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE with runtime support owner acceptance evidence.");
+      }
+      if (phase60.runtimeSupportPresenceAssertionGatePassed) {
+        steps.add("Keep multi-writer runtime support and release disabled; Phase 60 records runtime support presence assertion evidence only.");
+      }
+    }
   }
 
   if (bypassEnabled) {
@@ -1015,6 +1133,11 @@ export function assessManagedDatabaseRuntimeGuard(
     env,
     hasMultiWriterIntent,
     phase58.runtimeImplementationValidationGatePassed,
+  );
+  const phase60 = phase60MultiWriterRuntimeSupportPresenceAssertionGate(
+    env,
+    hasMultiWriterIntent,
+    phase59.runtimeReleaseEnablementApprovalGatePassed,
   );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -1112,6 +1235,13 @@ export function assessManagedDatabaseRuntimeGuard(
     phase59.summary,
   );
 
+  pushCheck(
+    checks,
+    "phase60-multi-writer-runtime-support-presence-assertion",
+    phase60.strictBlocker ? "fail" : "pass",
+    phase60.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -1148,6 +1278,7 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(phase57.summary);
     warnings.push(phase58.summary);
     warnings.push(phase59.summary);
+    warnings.push(phase60.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -1205,6 +1336,7 @@ export function assessManagedDatabaseRuntimeGuard(
       phase57,
       phase58,
       phase59,
+      phase60,
     ),
     observed: {
       nodeEnv,
@@ -1228,6 +1360,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase57,
     phase58,
     phase59,
+    phase60,
   };
 }
 

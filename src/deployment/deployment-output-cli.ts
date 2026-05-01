@@ -16,8 +16,11 @@ const SECRET_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 const PHASE58_REPORT_KEY_PATTERN = /^phase58/i;
 const PHASE59_REPORT_KEY_PATTERN = /^phase59/i;
+const PHASE60_REPORT_KEY_PATTERN = /^phase60/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
+const PHASE60_URL_REDACTION_KEY_PATTERN =
+  /(implementation|statement|matrix|evidence|cutover|approval|acceptance|support)/i;
 
 function clean(value: string | undefined): string {
   return (value ?? "").trim();
@@ -72,6 +75,7 @@ function redactValue(
   redactPhaseUrl = false,
   inPhaseUrlRedactionReport = false,
   inPhase59Report = false,
+  inPhase60Report = false,
 ): unknown {
   if (typeof value === "string") {
     if (!value) return value;
@@ -81,7 +85,7 @@ function redactValue(
   }
   if (Array.isArray(value)) {
     return value.map((entry) =>
-      redactValue(entry, force, redactPhaseUrl, inPhaseUrlRedactionReport, inPhase59Report)
+      redactValue(entry, force, redactPhaseUrl, inPhaseUrlRedactionReport, inPhase59Report, inPhase60Report)
     );
   }
   if (value && typeof value === "object") {
@@ -89,11 +93,16 @@ function redactValue(
     for (const [key, entry] of Object.entries(value)) {
       const sensitiveKey = SENSITIVE_KEY_PATTERN.test(key);
       const nestedInPhaseUrlRedactionReport =
-        inPhaseUrlRedactionReport || PHASE58_REPORT_KEY_PATTERN.test(key) || PHASE59_REPORT_KEY_PATTERN.test(key);
+        inPhaseUrlRedactionReport ||
+        PHASE58_REPORT_KEY_PATTERN.test(key) ||
+        PHASE59_REPORT_KEY_PATTERN.test(key) ||
+        PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase60Report && PHASE60_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -103,6 +112,7 @@ function redactValue(
           nestedRedactPhaseUrl,
           nestedInPhaseUrlRedactionReport,
           nestedInPhase59Report,
+          nestedInPhase60Report,
         );
     }
     return redacted;
@@ -161,6 +171,16 @@ function blockMultiWriterRuntimeSupport(value: unknown): unknown {
         releaseAllowed: false,
       };
     } else if (PHASE59_REPORT_KEY_PATTERN.test(key) && isReport(entry)) {
+      blocked[key] = {
+        ...(blockMultiWriterRuntimeSupport(entry) as DeploymentCliReport),
+        runtimeSupport: false,
+        runtimeSupported: false,
+        multiWriterSupported: false,
+        runtimeImplementationBlocked: true,
+        runtimeSupportBlocked: true,
+        releaseAllowed: false,
+      };
+    } else if (PHASE60_REPORT_KEY_PATTERN.test(key) && isReport(entry)) {
       blocked[key] = {
         ...(blockMultiWriterRuntimeSupport(entry) as DeploymentCliReport),
         runtimeSupport: false,
@@ -471,6 +491,11 @@ function phase59EnvValue(env: NodeJS.ProcessEnv, key: string): string | undefine
   return value ? value : undefined;
 }
 
+function phase60EnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = clean(env[key]);
+  return value ? value : undefined;
+}
+
 function withPhase59Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
     return report;
@@ -580,13 +605,126 @@ function withPhase59Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function withPhase60Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
+    return report;
+  }
+
+  const nestedPhase60 = firstReportAt(report, [
+    ["phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["phase60MultiWriterRuntimeSupportPresenceAssertionReport"],
+    ["phase60MultiWriterRuntimeSupportGate"],
+    ["phase60MultiWriterRuntimeSupportReport"],
+    ["managedDatabase", "phase60"],
+    ["managedDatabase", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["managedDatabaseTopology", "phase60"],
+    ["managedDatabaseTopology", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["managedDatabaseTopology", "managedDatabase", "phase60"],
+    ["managedDatabaseRuntimeGuard", "phase60"],
+    ["managedDatabaseRuntimeGuard", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["runtimeGuard", "phase60"],
+    ["runtimeGuard", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["releaseReadiness", "phase60"],
+    ["releaseReadiness", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["releaseReadiness", "managedDatabaseRuntimeGuard", "phase60"],
+    ["releaseEvidence", "phase60"],
+    ["releaseEvidence", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["evidence", "phase60"],
+    ["evidence", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+    ["asyncStoreBoundary", "phase60"],
+    ["asyncStoreBoundary", "phase60MultiWriterRuntimeSupportPresenceAssertionGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE60_REPORT_KEY_PATTERN.test(key));
+  const existingPhase60 = reportAt(report, ["phase60"]) ?? nestedPhase60 ?? {};
+
+  const runtimeSupportImplementationPresent = existingPhase60.runtimeSupportImplementationPresent ??
+    existingPhase60.implementationPresent ??
+    phase60EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT");
+  const runtimeSupportExplicitSupportStatement = existingPhase60.runtimeSupportExplicitSupportStatement ??
+    existingPhase60.explicitSupportStatement ??
+    phase60EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT");
+  const runtimeSupportCompatibilityMatrix = existingPhase60.runtimeSupportCompatibilityMatrix ??
+    existingPhase60.compatibilityMatrix ??
+    phase60EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX");
+  const runtimeSupportCutoverEvidence = existingPhase60.runtimeSupportCutoverEvidence ??
+    existingPhase60.cutoverEvidence ??
+    phase60EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE");
+  const runtimeSupportReleaseAutomationApproval = existingPhase60.runtimeSupportReleaseAutomationApproval ??
+    existingPhase60.releaseAutomationApproval ??
+    phase60EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL");
+  const runtimeSupportOwnerAcceptance = existingPhase60.runtimeSupportOwnerAcceptance ??
+    existingPhase60.ownerAcceptance ??
+    phase60EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE");
+
+  const runtimeSupportImplementationPresentRecorded =
+    existingPhase60.runtimeSupportImplementationPresentRecorded ?? runtimeSupportImplementationPresent !== undefined;
+  const runtimeSupportExplicitSupportStatementRecorded =
+    existingPhase60.runtimeSupportExplicitSupportStatementRecorded ??
+    runtimeSupportExplicitSupportStatement !== undefined;
+  const runtimeSupportCompatibilityMatrixRecorded =
+    existingPhase60.runtimeSupportCompatibilityMatrixRecorded ?? runtimeSupportCompatibilityMatrix !== undefined;
+  const runtimeSupportCutoverEvidenceRecorded =
+    existingPhase60.runtimeSupportCutoverEvidenceRecorded ?? runtimeSupportCutoverEvidence !== undefined;
+  const runtimeSupportReleaseAutomationApprovalRecorded =
+    existingPhase60.runtimeSupportReleaseAutomationApprovalRecorded ??
+    runtimeSupportReleaseAutomationApproval !== undefined;
+  const runtimeSupportOwnerAcceptanceRecorded =
+    existingPhase60.runtimeSupportOwnerAcceptanceRecorded ?? runtimeSupportOwnerAcceptance !== undefined;
+  const runtimeSupportPresenceAssertionComplete =
+    existingPhase60.runtimeSupportPresenceAssertionComplete ??
+    existingPhase60.runtimeSupportPresenceAssertionGatePassed ??
+    (
+      runtimeSupportImplementationPresentRecorded === true &&
+      runtimeSupportExplicitSupportStatementRecorded === true &&
+      runtimeSupportCompatibilityMatrixRecorded === true &&
+      runtimeSupportCutoverEvidenceRecorded === true &&
+      runtimeSupportReleaseAutomationApprovalRecorded === true &&
+      runtimeSupportOwnerAcceptanceRecorded === true
+    );
+
+  return blockMultiWriterRuntimeSupport({
+    ...report,
+    phase60: {
+      ...existingPhase60,
+      phase: existingPhase60.phase ?? "60",
+      required: existingPhase60.required ?? true,
+      multiWriterTopologyRequested: existingPhase60.multiWriterTopologyRequested ?? true,
+      runtimeSupportImplementationPresent,
+      runtimeSupportExplicitSupportStatement,
+      runtimeSupportCompatibilityMatrix,
+      runtimeSupportCutoverEvidence,
+      runtimeSupportReleaseAutomationApproval,
+      runtimeSupportOwnerAcceptance,
+      runtimeSupportImplementationPresentRecorded,
+      runtimeSupportExplicitSupportStatementRecorded,
+      runtimeSupportCompatibilityMatrixRecorded,
+      runtimeSupportCutoverEvidenceRecorded,
+      runtimeSupportReleaseAutomationApprovalRecorded,
+      runtimeSupportOwnerAcceptanceRecorded,
+      runtimeSupportPresenceAssertionComplete,
+      runtimeSupportPresenceAssertionGatePassed: runtimeSupportPresenceAssertionComplete,
+      runtimeSupport: false,
+      runtimeSupported: false,
+      multiWriterSupported: false,
+      runtimeImplementationBlocked: true,
+      runtimeSupportBlocked: true,
+      releaseAllowed: false,
+      strictBlocker: existingPhase60.strictBlocker ?? runtimeSupportPresenceAssertionComplete !== true,
+      summary: existingPhase60.summary ??
+        "Phase 60 records multi-writer runtime-support presence assertion evidence; runtime support and release approval remain blocked in CLI output.",
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
     redactValue(
-      withPhase59Status(
-        withPhase58Status(
-          withPhase57Status(
-            withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+      withPhase60Status(
+        withPhase59Status(
+          withPhase58Status(
+            withPhase57Status(
+              withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+              env,
+            ),
             env,
           ),
           env,

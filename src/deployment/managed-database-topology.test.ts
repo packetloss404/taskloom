@@ -77,6 +77,15 @@ const distributedTopologyPhase59Env = {
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "REL-59",
 } as const;
 
+const distributedTopologyPhase60Env = {
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "docs/phase-60/implementation-present.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT: "docs/phase-60/support-statement.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "docs/phase-60/compatibility-matrix.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "docs/phase-60/cutover-evidence.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL: "REL-AUTO-60",
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "database-platform",
+} as const;
+
 test("local JSON reports current supported local mode", () => {
   const report = assessManagedDatabaseTopology({ env: {} });
 
@@ -844,6 +853,121 @@ test("distributed topology with Phase 59 release-enable approval evidence still 
   assert.ok(
     report.nextSteps.some((step) =>
       step.includes("Phase 59 records release-enable approval evidence only"),
+    ),
+  );
+});
+
+test("distributed topology with Phase 59 complete requires Phase 60 runtime support presence assertion evidence", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      ...distributedTopologyPhase56BundledEnv,
+      ...distributedTopologyPhase57Env,
+      ...distributedTopologyPhase58Env,
+      ...distributedTopologyPhase59Env,
+    },
+  });
+  const implementationPresent = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT",
+  );
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.phase59?.runtimeReleaseEnablementApprovalGatePassed, true);
+  assert.equal(report.managedDatabase.phase60?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeReleaseEnablementApprovalGatePassed, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportImplementationPresentConfigured, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportExplicitSupportStatementConfigured, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportCompatibilityMatrixConfigured, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportCutoverEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportReleaseAutomationApprovalConfigured, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportOwnerAcceptanceConfigured, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportPresenceAssertionGatePassed, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupported, false);
+  assert.equal(report.managedDatabase.phase60?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabase.phase60?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase60?.strictBlocker, true);
+  assert.equal(implementationPresent.configured, false);
+  assert.equal(implementationPresent.value, null);
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase60-multi-writer-runtime-support-presence-assertion" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 60 requires complete Phase 59")));
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT"),
+    ),
+  );
+});
+
+test("distributed topology with Phase 60 runtime support presence assertion evidence still remains blocked", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      ...distributedTopologyPhase56BundledEnv,
+      ...distributedTopologyPhase57Env,
+      ...distributedTopologyPhase58Env,
+      ...distributedTopologyPhase59Env,
+      ...distributedTopologyPhase60Env,
+    },
+  });
+  const supportStatement = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT",
+  );
+  const ownerAcceptance = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+  );
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.phase59?.runtimeReleaseEnablementApprovalGatePassed, true);
+  assert.equal(report.managedDatabase.phase60?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeReleaseEnablementApprovalGatePassed, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportImplementationPresentConfigured, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportExplicitSupportStatementConfigured, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportCompatibilityMatrixConfigured, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportCutoverEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportReleaseAutomationApprovalConfigured, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportOwnerAcceptanceConfigured, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupported, false);
+  assert.equal(report.managedDatabase.phase60?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabase.phase60?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase60?.strictBlocker, true);
+  assert.equal(supportStatement.configured, true);
+  assert.equal(supportStatement.value, "docs/phase-60/support-statement.md");
+  assert.equal(supportStatement.redacted, false);
+  assert.equal(ownerAcceptance.configured, true);
+  assert.equal(ownerAcceptance.value, "database-platform");
+  assert.equal(ownerAcceptance.redacted, false);
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase60-multi-writer-runtime-support-presence-assertion" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 60")));
+  assert.ok(report.warnings.some((warning) => warning.includes("Phase 60")));
+  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("Phase 60 records runtime support presence assertion evidence only"),
     ),
   );
 });

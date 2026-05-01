@@ -56,6 +56,12 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -115,6 +121,7 @@ export interface AsyncStoreBoundaryReport {
   phase57MultiWriterImplementationScopeGate?: Phase57MultiWriterImplementationScopeGateReport;
   phase58MultiWriterRuntimeImplementationValidationGate?: Phase58MultiWriterRuntimeImplementationValidationGateReport;
   phase59MultiWriterRuntimeEnablementApprovalGate?: Phase59MultiWriterRuntimeEnablementApprovalGateReport;
+  phase60MultiWriterRuntimeSupportPresenceAssertionGate?: Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -248,6 +255,31 @@ export interface Phase59MultiWriterRuntimeEnablementApprovalGateReport {
   releaseTicketEvidenceRequired: boolean;
   releaseTicketEvidenceAttached: boolean;
   runtimeEnablementApprovalComplete: boolean;
+  runtimeSupportBlocked: boolean;
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
+export interface Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport {
+  phase: "60";
+  required: boolean;
+  runtimeEnablementApprovalRequired: boolean;
+  runtimeEnablementApprovalComplete: boolean;
+  implementationPresentEvidenceRequired: boolean;
+  implementationPresentEvidenceAttached: boolean;
+  explicitSupportStatementRequired: boolean;
+  explicitSupportStatementAttached: boolean;
+  compatibilityMatrixRequired: boolean;
+  compatibilityMatrixAttached: boolean;
+  cutoverEvidenceRequired: boolean;
+  cutoverEvidenceAttached: boolean;
+  releaseAutomationApprovalRequired: boolean;
+  releaseAutomationApprovalAttached: boolean;
+  ownerAcceptanceRequired: boolean;
+  ownerAcceptanceAttached: boolean;
+  runtimeSupportPresenceAssertionComplete: boolean;
   runtimeSupportBlocked: boolean;
   releaseAllowed: boolean;
   summary: string;
@@ -1181,6 +1213,136 @@ function buildPhase59MultiWriterRuntimeEnablementApprovalGate(
   };
 }
 
+function buildPhase60MultiWriterRuntimeSupportPresenceAssertionGate(
+  multiWriterIntent: boolean,
+  phase59Gate: Phase59MultiWriterRuntimeEnablementApprovalGateReport,
+  env: ReleaseReadinessEnv,
+): Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport {
+  const implementationPresentEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT).length > 0;
+  const explicitSupportStatementAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT).length > 0;
+  const compatibilityMatrixAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX).length > 0;
+  const cutoverEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE).length > 0;
+  const releaseAutomationApprovalAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL).length > 0;
+  const ownerAcceptanceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE).length > 0;
+  const runtimeSupportPresenceAssertionComplete =
+    multiWriterIntent &&
+    phase59Gate.runtimeEnablementApprovalComplete &&
+    implementationPresentEvidenceAttached &&
+    explicitSupportStatementAttached &&
+    compatibilityMatrixAttached &&
+    cutoverEvidenceAttached &&
+    releaseAutomationApprovalAttached &&
+    ownerAcceptanceAttached;
+
+  if (!multiWriterIntent) {
+    return {
+      phase: "60",
+      required: false,
+      runtimeEnablementApprovalRequired: false,
+      runtimeEnablementApprovalComplete: phase59Gate.runtimeEnablementApprovalComplete,
+      implementationPresentEvidenceRequired: false,
+      implementationPresentEvidenceAttached,
+      explicitSupportStatementRequired: false,
+      explicitSupportStatementAttached,
+      compatibilityMatrixRequired: false,
+      compatibilityMatrixAttached,
+      cutoverEvidenceRequired: false,
+      cutoverEvidenceAttached,
+      releaseAutomationApprovalRequired: false,
+      releaseAutomationApprovalAttached,
+      ownerAcceptanceRequired: false,
+      ownerAcceptanceAttached,
+      runtimeSupportPresenceAssertionComplete: false,
+      runtimeSupportBlocked: false,
+      releaseAllowed: true,
+      summary: "Phase 60 multi-writer runtime support presence assertion gate is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 60 runtime support presence assertion evidence ready before any future multi-writer support assertion claim."],
+    };
+  }
+
+  return {
+    phase: "60",
+    required: true,
+    runtimeEnablementApprovalRequired: true,
+    runtimeEnablementApprovalComplete: phase59Gate.runtimeEnablementApprovalComplete,
+    implementationPresentEvidenceRequired: true,
+    implementationPresentEvidenceAttached,
+    explicitSupportStatementRequired: true,
+    explicitSupportStatementAttached,
+    compatibilityMatrixRequired: true,
+    compatibilityMatrixAttached,
+    cutoverEvidenceRequired: true,
+    cutoverEvidenceAttached,
+    releaseAutomationApprovalRequired: true,
+    releaseAutomationApprovalAttached,
+    ownerAcceptanceRequired: true,
+    ownerAcceptanceAttached,
+    runtimeSupportPresenceAssertionComplete,
+    runtimeSupportBlocked: true,
+    releaseAllowed: false,
+    summary: runtimeSupportPresenceAssertionComplete
+      ? "Phase 60 multi-writer runtime support presence assertion evidence is attached, but multi-writer runtime support remains blocked; this phase records support presence assertion evidence only."
+      : phase59Gate.runtimeEnablementApprovalComplete
+        ? "Phase 60 multi-writer runtime support presence assertion evidence is required after Phase 59 release-enable approval evidence."
+        : "Phase 60 multi-writer runtime support presence assertion requires Phase 59 release-enable approval completion first.",
+    blockers: [
+      ...(!phase59Gate.runtimeEnablementApprovalComplete
+        ? ["Phase 60 multi-writer runtime support presence assertion requires complete Phase 59 release-enable approval evidence first."]
+        : []),
+      ...(!implementationPresentEvidenceAttached
+        ? ["Phase 60 multi-writer runtime support implementation-present evidence is required before recording support presence assertion evidence."]
+        : []),
+      ...(!explicitSupportStatementAttached
+        ? ["Phase 60 multi-writer explicit runtime support statement evidence is required before recording support presence assertion evidence."]
+        : []),
+      ...(!compatibilityMatrixAttached
+        ? ["Phase 60 multi-writer runtime support compatibility matrix evidence is required before recording support presence assertion evidence."]
+        : []),
+      ...(!cutoverEvidenceAttached
+        ? ["Phase 60 multi-writer runtime support cutover evidence is required before recording support presence assertion evidence."]
+        : []),
+      ...(!releaseAutomationApprovalAttached
+        ? ["Phase 60 multi-writer runtime support release automation approval evidence is required before recording support presence assertion evidence."]
+        : []),
+      ...(!ownerAcceptanceAttached
+        ? ["Phase 60 multi-writer runtime support owner acceptance evidence is required before recording support presence assertion evidence."]
+        : []),
+      "Phase 60 multi-writer runtime support remains blocked; support presence assertion evidence does not permit distributed, active-active, or multi-writer release.",
+    ],
+    nextSteps: [
+      ...(!phase59Gate.runtimeEnablementApprovalComplete
+        ? ["Complete Phase 59 multi-writer release-enable approval evidence before treating Phase 60 runtime support presence assertion evidence as complete."]
+        : []),
+      ...(!implementationPresentEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT before recording multi-writer runtime support presence assertion evidence."]
+        : []),
+      ...(!explicitSupportStatementAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT before recording multi-writer runtime support presence assertion evidence."]
+        : []),
+      ...(!compatibilityMatrixAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX before recording multi-writer runtime support presence assertion evidence."]
+        : []),
+      ...(!cutoverEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE before recording multi-writer runtime support presence assertion evidence."]
+        : []),
+      ...(!releaseAutomationApprovalAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL before recording multi-writer runtime support presence assertion evidence."]
+        : []),
+      ...(!ownerAcceptanceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE before recording multi-writer runtime support presence assertion evidence."]
+        : []),
+      "Keep multi-writer runtime release blocked after Phase 60 support presence assertion evidence; this phase records assertion evidence only and does not enable distributed, active-active, or multi-writer runtime support.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -1347,6 +1509,12 @@ export function buildAsyncStoreBoundaryReport(
       phase58MultiWriterRuntimeImplementationValidationGate,
       env,
     );
+  const phase60MultiWriterRuntimeSupportPresenceAssertionGate =
+    buildPhase60MultiWriterRuntimeSupportPresenceAssertionGate(
+      multiWriterIntent,
+      phase59MultiWriterRuntimeEnablementApprovalGate,
+      env,
+    );
   const unsupportedStore =
     managedDatabaseTopology.classification === "unsupported-store" ||
     managedDatabaseRuntimeGuard.classification === "unsupported-store" ||
@@ -1366,6 +1534,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase57MultiWriterImplementationScopeGate.blockers,
     ...phase58MultiWriterRuntimeImplementationValidationGate.blockers,
     ...phase59MultiWriterRuntimeEnablementApprovalGate.blockers,
+    ...phase60MultiWriterRuntimeSupportPresenceAssertionGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -1382,6 +1551,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase57MultiWriterImplementationScopeGate.nextSteps,
     ...phase58MultiWriterRuntimeImplementationValidationGate.nextSteps,
     ...phase59MultiWriterRuntimeEnablementApprovalGate.nextSteps,
+    ...phase60MultiWriterRuntimeSupportPresenceAssertionGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -1421,7 +1591,9 @@ export function buildAsyncStoreBoundaryReport(
     nextSteps.add(`Finish Phase 51 runtime call-site migration for: ${phase51Capability.remainingSyncCallSiteGroups.join(", ")}.`);
   }
   if (multiWriterIntent) {
-    if (phase59MultiWriterRuntimeEnablementApprovalGate.runtimeEnablementApprovalComplete) {
+    if (phase60MultiWriterRuntimeSupportPresenceAssertionGate.runtimeSupportPresenceAssertionComplete) {
+      nextSteps.add("Keep multi-writer database topology blocked even with Phase 60 runtime support presence assertion evidence attached; this phase records assertion evidence and does not enable runtime support.");
+    } else if (phase59MultiWriterRuntimeEnablementApprovalGate.runtimeEnablementApprovalComplete) {
       nextSteps.add("Keep multi-writer database topology blocked even with Phase 59 release-enable approval evidence attached; this phase records approval evidence and does not enable runtime support.");
     } else if (phase58MultiWriterRuntimeImplementationValidationGate.runtimeImplementationValidationComplete) {
       nextSteps.add("Keep multi-writer database topology blocked even with Phase 58 runtime implementation validation evidence attached; this phase validates evidence and does not enable runtime support.");
@@ -1448,6 +1620,7 @@ export function buildAsyncStoreBoundaryReport(
     phase57MultiWriterImplementationScopeGate.releaseAllowed &&
     phase58MultiWriterRuntimeImplementationValidationGate.releaseAllowed &&
     phase59MultiWriterRuntimeEnablementApprovalGate.releaseAllowed &&
+    phase60MultiWriterRuntimeSupportPresenceAssertionGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -1458,8 +1631,10 @@ export function buildAsyncStoreBoundaryReport(
   if (managedIntent && effectivePhase52ManagedStartupSupported) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
   } else if (multiWriterIntent) {
-    summary = phase59MultiWriterRuntimeEnablementApprovalGate.runtimeEnablementApprovalComplete
-      ? "Phase 49 async-store boundary exists as foundation and Phase 59 release-enable approval evidence is attached, but multi-writer database runtime remains blocked."
+    summary = phase60MultiWriterRuntimeSupportPresenceAssertionGate.runtimeSupportPresenceAssertionComplete
+      ? "Phase 49 async-store boundary exists as foundation and Phase 60 runtime support presence assertion evidence is attached, but multi-writer database runtime remains blocked."
+      : phase59MultiWriterRuntimeEnablementApprovalGate.runtimeEnablementApprovalComplete
+      ? "Phase 49 async-store boundary exists as foundation and Phase 59 release-enable approval evidence is attached, and Phase 60 runtime support presence assertion evidence is required, but multi-writer database runtime remains blocked."
       : phase58MultiWriterRuntimeImplementationValidationGate.runtimeImplementationValidationComplete
       ? "Phase 49 async-store boundary exists as foundation and Phase 58 runtime implementation validation evidence is attached, and Phase 59 release-enable approval evidence is required, but multi-writer database runtime remains blocked."
       : phase57MultiWriterImplementationScopeGate.implementationScopeComplete
@@ -1507,6 +1682,7 @@ export function buildAsyncStoreBoundaryReport(
     phase57MultiWriterImplementationScopeGate,
     phase58MultiWriterRuntimeImplementationValidationGate,
     phase59MultiWriterRuntimeEnablementApprovalGate,
+    phase60MultiWriterRuntimeSupportPresenceAssertionGate,
     classification,
     summary,
     blockers,

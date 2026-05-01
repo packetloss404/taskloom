@@ -59,6 +59,18 @@ function phase58CompleteMultiWriterEvidenceEnv() {
   };
 }
 
+function phase59CompleteMultiWriterEvidenceEnv() {
+  return {
+    ...phase58CompleteMultiWriterEvidenceEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "decision://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "release-owner",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-04T16:00:00Z/2026-05-04T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "monitoring-signoff://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "abort-plan://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "release-ticket://phase59",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -977,6 +989,78 @@ test("strict evidence records redacted Phase 59 approval attachments while runti
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER").value, "[redacted]");
   assert.ok(bundle.summary.includes("Phase 59 release-enable approval evidence is attached"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 59 release-enable approval evidence attached")));
+});
+
+test("strict evidence records missing Phase 60 support presence assertion evidence while runtime stays blocked", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase59CompleteMultiWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T02:30:00.000Z",
+    strict: true,
+  });
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeEnablementApprovalComplete, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportPresenceAssertionGateRequired, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeEnablementApprovalComplete, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterImplementationPresentEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterExplicitSupportStatementAttached, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterCompatibilityMatrixAttached, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterCutoverEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterReleaseAutomationApprovalAttached, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterOwnerAcceptanceAttached, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportPresenceAssertionComplete, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.releaseAllowed, false);
+  assert.ok(bundle.summary.includes("Phase 60 runtime support presence assertion evidence is required"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT")));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-60-multi-writer-runtime-support-implementation-present" && attachment.required));
+});
+
+test("strict evidence records redacted Phase 60 support presence assertion attachments while runtime stays blocked", () => {
+  const env = {
+    ...phase59CompleteMultiWriterEvidenceEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "implementation-present://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT: "https://support:secret@runtime.internal/phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "compatibility-matrix://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "cutover-evidence://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL: "release-automation://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "owner-acceptance://phase60",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T03:00:00.000Z",
+    strict: true,
+  });
+  const supportStatementAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-60-multi-writer-runtime-support-explicit-support-statement");
+  const ownerAcceptanceAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-60-multi-writer-runtime-support-owner-acceptance");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportPresenceAssertionGateRequired, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterImplementationPresentEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterExplicitSupportStatementAttached, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterCompatibilityMatrixAttached, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterCutoverEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterReleaseAutomationApprovalAttached, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterOwnerAcceptanceAttached, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportPresenceAssertionComplete, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase60MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase60MultiWriterRuntimeSupportPresenceAssertionGate?.releaseAllowed, false);
+  assert.equal(supportStatementAttachment?.configured, true);
+  assert.equal(supportStatementAttachment?.redacted, true);
+  assert.equal(supportStatementAttachment?.value, "[redacted]");
+  assert.equal(ownerAcceptanceAttachment?.configured, true);
+  assert.equal(ownerAcceptanceAttachment?.value, "owner-acceptance://phase60");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT").value, "[redacted]");
+  assert.ok(bundle.summary.includes("Phase 60 runtime support presence assertion evidence is attached"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 60 runtime support presence assertion evidence attached")));
 });
 
 test("release readiness managed reports are reused when present", () => {
