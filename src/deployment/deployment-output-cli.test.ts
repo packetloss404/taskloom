@@ -1004,3 +1004,186 @@ test("formatDeploymentCliJson preserves nested Phase 60 support-presence reports
   assert.doesNotMatch(output, /approvals\.example\.com/);
   assert.doesNotMatch(output, /phase60-assertion-secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 61 unsupported-claim evidence while blocking support claims", () => {
+  const output = formatDeploymentCliJson({
+    phase61EvidenceUrl: "https://evidence.example.com/phase61/unsupported-claims",
+    runtimeClaims: {
+      activeActiveSupport: true,
+      regionalSupport: true,
+      pitrSupport: true,
+      sqliteDistributedSupport: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+    TASKLOOM_PHASE61_ACTIVE_ACTIVE_CLAIM_EVIDENCE: "https://evidence.example.com/phase61/active-active",
+    TASKLOOM_PHASE61_REGIONAL_CLAIM_EVIDENCE: "regional-claim-reviewed",
+    TASKLOOM_PHASE61_PITR_CLAIM_EVIDENCE: "https://evidence.example.com/phase61/pitr",
+    TASKLOOM_PHASE61_SQLITE_DISTRIBUTED_CLAIM_EVIDENCE: "sqlite-distributed-claim-reviewed",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase61EvidenceUrl?: unknown;
+    runtimeClaims?: {
+      activeActiveSupport?: unknown;
+      regionalSupport?: unknown;
+      pitrSupport?: unknown;
+      sqliteDistributedSupport?: unknown;
+    };
+    phase61?: {
+      phase?: unknown;
+      activeActiveClaimEvidence?: unknown;
+      regionalClaimEvidence?: unknown;
+      pitrClaimEvidence?: unknown;
+      sqliteDistributedClaimEvidence?: unknown;
+      unsupportedRuntimeReleaseClaimsComplete?: unknown;
+      unsupportedRuntimeReleaseClaimsGatePassed?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      releaseSupported?: unknown;
+      multiWriterSupported?: unknown;
+      activeActiveSupport?: unknown;
+      activeActiveSupported?: unknown;
+      regionalSupport?: unknown;
+      regionalSupported?: unknown;
+      pitrSupport?: unknown;
+      pitrSupported?: unknown;
+      sqliteDistributedSupport?: unknown;
+      sqliteDistributedSupported?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase61EvidenceUrl, "[redacted]");
+  assert.equal(report.runtimeClaims?.activeActiveSupport, false);
+  assert.equal(report.runtimeClaims?.regionalSupport, false);
+  assert.equal(report.runtimeClaims?.pitrSupport, false);
+  assert.equal(report.runtimeClaims?.sqliteDistributedSupport, false);
+  assert.equal(report.phase61?.phase, "61");
+  assert.equal(report.phase61?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.regionalClaimEvidence, "regional-claim-reviewed");
+  assert.equal(report.phase61?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.sqliteDistributedClaimEvidence, "sqlite-distributed-claim-reviewed");
+  assert.equal(report.phase61?.unsupportedRuntimeReleaseClaimsComplete, true);
+  assert.equal(report.phase61?.unsupportedRuntimeReleaseClaimsGatePassed, true);
+  assert.equal(report.phase61?.runtimeSupport, false);
+  assert.equal(report.phase61?.runtimeSupported, false);
+  assert.equal(report.phase61?.releaseSupported, false);
+  assert.equal(report.phase61?.multiWriterSupported, false);
+  assert.equal(report.phase61?.activeActiveSupport, false);
+  assert.equal(report.phase61?.activeActiveSupported, false);
+  assert.equal(report.phase61?.regionalSupport, false);
+  assert.equal(report.phase61?.regionalSupported, false);
+  assert.equal(report.phase61?.pitrSupport, false);
+  assert.equal(report.phase61?.pitrSupported, false);
+  assert.equal(report.phase61?.sqliteDistributedSupport, false);
+  assert.equal(report.phase61?.sqliteDistributedSupported, false);
+  assert.equal(report.phase61?.releaseAllowed, false);
+  assert.equal(report.phase61?.strictBlocker, false);
+  assert.match(String(report.phase61?.summary), /Phase 61/);
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 61 reports while blocking unsupported claims", () => {
+  const output = formatDeploymentCliJson({
+    releaseEvidence: {
+      phase61UnsupportedRuntimeReleaseClaimsGate: {
+        activeActiveClaimEvidence: "https://evidence.example.com/phase61/nested-active-active",
+        regionalClaimEvidence: "regional-reviewed",
+        pitrClaimEvidence: "https://evidence.example.com/phase61/nested-pitr",
+        sqliteDistributedClaimEvidence: "sqlite-reviewed",
+        unsupportedRuntimeReleaseClaimsComplete: true,
+        runtimeSupport: true,
+        runtimeSupported: true,
+        releaseSupported: true,
+        multiWriterSupported: true,
+        activeActiveSupport: true,
+        activeActiveSupported: true,
+        regionalSupport: true,
+        regionalSupported: true,
+        pitrSupport: true,
+        pitrSupported: true,
+        sqliteDistributedSupport: true,
+        sqliteDistributedSupported: true,
+        releaseAllowed: true,
+        strictBlocker: false,
+        claimSecret: "phase61-claim-secret",
+        summary: "Phase 61 unsupported runtime/release claim evidence is recorded.",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "active-active" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    releaseEvidence?: {
+      phase61UnsupportedRuntimeReleaseClaimsGate?: {
+        activeActiveClaimEvidence?: unknown;
+        pitrClaimEvidence?: unknown;
+        runtimeSupport?: unknown;
+        activeActiveSupport?: unknown;
+        regionalSupport?: unknown;
+        pitrSupport?: unknown;
+        sqliteDistributedSupport?: unknown;
+        releaseAllowed?: unknown;
+        claimSecret?: unknown;
+      };
+    };
+    phase61?: {
+      phase?: unknown;
+      activeActiveClaimEvidence?: unknown;
+      regionalClaimEvidence?: unknown;
+      pitrClaimEvidence?: unknown;
+      sqliteDistributedClaimEvidence?: unknown;
+      unsupportedRuntimeReleaseClaimsComplete?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      releaseSupported?: unknown;
+      multiWriterSupported?: unknown;
+      activeActiveSupport?: unknown;
+      activeActiveSupported?: unknown;
+      regionalSupport?: unknown;
+      regionalSupported?: unknown;
+      pitrSupport?: unknown;
+      pitrSupported?: unknown;
+      sqliteDistributedSupport?: unknown;
+      sqliteDistributedSupported?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      claimSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase61?.phase, "61");
+  assert.equal(report.phase61?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.regionalClaimEvidence, "regional-reviewed");
+  assert.equal(report.phase61?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.sqliteDistributedClaimEvidence, "sqlite-reviewed");
+  assert.equal(report.phase61?.unsupportedRuntimeReleaseClaimsComplete, true);
+  assert.equal(report.phase61?.runtimeSupport, false);
+  assert.equal(report.phase61?.runtimeSupported, false);
+  assert.equal(report.phase61?.releaseSupported, false);
+  assert.equal(report.phase61?.multiWriterSupported, false);
+  assert.equal(report.phase61?.activeActiveSupport, false);
+  assert.equal(report.phase61?.activeActiveSupported, false);
+  assert.equal(report.phase61?.regionalSupport, false);
+  assert.equal(report.phase61?.regionalSupported, false);
+  assert.equal(report.phase61?.pitrSupport, false);
+  assert.equal(report.phase61?.pitrSupported, false);
+  assert.equal(report.phase61?.sqliteDistributedSupport, false);
+  assert.equal(report.phase61?.sqliteDistributedSupported, false);
+  assert.equal(report.phase61?.releaseAllowed, false);
+  assert.equal(report.phase61?.strictBlocker, false);
+  assert.equal(report.phase61?.claimSecret, "[redacted]");
+  assert.equal(report.phase61?.summary, "Phase 61 unsupported runtime/release claim evidence is recorded.");
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.runtimeSupport, false);
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.activeActiveSupport, false);
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.regionalSupport, false);
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.pitrSupport, false);
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.sqliteDistributedSupport, false);
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.releaseAllowed, false);
+  assert.equal(report.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.claimSecret, "[redacted]");
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+  assert.doesNotMatch(output, /phase61-claim-secret/);
+});

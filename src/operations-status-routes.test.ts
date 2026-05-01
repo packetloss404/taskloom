@@ -157,6 +157,16 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
   assert.equal(multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
   assert.equal(multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+  assert.ok(
+    body.multiWriterRuntimeActivationControls &&
+      typeof body.multiWriterRuntimeActivationControls === "object",
+  );
+  const multiWriterRuntimeActivationControls =
+    body.multiWriterRuntimeActivationControls as Record<string, unknown>;
+  assert.equal(multiWriterRuntimeActivationControls.phase, "61");
+  assert.equal(multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
+  assert.equal(multiWriterRuntimeActivationControls.releaseAllowed, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);

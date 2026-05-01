@@ -3,6 +3,11 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { loadStore as defaultLoadStore, loadStoreAsync as defaultLoadStoreAsync } from "./taskloom-store.js";
 import { getSchedulerHeartbeat as defaultSchedulerHeartbeat, type SchedulerHeartbeat } from "./jobs/scheduler-heartbeat.js";
 import { redactedErrorMessage } from "./security/redaction.js";
+import { buildStorageTopologyReport as defaultBuildStorageTopologyReport } from "./deployment/storage-topology.js";
+import { buildManagedDatabaseTopologyReport as defaultBuildManagedDatabaseTopologyReport } from "./deployment/managed-database-topology.js";
+import { buildManagedDatabaseRuntimeGuardReport as defaultBuildManagedDatabaseRuntimeGuardReport } from "./deployment/managed-database-runtime-guard.js";
+import { buildReleaseReadinessReport as defaultBuildReleaseReadinessReport } from "./deployment/release-readiness.js";
+import { buildReleaseEvidenceBundle as defaultBuildReleaseEvidenceBundle } from "./deployment/release-evidence.js";
 
 export type SubsystemStatus = "ok" | "degraded" | "down" | "disabled";
 
@@ -27,6 +32,11 @@ export interface OperationsHealthDeps {
   now?: () => Date;
   fileExists?: (path: string) => boolean;
   schedulerStaleAfterMs?: number;
+  buildStorageTopologyReport?: (env: NodeJS.ProcessEnv) => unknown;
+  buildManagedDatabaseTopologyReport?: (env: NodeJS.ProcessEnv) => unknown;
+  buildManagedDatabaseRuntimeGuardReport?: (env: NodeJS.ProcessEnv) => unknown;
+  buildReleaseReadinessReport?: (env: NodeJS.ProcessEnv, deps?: OperationsHealthReleaseDeps) => unknown;
+  buildReleaseEvidenceBundle?: (env: NodeJS.ProcessEnv, deps?: OperationsHealthEvidenceDeps) => unknown;
 }
 
 export interface OperationsHealthAsyncDeps extends Omit<OperationsHealthDeps, "loadStore"> {
@@ -34,6 +44,24 @@ export interface OperationsHealthAsyncDeps extends Omit<OperationsHealthDeps, "l
 }
 
 const DEFAULT_SCHEDULER_STALE_AFTER_MS = 60_000;
+
+interface OperationsHealthReleaseDeps {
+  storageTopology: unknown;
+  managedDatabaseTopology: unknown;
+  managedDatabaseRuntimeGuard: unknown;
+}
+
+interface OperationsHealthEvidenceDeps extends OperationsHealthReleaseDeps {
+  releaseReadiness: unknown;
+}
+
+interface DeploymentReportSources {
+  managedDatabaseRuntimeGuard: unknown;
+  managedDatabaseTopology: unknown;
+  releaseReadiness: unknown;
+  releaseEvidence: unknown;
+}
+
 const MANAGED_POSTGRES_URL_HINT_KEYS = [
   "TASKLOOM_MANAGED_DATABASE_URL",
   "DATABASE_URL",
@@ -204,9 +232,100 @@ const MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE = [
     envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
   },
 ] as const;
+const MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS_EVIDENCE = [
+  {
+    key: "activationDecision",
+    label: "runtime activation decision",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+    reportKeys: ["activationDecision", "runtimeActivationDecision", "decision", "activationControlDecision"],
+  },
+  {
+    key: "activationOwner",
+    label: "runtime activation owner",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+    reportKeys: ["activationOwner", "runtimeActivationOwner", "owner", "activationControlOwner"],
+  },
+  {
+    key: "activationWindow",
+    label: "runtime activation window",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
+    reportKeys: ["activationWindow", "runtimeActivationWindow", "window", "activationControlWindow"],
+  },
+  {
+    key: "activationFlag",
+    label: "runtime activation flag",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
+    reportKeys: ["activationFlag", "runtimeActivationFlag", "featureFlag", "flag", "activationControlFlag"],
+  },
+  {
+    key: "releaseAutomationAssertion",
+    label: "runtime activation release automation assertion",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
+    reportKeys: [
+      "releaseAutomationAssertion",
+      "runtimeActivationReleaseAutomationAssertion",
+      "activationReleaseAutomationAssertion",
+      "automationAssertion",
+    ],
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function findNestedRecord(record: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> | null {
+  let current: unknown = record;
+  for (const key of keys) {
+    if (!isRecord(current)) return null;
+    current = current[key];
+  }
+  return isRecord(current) ? current : null;
+}
+
+function valueFromRecord(record: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = cleanEnvValue(record[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function booleanFromRecord(record: Record<string, unknown>, key: string): boolean | undefined {
+  return typeof record[key] === "boolean" ? record[key] : undefined;
+}
+
+function runtimeSupportPresenceAssertionRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase60"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupportPresenceAssertion"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupportPresenceAssertionGate"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupportPresence"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeSupport"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase60"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterRuntimeSupportPresenceAssertion"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase60"]) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeSupportPresenceAssertion"],
+    );
+}
+
+function runtimeActivationControlsRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase61"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivationControls"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivationControlsGate"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivation"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivationControlGate"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase61"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterRuntimeActivationControls"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase61"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeActivationControls"]);
 }
 
 function checkStore(loadStore: () => unknown, checkedAt: string): SubsystemHealth {
@@ -525,6 +644,57 @@ function phase59ReleaseEnablementApprovalComplete(env: NodeJS.ProcessEnv): boole
     );
 }
 
+function phase60RuntimeSupportPresenceAssertionComplete(
+  env: NodeJS.ProcessEnv,
+  deploymentReports: DeploymentReportSources,
+): boolean {
+  const envComplete = phase59ReleaseEnablementApprovalComplete(env) &&
+    MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE.every(
+      (entry) => cleanEnvValue(env[entry.envKey]).length > 0,
+    );
+  if (envComplete) return true;
+
+  for (const report of Object.values(deploymentReports)) {
+    const record = runtimeSupportPresenceAssertionRecord(report);
+    if (!record) continue;
+    const complete = booleanFromRecord(record, "runtimeSupportPresenceAssertionComplete") ??
+      booleanFromRecord(record, "supportPresenceAssertionComplete") ??
+      booleanFromRecord(record, "assertionComplete");
+    const status = cleanEnvValue(record.status).toLowerCase();
+    const assertionStatus = cleanEnvValue(record.assertionStatus).toLowerCase();
+    if (complete === true || status === "assertion-complete" || assertionStatus === "complete") return true;
+  }
+  return false;
+}
+
+function multiWriterIntentDetectedFromReports(deploymentReports: DeploymentReportSources): boolean {
+  for (const report of Object.values(deploymentReports)) {
+    const phase61 = runtimeActivationControlsRecord(report);
+    const phase60 = runtimeSupportPresenceAssertionRecord(report);
+    for (const record of [phase61, phase60]) {
+      if (!record) continue;
+      const explicit = booleanFromRecord(record, "multiWriterIntentDetected");
+      if (explicit === true) return true;
+      const topology = cleanEnvValue(record.topologyIntent).toLowerCase();
+      if (MULTI_WRITER_TOPOLOGY_HINTS.has(topology)) return true;
+    }
+  }
+  return false;
+}
+
+function topologyIntentFromReports(deploymentReports: DeploymentReportSources): string {
+  for (const report of Object.values(deploymentReports)) {
+    const phase61 = runtimeActivationControlsRecord(report);
+    const phase60 = runtimeSupportPresenceAssertionRecord(report);
+    for (const record of [phase61, phase60]) {
+      if (!record) continue;
+      const topology = cleanEnvValue(record.topologyIntent);
+      if (topology) return topology.toLowerCase();
+    }
+  }
+  return "";
+}
+
 function checkMultiWriterTopologyImplementationScope(
   env: NodeJS.ProcessEnv,
   checkedAt: string,
@@ -673,6 +843,56 @@ function checkMultiWriterRuntimeSupportPresenceAssertion(
   };
 }
 
+function checkMultiWriterRuntimeActivationControls(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+  deploymentReports: DeploymentReportSources,
+): SubsystemHealth {
+  const reportTopology = topologyIntentFromReports(deploymentReports);
+  const topology = cleanEnvValue(env.TASKLOOM_DATABASE_TOPOLOGY).toLowerCase() || reportTopology;
+  const hasMultiWriterIntent =
+    MULTI_WRITER_TOPOLOGY_HINTS.has(topology) || multiWriterIntentDetectedFromReports(deploymentReports);
+  if (!hasMultiWriterIntent) {
+    return {
+      name: "multiWriterRuntimeActivationControls",
+      status: "disabled",
+      detail: "Phase 61 runtime activation controls are not required without multi-writer, distributed, or active-active intent; runtimeSupported=false",
+      checkedAt,
+    };
+  }
+
+  const phase61Records = Object.values(deploymentReports)
+    .map((report) => runtimeActivationControlsRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  const missingActivationControls = MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS_EVIDENCE
+    .filter((entry) => {
+      if (cleanEnvValue(env[entry.envKey]).length > 0) return false;
+      return !phase61Records.some((record) => {
+        const direct = valueFromRecord(record, entry.reportKeys);
+        const nested = isRecord(record.evidence) ? valueFromRecord(record.evidence, entry.reportKeys) : "";
+        return Boolean(direct || nested);
+      });
+    })
+    .map((entry) => entry.label);
+  const phase60Complete = phase60RuntimeSupportPresenceAssertionComplete(env, deploymentReports);
+
+  let detail: string;
+  if (!phase60Complete) {
+    detail = `Phase 61 runtime activation controls are blocked for ${topology} intent until Phase 60 runtime support presence assertion is complete; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  } else if (missingActivationControls.length > 0) {
+    detail = `Phase 61 runtime activation controls are blocked for ${topology} intent; missing ${missingActivationControls.join(", ")}; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  } else {
+    detail = `Phase 61 runtime activation controls are complete for ${topology} intent and visible for activation audit; distributed, active-active, regional/PITR, and SQLite-distributed runtime support remain unsupported; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false`;
+  }
+
+  return {
+    name: "multiWriterRuntimeActivationControls",
+    status: "degraded",
+    detail,
+    checkedAt,
+  };
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -680,6 +900,38 @@ function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
     if (subsystem.status === "degraded") result = "degraded";
   }
   return result;
+}
+
+function buildDeploymentReportSources(env: NodeJS.ProcessEnv, deps: OperationsHealthDeps): DeploymentReportSources {
+  const buildStorageTopologyReport = deps.buildStorageTopologyReport ?? defaultBuildStorageTopologyReport;
+  const buildManagedDatabaseTopologyReport =
+    deps.buildManagedDatabaseTopologyReport ?? defaultBuildManagedDatabaseTopologyReport;
+  const buildManagedDatabaseRuntimeGuardReport =
+    deps.buildManagedDatabaseRuntimeGuardReport ?? defaultBuildManagedDatabaseRuntimeGuardReport;
+  const buildReleaseReadinessReport = deps.buildReleaseReadinessReport ?? defaultBuildReleaseReadinessReport;
+  const buildReleaseEvidenceBundle = deps.buildReleaseEvidenceBundle ?? defaultBuildReleaseEvidenceBundle;
+
+  const storageTopology = buildStorageTopologyReport(env);
+  const managedDatabaseTopology = buildManagedDatabaseTopologyReport(env);
+  const managedDatabaseRuntimeGuard = buildManagedDatabaseRuntimeGuardReport(env);
+  const releaseReadiness = buildReleaseReadinessReport(env, {
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+  } as never);
+  const releaseEvidence = buildReleaseEvidenceBundle(env, {
+    storageTopology,
+    managedDatabaseTopology,
+    managedDatabaseRuntimeGuard,
+    releaseReadiness,
+  } as never);
+
+  return {
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+  };
 }
 
 export function getOperationsHealth(deps: OperationsHealthDeps = {}): OperationsHealthReport {
@@ -690,6 +942,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
   const fileExists = deps.fileExists ?? existsSync;
   const staleAfterMs = deps.schedulerStaleAfterMs ?? DEFAULT_SCHEDULER_STALE_AFTER_MS;
   const checkedAt = now.toISOString();
+  const deploymentReports = buildDeploymentReportSources(env, deps);
 
   const subsystems: SubsystemHealth[] = [
     checkStore(loadStore, checkedAt),
@@ -703,6 +956,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkMultiWriterRuntimeImplementationValidation(env, checkedAt),
     checkMultiWriterRuntimeReleaseEnablementApproval(env, checkedAt),
     checkMultiWriterRuntimeSupportPresenceAssertion(env, checkedAt),
+    checkMultiWriterRuntimeActivationControls(env, checkedAt, deploymentReports),
   ];
 
   return {
@@ -720,6 +974,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
   const fileExists = deps.fileExists ?? existsSync;
   const staleAfterMs = deps.schedulerStaleAfterMs ?? DEFAULT_SCHEDULER_STALE_AFTER_MS;
   const checkedAt = now.toISOString();
+  const deploymentReports = buildDeploymentReportSources(env, deps);
 
   const subsystems: SubsystemHealth[] = [
     await checkStoreAsync(loadStore, checkedAt),
@@ -733,6 +988,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkMultiWriterRuntimeImplementationValidation(env, checkedAt),
     checkMultiWriterRuntimeReleaseEnablementApproval(env, checkedAt),
     checkMultiWriterRuntimeSupportPresenceAssertion(env, checkedAt),
+    checkMultiWriterRuntimeActivationControls(env, checkedAt, deploymentReports),
   ];
 
   return {

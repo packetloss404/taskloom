@@ -83,6 +83,7 @@ test("operations health route returns the report shape for an admin-equivalent o
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeImplementationValidation"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeReleaseEnablementApproval"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeSupportPresenceAssertion"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeActivationControls"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
@@ -142,6 +143,10 @@ test("operations health surfaces supported single-writer managed Postgres topolo
   assert.equal(supportPresenceAssertion.status, "disabled");
   assert.match(supportPresenceAssertion.detail, /Phase 60 runtime support presence assertion is not required/i);
   assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
+  const activationControls = findSubsystem(report, "multiWriterRuntimeActivationControls");
+  assert.equal(activationControls.status, "disabled");
+  assert.match(activationControls.detail, /Phase 61 runtime activation controls are not required/i);
+  assert.match(activationControls.detail, /runtimeSupported=false/);
   assert.equal(report.overall, "ok");
 });
 
@@ -219,6 +224,61 @@ test("operations health degrades for blocked multi-writer topology intent", () =
   assert.match(supportPresenceAssertion.detail, /runtimeImplementationBlocked=true/);
   assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
   assert.match(supportPresenceAssertion.detail, /releaseAllowed=false/);
+  const activationControls = findSubsystem(report, "multiWriterRuntimeActivationControls");
+  assert.equal(activationControls.status, "degraded");
+  assert.match(activationControls.detail, /Phase 61 runtime activation controls are blocked/i);
+  assert.match(activationControls.detail, /until Phase 60 runtime support presence assertion is complete/i);
+  assert.match(activationControls.detail, /runtimeImplementationBlocked=true/);
+  assert.match(activationControls.detail, /runtimeSupported=false/);
+  assert.match(activationControls.detail, /releaseAllowed=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("operations health reports Phase 61 activation controls complete from deployment reports but still blocked", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+    buildReleaseEvidenceBundle: () => ({
+      phase60: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        status: "assertion-complete",
+        assertionStatus: "complete",
+      },
+      phase61: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        activationDecision: "report-approved-for-activation-audit-only",
+        activationOwner: "report-activation-owner",
+        activationWindow: "2026-05-03T02:00:00Z/2026-05-03T04:00:00Z",
+        activationFlag: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER=false",
+        releaseAutomationAssertion: "artifacts/reports/phase61-release-automation-assertion.md",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }),
+  });
+
+  const activationControls = findSubsystem(report, "multiWriterRuntimeActivationControls");
+  assert.equal(activationControls.status, "degraded");
+  assert.match(activationControls.detail, /Phase 61 runtime activation controls are complete/i);
+  assert.match(activationControls.detail, /activation audit/i);
+  assert.match(activationControls.detail, /distributed, active-active, regional\/PITR, and SQLite-distributed runtime support remain unsupported/i);
+  assert.match(activationControls.detail, /runtimeImplementationBlocked=true/);
+  assert.match(activationControls.detail, /runtimeSupported=false/);
+  assert.match(activationControls.detail, /releaseAllowed=false/);
   assert.equal(report.overall, "degraded");
 });
 
@@ -611,5 +671,13 @@ test("operations health reports Phase 60 support presence assertion complete but
   assert.match(supportPresenceAssertion.detail, /runtimeImplementationBlocked=true/);
   assert.match(supportPresenceAssertion.detail, /runtimeSupported=false/);
   assert.match(supportPresenceAssertion.detail, /releaseAllowed=false/);
+  const activationControls = findSubsystem(report, "multiWriterRuntimeActivationControls");
+  assert.equal(activationControls.status, "degraded");
+  assert.match(activationControls.detail, /Phase 61 runtime activation controls are blocked/i);
+  assert.match(activationControls.detail, /runtime activation decision/i);
+  assert.match(activationControls.detail, /runtime activation release automation assertion/i);
+  assert.match(activationControls.detail, /runtimeImplementationBlocked=true/);
+  assert.match(activationControls.detail, /runtimeSupported=false/);
+  assert.match(activationControls.detail, /releaseAllowed=false/);
   assert.equal(report.overall, "degraded");
 });

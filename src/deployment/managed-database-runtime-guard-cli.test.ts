@@ -394,6 +394,92 @@ test("runManagedDatabaseRuntimeGuardCli preserves Phase 60 support-presence fiel
   assert.doesNotMatch(output[0] ?? "", /phase60-runtime-secret/);
 });
 
+test("runManagedDatabaseRuntimeGuardCli preserves Phase 61 unsupported-claim fields while blocking support claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseRuntimeGuardCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseRuntimeGuardReport: () => ({
+      allowed: false,
+      phase61UnsupportedRuntimeReleaseClaimsGate: {
+        activeActiveClaimEvidence: "https://evidence.example.com/phase61/runtime-active-active",
+        regionalClaimEvidence: "regional-reviewed",
+        pitrClaimEvidence: "https://evidence.example.com/phase61/runtime-pitr",
+        sqliteDistributedClaimEvidence: "sqlite-reviewed",
+        unsupportedRuntimeReleaseClaimsComplete: true,
+        activeActiveSupport: true,
+        regionalSupport: true,
+        pitrSupport: true,
+        sqliteDistributedSupport: true,
+        runtimeSupport: true,
+        releaseAllowed: true,
+        strictBlocker: false,
+        claimSecret: "phase61-runtime-secret",
+        summary: "Phase 61 runtime guard unsupported claim evidence is recorded.",
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase61UnsupportedRuntimeReleaseClaimsGate?: {
+      activeActiveClaimEvidence?: unknown;
+      pitrClaimEvidence?: unknown;
+      activeActiveSupport?: unknown;
+      regionalSupport?: unknown;
+      pitrSupport?: unknown;
+      sqliteDistributedSupport?: unknown;
+      runtimeSupport?: unknown;
+      releaseAllowed?: unknown;
+      claimSecret?: unknown;
+    };
+    phase61?: {
+      phase?: unknown;
+      activeActiveClaimEvidence?: unknown;
+      pitrClaimEvidence?: unknown;
+      unsupportedRuntimeReleaseClaimsComplete?: unknown;
+      activeActiveSupport?: unknown;
+      regionalSupport?: unknown;
+      pitrSupport?: unknown;
+      sqliteDistributedSupport?: unknown;
+      runtimeSupport?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      claimSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase61?.phase, "61");
+  assert.equal(report.phase61?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.unsupportedRuntimeReleaseClaimsComplete, true);
+  assert.equal(report.phase61?.activeActiveSupport, false);
+  assert.equal(report.phase61?.regionalSupport, false);
+  assert.equal(report.phase61?.pitrSupport, false);
+  assert.equal(report.phase61?.sqliteDistributedSupport, false);
+  assert.equal(report.phase61?.runtimeSupport, false);
+  assert.equal(report.phase61?.releaseAllowed, false);
+  assert.equal(report.phase61?.strictBlocker, false);
+  assert.equal(report.phase61?.claimSecret, "[redacted]");
+  assert.equal(report.phase61?.summary, "Phase 61 runtime guard unsupported claim evidence is recorded.");
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.activeActiveSupport, false);
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.regionalSupport, false);
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.pitrSupport, false);
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.sqliteDistributedSupport, false);
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.runtimeSupport, false);
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.releaseAllowed, false);
+  assert.equal(report.phase61UnsupportedRuntimeReleaseClaimsGate?.claimSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase61-runtime-secret/);
+});
+
 test("runManagedDatabaseRuntimeGuardCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

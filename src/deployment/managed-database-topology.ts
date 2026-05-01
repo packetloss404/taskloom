@@ -60,6 +60,11 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION?: string;
 }
 
 export interface ManagedDatabaseTopologyObservedEnvValue {
@@ -233,6 +238,25 @@ export interface ManagedDatabaseTopologyReport {
       strictBlocker: boolean;
       summary: string;
     };
+    phase61?: {
+      multiWriterTopologyRequested: boolean;
+      runtimeSupportPresenceAssertionGatePassed: boolean;
+      runtimeActivationDecisionConfigured: boolean;
+      runtimeActivationOwnerConfigured: boolean;
+      runtimeActivationWindowConfigured: boolean;
+      runtimeActivationFlagConfigured: boolean;
+      runtimeActivationReleaseAutomationAssertionConfigured: boolean;
+      activationControlsReady: boolean;
+      activationGatePassed: boolean;
+      runtimeSupport: false;
+      runtimeSupported: false;
+      multiWriterSupported: false;
+      runtimeImplementationBlocked: true;
+      runtimeSupportBlocked: true;
+      releaseAllowed: false;
+      strictBlocker: boolean;
+      summary: string;
+    };
   };
 }
 
@@ -298,6 +322,11 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
 const MANAGED_TOPOLOGY_HINTS = new Set([
@@ -319,6 +348,10 @@ const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
   "multi-writer",
   "production",
   "cluster",
+  "regional",
+  "regional-pitr",
+  "pitr",
+  "failover-pitr",
 ]);
 const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
   "postgres",
@@ -822,6 +855,56 @@ function phase60MultiWriterRuntimeSupportPresenceAssertionGate(
   };
 }
 
+function phase61MultiWriterRuntimeActivationControlsGate(
+  env: ManagedDatabaseTopologyEnv,
+  hasMultiWriterIntent: boolean,
+  runtimeSupportPresenceAssertionGatePassed: boolean,
+) {
+  const runtimeActivationDecisionConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION,
+  );
+  const runtimeActivationOwnerConfigured = configured(env.TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER);
+  const runtimeActivationWindowConfigured = configured(env.TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW);
+  const runtimeActivationFlagConfigured = configured(env.TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG);
+  const runtimeActivationReleaseAutomationAssertionConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION,
+  );
+  const activationControlsReady =
+    runtimeActivationDecisionConfigured &&
+    runtimeActivationOwnerConfigured &&
+    runtimeActivationWindowConfigured &&
+    runtimeActivationFlagConfigured &&
+    runtimeActivationReleaseAutomationAssertionConfigured;
+  const activationGatePassed =
+    !hasMultiWriterIntent || (runtimeSupportPresenceAssertionGatePassed && activationControlsReady);
+  const strictBlocker = hasMultiWriterIntent;
+  const summary = hasMultiWriterIntent
+    ? activationGatePassed
+      ? "Phase 61 multi-writer runtime activation controls are configured; activation controls are ready, but runtime support and release remain blocked."
+      : "Phase 61 requires complete Phase 60 runtime support presence assertion plus activation decision, owner, window, flag, and release automation assertion before activation controls can be recorded."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 61.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    runtimeSupportPresenceAssertionGatePassed,
+    runtimeActivationDecisionConfigured,
+    runtimeActivationOwnerConfigured,
+    runtimeActivationWindowConfigured,
+    runtimeActivationFlagConfigured,
+    runtimeActivationReleaseAutomationAssertionConfigured,
+    activationControlsReady,
+    activationGatePassed,
+    runtimeSupport: false as const,
+    runtimeSupported: false as const,
+    multiWriterSupported: false as const,
+    runtimeImplementationBlocked: true as const,
+    runtimeSupportBlocked: true as const,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -840,6 +923,7 @@ function buildNextSteps(
   phase58: ReturnType<typeof phase58MultiWriterRuntimeImplementationValidationGate>,
   phase59: ReturnType<typeof phase59MultiWriterRuntimeReleaseEnablementApprovalGate>,
   phase60: ReturnType<typeof phase60MultiWriterRuntimeSupportPresenceAssertionGate>,
+  phase61: ReturnType<typeof phase61MultiWriterRuntimeActivationControlsGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -1026,6 +1110,29 @@ function buildNextSteps(
         steps.add("Keep multi-writer runtime support and release disabled; Phase 60 records runtime support presence assertion evidence only.");
       }
     }
+    if (check.id === "phase61-multi-writer-runtime-activation-controls") {
+      if (!phase60.runtimeSupportPresenceAssertionGatePassed) {
+        steps.add("Complete Phase 60 multi-writer runtime support presence assertion before recording runtime activation controls.");
+      }
+      if (!phase61.runtimeActivationDecisionConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION with the Phase 61 activation decision evidence.");
+      }
+      if (!phase61.runtimeActivationOwnerConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER with the runtime activation owner.");
+      }
+      if (!phase61.runtimeActivationWindowConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW with the approved activation window.");
+      }
+      if (!phase61.runtimeActivationFlagConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG with the explicit activation flag evidence.");
+      }
+      if (!phase61.runtimeActivationReleaseAutomationAssertionConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION with release automation assertion evidence.");
+      }
+      if (phase61.activationGatePassed) {
+        steps.add("Keep multi-writer runtime support and release disabled; Phase 61 records activation controls only.");
+      }
+    }
   }
 
   if (steps.size === 0) {
@@ -1080,6 +1187,11 @@ export function assessManagedDatabaseTopology(
     env,
     hasMultiWriterIntent,
     phase59.runtimeReleaseEnablementApprovalGatePassed,
+  );
+  const phase61 = phase61MultiWriterRuntimeActivationControlsGate(
+    env,
+    hasMultiWriterIntent,
+    phase60.runtimeSupportPresenceAssertionGatePassed,
   );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -1186,6 +1298,13 @@ export function assessManagedDatabaseTopology(
 
   pushCheck(
     checks,
+    "phase61-multi-writer-runtime-activation-controls",
+    phase61.strictBlocker ? "fail" : "pass",
+    phase61.summary,
+  );
+
+  pushCheck(
+    checks,
     "production-topology",
     isProductionEnv && store === "json" ? "fail" : "pass",
     isProductionEnv && store === "json"
@@ -1225,6 +1344,7 @@ export function assessManagedDatabaseTopology(
     warnings.push(phase58.summary);
     warnings.push(phase59.summary);
     warnings.push(phase60.summary);
+    warnings.push(phase61.summary);
   }
 
   const status = statusFromChecks(checks);
@@ -1263,7 +1383,18 @@ export function assessManagedDatabaseTopology(
     checks,
     blockers,
     warnings,
-    nextSteps: buildNextSteps(checks, phase53, phase54, phase55, phase56, phase57, phase58, phase59, phase60),
+    nextSteps: buildNextSteps(
+      checks,
+      phase53,
+      phase54,
+      phase55,
+      phase56,
+      phase57,
+      phase58,
+      phase59,
+      phase60,
+      phase61,
+    ),
     observed: {
       nodeEnv,
       isProductionEnv,
@@ -1291,6 +1422,7 @@ export function assessManagedDatabaseTopology(
       phase58,
       phase59,
       phase60,
+      phase61,
     },
   };
 }

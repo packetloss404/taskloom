@@ -71,6 +71,18 @@ function phase59CompleteMultiWriterEvidenceEnv() {
   };
 }
 
+function phase60CompleteMultiWriterEvidenceEnv() {
+  return {
+    ...phase59CompleteMultiWriterEvidenceEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "implementation-present://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT: "support-statement://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "compatibility-matrix://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "cutover-evidence://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL: "release-automation://phase60",
+    TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "owner-acceptance://phase60",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -1061,6 +1073,109 @@ test("strict evidence records redacted Phase 60 support presence assertion attac
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT").value, "[redacted]");
   assert.ok(bundle.summary.includes("Phase 60 runtime support presence assertion evidence is attached"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 60 runtime support presence assertion evidence attached")));
+});
+
+test("strict evidence records missing Phase 61 activation controls while runtime stays blocked", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase60CompleteMultiWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T03:30:00.000Z",
+    strict: true,
+  });
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase60MultiWriterRuntimeSupportPresenceAssertionComplete, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterRuntimeActivationControlsGateRequired, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterRuntimeSupportPresenceAssertionComplete, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationDecisionAttached, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationOwnerAttached, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationWindowAttached, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationFlagAttached, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterReleaseAutomationAssertionAttached, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationControlsReady, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationGatePassed, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationReady, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase61MultiWriterRuntimeActivationControlsGate?.releaseAllowed, false);
+  assert.ok(bundle.summary.includes("Phase 61 runtime activation controls are required"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION")));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-61-multi-writer-runtime-activation-decision" && attachment.required));
+});
+
+test("strict evidence records complete Phase 61 activation controls without unblocking runtime or claiming later phases", () => {
+  const env = {
+    ...phase60CompleteMultiWriterEvidenceEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "activation-decision://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "activation-owner://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-05T16:00:00Z/2026-05-05T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "release-automation-assertion://phase61",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T04:00:00.000Z",
+    strict: true,
+  });
+  const decisionAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-61-multi-writer-runtime-activation-decision");
+  const assertionAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-61-multi-writer-runtime-activation-release-automation-assertion");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterRuntimeActivationControlsGateRequired, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationDecisionAttached, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationOwnerAttached, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationWindowAttached, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationFlagAttached, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterReleaseAutomationAssertionAttached, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationControlsReady, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationGatePassed, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationReady, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase61MultiWriterRuntimeActivationControlsGate?.releaseAllowed, false);
+  assert.equal(decisionAttachment?.configured, true);
+  assert.equal(decisionAttachment?.value, "activation-decision://phase61");
+  assert.equal(assertionAttachment?.configured, true);
+  assert.equal(assertionAttachment?.value, "release-automation-assertion://phase61");
+  assert.ok(bundle.summary.includes("Phase 61 runtime activation controls are attached"));
+  assert.ok(!bundle.summary.includes("Phase 62"));
+  assert.ok(!bundle.summary.includes("Phase 66"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 61 runtime activation controls attached")));
+});
+
+test("strict evidence redacts sensitive Phase 61 activation attachments while runtime stays blocked", () => {
+  const env = {
+    ...phase60CompleteMultiWriterEvidenceEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "activation-decision://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "https://owner:secret@release.internal/phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-05T16:00:00Z/2026-05-05T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "release-automation-assertion://phase61",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T04:30:00.000Z",
+    strict: true,
+  });
+  const ownerAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-61-multi-writer-runtime-activation-owner");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationControlsReady, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterActivationGatePassed, true);
+  assert.equal(bundle.evidence.config.phase61MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(ownerAttachment?.configured, true);
+  assert.equal(ownerAttachment?.redacted, true);
+  assert.equal(ownerAttachment?.value, "[redacted]");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER").value, "[redacted]");
+  assert.ok(bundle.summary.includes("Phase 61 runtime activation controls are attached"));
 });
 
 test("release readiness managed reports are reused when present", () => {

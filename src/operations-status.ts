@@ -445,6 +445,57 @@ export interface MultiWriterRuntimeSupportPresenceAssertionStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type MultiWriterRuntimeActivationControlsEvidenceKey =
+  | "activationDecision"
+  | "activationOwner"
+  | "activationWindow"
+  | "activationFlag"
+  | "releaseAutomationAssertion";
+
+export interface MultiWriterRuntimeActivationControlsEvidenceStatus {
+  key: MultiWriterRuntimeActivationControlsEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source:
+    | "env"
+    | "managedDatabaseRuntimeGuard"
+    | "managedDatabaseTopology"
+    | "releaseReadiness"
+    | "releaseEvidence"
+    | "derived";
+}
+
+export interface MultiWriterRuntimeActivationControlsStatus {
+  phase: "61";
+  status: "activation-controls-complete" | "blocked" | "not-required";
+  activationControlStatus: "complete" | "blocked" | "missing" | "not-required";
+  summary: string;
+  required: boolean;
+  phase60RuntimeSupportPresenceAssertionComplete: boolean;
+  runtimeActivationControlsComplete: boolean;
+  runtimeImplementationBlocked: true;
+  runtimeSupported: false;
+  releaseAllowed: false;
+  multiWriterIntentDetected: boolean;
+  topologyIntent: string | null;
+  runtimeSupportPresenceAssertionStatus: MultiWriterRuntimeSupportPresenceAssertionStatus["status"];
+  evidence: Record<
+    MultiWriterRuntimeActivationControlsEvidenceKey,
+    MultiWriterRuntimeActivationControlsEvidenceStatus
+  >;
+  activationDecision: MultiWriterRuntimeActivationControlsEvidenceStatus;
+  activationOwner: MultiWriterRuntimeActivationControlsEvidenceStatus;
+  activationWindow: MultiWriterRuntimeActivationControlsEvidenceStatus;
+  activationFlag: MultiWriterRuntimeActivationControlsEvidenceStatus;
+  releaseAutomationAssertion: MultiWriterRuntimeActivationControlsEvidenceStatus;
+  missingEvidence: MultiWriterRuntimeActivationControlsEvidenceKey[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -476,6 +527,7 @@ export interface OperationsStatus {
   multiWriterRuntimeImplementationValidation: MultiWriterRuntimeImplementationValidationStatus;
   multiWriterRuntimeReleaseEnablementApproval: MultiWriterRuntimeReleaseEnablementApprovalStatus;
   multiWriterRuntimeSupportPresenceAssertion: MultiWriterRuntimeSupportPresenceAssertionStatus;
+  multiWriterRuntimeActivationControls: MultiWriterRuntimeActivationControlsStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -926,6 +978,69 @@ const MULTI_WRITER_RUNTIME_SUPPORT_PRESENCE_ASSERTION_EVIDENCE = [
   },
 ] as const satisfies ReadonlyArray<{
   key: MultiWriterRuntimeSupportPresenceAssertionEvidenceKey;
+  label: string;
+  envKey: string;
+  reportKeys: readonly string[];
+}>;
+const MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS_EVIDENCE = [
+  {
+    key: "activationDecision",
+    label: "runtime activation decision",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+    reportKeys: [
+      "activationDecision",
+      "runtimeActivationDecision",
+      "decision",
+      "activationControlDecision",
+    ],
+  },
+  {
+    key: "activationOwner",
+    label: "runtime activation owner",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+    reportKeys: [
+      "activationOwner",
+      "runtimeActivationOwner",
+      "owner",
+      "activationControlOwner",
+    ],
+  },
+  {
+    key: "activationWindow",
+    label: "runtime activation window",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
+    reportKeys: [
+      "activationWindow",
+      "runtimeActivationWindow",
+      "window",
+      "activationControlWindow",
+    ],
+  },
+  {
+    key: "activationFlag",
+    label: "runtime activation flag",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
+    reportKeys: [
+      "activationFlag",
+      "runtimeActivationFlag",
+      "featureFlag",
+      "flag",
+      "activationControlFlag",
+    ],
+  },
+  {
+    key: "releaseAutomationAssertion",
+    label: "runtime activation release automation assertion",
+    envKey: "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
+    reportKeys: [
+      "releaseAutomationAssertion",
+      "runtimeActivationReleaseAutomationAssertion",
+      "activationReleaseAutomationAssertion",
+      "automationAssertion",
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  key: MultiWriterRuntimeActivationControlsEvidenceKey;
   label: string;
   envKey: string;
   reportKeys: readonly string[];
@@ -1438,6 +1553,24 @@ function runtimeSupportPresenceAssertionRecord(
     findNestedRecord(
       report,
       ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeSupportPresenceAssertion"],
+    );
+}
+
+function runtimeActivationControlsRecord(
+  report: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase61"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivationControls"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivationControlsGate"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivation"]) ??
+    findNestedRecord(report, ["multiWriterRuntimeActivationControlGate"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase61"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "multiWriterRuntimeActivationControls"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase61"]) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeActivationControls"],
     );
 }
 
@@ -2497,6 +2630,126 @@ function deriveMultiWriterRuntimeSupportPresenceAssertion(
   };
 }
 
+function deriveMultiWriterRuntimeActivationControls(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  multiWriterRuntimeSupportPresenceAssertion: MultiWriterRuntimeSupportPresenceAssertionStatus,
+): MultiWriterRuntimeActivationControlsStatus {
+  const reportSources: Array<{
+    source: Exclude<MultiWriterRuntimeActivationControlsStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = runtimeActivationControlsRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase61 = reportSources[0];
+  const multiWriterIntentDetected = booleanValue(phase61?.record.multiWriterIntentDetected) ??
+    multiWriterRuntimeSupportPresenceAssertion.multiWriterIntentDetected;
+  const topologyIntent = stringValue(phase61?.record.topologyIntent) ||
+    multiWriterRuntimeSupportPresenceAssertion.topologyIntent ||
+    null;
+  const required = multiWriterIntentDetected;
+  const phase60RuntimeSupportPresenceAssertionComplete =
+    multiWriterRuntimeSupportPresenceAssertion.status === "assertion-complete";
+
+  const evidenceEntries = MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS_EVIDENCE.map((definition) => {
+    let value = stringValue(env[definition.envKey]);
+    let source: MultiWriterRuntimeActivationControlsEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys);
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        value = direct || nested;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+
+    const configured = value.length > 0;
+    const status: MultiWriterRuntimeActivationControlsEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<
+    MultiWriterRuntimeActivationControlsEvidenceKey,
+    MultiWriterRuntimeActivationControlsEvidenceStatus
+  >;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const allActivationControlsConfigured = evidenceEntries.every((entry) => entry.configured);
+  const runtimeActivationControlsComplete =
+    required && phase60RuntimeSupportPresenceAssertionComplete && allActivationControlsConfigured;
+  const activationControlStatus: MultiWriterRuntimeActivationControlsStatus["activationControlStatus"] = required
+    ? runtimeActivationControlsComplete
+      ? "complete"
+      : allActivationControlsConfigured && !phase60RuntimeSupportPresenceAssertionComplete
+        ? "blocked"
+        : "missing"
+    : "not-required";
+  const status: MultiWriterRuntimeActivationControlsStatus["status"] = required
+    ? runtimeActivationControlsComplete ? "activation-controls-complete" : "blocked"
+    : "not-required";
+  const missingEvidenceSummary = missingEvidence.join(", ") || "Phase 61 runtime activation controls";
+  const summary = required
+    ? !phase60RuntimeSupportPresenceAssertionComplete
+      ? "Phase 61 multi-writer runtime activation controls are blocked until Phase 60 runtime support presence assertion is complete; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false."
+      : runtimeActivationControlsComplete
+        ? "Phase 61 multi-writer runtime activation controls are complete and visible for activation audit, but distributed, active-active, regional/PITR, and SQLite-distributed runtime support remain unsupported; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false."
+        : `Phase 61 multi-writer runtime activation controls are blocked pending ${missingEvidenceSummary}; runtimeImplementationBlocked=true; runtimeSupported=false; releaseAllowed=false.`
+    : "Phase 61 multi-writer runtime activation controls are not required without multi-writer, distributed, or active-active intent; runtimeSupported=false.";
+
+  return {
+    phase: "61",
+    status,
+    activationControlStatus,
+    summary,
+    required,
+    phase60RuntimeSupportPresenceAssertionComplete,
+    runtimeActivationControlsComplete,
+    runtimeImplementationBlocked: true,
+    runtimeSupported: false,
+    releaseAllowed: false,
+    multiWriterIntentDetected,
+    topologyIntent,
+    runtimeSupportPresenceAssertionStatus: multiWriterRuntimeSupportPresenceAssertion.status,
+    evidence: evidenceByKey,
+    activationDecision: evidenceByKey.activationDecision,
+    activationOwner: evidenceByKey.activationOwner,
+    activationWindow: evidenceByKey.activationWindow,
+    activationFlag: evidenceByKey.activationFlag,
+    releaseAutomationAssertion: evidenceByKey.releaseAutomationAssertion,
+    missingEvidence,
+    source: phase61?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -2657,6 +2910,15 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       releaseEvidence,
       multiWriterRuntimeReleaseEnablementApproval,
     );
+  const multiWriterRuntimeActivationControls =
+    deriveMultiWriterRuntimeActivationControls(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterRuntimeSupportPresenceAssertion,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -2703,6 +2965,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     multiWriterRuntimeImplementationValidation,
     multiWriterRuntimeReleaseEnablementApproval,
     multiWriterRuntimeSupportPresenceAssertion,
+    multiWriterRuntimeActivationControls,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -2822,6 +3085,15 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
       releaseEvidence,
       multiWriterRuntimeReleaseEnablementApproval,
     );
+  const multiWriterRuntimeActivationControls =
+    deriveMultiWriterRuntimeActivationControls(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      multiWriterRuntimeSupportPresenceAssertion,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -2868,6 +3140,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     multiWriterRuntimeImplementationValidation,
     multiWriterRuntimeReleaseEnablementApproval,
     multiWriterRuntimeSupportPresenceAssertion,
+    multiWriterRuntimeActivationControls,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

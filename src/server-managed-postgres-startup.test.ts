@@ -52,6 +52,14 @@ type Phase60ManagedDatabaseRuntimeGuardEnv = Phase59ManagedDatabaseRuntimeGuardE
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE?: string;
 };
 
+type Phase61ManagedDatabaseRuntimeGuardEnv = Phase60ManagedDatabaseRuntimeGuardEnv & {
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION?: string;
+};
+
 const COMPLETE_MULTI_WRITER_TOPOLOGY_REVIEW_AUTHORIZATION_EVIDENCE = {
   TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/multi-writer-requirements.md",
   TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/multi-writer-design.md",
@@ -119,6 +127,16 @@ const COMPLETE_MULTI_WRITER_RUNTIME_SUPPORT_ASSERTION_EVIDENCE = {
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "docs/phase-60/owner-acceptance.md",
 } satisfies Partial<Phase60ManagedDatabaseRuntimeGuardEnv>;
 
+const COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS = {
+  ...COMPLETE_MULTI_WRITER_RUNTIME_SUPPORT_ASSERTION_EVIDENCE,
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "blocked-pending-runtime-support",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "platform-ops",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-11T15:00:00Z/2026-05-11T17:00:00Z",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER_ACTIVATION=false",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION:
+    "docs/phase-61/release-automation-assertion.md",
+} satisfies Partial<Phase61ManagedDatabaseRuntimeGuardEnv>;
+
 type Phase56RuntimeGuardReport = {
   phase56?: {
     implementationReadinessGatePassed?: boolean;
@@ -139,7 +157,7 @@ type Phase57RuntimeGuardReport = Phase56RuntimeGuardReport & {
   };
 };
 
-function assertServerStartupRuntimeSupported(env: Phase60ManagedDatabaseRuntimeGuardEnv) {
+function assertServerStartupRuntimeSupported(env: Phase61ManagedDatabaseRuntimeGuardEnv) {
   return assertManagedDatabaseRuntimeSupported(env, {
     phase51: {
       remainingSyncCallSiteGroups: [],
@@ -348,6 +366,28 @@ test("server startup guard keeps single-writer managed Postgres allowed with Pha
   assert.match(report.phase58?.summary ?? "", /No multi-writer, distributed, or active-active topology requested/i);
 });
 
+test("server startup guard keeps single-writer managed Postgres allowed with Phase 61 activation controls present", () => {
+  const report = assertServerStartupRuntimeSupported({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "single-writer",
+    ...COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS,
+  });
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
+  assert.equal(report.phase50?.asyncAdapterAvailable, true);
+  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
+  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
+  assert.equal(report.phase60?.multiWriterTopologyRequested, false);
+  assert.equal(report.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
+  assert.equal(report.phase60?.runtimeSupport, false);
+  assert.equal(report.phase60?.runtimeSupported, false);
+  assert.equal(report.phase60?.releaseAllowed, false);
+});
+
 test("server startup guard blocks unsupported store posture even with Phase 57 implementation-scope evidence", () => {
   assert.throws(
     () =>
@@ -436,6 +476,94 @@ test("server startup guard blocks unsupported store posture even with Phase 60 r
       assert.ok(error.report.blockers.some((blocker) => blocker.includes("TASKLOOM_STORE=memory")));
       assert.equal(error.report.phase58?.runtimeSupport, false);
       assert.equal(error.report.phase58?.releaseAllowed, false);
+      return true;
+    },
+  );
+});
+
+test("server startup guard blocks unsupported store posture even with complete Phase 61 activation controls", () => {
+  assert.throws(
+    () =>
+      assertServerStartupRuntimeSupported({
+        TASKLOOM_STORE: "memory",
+        ...COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS,
+      }),
+    (error) => {
+      assert.ok(error instanceof ManagedDatabaseRuntimeGuardError);
+      assert.equal(error.report.allowed, false);
+      assert.equal(error.report.classification, "unsupported-store");
+      assert.equal(error.report.observed.store, "memory");
+      assert.equal(error.report.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
+      assert.equal(error.report.phase60?.runtimeSupport, false);
+      assert.equal(error.report.phase60?.runtimeSupported, false);
+      assert.equal(error.report.phase60?.releaseAllowed, false);
+      assert.ok(error.report.blockers.some((blocker) => blocker.includes("TASKLOOM_STORE=memory")));
+      return true;
+    },
+  );
+});
+
+test("server startup guard blocks active-active, regional, and multi-writer runtime even with complete Phase 61 activation controls and PITR evidence", () => {
+  const blockedTopologies = ["multi-writer", "multi-region", "active-active", "distributed"] as const;
+
+  for (const topology of blockedTopologies) {
+    assert.throws(
+      () =>
+        assertServerStartupRuntimeSupported({
+          TASKLOOM_STORE: "postgres",
+          TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+          TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+          TASKLOOM_DATABASE_TOPOLOGY: topology,
+          ...COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS,
+        }),
+      (error) => {
+        assert.ok(error instanceof ManagedDatabaseRuntimeGuardError);
+        assert.equal(error.report.allowed, false);
+        assert.equal(error.report.classification, "multi-writer-blocked");
+        assert.equal(error.report.managedDatabaseRuntimeBlocked, true);
+        assert.equal(error.report.observed.databaseTopology, topology);
+        assert.equal(error.report.phase52?.managedPostgresStartupSupported, false);
+        assert.equal(error.report.phase54?.failoverPitrPlanConfigured, true);
+        assert.equal(error.report.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
+        assert.equal(error.report.phase60?.runtimeSupport, false);
+        assert.equal(error.report.phase60?.runtimeSupported, false);
+        assert.equal(error.report.phase60?.multiWriterSupported, false);
+        assert.equal(error.report.phase60?.runtimeImplementationBlocked, true);
+        assert.equal(error.report.phase60?.runtimeSupportBlocked, true);
+        assert.equal(error.report.phase60?.releaseAllowed, false);
+        assert.match(error.report.summary, /blocked unsupported managed database or multi-writer runtime/i);
+        assert.ok(error.report.blockers.some((blocker) => blocker.includes("TASKLOOM_DATABASE_TOPOLOGY")));
+        return true;
+      },
+    );
+  }
+});
+
+test("server startup guard keeps existing sync-call-site startup guard active with Phase 61 controls present", () => {
+  assert.throws(
+    () =>
+      assertManagedDatabaseRuntimeSupported(
+        {
+          TASKLOOM_STORE: "postgres",
+          TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+          TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+          TASKLOOM_DATABASE_TOPOLOGY: "single-writer",
+          ...COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS,
+        },
+        {
+          phase51: {
+            remainingSyncCallSiteGroups: ["legacy-bootstrap-store"],
+            managedPostgresStartupSupported: true,
+          },
+        },
+      ),
+    (error) => {
+      assert.ok(error instanceof ManagedDatabaseRuntimeGuardError);
+      assert.equal(error.report.allowed, false);
+      assert.equal(error.report.classification, "managed-database-blocked");
+      assert.equal(error.report.phase51?.runtimeCallSitesMigrated, false);
+      assert.equal(error.report.phase52?.managedPostgresStartupSupported, false);
+      assert.ok(error.report.blockers.some((blocker) => blocker.includes("Phase 51 runtime call-site migration")));
       return true;
     },
   );

@@ -17,10 +17,23 @@ const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 const PHASE58_REPORT_KEY_PATTERN = /^phase58/i;
 const PHASE59_REPORT_KEY_PATTERN = /^phase59/i;
 const PHASE60_REPORT_KEY_PATTERN = /^phase60/i;
+const PHASE61_REPORT_KEY_PATTERN = /^phase61/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 const PHASE60_URL_REDACTION_KEY_PATTERN =
   /(implementation|statement|matrix|evidence|cutover|approval|acceptance|support)/i;
+const PHASE61_URL_REDACTION_KEY_PATTERN =
+  /(active|regional|pitr|sqlite|distributed|support|claim|evidence|ticket|approval|url)/i;
+const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
+  /(activeactive|active_active|active-active).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
+  /(support|supported|releaseallowed|releasesupported|runtimesupport).*(activeactive|active_active|active-active)/i,
+  /regional.*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
+  /(support|supported|releaseallowed|releasesupported|runtimesupport).*regional/i,
+  /pitr.*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
+  /(support|supported|releaseallowed|releasesupported|runtimesupport).*pitr/i,
+  /(sqlitedistributed|sqlite_distributed|sqlite-distributed|distributedsqlite|distributed_sqlite|distributed-sqlite).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
+  /(support|supported|releaseallowed|releasesupported|runtimesupport).*(sqlitedistributed|sqlite_distributed|sqlite-distributed|distributedsqlite|distributed_sqlite|distributed-sqlite)/i,
+];
 
 function clean(value: string | undefined): string {
   return (value ?? "").trim();
@@ -76,6 +89,7 @@ function redactValue(
   inPhaseUrlRedactionReport = false,
   inPhase59Report = false,
   inPhase60Report = false,
+  inPhase61Report = false,
 ): unknown {
   if (typeof value === "string") {
     if (!value) return value;
@@ -85,7 +99,15 @@ function redactValue(
   }
   if (Array.isArray(value)) {
     return value.map((entry) =>
-      redactValue(entry, force, redactPhaseUrl, inPhaseUrlRedactionReport, inPhase59Report, inPhase60Report)
+      redactValue(
+        entry,
+        force,
+        redactPhaseUrl,
+        inPhaseUrlRedactionReport,
+        inPhase59Report,
+        inPhase60Report,
+        inPhase61Report,
+      )
     );
   }
   if (value && typeof value === "object") {
@@ -96,13 +118,16 @@ function redactValue(
         inPhaseUrlRedactionReport ||
         PHASE58_REPORT_KEY_PATTERN.test(key) ||
         PHASE59_REPORT_KEY_PATTERN.test(key) ||
-        PHASE60_REPORT_KEY_PATTERN.test(key);
+        PHASE60_REPORT_KEY_PATTERN.test(key) ||
+        PHASE61_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase61Report = inPhase61Report || PHASE61_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase60Report && PHASE60_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase61Report && PHASE61_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -113,6 +138,7 @@ function redactValue(
           nestedInPhaseUrlRedactionReport,
           nestedInPhase59Report,
           nestedInPhase60Report,
+          nestedInPhase61Report,
         );
     }
     return redacted;
@@ -190,9 +216,49 @@ function blockMultiWriterRuntimeSupport(value: unknown): unknown {
         runtimeSupportBlocked: true,
         releaseAllowed: false,
       };
+    } else if (PHASE61_REPORT_KEY_PATTERN.test(key) && isReport(entry)) {
+      blocked[key] = blockUnsupportedRuntimeReleaseClaims({
+        ...(blockMultiWriterRuntimeSupport(entry) as DeploymentCliReport),
+        runtimeSupport: false,
+        runtimeSupported: false,
+        releaseSupported: false,
+        multiWriterSupported: false,
+        activeActiveSupport: false,
+        activeActiveSupported: false,
+        regionalSupport: false,
+        regionalSupported: false,
+        pitrSupport: false,
+        pitrSupported: false,
+        sqliteDistributedSupport: false,
+        sqliteDistributedSupported: false,
+        runtimeImplementationBlocked: true,
+        runtimeSupportBlocked: true,
+        releaseAllowed: false,
+      });
     } else {
       blocked[key] = blockMultiWriterRuntimeSupport(entry);
     }
+  }
+  return blocked;
+}
+
+function isUnsupportedRuntimeReleaseClaimKey(key: string): boolean {
+  return UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+function blockUnsupportedRuntimeReleaseClaims(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => blockUnsupportedRuntimeReleaseClaims(entry));
+  }
+  if (!isReport(value)) {
+    return value;
+  }
+
+  const blocked: DeploymentCliReport = {};
+  for (const [key, entry] of Object.entries(value)) {
+    blocked[key] = isUnsupportedRuntimeReleaseClaimKey(key)
+      ? false
+      : blockUnsupportedRuntimeReleaseClaims(entry);
   }
   return blocked;
 }
@@ -496,6 +562,14 @@ function phase60EnvValue(env: NodeJS.ProcessEnv, key: string): string | undefine
   return value ? value : undefined;
 }
 
+function phase61EnvValue(env: NodeJS.ProcessEnv, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = clean(env[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function withPhase59Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
     return report;
@@ -715,14 +789,164 @@ function withPhase60Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function withPhase61Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!isReport(report)) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const nestedPhase61 = firstReportAt(report, [
+    ["phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["phase61UnsupportedRuntimeReleaseClaimsReport"],
+    ["phase61RuntimeReleaseClaimsGate"],
+    ["phase61RuntimeReleaseClaimsReport"],
+    ["managedDatabase", "phase61"],
+    ["managedDatabase", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["managedDatabaseTopology", "phase61"],
+    ["managedDatabaseTopology", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["managedDatabaseTopology", "managedDatabase", "phase61"],
+    ["managedDatabaseRuntimeGuard", "phase61"],
+    ["managedDatabaseRuntimeGuard", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["runtimeGuard", "phase61"],
+    ["runtimeGuard", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["releaseReadiness", "phase61"],
+    ["releaseReadiness", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["releaseReadiness", "managedDatabaseRuntimeGuard", "phase61"],
+    ["releaseEvidence", "phase61"],
+    ["releaseEvidence", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["evidence", "phase61"],
+    ["evidence", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+    ["asyncStoreBoundary", "phase61"],
+    ["asyncStoreBoundary", "phase61UnsupportedRuntimeReleaseClaimsGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE61_REPORT_KEY_PATTERN.test(key));
+  const existingPhase61 = reportAt(report, ["phase61"]) ?? nestedPhase61 ?? {};
+  const hasPhase61EnvEvidence = phase61EnvValue(env, [
+    "TASKLOOM_PHASE61_ACTIVE_ACTIVE_CLAIM_EVIDENCE",
+    "TASKLOOM_PHASE61_ACTIVE_ACTIVE_SUPPORT_CLAIM_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_ACTIVE_ACTIVE_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_ACTIVE_ACTIVE_EVIDENCE",
+    "TASKLOOM_PHASE61_REGIONAL_CLAIM_EVIDENCE",
+    "TASKLOOM_PHASE61_REGIONAL_SUPPORT_CLAIM_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_REGIONAL_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_REGIONAL_EVIDENCE",
+    "TASKLOOM_PHASE61_PITR_CLAIM_EVIDENCE",
+    "TASKLOOM_PHASE61_PITR_SUPPORT_CLAIM_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_PITR_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_PITR_EVIDENCE",
+    "TASKLOOM_PHASE61_SQLITE_DISTRIBUTED_CLAIM_EVIDENCE",
+    "TASKLOOM_PHASE61_SQLITE_DISTRIBUTED_SUPPORT_CLAIM_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_SQLITE_DISTRIBUTED_EVIDENCE",
+    "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_SQLITE_DISTRIBUTED_EVIDENCE",
+  ]) !== undefined;
+
+  if (!hasMultiWriterTopologyIntent(env) && !nestedPhase61 && !reportAt(report, ["phase61"]) && !hasPhase61EnvEvidence) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const activeActiveClaimEvidence = existingPhase61.activeActiveClaimEvidence ??
+    existingPhase61.activeActiveEvidence ??
+    existingPhase61.activeActiveSupportClaimEvidence ??
+    phase61EnvValue(env, [
+      "TASKLOOM_PHASE61_ACTIVE_ACTIVE_CLAIM_EVIDENCE",
+      "TASKLOOM_PHASE61_ACTIVE_ACTIVE_SUPPORT_CLAIM_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_ACTIVE_ACTIVE_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_ACTIVE_ACTIVE_EVIDENCE",
+    ]);
+  const regionalClaimEvidence = existingPhase61.regionalClaimEvidence ??
+    existingPhase61.regionalEvidence ??
+    existingPhase61.regionalSupportClaimEvidence ??
+    phase61EnvValue(env, [
+      "TASKLOOM_PHASE61_REGIONAL_CLAIM_EVIDENCE",
+      "TASKLOOM_PHASE61_REGIONAL_SUPPORT_CLAIM_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_REGIONAL_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_REGIONAL_EVIDENCE",
+    ]);
+  const pitrClaimEvidence = existingPhase61.pitrClaimEvidence ??
+    existingPhase61.pitrEvidence ??
+    existingPhase61.pitrSupportClaimEvidence ??
+    phase61EnvValue(env, [
+      "TASKLOOM_PHASE61_PITR_CLAIM_EVIDENCE",
+      "TASKLOOM_PHASE61_PITR_SUPPORT_CLAIM_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_PITR_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_PITR_EVIDENCE",
+    ]);
+  const sqliteDistributedClaimEvidence = existingPhase61.sqliteDistributedClaimEvidence ??
+    existingPhase61.sqliteDistributedEvidence ??
+    existingPhase61.sqliteDistributedSupportClaimEvidence ??
+    phase61EnvValue(env, [
+      "TASKLOOM_PHASE61_SQLITE_DISTRIBUTED_CLAIM_EVIDENCE",
+      "TASKLOOM_PHASE61_SQLITE_DISTRIBUTED_SUPPORT_CLAIM_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_SQLITE_DISTRIBUTED_EVIDENCE",
+      "TASKLOOM_UNSUPPORTED_RUNTIME_RELEASE_CLAIMS_SQLITE_DISTRIBUTED_EVIDENCE",
+    ]);
+
+  const activeActiveClaimEvidenceRecorded =
+    existingPhase61.activeActiveClaimEvidenceRecorded ?? activeActiveClaimEvidence !== undefined;
+  const regionalClaimEvidenceRecorded =
+    existingPhase61.regionalClaimEvidenceRecorded ?? regionalClaimEvidence !== undefined;
+  const pitrClaimEvidenceRecorded =
+    existingPhase61.pitrClaimEvidenceRecorded ?? pitrClaimEvidence !== undefined;
+  const sqliteDistributedClaimEvidenceRecorded =
+    existingPhase61.sqliteDistributedClaimEvidenceRecorded ?? sqliteDistributedClaimEvidence !== undefined;
+  const unsupportedRuntimeReleaseClaimsComplete =
+    existingPhase61.unsupportedRuntimeReleaseClaimsComplete ??
+    existingPhase61.unsupportedRuntimeReleaseClaimsGatePassed ??
+    (
+      activeActiveClaimEvidenceRecorded === true &&
+      regionalClaimEvidenceRecorded === true &&
+      pitrClaimEvidenceRecorded === true &&
+      sqliteDistributedClaimEvidenceRecorded === true
+    );
+
+  return blockUnsupportedRuntimeReleaseClaims(blockMultiWriterRuntimeSupport({
+    ...report,
+    phase61: {
+      ...existingPhase61,
+      phase: existingPhase61.phase ?? "61",
+      required: existingPhase61.required ?? true,
+      multiWriterTopologyRequested: existingPhase61.multiWriterTopologyRequested ?? true,
+      activeActiveClaimEvidence,
+      regionalClaimEvidence,
+      pitrClaimEvidence,
+      sqliteDistributedClaimEvidence,
+      activeActiveClaimEvidenceRecorded,
+      regionalClaimEvidenceRecorded,
+      pitrClaimEvidenceRecorded,
+      sqliteDistributedClaimEvidenceRecorded,
+      unsupportedRuntimeReleaseClaimsComplete,
+      unsupportedRuntimeReleaseClaimsGatePassed: unsupportedRuntimeReleaseClaimsComplete,
+      runtimeSupport: false,
+      runtimeSupported: false,
+      releaseSupported: false,
+      multiWriterSupported: false,
+      activeActiveSupport: false,
+      activeActiveSupported: false,
+      regionalSupport: false,
+      regionalSupported: false,
+      pitrSupport: false,
+      pitrSupported: false,
+      sqliteDistributedSupport: false,
+      sqliteDistributedSupported: false,
+      runtimeImplementationBlocked: true,
+      runtimeSupportBlocked: true,
+      releaseAllowed: false,
+      strictBlocker: existingPhase61.strictBlocker ?? unsupportedRuntimeReleaseClaimsComplete !== true,
+      summary: existingPhase61.summary ??
+        "Phase 61 records unsupported runtime/release claim evidence; active-active, regional, PITR, and SQLite-distributed support remain blocked in CLI output.",
+    },
+  }));
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
     redactValue(
-      withPhase60Status(
-        withPhase59Status(
-          withPhase58Status(
-            withPhase57Status(
-              withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+      withPhase61Status(
+        withPhase60Status(
+          withPhase59Status(
+            withPhase58Status(
+              withPhase57Status(
+                withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+                env,
+              ),
               env,
             ),
             env,

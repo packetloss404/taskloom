@@ -18,6 +18,7 @@ import {
   type Phase58MultiWriterRuntimeImplementationValidationGateReport,
   type Phase59MultiWriterRuntimeEnablementApprovalGateReport,
   type Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport,
+  type Phase61MultiWriterRuntimeActivationControlsGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -222,6 +223,24 @@ export interface ReleaseEvidenceBundle {
       phase60MultiWriterRuntimeSupportPresenceAssertionComplete: boolean;
       phase60MultiWriterRuntimeSupportBlocked: boolean;
       phase60MultiWriterTopologyReleaseAllowed: boolean;
+      phase61MultiWriterRuntimeActivationControlsGateRequired: boolean;
+      phase61MultiWriterRuntimeSupportPresenceAssertionRequired: boolean;
+      phase61MultiWriterRuntimeSupportPresenceAssertionComplete: boolean;
+      phase61MultiWriterActivationDecisionRequired: boolean;
+      phase61MultiWriterActivationDecisionAttached: boolean;
+      phase61MultiWriterActivationOwnerRequired: boolean;
+      phase61MultiWriterActivationOwnerAttached: boolean;
+      phase61MultiWriterActivationWindowRequired: boolean;
+      phase61MultiWriterActivationWindowAttached: boolean;
+      phase61MultiWriterActivationFlagRequired: boolean;
+      phase61MultiWriterActivationFlagAttached: boolean;
+      phase61MultiWriterReleaseAutomationAssertionRequired: boolean;
+      phase61MultiWriterReleaseAutomationAssertionAttached: boolean;
+      phase61MultiWriterActivationControlsReady: boolean;
+      phase61MultiWriterActivationGatePassed: boolean;
+      phase61MultiWriterActivationReady: boolean;
+      phase61MultiWriterRuntimeSupportBlocked: boolean;
+      phase61MultiWriterTopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -348,6 +367,11 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -862,6 +886,65 @@ function phase60MultiWriterRuntimeSupportPresenceAssertionGate(
   };
 }
 
+function phase61MultiWriterRuntimeActivationControlsGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase60Gate: Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport,
+): Phase61MultiWriterRuntimeActivationControlsGateReport {
+  const fallbackRequired = asyncStoreBoundary.classification === "multi-writer-unsupported";
+  return asyncStoreBoundary.phase61MultiWriterRuntimeActivationControlsGate ?? {
+    phase: "61",
+    required: fallbackRequired,
+    runtimeSupportPresenceAssertionRequired: fallbackRequired,
+    runtimeSupportPresenceAssertionComplete: phase60Gate.runtimeSupportPresenceAssertionComplete,
+    activationDecisionRequired: fallbackRequired,
+    activationDecisionAttached: false,
+    activationOwnerRequired: fallbackRequired,
+    activationOwnerAttached: false,
+    activationWindowRequired: fallbackRequired,
+    activationWindowAttached: false,
+    activationFlagRequired: fallbackRequired,
+    activationFlagAttached: false,
+    releaseAutomationAssertionRequired: fallbackRequired,
+    releaseAutomationAssertionAttached: false,
+    activationControlsReady: false,
+    activationGatePassed: false,
+    activationReady: false,
+    runtimeSupportBlocked: fallbackRequired,
+    releaseAllowed: !fallbackRequired,
+    summary: fallbackRequired
+      ? phase60Gate.runtimeSupportPresenceAssertionComplete
+        ? "Phase 61 multi-writer runtime activation controls are required after Phase 60 support presence assertion evidence."
+        : "Phase 61 multi-writer runtime activation controls require Phase 60 support presence assertion completion first."
+      : "Phase 61 multi-writer runtime activation controls gate is not required for this release posture.",
+    blockers: fallbackRequired
+      ? [
+        ...(!phase60Gate.runtimeSupportPresenceAssertionComplete
+          ? ["Phase 61 multi-writer runtime activation controls require complete Phase 60 support presence assertion evidence first."]
+          : []),
+        "Phase 61 multi-writer runtime activation decision evidence is required before recording activation controls.",
+        "Phase 61 multi-writer runtime activation owner evidence is required before recording activation controls.",
+        "Phase 61 multi-writer runtime activation window evidence is required before recording activation controls.",
+        "Phase 61 multi-writer runtime activation flag evidence is required before recording activation controls.",
+        "Phase 61 multi-writer runtime activation release automation assertion evidence is required before recording activation controls.",
+        "Phase 61 multi-writer runtime support remains blocked; activation controls evidence does not permit distributed, active-active, or multi-writer release.",
+      ]
+      : [],
+    nextSteps: fallbackRequired
+      ? [
+        ...(!phase60Gate.runtimeSupportPresenceAssertionComplete
+          ? ["Complete Phase 60 multi-writer support presence assertion evidence before treating Phase 61 runtime activation controls as ready."]
+          : []),
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION before recording multi-writer runtime activation controls.",
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER before recording multi-writer runtime activation controls.",
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW before recording multi-writer runtime activation controls.",
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG before recording multi-writer runtime activation controls.",
+        "Attach TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION before recording multi-writer runtime activation controls.",
+        "Keep multi-writer runtime release blocked after Phase 61 activation controls evidence; this phase records activation controls only and does not enable distributed, active-active, or multi-writer runtime support.",
+      ]
+      : ["Keep Phase 61 runtime activation controls evidence ready before any future multi-writer activation claim."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -1086,6 +1169,36 @@ function phase60OwnerAcceptanceAttachmentEvidence(
   return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE");
 }
 
+function phase61ActivationDecisionAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION");
+}
+
+function phase61ActivationOwnerAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER");
+}
+
+function phase61ActivationWindowAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW");
+}
+
+function phase61ActivationFlagAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG");
+}
+
+function phase61ReleaseAutomationAssertionAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -1103,6 +1216,7 @@ function buildAttachments(
   const phase58Gate = phase58MultiWriterRuntimeImplementationValidationGate(asyncStoreBoundary, phase57Gate);
   const phase59Gate = phase59MultiWriterRuntimeEnablementApprovalGate(asyncStoreBoundary, phase58Gate);
   const phase60Gate = phase60MultiWriterRuntimeSupportPresenceAssertionGate(asyncStoreBoundary, phase59Gate);
+  const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -1471,6 +1585,56 @@ function buildAttachments(
       ...phase60OwnerAcceptanceAttachmentEvidence(env),
     },
     {
+      id: "phase-61-multi-writer-runtime-activation-decision",
+      label: "Phase 61 multi-writer runtime activation decision evidence",
+      format: "json",
+      required: phase61Gate.activationDecisionRequired,
+      summary: phase61Gate.activationDecisionAttached
+        ? "Phase 61 multi-writer runtime activation decision evidence is attached; runtime release remains blocked."
+        : "Phase 61 multi-writer runtime activation decision evidence is required before recording activation controls.",
+      ...phase61ActivationDecisionAttachmentEvidence(env),
+    },
+    {
+      id: "phase-61-multi-writer-runtime-activation-owner",
+      label: "Phase 61 multi-writer runtime activation owner evidence",
+      format: "json",
+      required: phase61Gate.activationOwnerRequired,
+      summary: phase61Gate.activationOwnerAttached
+        ? "Phase 61 multi-writer runtime activation owner evidence is attached; runtime release remains blocked."
+        : "Phase 61 multi-writer runtime activation owner evidence is required before recording activation controls.",
+      ...phase61ActivationOwnerAttachmentEvidence(env),
+    },
+    {
+      id: "phase-61-multi-writer-runtime-activation-window",
+      label: "Phase 61 multi-writer runtime activation window evidence",
+      format: "json",
+      required: phase61Gate.activationWindowRequired,
+      summary: phase61Gate.activationWindowAttached
+        ? "Phase 61 multi-writer runtime activation window evidence is attached; runtime release remains blocked."
+        : "Phase 61 multi-writer runtime activation window evidence is required before recording activation controls.",
+      ...phase61ActivationWindowAttachmentEvidence(env),
+    },
+    {
+      id: "phase-61-multi-writer-runtime-activation-flag",
+      label: "Phase 61 multi-writer runtime activation flag evidence",
+      format: "json",
+      required: phase61Gate.activationFlagRequired,
+      summary: phase61Gate.activationFlagAttached
+        ? "Phase 61 multi-writer runtime activation flag evidence is attached; runtime release remains blocked."
+        : "Phase 61 multi-writer runtime activation flag evidence is required before recording activation controls.",
+      ...phase61ActivationFlagAttachmentEvidence(env),
+    },
+    {
+      id: "phase-61-multi-writer-runtime-activation-release-automation-assertion",
+      label: "Phase 61 multi-writer runtime activation release automation assertion evidence",
+      format: "json",
+      required: phase61Gate.releaseAutomationAssertionRequired,
+      summary: phase61Gate.releaseAutomationAssertionAttached
+        ? "Phase 61 multi-writer runtime activation release automation assertion evidence is attached; runtime release remains blocked."
+        : "Phase 61 multi-writer runtime activation release automation assertion evidence is required before recording activation controls.",
+      ...phase61ReleaseAutomationAssertionAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -1594,6 +1758,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase58Gate = phase58MultiWriterRuntimeImplementationValidationGate(asyncStoreBoundary, phase57Gate);
   const phase59Gate = phase59MultiWriterRuntimeEnablementApprovalGate(asyncStoreBoundary, phase58Gate);
   const phase60Gate = phase60MultiWriterRuntimeSupportPresenceAssertionGate(asyncStoreBoundary, phase59Gate);
+  const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
 
   return {
     phase: "44",
@@ -1764,6 +1929,24 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase60MultiWriterRuntimeSupportPresenceAssertionComplete: phase60Gate.runtimeSupportPresenceAssertionComplete,
         phase60MultiWriterRuntimeSupportBlocked: phase60Gate.runtimeSupportBlocked,
         phase60MultiWriterTopologyReleaseAllowed: phase60Gate.releaseAllowed,
+        phase61MultiWriterRuntimeActivationControlsGateRequired: phase61Gate.required,
+        phase61MultiWriterRuntimeSupportPresenceAssertionRequired: phase61Gate.runtimeSupportPresenceAssertionRequired,
+        phase61MultiWriterRuntimeSupportPresenceAssertionComplete: phase61Gate.runtimeSupportPresenceAssertionComplete,
+        phase61MultiWriterActivationDecisionRequired: phase61Gate.activationDecisionRequired,
+        phase61MultiWriterActivationDecisionAttached: phase61Gate.activationDecisionAttached,
+        phase61MultiWriterActivationOwnerRequired: phase61Gate.activationOwnerRequired,
+        phase61MultiWriterActivationOwnerAttached: phase61Gate.activationOwnerAttached,
+        phase61MultiWriterActivationWindowRequired: phase61Gate.activationWindowRequired,
+        phase61MultiWriterActivationWindowAttached: phase61Gate.activationWindowAttached,
+        phase61MultiWriterActivationFlagRequired: phase61Gate.activationFlagRequired,
+        phase61MultiWriterActivationFlagAttached: phase61Gate.activationFlagAttached,
+        phase61MultiWriterReleaseAutomationAssertionRequired: phase61Gate.releaseAutomationAssertionRequired,
+        phase61MultiWriterReleaseAutomationAssertionAttached: phase61Gate.releaseAutomationAssertionAttached,
+        phase61MultiWriterActivationControlsReady: phase61Gate.activationControlsReady,
+        phase61MultiWriterActivationGatePassed: phase61Gate.activationGatePassed,
+        phase61MultiWriterActivationReady: phase61Gate.activationReady,
+        phase61MultiWriterRuntimeSupportBlocked: phase61Gate.runtimeSupportBlocked,
+        phase61MultiWriterTopologyReleaseAllowed: phase61Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

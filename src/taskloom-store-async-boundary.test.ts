@@ -71,6 +71,11 @@ const STORE_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -100,6 +105,14 @@ const PHASE_60_MULTI_WRITER_RUNTIME_SUPPORT_EVIDENCE_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL",
   "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
+] as const satisfies readonly StoreEnvKey[];
+
+const PHASE_61_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROL_ENV_KEYS = [
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
 ] as const satisfies readonly StoreEnvKey[];
 
 const COMPLETE_MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE = {
@@ -155,6 +168,16 @@ const COMPLETE_MULTI_WRITER_RUNTIME_SUPPORT_ASSERTION_EVIDENCE = {
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "docs/phase-60/cutover-evidence.md",
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL: "docs/phase-60/release-automation-approval.md",
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "docs/phase-60/owner-acceptance.md",
+} satisfies Partial<Record<StoreEnvKey, string>>;
+
+const COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS = {
+  ...COMPLETE_MULTI_WRITER_RUNTIME_SUPPORT_ASSERTION_EVIDENCE,
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "blocked-pending-runtime-support",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "platform-ops",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-11T15:00:00Z/2026-05-11T17:00:00Z",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER_ACTIVATION=false",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION:
+    "docs/phase-61/release-automation-assertion.md",
 } satisfies Partial<Record<StoreEnvKey, string>>;
 
 async function withStoreEnv(
@@ -311,6 +334,41 @@ test("async store env helper clears and restores Phase 60 runtime support eviden
     }
   } finally {
     for (const key of PHASE_60_MULTI_WRITER_RUNTIME_SUPPORT_EVIDENCE_ENV_KEYS) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("async store env helper clears and restores Phase 61 runtime activation control keys", async () => {
+  const previous = new Map<StoreEnvKey, string | undefined>();
+  for (const key of PHASE_61_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROL_ENV_KEYS) {
+    previous.set(key, process.env[key]);
+    process.env[key] = `outer-${key}`;
+  }
+
+  try {
+    await withStoreEnv({
+      TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "blocked-pending-runtime-support",
+    }, async () => {
+      await Promise.resolve();
+      assert.equal(
+        process.env.TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION,
+        "blocked-pending-runtime-support",
+      );
+      for (const key of PHASE_61_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROL_ENV_KEYS) {
+        if (key !== "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION") {
+          assert.equal(process.env[key], undefined);
+        }
+      }
+    });
+
+    for (const key of PHASE_61_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROL_ENV_KEYS) {
+      assert.equal(process.env[key], `outer-${key}`);
+    }
+  } finally {
+    for (const key of PHASE_61_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROL_ENV_KEYS) {
       const value = previous.get(key);
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -650,6 +708,40 @@ test("synchronous APIs stay guarded when complete multi-writer Phase 60 runtime 
       TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
       TASKLOOM_DATABASE_TOPOLOGY: topology,
       ...COMPLETE_MULTI_WRITER_RUNTIME_SUPPORT_ASSERTION_EVIDENCE,
+    }, () => {
+      assert.throws(
+        () => loadStore(),
+        (error) => {
+          assert.ok(error instanceof ManagedDatabaseStoreBoundaryError);
+          assert.equal(error.code, "TASKLOOM_MANAGED_DATABASE_SYNC_ADAPTER_GAP");
+          assert.equal(error.storeMode, "postgres");
+          assert.deepEqual(error.managedDatabaseUrlKeys, ["TASKLOOM_MANAGED_DATABASE_URL"]);
+          return true;
+        },
+      );
+
+      let mutatorRan = false;
+      assert.throws(
+        () => mutateStore(() => {
+          mutatorRan = true;
+          return "should-not-run";
+        }),
+        ManagedDatabaseStoreBoundaryError,
+      );
+      assert.equal(mutatorRan, false);
+    });
+  }
+});
+
+test("synchronous APIs stay guarded when complete multi-writer Phase 61 activation controls are configured", async () => {
+  const blockedTopologies = ["multi-writer", "multi-region", "active-active", "distributed"] as const;
+
+  for (const topology of blockedTopologies) {
+    await withStoreEnv({
+      TASKLOOM_STORE: "postgres",
+      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_DATABASE_TOPOLOGY: topology,
+      ...COMPLETE_MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS,
     }, () => {
       assert.throws(
         () => loadStore(),

@@ -472,6 +472,96 @@ test("runReleaseEvidenceCli preserves Phase 60 support-presence evidence while b
   assert.doesNotMatch(output[0] ?? "", /phase60-evidence-secret/);
 });
 
+test("runReleaseEvidenceCli preserves Phase 61 unsupported-claim evidence while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseEvidenceCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildReleaseEvidenceBundle: () => ({
+      readyForRelease: false,
+      releaseEvidence: {
+        phase61UnsupportedRuntimeReleaseClaimsGate: {
+          activeActiveClaimEvidence: "https://evidence.example.com/phase61/evidence-active-active",
+          regionalClaimEvidence: "regional-reviewed",
+          pitrClaimEvidence: "https://evidence.example.com/phase61/evidence-pitr",
+          sqliteDistributedClaimEvidence: "sqlite-reviewed",
+          unsupportedRuntimeReleaseClaimsComplete: true,
+          activeActiveSupport: true,
+          regionalSupport: true,
+          pitrSupport: true,
+          sqliteDistributedSupport: true,
+          runtimeSupport: true,
+          releaseAllowed: true,
+          strictBlocker: false,
+          claimSecret: "phase61-evidence-secret",
+          summary: "Phase 61 release evidence unsupported claim evidence is recorded.",
+        },
+      },
+    }),
+  });
+  const bundle = parseJsonOutput(output) as {
+    releaseEvidence?: {
+      phase61UnsupportedRuntimeReleaseClaimsGate?: {
+        activeActiveClaimEvidence?: unknown;
+        pitrClaimEvidence?: unknown;
+        activeActiveSupport?: unknown;
+        regionalSupport?: unknown;
+        pitrSupport?: unknown;
+        sqliteDistributedSupport?: unknown;
+        runtimeSupport?: unknown;
+        releaseAllowed?: unknown;
+        claimSecret?: unknown;
+      };
+    };
+    phase61?: {
+      phase?: unknown;
+      activeActiveClaimEvidence?: unknown;
+      pitrClaimEvidence?: unknown;
+      unsupportedRuntimeReleaseClaimsComplete?: unknown;
+      activeActiveSupport?: unknown;
+      regionalSupport?: unknown;
+      pitrSupport?: unknown;
+      sqliteDistributedSupport?: unknown;
+      runtimeSupport?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      claimSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(bundle.phase61?.phase, "61");
+  assert.equal(bundle.phase61?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(bundle.phase61?.pitrClaimEvidence, "[redacted]");
+  assert.equal(bundle.phase61?.unsupportedRuntimeReleaseClaimsComplete, true);
+  assert.equal(bundle.phase61?.activeActiveSupport, false);
+  assert.equal(bundle.phase61?.regionalSupport, false);
+  assert.equal(bundle.phase61?.pitrSupport, false);
+  assert.equal(bundle.phase61?.sqliteDistributedSupport, false);
+  assert.equal(bundle.phase61?.runtimeSupport, false);
+  assert.equal(bundle.phase61?.releaseAllowed, false);
+  assert.equal(bundle.phase61?.strictBlocker, false);
+  assert.equal(bundle.phase61?.claimSecret, "[redacted]");
+  assert.equal(bundle.phase61?.summary, "Phase 61 release evidence unsupported claim evidence is recorded.");
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.pitrClaimEvidence, "[redacted]");
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.activeActiveSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.regionalSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.pitrSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.sqliteDistributedSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.runtimeSupport, false);
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.releaseAllowed, false);
+  assert.equal(bundle.releaseEvidence?.phase61UnsupportedRuntimeReleaseClaimsGate?.claimSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase61-evidence-secret/);
+});
+
 test("runReleaseEvidenceCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

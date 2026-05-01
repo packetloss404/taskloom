@@ -665,6 +665,96 @@ test("runManagedDatabaseTopologyCli preserves Phase 60 support-presence fields w
   assert.doesNotMatch(output[0] ?? "", /phase60-topology-secret/);
 });
 
+test("runManagedDatabaseTopologyCli preserves Phase 61 unsupported-claim fields while blocking support claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseTopologyCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseTopologyReport: () => ({
+      ready: false,
+      managedDatabase: {
+        phase61: {
+          activeActiveClaimEvidence: "https://evidence.example.com/phase61/topology-active-active",
+          regionalClaimEvidence: "regional-reviewed",
+          pitrClaimEvidence: "https://evidence.example.com/phase61/topology-pitr",
+          sqliteDistributedClaimEvidence: "sqlite-reviewed",
+          unsupportedRuntimeReleaseClaimsComplete: true,
+          activeActiveSupport: true,
+          regionalSupport: true,
+          pitrSupport: true,
+          sqliteDistributedSupport: true,
+          runtimeSupport: true,
+          releaseAllowed: true,
+          strictBlocker: false,
+          claimSecret: "phase61-topology-secret",
+          summary: "Phase 61 topology unsupported claim evidence is recorded.",
+        },
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase61?: {
+      phase?: unknown;
+      activeActiveClaimEvidence?: unknown;
+      pitrClaimEvidence?: unknown;
+      unsupportedRuntimeReleaseClaimsComplete?: unknown;
+      activeActiveSupport?: unknown;
+      regionalSupport?: unknown;
+      pitrSupport?: unknown;
+      sqliteDistributedSupport?: unknown;
+      runtimeSupport?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      claimSecret?: unknown;
+      summary?: unknown;
+    };
+    managedDatabase?: {
+      phase61?: {
+        activeActiveClaimEvidence?: unknown;
+        pitrClaimEvidence?: unknown;
+        activeActiveSupport?: unknown;
+        regionalSupport?: unknown;
+        pitrSupport?: unknown;
+        sqliteDistributedSupport?: unknown;
+        runtimeSupport?: unknown;
+        releaseAllowed?: unknown;
+        claimSecret?: unknown;
+      };
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase61?.phase, "61");
+  assert.equal(report.phase61?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.phase61?.unsupportedRuntimeReleaseClaimsComplete, true);
+  assert.equal(report.phase61?.activeActiveSupport, false);
+  assert.equal(report.phase61?.regionalSupport, false);
+  assert.equal(report.phase61?.pitrSupport, false);
+  assert.equal(report.phase61?.sqliteDistributedSupport, false);
+  assert.equal(report.phase61?.runtimeSupport, false);
+  assert.equal(report.phase61?.releaseAllowed, false);
+  assert.equal(report.phase61?.strictBlocker, false);
+  assert.equal(report.phase61?.claimSecret, "[redacted]");
+  assert.equal(report.phase61?.summary, "Phase 61 topology unsupported claim evidence is recorded.");
+  assert.equal(report.managedDatabase?.phase61?.activeActiveClaimEvidence, "[redacted]");
+  assert.equal(report.managedDatabase?.phase61?.pitrClaimEvidence, "[redacted]");
+  assert.equal(report.managedDatabase?.phase61?.activeActiveSupport, false);
+  assert.equal(report.managedDatabase?.phase61?.regionalSupport, false);
+  assert.equal(report.managedDatabase?.phase61?.pitrSupport, false);
+  assert.equal(report.managedDatabase?.phase61?.sqliteDistributedSupport, false);
+  assert.equal(report.managedDatabase?.phase61?.runtimeSupport, false);
+  assert.equal(report.managedDatabase?.phase61?.releaseAllowed, false);
+  assert.equal(report.managedDatabase?.phase61?.claimSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /evidence\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase61-topology-secret/);
+});
+
 test("runManagedDatabaseTopologyCli preserves detailed Phase 54 design-package reports from the builder", async () => {
   const output: string[] = [];
   const env = {

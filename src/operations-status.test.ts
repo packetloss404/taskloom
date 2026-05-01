@@ -103,6 +103,18 @@ function completeMultiWriterPhase60Env(): NodeJS.ProcessEnv {
   };
 }
 
+function completeMultiWriterPhase61Env(): NodeJS.ProcessEnv {
+  return {
+    ...completeMultiWriterPhase60Env(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "approved-for-activation-audit-only",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "platform-activation-owner",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-03T02:00:00Z/2026-05-03T04:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER=false",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION:
+      "artifacts/phase61/release-automation-assertion.md",
+  };
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -147,6 +159,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.phase, "61");
+  assert.equal(status.multiWriterRuntimeActivationControls.status, "not-required");
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -1302,6 +1319,141 @@ test("multiWriterRuntimeSupportPresenceAssertion can derive evidence from deploy
   );
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeActivationControls is not required without multi-writer intent", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeActivationControls.phase, "61");
+  assert.equal(status.multiWriterRuntimeActivationControls.status, "not-required");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationControlStatus, "not-required");
+  assert.equal(status.multiWriterRuntimeActivationControls.required, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.activationDecision.status, "not-required");
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeActivationControls is blocked until Phase 60 support presence assertion is complete", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeMultiWriterPhase59Env(),
+      TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "approved-for-activation-audit-only",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "platform-activation-owner",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-03T02:00:00Z/2026-05-03T04:00:00Z",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER=false",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION:
+        "artifacts/phase61/release-automation-assertion.md",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeActivationControls.phase, "61");
+  assert.equal(status.multiWriterRuntimeActivationControls.status, "blocked");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationControlStatus, "blocked");
+  assert.equal(status.multiWriterRuntimeActivationControls.phase60RuntimeSupportPresenceAssertionComplete, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeActivationControlsComplete, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.activationDecision.configured, true);
+  assert.deepEqual(status.multiWriterRuntimeActivationControls.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeActivationControls.summary, /blocked until Phase 60/i);
+});
+
+test("multiWriterRuntimeActivationControls reports missing Phase 61 controls", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase60Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeActivationControls.phase, "61");
+  assert.equal(status.multiWriterRuntimeActivationControls.status, "blocked");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationControlStatus, "missing");
+  assert.equal(status.multiWriterRuntimeActivationControls.phase60RuntimeSupportPresenceAssertionComplete, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeActivationControlsComplete, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.activationDecision.status, "missing");
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAutomationAssertion.status, "missing");
+  assert.deepEqual(status.multiWriterRuntimeActivationControls.missingEvidence, [
+    "activationDecision",
+    "activationOwner",
+    "activationWindow",
+    "activationFlag",
+    "releaseAutomationAssertion",
+  ]);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeActivationControls.summary, /blocked pending activationDecision/i);
+});
+
+test("multiWriterRuntimeActivationControls records complete controls without enabling runtime release", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase61Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeActivationControls.phase, "61");
+  assert.equal(status.multiWriterRuntimeActivationControls.status, "activation-controls-complete");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationControlStatus, "complete");
+  assert.equal(status.multiWriterRuntimeActivationControls.phase60RuntimeSupportPresenceAssertionComplete, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeActivationControlsComplete, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.activationDecision.status, "provided");
+  assert.equal(
+    status.multiWriterRuntimeActivationControls.activationDecision.value,
+    "approved-for-activation-audit-only",
+  );
+  assert.equal(status.multiWriterRuntimeActivationControls.activationOwner.status, "provided");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationWindow.status, "provided");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationFlag.status, "provided");
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAutomationAssertion.status, "provided");
+  assert.deepEqual(status.multiWriterRuntimeActivationControls.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeActivationControls.summary, /activation audit/i);
+  assert.match(status.multiWriterRuntimeActivationControls.summary, /distributed, active-active, regional\/PITR, and SQLite-distributed runtime support remain unsupported/i);
+});
+
+test("multiWriterRuntimeActivationControls can derive controls from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase60Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseEvidenceBundle: () => ({
+      phase61: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        activationDecision: "report-approved-for-activation-audit-only",
+        activationOwner: "report-activation-owner",
+        activationWindow: "2026-05-03T02:00:00Z/2026-05-03T04:00:00Z",
+        activationFlag: "TASKLOOM_EXPERIMENTAL_MULTI_WRITER=false",
+        releaseAutomationAssertion: "artifacts/reports/phase61-release-automation-assertion.md",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.multiWriterRuntimeActivationControls.status, "activation-controls-complete");
+  assert.equal(status.multiWriterRuntimeActivationControls.activationDecision.source, "releaseEvidence");
+  assert.equal(
+    status.multiWriterRuntimeActivationControls.activationDecision.value,
+    "report-approved-for-activation-audit-only",
+  );
+  assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

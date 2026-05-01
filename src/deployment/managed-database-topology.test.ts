@@ -86,6 +86,14 @@ const distributedTopologyPhase60Env = {
   TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "database-platform",
 } as const;
 
+const distributedTopologyPhase61Env = {
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "docs/phase-61/activation-decision.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "release-commander",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-06T02:00Z/2026-05-06T04:00Z",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "multi-writer-runtime-activation-disabled",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "REL-AUTO-61",
+} as const;
+
 test("local JSON reports current supported local mode", () => {
   const report = assessManagedDatabaseTopology({ env: {} });
 
@@ -970,6 +978,142 @@ test("distributed topology with Phase 60 runtime support presence assertion evid
       step.includes("Phase 60 records runtime support presence assertion evidence only"),
     ),
   );
+});
+
+test("distributed topology with Phase 60 complete requires Phase 61 runtime activation controls", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      ...distributedTopologyPhase56BundledEnv,
+      ...distributedTopologyPhase57Env,
+      ...distributedTopologyPhase58Env,
+      ...distributedTopologyPhase59Env,
+      ...distributedTopologyPhase60Env,
+    },
+  });
+  const activationDecision = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
+  );
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
+  assert.equal(report.managedDatabase.phase61?.multiWriterTopologyRequested, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupportPresenceAssertionGatePassed, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationDecisionConfigured, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationOwnerConfigured, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationWindowConfigured, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationFlagConfigured, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationReleaseAutomationAssertionConfigured, false);
+  assert.equal(report.managedDatabase.phase61?.activationControlsReady, false);
+  assert.equal(report.managedDatabase.phase61?.activationGatePassed, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupported, false);
+  assert.equal(report.managedDatabase.phase61?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase61?.strictBlocker, true);
+  assert.equal(activationDecision.configured, false);
+  assert.equal(activationDecision.value, null);
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase61-multi-writer-runtime-activation-controls" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 61 requires complete Phase 60")));
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION"),
+    ),
+  );
+});
+
+test("distributed topology with Phase 61 activation controls records readiness but remains blocked", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      ...distributedTopologyPhase56BundledEnv,
+      ...distributedTopologyPhase57Env,
+      ...distributedTopologyPhase58Env,
+      ...distributedTopologyPhase59Env,
+      ...distributedTopologyPhase60Env,
+      ...distributedTopologyPhase61Env,
+    },
+  });
+  const activationOwner = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
+  );
+  const activationAutomation = observedEnvValue(
+    report,
+    "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
+  );
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-requested");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.syncStartupSupported, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupportPresenceAssertionGatePassed, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationDecisionConfigured, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationOwnerConfigured, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationWindowConfigured, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationFlagConfigured, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeActivationReleaseAutomationAssertionConfigured, true);
+  assert.equal(report.managedDatabase.phase61?.activationControlsReady, true);
+  assert.equal(report.managedDatabase.phase61?.activationGatePassed, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupport, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupported, false);
+  assert.equal(report.managedDatabase.phase61?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase.phase61?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabase.phase61?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase61?.strictBlocker, true);
+  assert.equal(activationOwner.configured, true);
+  assert.equal(activationOwner.value, "release-commander");
+  assert.equal(activationOwner.redacted, false);
+  assert.equal(activationAutomation.configured, true);
+  assert.equal(activationAutomation.value, "REL-AUTO-61");
+  assert.equal(activationAutomation.redacted, false);
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 61")));
+  assert.ok(report.warnings.some((warning) => warning.includes("activation controls are ready")));
+  assert.ok(
+    report.nextSteps.some((step) => step.includes("Phase 61 records activation controls only")),
+  );
+});
+
+test("Phase 61 activation controls do not bypass SQLite regional PITR topology", () => {
+  const report = assessManagedDatabaseTopology({
+    env: {
+      ...distributedTopologyPhase56BundledEnv,
+      ...distributedTopologyPhase57Env,
+      ...distributedTopologyPhase58Env,
+      ...distributedTopologyPhase59Env,
+      ...distributedTopologyPhase60Env,
+      ...distributedTopologyPhase61Env,
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: undefined,
+      TASKLOOM_MANAGED_DATABASE_URL: undefined,
+      TASKLOOM_DATABASE_TOPOLOGY: "regional-pitr",
+    },
+  });
+
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "production-blocked");
+  assert.equal(report.ready, false);
+  assert.equal(report.managedDatabase.configured, false);
+  assert.equal(report.managedDatabase.supported, false);
+  assert.equal(report.managedDatabase.syncStartupSupported, false);
+  assert.equal(report.observed.databaseTopology, "regional-pitr");
+  assert.equal(report.managedDatabase.phase52?.managedPostgresStartupSupported, false);
+  assert.equal(report.managedDatabase.phase61?.activationControlsReady, true);
+  assert.equal(report.managedDatabase.phase61?.activationGatePassed, true);
+  assert.equal(report.managedDatabase.phase61?.runtimeSupported, false);
+  assert.equal(report.managedDatabase.phase61?.releaseAllowed, false);
+  assert.ok(
+    report.checks.some((check) => check.id === "single-writer-topology" && check.status === "fail"),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
 });
 
 test("production SQLite remains single-node advisory-supported without managed database intent", () => {
