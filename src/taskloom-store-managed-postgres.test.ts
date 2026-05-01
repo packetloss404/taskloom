@@ -56,6 +56,12 @@ const STORE_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK",
   "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET",
 ] as const;
 
 type StoreEnvKey = (typeof STORE_ENV_KEYS)[number];
@@ -67,6 +73,15 @@ const PHASE_58_MULTI_WRITER_EVIDENCE_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK",
   "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF",
+] as const satisfies readonly StoreEnvKey[];
+
+const PHASE_59_MULTI_WRITER_ENABLEMENT_EVIDENCE_ENV_KEYS = [
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET",
 ] as const satisfies readonly StoreEnvKey[];
 
 const COMPLETE_MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE = {
@@ -102,6 +117,16 @@ const COMPLETE_MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE = {
   TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "docs/phase-58/data-integrity-validation.md",
   TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "docs/phase-58/operations-runbook.md",
   TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "docs/phase-58/runtime-release-signoff.md",
+} satisfies Partial<Record<StoreEnvKey, string>>;
+
+const COMPLETE_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_GATE_EVIDENCE = {
+  ...COMPLETE_MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE,
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-release-window",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "release-captain",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-04T15:00:00Z/2026-05-04T17:00:00Z",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "docs/phase-59/monitoring-signoff.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "docs/phase-59/abort-plan.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "TASKLOOM-59",
 } satisfies Partial<Record<StoreEnvKey, string>>;
 
 interface QueryLog {
@@ -232,6 +257,41 @@ test("managed Postgres env helper clears and restores Phase 58 runtime evidence 
     }
   } finally {
     for (const key of PHASE_58_MULTI_WRITER_EVIDENCE_ENV_KEYS) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("managed Postgres env helper clears and restores Phase 59 enablement evidence keys", async () => {
+  const previous = new Map<StoreEnvKey, string | undefined>();
+  for (const key of PHASE_59_MULTI_WRITER_ENABLEMENT_EVIDENCE_ENV_KEYS) {
+    previous.set(key, process.env[key]);
+    process.env[key] = `outer-${key}`;
+  }
+
+  try {
+    await withManagedStoreEnv({
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-release-window",
+    }, new FakeManagedPostgresClient(), async () => {
+      await Promise.resolve();
+      assert.equal(
+        process.env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION,
+        "approved-for-release-window",
+      );
+      for (const key of PHASE_59_MULTI_WRITER_ENABLEMENT_EVIDENCE_ENV_KEYS) {
+        if (key !== "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION") {
+          assert.equal(process.env[key], undefined);
+        }
+      }
+    });
+
+    for (const key of PHASE_59_MULTI_WRITER_ENABLEMENT_EVIDENCE_ENV_KEYS) {
+      assert.equal(process.env[key], `outer-${key}`);
+    }
+  } finally {
+    for (const key of PHASE_59_MULTI_WRITER_ENABLEMENT_EVIDENCE_ENV_KEYS) {
       const value = previous.get(key);
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -535,6 +595,37 @@ test("single-writer managed Postgres remains supported when Phase 58 runtime imp
     }, "2026-04-30T20:00:00.000Z").id);
 
     assert.equal(requirementId, "req_single_writer_with_phase58_runtime_evidence");
+    assert.equal(client.storedData().requirements.some((entry) => entry.id === requirementId), true);
+    assert.equal(configs[0]?.envKey, "TASKLOOM_DATABASE_URL");
+    assert.equal(configs[0]?.resolution.mode, "postgres");
+    assert.equal(configs[0]?.resolution.requestedStore, "postgres");
+
+    const queries = client.normalizedQueries();
+    assert.equal(queries.some((query) => query.startsWith("select pg_advisory_xact_lock")), true);
+    assert.equal(queries.some((query) => query.includes("for update")), true);
+    assert.equal(queries.includes("commit"), true);
+  });
+});
+
+test("single-writer managed Postgres remains supported when Phase 59 enablement evidence is configured", async () => {
+  const client = new FakeManagedPostgresClient();
+
+  await withManagedStoreEnv({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "single-writer",
+    ...COMPLETE_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_GATE_EVIDENCE,
+  }, client, async (configs) => {
+    const requirementId = await mutateStoreAsync((data) => upsertRequirement(data, {
+      id: "req_single_writer_with_phase59_enablement_evidence",
+      workspaceId: "alpha",
+      title: "Single-writer with Phase 59 enablement evidence",
+      priority: "must",
+      status: "approved",
+      createdByUserId: "user_alpha",
+    }, "2026-05-01T15:00:00.000Z").id);
+
+    assert.equal(requirementId, "req_single_writer_with_phase59_enablement_evidence");
     assert.equal(client.storedData().requirements.some((entry) => entry.id === requirementId), true);
     assert.equal(configs[0]?.envKey, "TASKLOOM_DATABASE_URL");
     assert.equal(configs[0]?.resolution.mode, "postgres");

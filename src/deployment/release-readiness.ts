@@ -50,6 +50,12 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
   TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -108,6 +114,7 @@ export interface AsyncStoreBoundaryReport {
   phase56MultiWriterRuntimeReadinessGate?: Phase56MultiWriterRuntimeReadinessGateReport;
   phase57MultiWriterImplementationScopeGate?: Phase57MultiWriterImplementationScopeGateReport;
   phase58MultiWriterRuntimeImplementationValidationGate?: Phase58MultiWriterRuntimeImplementationValidationGateReport;
+  phase59MultiWriterRuntimeEnablementApprovalGate?: Phase59MultiWriterRuntimeEnablementApprovalGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -216,6 +223,31 @@ export interface Phase58MultiWriterRuntimeImplementationValidationGateReport {
   runtimeReleaseSignoffRequired: boolean;
   runtimeReleaseSignoffAttached: boolean;
   runtimeImplementationValidationComplete: boolean;
+  runtimeSupportBlocked: boolean;
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
+export interface Phase59MultiWriterRuntimeEnablementApprovalGateReport {
+  phase: "59";
+  required: boolean;
+  runtimeImplementationValidationRequired: boolean;
+  runtimeImplementationValidationComplete: boolean;
+  enablementDecisionEvidenceRequired: boolean;
+  enablementDecisionEvidenceAttached: boolean;
+  enablementApproverEvidenceRequired: boolean;
+  enablementApproverEvidenceAttached: boolean;
+  rolloutWindowEvidenceRequired: boolean;
+  rolloutWindowEvidenceAttached: boolean;
+  monitoringSignoffEvidenceRequired: boolean;
+  monitoringSignoffEvidenceAttached: boolean;
+  abortPlanEvidenceRequired: boolean;
+  abortPlanEvidenceAttached: boolean;
+  releaseTicketEvidenceRequired: boolean;
+  releaseTicketEvidenceAttached: boolean;
+  runtimeEnablementApprovalComplete: boolean;
   runtimeSupportBlocked: boolean;
   releaseAllowed: boolean;
   summary: string;
@@ -1019,6 +1051,136 @@ function buildPhase58MultiWriterRuntimeImplementationValidationGate(
   };
 }
 
+function buildPhase59MultiWriterRuntimeEnablementApprovalGate(
+  multiWriterIntent: boolean,
+  phase58Gate: Phase58MultiWriterRuntimeImplementationValidationGateReport,
+  env: ReleaseReadinessEnv,
+): Phase59MultiWriterRuntimeEnablementApprovalGateReport {
+  const enablementDecisionEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION).length > 0;
+  const enablementApproverEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER).length > 0;
+  const rolloutWindowEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW).length > 0;
+  const monitoringSignoffEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF).length > 0;
+  const abortPlanEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN).length > 0;
+  const releaseTicketEvidenceAttached =
+    clean(env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET).length > 0;
+  const runtimeEnablementApprovalComplete =
+    multiWriterIntent &&
+    phase58Gate.runtimeImplementationValidationComplete &&
+    enablementDecisionEvidenceAttached &&
+    enablementApproverEvidenceAttached &&
+    rolloutWindowEvidenceAttached &&
+    monitoringSignoffEvidenceAttached &&
+    abortPlanEvidenceAttached &&
+    releaseTicketEvidenceAttached;
+
+  if (!multiWriterIntent) {
+    return {
+      phase: "59",
+      required: false,
+      runtimeImplementationValidationRequired: false,
+      runtimeImplementationValidationComplete: phase58Gate.runtimeImplementationValidationComplete,
+      enablementDecisionEvidenceRequired: false,
+      enablementDecisionEvidenceAttached,
+      enablementApproverEvidenceRequired: false,
+      enablementApproverEvidenceAttached,
+      rolloutWindowEvidenceRequired: false,
+      rolloutWindowEvidenceAttached,
+      monitoringSignoffEvidenceRequired: false,
+      monitoringSignoffEvidenceAttached,
+      abortPlanEvidenceRequired: false,
+      abortPlanEvidenceAttached,
+      releaseTicketEvidenceRequired: false,
+      releaseTicketEvidenceAttached,
+      runtimeEnablementApprovalComplete: false,
+      runtimeSupportBlocked: false,
+      releaseAllowed: true,
+      summary: "Phase 59 multi-writer runtime enablement approval gate is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 59 runtime enablement approval evidence ready before any future multi-writer release-enable claim."],
+    };
+  }
+
+  return {
+    phase: "59",
+    required: true,
+    runtimeImplementationValidationRequired: true,
+    runtimeImplementationValidationComplete: phase58Gate.runtimeImplementationValidationComplete,
+    enablementDecisionEvidenceRequired: true,
+    enablementDecisionEvidenceAttached,
+    enablementApproverEvidenceRequired: true,
+    enablementApproverEvidenceAttached,
+    rolloutWindowEvidenceRequired: true,
+    rolloutWindowEvidenceAttached,
+    monitoringSignoffEvidenceRequired: true,
+    monitoringSignoffEvidenceAttached,
+    abortPlanEvidenceRequired: true,
+    abortPlanEvidenceAttached,
+    releaseTicketEvidenceRequired: true,
+    releaseTicketEvidenceAttached,
+    runtimeEnablementApprovalComplete,
+    runtimeSupportBlocked: true,
+    releaseAllowed: false,
+    summary: runtimeEnablementApprovalComplete
+      ? "Phase 59 multi-writer runtime enablement approval evidence is attached, but multi-writer runtime support remains blocked; this phase records approval evidence only."
+      : phase58Gate.runtimeImplementationValidationComplete
+        ? "Phase 59 multi-writer runtime enablement approval evidence is required after Phase 58 runtime implementation validation."
+        : "Phase 59 multi-writer runtime enablement approval requires Phase 58 runtime implementation validation completion first.",
+    blockers: [
+      ...(!phase58Gate.runtimeImplementationValidationComplete
+        ? ["Phase 59 multi-writer runtime enablement approval requires complete Phase 58 runtime implementation validation evidence first."]
+        : []),
+      ...(!enablementDecisionEvidenceAttached
+        ? ["Phase 59 multi-writer runtime enablement decision evidence is required before recording release-enable approval."]
+        : []),
+      ...(!enablementApproverEvidenceAttached
+        ? ["Phase 59 multi-writer runtime enablement approver evidence is required before recording release-enable approval."]
+        : []),
+      ...(!rolloutWindowEvidenceAttached
+        ? ["Phase 59 multi-writer runtime enablement rollout window evidence is required before recording release-enable approval."]
+        : []),
+      ...(!monitoringSignoffEvidenceAttached
+        ? ["Phase 59 multi-writer runtime enablement monitoring signoff evidence is required before recording release-enable approval."]
+        : []),
+      ...(!abortPlanEvidenceAttached
+        ? ["Phase 59 multi-writer runtime enablement abort plan evidence is required before recording release-enable approval."]
+        : []),
+      ...(!releaseTicketEvidenceAttached
+        ? ["Phase 59 multi-writer runtime enablement release ticket evidence is required before recording release-enable approval."]
+        : []),
+      "Phase 59 multi-writer runtime support remains blocked; approval evidence does not permit distributed, active-active, or multi-writer release.",
+    ],
+    nextSteps: [
+      ...(!phase58Gate.runtimeImplementationValidationComplete
+        ? ["Complete Phase 58 multi-writer runtime implementation validation before treating Phase 59 release-enable approval evidence as complete."]
+        : []),
+      ...(!enablementDecisionEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION before recording multi-writer release-enable approval evidence."]
+        : []),
+      ...(!enablementApproverEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER before recording multi-writer release-enable approval evidence."]
+        : []),
+      ...(!rolloutWindowEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW before recording multi-writer release-enable approval evidence."]
+        : []),
+      ...(!monitoringSignoffEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF before recording multi-writer release-enable approval evidence."]
+        : []),
+      ...(!abortPlanEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN before recording multi-writer release-enable approval evidence."]
+        : []),
+      ...(!releaseTicketEvidenceAttached
+        ? ["Attach TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET before recording multi-writer release-enable approval evidence."]
+        : []),
+      "Keep multi-writer runtime release blocked after Phase 59 approval evidence; this phase records approval evidence only and does not enable distributed, active-active, or multi-writer runtime support.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -1179,6 +1341,12 @@ export function buildAsyncStoreBoundaryReport(
       phase57MultiWriterImplementationScopeGate,
       env,
     );
+  const phase59MultiWriterRuntimeEnablementApprovalGate =
+    buildPhase59MultiWriterRuntimeEnablementApprovalGate(
+      multiWriterIntent,
+      phase58MultiWriterRuntimeImplementationValidationGate,
+      env,
+    );
   const unsupportedStore =
     managedDatabaseTopology.classification === "unsupported-store" ||
     managedDatabaseRuntimeGuard.classification === "unsupported-store" ||
@@ -1197,6 +1365,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase56MultiWriterRuntimeReadinessGate.blockers,
     ...phase57MultiWriterImplementationScopeGate.blockers,
     ...phase58MultiWriterRuntimeImplementationValidationGate.blockers,
+    ...phase59MultiWriterRuntimeEnablementApprovalGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -1212,6 +1381,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase56MultiWriterRuntimeReadinessGate.nextSteps,
     ...phase57MultiWriterImplementationScopeGate.nextSteps,
     ...phase58MultiWriterRuntimeImplementationValidationGate.nextSteps,
+    ...phase59MultiWriterRuntimeEnablementApprovalGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -1251,7 +1421,9 @@ export function buildAsyncStoreBoundaryReport(
     nextSteps.add(`Finish Phase 51 runtime call-site migration for: ${phase51Capability.remainingSyncCallSiteGroups.join(", ")}.`);
   }
   if (multiWriterIntent) {
-    if (phase58MultiWriterRuntimeImplementationValidationGate.runtimeImplementationValidationComplete) {
+    if (phase59MultiWriterRuntimeEnablementApprovalGate.runtimeEnablementApprovalComplete) {
+      nextSteps.add("Keep multi-writer database topology blocked even with Phase 59 release-enable approval evidence attached; this phase records approval evidence and does not enable runtime support.");
+    } else if (phase58MultiWriterRuntimeImplementationValidationGate.runtimeImplementationValidationComplete) {
       nextSteps.add("Keep multi-writer database topology blocked even with Phase 58 runtime implementation validation evidence attached; this phase validates evidence and does not enable runtime support.");
     } else if (phase57MultiWriterImplementationScopeGate.implementationScopeComplete) {
       nextSteps.add("Keep multi-writer database topology blocked even with Phase 57 implementation-scope evidence attached until a later release gate explicitly allows the topology.");
@@ -1275,6 +1447,7 @@ export function buildAsyncStoreBoundaryReport(
     phase56MultiWriterRuntimeReadinessGate.releaseAllowed &&
     phase57MultiWriterImplementationScopeGate.releaseAllowed &&
     phase58MultiWriterRuntimeImplementationValidationGate.releaseAllowed &&
+    phase59MultiWriterRuntimeEnablementApprovalGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -1285,8 +1458,10 @@ export function buildAsyncStoreBoundaryReport(
   if (managedIntent && effectivePhase52ManagedStartupSupported) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
   } else if (multiWriterIntent) {
-    summary = phase58MultiWriterRuntimeImplementationValidationGate.runtimeImplementationValidationComplete
-      ? "Phase 49 async-store boundary exists as foundation and Phase 58 runtime implementation validation evidence is attached, but multi-writer database runtime remains blocked."
+    summary = phase59MultiWriterRuntimeEnablementApprovalGate.runtimeEnablementApprovalComplete
+      ? "Phase 49 async-store boundary exists as foundation and Phase 59 release-enable approval evidence is attached, but multi-writer database runtime remains blocked."
+      : phase58MultiWriterRuntimeImplementationValidationGate.runtimeImplementationValidationComplete
+      ? "Phase 49 async-store boundary exists as foundation and Phase 58 runtime implementation validation evidence is attached, and Phase 59 release-enable approval evidence is required, but multi-writer database runtime remains blocked."
       : phase57MultiWriterImplementationScopeGate.implementationScopeComplete
       ? "Phase 49 async-store boundary exists as foundation and Phase 57 implementation-scope evidence is attached, but multi-writer database runtime remains blocked."
       : phase56MultiWriterRuntimeReadinessGate.runtimeReadinessComplete
@@ -1331,6 +1506,7 @@ export function buildAsyncStoreBoundaryReport(
     phase56MultiWriterRuntimeReadinessGate,
     phase57MultiWriterImplementationScopeGate,
     phase58MultiWriterRuntimeImplementationValidationGate,
+    phase59MultiWriterRuntimeEnablementApprovalGate,
     classification,
     summary,
     blockers,

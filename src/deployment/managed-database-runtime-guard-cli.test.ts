@@ -227,6 +227,90 @@ test("runManagedDatabaseRuntimeGuardCli preserves Phase 58 validation fields whi
   assert.doesNotMatch(output[0] ?? "", /phase58-runtime-secret/);
 });
 
+test("runManagedDatabaseRuntimeGuardCli preserves Phase 59 enablement fields while blocking support claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseRuntimeGuardCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseRuntimeGuardReport: () => ({
+      allowed: false,
+      phase59MultiWriterRuntimeEnablementGate: {
+        runtimeEnablementDecision: "approved",
+        runtimeEnablementApprover: "release-council",
+        runtimeEnablementRolloutWindow: "maintenance-window-59",
+        runtimeEnablementMonitoringSignoff: "observability-ready",
+        runtimeEnablementAbortPlan: "https://runbooks.example.com/phase59/runtime-abort",
+        runtimeEnablementReleaseTicket: "MW-59",
+        runtimeEnablementApprovalEvidenceComplete: true,
+        runtimeSupport: true,
+        runtimeSupported: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        approvalSecret: "phase59-runtime-secret",
+        summary: "Phase 59 runtime guard enablement approval is recorded.",
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase59MultiWriterRuntimeEnablementGate?: {
+      runtimeEnablementAbortPlan?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      approvalSecret?: unknown;
+    };
+    phase59?: {
+      phase?: unknown;
+      runtimeEnablementDecision?: unknown;
+      runtimeEnablementAbortPlan?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      approvalSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase59?.phase, "59");
+  assert.equal(report.phase59?.runtimeEnablementDecision, "approved");
+  assert.equal(report.phase59?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.phase59?.runtimeSupport, false);
+  assert.equal(report.phase59?.runtimeSupported, false);
+  assert.equal(report.phase59?.multiWriterSupported, false);
+  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.phase59?.releaseAllowed, false);
+  assert.equal(report.phase59?.strictBlocker, false);
+  assert.equal(report.phase59?.approvalSecret, "[redacted]");
+  assert.equal(report.phase59?.summary, "Phase 59 runtime guard enablement approval is recorded.");
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.runtimeSupport, false);
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.runtimeSupported, false);
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.multiWriterSupported, false);
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.runtimeSupportBlocked, true);
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.releaseAllowed, false);
+  assert.equal(report.phase59MultiWriterRuntimeEnablementGate?.approvalSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /runbooks\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase59-runtime-secret/);
+});
+
 test("runManagedDatabaseRuntimeGuardCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

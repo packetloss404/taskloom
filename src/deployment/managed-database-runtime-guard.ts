@@ -49,6 +49,12 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
   TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -198,6 +204,25 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase59?: {
+    multiWriterTopologyRequested: boolean;
+    runtimeImplementationValidationGatePassed: boolean;
+    runtimeEnablementDecisionConfigured: boolean;
+    runtimeEnablementApproverConfigured: boolean;
+    runtimeEnablementRolloutWindowConfigured: boolean;
+    runtimeEnablementMonitoringSignoffConfigured: boolean;
+    runtimeEnablementAbortPlanConfigured: boolean;
+    runtimeEnablementReleaseTicketConfigured: boolean;
+    runtimeReleaseEnablementApprovalGatePassed: boolean;
+    runtimeSupport: false;
+    runtimeSupported: false;
+    multiWriterSupported: false;
+    runtimeImplementationBlocked: true;
+    runtimeSupportBlocked: true;
+    releaseAllowed: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -259,6 +284,12 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE",
   "TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK",
   "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN",
+  "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -681,6 +712,66 @@ function phase58MultiWriterRuntimeImplementationValidationGate(
   };
 }
 
+function phase59MultiWriterRuntimeReleaseEnablementApprovalGate(
+  env: ManagedDatabaseRuntimeGuardEnv,
+  hasMultiWriterIntent: boolean,
+  runtimeImplementationValidationGatePassed: boolean,
+) {
+  const runtimeEnablementDecisionConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION,
+  );
+  const runtimeEnablementApproverConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER,
+  );
+  const runtimeEnablementRolloutWindowConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW,
+  );
+  const runtimeEnablementMonitoringSignoffConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF,
+  );
+  const runtimeEnablementAbortPlanConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN,
+  );
+  const runtimeEnablementReleaseTicketConfigured = configured(
+    env.TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET,
+  );
+  const runtimeReleaseEnablementApprovalGatePassed =
+    !hasMultiWriterIntent ||
+    (runtimeImplementationValidationGatePassed &&
+      runtimeEnablementDecisionConfigured &&
+      runtimeEnablementApproverConfigured &&
+      runtimeEnablementRolloutWindowConfigured &&
+      runtimeEnablementMonitoringSignoffConfigured &&
+      runtimeEnablementAbortPlanConfigured &&
+      runtimeEnablementReleaseTicketConfigured);
+  const strictBlocker = hasMultiWriterIntent;
+  const summary = hasMultiWriterIntent
+    ? runtimeReleaseEnablementApprovalGatePassed
+      ? "Phase 59 multi-writer runtime release-enable approval evidence is configured; runtime support and release remain blocked."
+      : "Phase 59 requires complete Phase 58 runtime implementation validation plus release-enable decision, approver, rollout window, monitoring signoff, abort plan, and release ticket before release-enable approval evidence can be recorded."
+    : "No multi-writer, distributed, or active-active topology requested for Phase 59.";
+
+  return {
+    multiWriterTopologyRequested: hasMultiWriterIntent,
+    runtimeImplementationValidationGatePassed,
+    runtimeEnablementDecisionConfigured,
+    runtimeEnablementApproverConfigured,
+    runtimeEnablementRolloutWindowConfigured,
+    runtimeEnablementMonitoringSignoffConfigured,
+    runtimeEnablementAbortPlanConfigured,
+    runtimeEnablementReleaseTicketConfigured,
+    runtimeReleaseEnablementApprovalGatePassed,
+    runtimeSupport: false as const,
+    runtimeSupported: false as const,
+    multiWriterSupported: false as const,
+    runtimeImplementationBlocked: true as const,
+    runtimeSupportBlocked: true as const,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
 }
@@ -708,6 +799,7 @@ function buildNextSteps(
   phase56: ReturnType<typeof phase56MultiWriterImplementationReadinessGate>,
   phase57: ReturnType<typeof phase57MultiWriterImplementationScopeGate>,
   phase58: ReturnType<typeof phase58MultiWriterRuntimeImplementationValidationGate>,
+  phase59: ReturnType<typeof phase59MultiWriterRuntimeReleaseEnablementApprovalGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -844,6 +936,32 @@ function buildNextSteps(
         steps.add("Keep multi-writer runtime support and release disabled; Phase 58 records implementation validation evidence only.");
       }
     }
+    if (check.id === "phase59-multi-writer-runtime-release-enable-approval") {
+      if (!phase58.runtimeImplementationValidationGatePassed) {
+        steps.add("Complete Phase 58 multi-writer runtime implementation validation before recording release-enable approval evidence.");
+      }
+      if (!phase59.runtimeEnablementDecisionConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION with the Phase 59 release-enable decision evidence.");
+      }
+      if (!phase59.runtimeEnablementApproverConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER with the release-enable approver evidence.");
+      }
+      if (!phase59.runtimeEnablementRolloutWindowConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW with the approved rollout window evidence.");
+      }
+      if (!phase59.runtimeEnablementMonitoringSignoffConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF with monitoring signoff evidence.");
+      }
+      if (!phase59.runtimeEnablementAbortPlanConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN with the release abort plan evidence.");
+      }
+      if (!phase59.runtimeEnablementReleaseTicketConfigured) {
+        steps.add("Configure TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET with the release ticket evidence.");
+      }
+      if (phase59.runtimeReleaseEnablementApprovalGatePassed) {
+        steps.add("Keep multi-writer runtime support and release disabled; Phase 59 records release-enable approval evidence only.");
+      }
+    }
   }
 
   if (bypassEnabled) {
@@ -892,6 +1010,11 @@ export function assessManagedDatabaseRuntimeGuard(
     env,
     hasMultiWriterIntent,
     phase57.implementationScopeGatePassed,
+  );
+  const phase59 = phase59MultiWriterRuntimeReleaseEnablementApprovalGate(
+    env,
+    hasMultiWriterIntent,
+    phase58.runtimeImplementationValidationGatePassed,
   );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
@@ -982,6 +1105,13 @@ export function assessManagedDatabaseRuntimeGuard(
     phase58.summary,
   );
 
+  pushCheck(
+    checks,
+    "phase59-multi-writer-runtime-release-enable-approval",
+    phase59.strictBlocker ? "fail" : "pass",
+    phase59.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -1017,6 +1147,7 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(phase56.summary);
     warnings.push(phase57.summary);
     warnings.push(phase58.summary);
+    warnings.push(phase59.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -1073,6 +1204,7 @@ export function assessManagedDatabaseRuntimeGuard(
       phase56,
       phase57,
       phase58,
+      phase59,
     ),
     observed: {
       nodeEnv,
@@ -1095,6 +1227,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase56,
     phase57,
     phase58,
+    phase59,
   };
 }
 

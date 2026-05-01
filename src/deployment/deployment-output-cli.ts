@@ -15,7 +15,9 @@ const SENSITIVE_KEY_PATTERN =
 const SECRET_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 const PHASE58_REPORT_KEY_PATTERN = /^phase58/i;
+const PHASE59_REPORT_KEY_PATTERN = /^phase59/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
+const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 
 function clean(value: string | undefined): string {
   return (value ?? "").trim();
@@ -64,25 +66,44 @@ function firstReportByKey(
   return null;
 }
 
-function redactValue(value: unknown, force = false, phase58Evidence = false, inPhase58Report = false): unknown {
+function redactValue(
+  value: unknown,
+  force = false,
+  redactPhaseUrl = false,
+  inPhaseUrlRedactionReport = false,
+  inPhase59Report = false,
+): unknown {
   if (typeof value === "string") {
     if (!value) return value;
-    return force || SECRET_URL_PATTERN.test(value) || (phase58Evidence && URL_PATTERN.test(value))
+    return force || SECRET_URL_PATTERN.test(value) || (redactPhaseUrl && URL_PATTERN.test(value))
       ? "[redacted]"
       : value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => redactValue(entry, force, phase58Evidence, inPhase58Report));
+    return value.map((entry) =>
+      redactValue(entry, force, redactPhaseUrl, inPhaseUrlRedactionReport, inPhase59Report)
+    );
   }
   if (value && typeof value === "object") {
     const redacted: DeploymentCliReport = {};
     for (const [key, entry] of Object.entries(value)) {
       const sensitiveKey = SENSITIVE_KEY_PATTERN.test(key);
-      const nestedInPhase58Report = inPhase58Report || PHASE58_REPORT_KEY_PATTERN.test(key);
-      const nestedPhase58Evidence = phase58Evidence || (nestedInPhase58Report && EVIDENCE_KEY_PATTERN.test(key));
+      const nestedInPhaseUrlRedactionReport =
+        inPhaseUrlRedactionReport || PHASE58_REPORT_KEY_PATTERN.test(key) || PHASE59_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
+      const nestedRedactPhaseUrl =
+        redactPhaseUrl ||
+        (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
-        : redactValue(entry, force || sensitiveKey, nestedPhase58Evidence, nestedInPhase58Report);
+        : redactValue(
+          entry,
+          force || sensitiveKey,
+          nestedRedactPhaseUrl,
+          nestedInPhaseUrlRedactionReport,
+          nestedInPhase59Report,
+        );
     }
     return redacted;
   }
@@ -130,6 +151,16 @@ function blockMultiWriterRuntimeSupport(value: unknown): unknown {
         releaseAllowed: false,
       };
     } else if (PHASE58_REPORT_KEY_PATTERN.test(key) && isReport(entry)) {
+      blocked[key] = {
+        ...(blockMultiWriterRuntimeSupport(entry) as DeploymentCliReport),
+        runtimeSupport: false,
+        runtimeSupported: false,
+        multiWriterSupported: false,
+        runtimeImplementationBlocked: true,
+        runtimeSupportBlocked: true,
+        releaseAllowed: false,
+      };
+    } else if (PHASE59_REPORT_KEY_PATTERN.test(key) && isReport(entry)) {
       blocked[key] = {
         ...(blockMultiWriterRuntimeSupport(entry) as DeploymentCliReport),
         runtimeSupport: false,
@@ -435,12 +466,129 @@ function withPhase58Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function phase59EnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = clean(env[key]);
+  return value ? value : undefined;
+}
+
+function withPhase59Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
+    return report;
+  }
+
+  const nestedPhase59 = firstReportAt(report, [
+    ["phase59MultiWriterRuntimeEnablementGate"],
+    ["phase59MultiWriterRuntimeEnablementReport"],
+    ["phase59MultiWriterRuntimeReleaseEnablementGate"],
+    ["phase59MultiWriterRuntimeReleaseEnablementReport"],
+    ["phase59MultiWriterReleaseEnablementGate"],
+    ["phase59MultiWriterReleaseApprovalGate"],
+    ["managedDatabase", "phase59"],
+    ["managedDatabase", "phase59MultiWriterRuntimeEnablementGate"],
+    ["managedDatabaseTopology", "phase59"],
+    ["managedDatabaseTopology", "phase59MultiWriterRuntimeEnablementGate"],
+    ["managedDatabaseTopology", "managedDatabase", "phase59"],
+    ["managedDatabaseRuntimeGuard", "phase59"],
+    ["managedDatabaseRuntimeGuard", "phase59MultiWriterRuntimeEnablementGate"],
+    ["runtimeGuard", "phase59"],
+    ["runtimeGuard", "phase59MultiWriterRuntimeEnablementGate"],
+    ["releaseReadiness", "phase59"],
+    ["releaseReadiness", "phase59MultiWriterRuntimeEnablementGate"],
+    ["releaseReadiness", "managedDatabaseRuntimeGuard", "phase59"],
+    ["releaseEvidence", "phase59"],
+    ["releaseEvidence", "phase59MultiWriterRuntimeEnablementGate"],
+    ["evidence", "phase59"],
+    ["evidence", "phase59MultiWriterRuntimeEnablementGate"],
+    ["asyncStoreBoundary", "phase59"],
+    ["asyncStoreBoundary", "phase59MultiWriterRuntimeEnablementGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE59_REPORT_KEY_PATTERN.test(key));
+  const existingPhase59 = reportAt(report, ["phase59"]) ?? nestedPhase59 ?? {};
+
+  const runtimeEnablementDecision = existingPhase59.runtimeEnablementDecision ??
+    existingPhase59.enablementDecision ??
+    phase59EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION");
+  const runtimeEnablementApprover = existingPhase59.runtimeEnablementApprover ??
+    existingPhase59.approver ??
+    phase59EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER");
+  const runtimeEnablementRolloutWindow = existingPhase59.runtimeEnablementRolloutWindow ??
+    existingPhase59.rolloutWindow ??
+    phase59EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW");
+  const runtimeEnablementMonitoringSignoff = existingPhase59.runtimeEnablementMonitoringSignoff ??
+    existingPhase59.monitoringSignoff ??
+    phase59EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF");
+  const runtimeEnablementAbortPlan = existingPhase59.runtimeEnablementAbortPlan ??
+    existingPhase59.abortPlan ??
+    phase59EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN");
+  const runtimeEnablementReleaseTicket = existingPhase59.runtimeEnablementReleaseTicket ??
+    existingPhase59.releaseTicket ??
+    phase59EnvValue(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET");
+
+  const runtimeEnablementDecisionRecorded =
+    existingPhase59.runtimeEnablementDecisionRecorded ?? runtimeEnablementDecision !== undefined;
+  const runtimeEnablementApproverRecorded =
+    existingPhase59.runtimeEnablementApproverRecorded ?? runtimeEnablementApprover !== undefined;
+  const runtimeEnablementRolloutWindowRecorded =
+    existingPhase59.runtimeEnablementRolloutWindowRecorded ?? runtimeEnablementRolloutWindow !== undefined;
+  const runtimeEnablementMonitoringSignoffRecorded =
+    existingPhase59.runtimeEnablementMonitoringSignoffRecorded ?? runtimeEnablementMonitoringSignoff !== undefined;
+  const runtimeEnablementAbortPlanRecorded =
+    existingPhase59.runtimeEnablementAbortPlanRecorded ?? runtimeEnablementAbortPlan !== undefined;
+  const runtimeEnablementReleaseTicketRecorded =
+    existingPhase59.runtimeEnablementReleaseTicketRecorded ?? runtimeEnablementReleaseTicket !== undefined;
+  const runtimeEnablementApprovalEvidenceComplete =
+    existingPhase59.runtimeEnablementApprovalEvidenceComplete ??
+    existingPhase59.runtimeEnablementGatePassed ??
+    (
+      runtimeEnablementDecisionRecorded === true &&
+      runtimeEnablementApproverRecorded === true &&
+      runtimeEnablementRolloutWindowRecorded === true &&
+      runtimeEnablementMonitoringSignoffRecorded === true &&
+      runtimeEnablementAbortPlanRecorded === true &&
+      runtimeEnablementReleaseTicketRecorded === true
+    );
+
+  return blockMultiWriterRuntimeSupport({
+    ...report,
+    phase59: {
+      ...existingPhase59,
+      phase: existingPhase59.phase ?? "59",
+      required: existingPhase59.required ?? true,
+      multiWriterTopologyRequested: existingPhase59.multiWriterTopologyRequested ?? true,
+      runtimeEnablementDecision,
+      runtimeEnablementApprover,
+      runtimeEnablementRolloutWindow,
+      runtimeEnablementMonitoringSignoff,
+      runtimeEnablementAbortPlan,
+      runtimeEnablementReleaseTicket,
+      runtimeEnablementDecisionRecorded,
+      runtimeEnablementApproverRecorded,
+      runtimeEnablementRolloutWindowRecorded,
+      runtimeEnablementMonitoringSignoffRecorded,
+      runtimeEnablementAbortPlanRecorded,
+      runtimeEnablementReleaseTicketRecorded,
+      runtimeEnablementApprovalEvidenceComplete,
+      runtimeSupport: false,
+      runtimeSupported: false,
+      multiWriterSupported: false,
+      runtimeImplementationBlocked: true,
+      runtimeSupportBlocked: true,
+      releaseAllowed: false,
+      strictBlocker: existingPhase59.strictBlocker ?? runtimeEnablementApprovalEvidenceComplete !== true,
+      summary: existingPhase59.summary ??
+        "Phase 59 records multi-writer runtime release-enablement approval evidence; runtime support and release approval remain blocked in CLI output.",
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
     redactValue(
-      withPhase58Status(
-        withPhase57Status(
-          withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+      withPhase59Status(
+        withPhase58Status(
+          withPhase57Status(
+            withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+            env,
+          ),
           env,
         ),
         env,

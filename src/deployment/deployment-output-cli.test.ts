@@ -673,3 +673,166 @@ test("formatDeploymentCliJson preserves nested Phase 58 validation reports while
   assert.doesNotMatch(output, /evidence\.example\.com/);
   assert.doesNotMatch(output, /phase58-validation-secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 59 enablement fields while blocking release claims", () => {
+  const output = formatDeploymentCliJson({
+    phase59EvidenceUrl: "https://evidence.example.com/phase59/approval",
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-window",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "release-council",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-04T01:00Z/2026-05-04T03:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "sre-observability",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "abort-plan-recorded",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "https://tickets.example.com/MW-59",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase59EvidenceUrl?: unknown;
+    phase59?: {
+      phase?: unknown;
+      required?: unknown;
+      multiWriterTopologyRequested?: unknown;
+      runtimeEnablementDecision?: unknown;
+      runtimeEnablementApprover?: unknown;
+      runtimeEnablementRolloutWindow?: unknown;
+      runtimeEnablementMonitoringSignoff?: unknown;
+      runtimeEnablementAbortPlan?: unknown;
+      runtimeEnablementReleaseTicket?: unknown;
+      runtimeEnablementDecisionRecorded?: unknown;
+      runtimeEnablementApproverRecorded?: unknown;
+      runtimeEnablementRolloutWindowRecorded?: unknown;
+      runtimeEnablementMonitoringSignoffRecorded?: unknown;
+      runtimeEnablementAbortPlanRecorded?: unknown;
+      runtimeEnablementReleaseTicketRecorded?: unknown;
+      runtimeEnablementApprovalEvidenceComplete?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase59EvidenceUrl, "[redacted]");
+  assert.equal(report.phase59?.phase, "59");
+  assert.equal(report.phase59?.required, true);
+  assert.equal(report.phase59?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase59?.runtimeEnablementDecision, "approved-for-window");
+  assert.equal(report.phase59?.runtimeEnablementApprover, "release-council");
+  assert.equal(report.phase59?.runtimeEnablementRolloutWindow, "2026-05-04T01:00Z/2026-05-04T03:00Z");
+  assert.equal(report.phase59?.runtimeEnablementMonitoringSignoff, "sre-observability");
+  assert.equal(report.phase59?.runtimeEnablementAbortPlan, "abort-plan-recorded");
+  assert.equal(report.phase59?.runtimeEnablementReleaseTicket, "[redacted]");
+  assert.equal(report.phase59?.runtimeEnablementDecisionRecorded, true);
+  assert.equal(report.phase59?.runtimeEnablementApproverRecorded, true);
+  assert.equal(report.phase59?.runtimeEnablementRolloutWindowRecorded, true);
+  assert.equal(report.phase59?.runtimeEnablementMonitoringSignoffRecorded, true);
+  assert.equal(report.phase59?.runtimeEnablementAbortPlanRecorded, true);
+  assert.equal(report.phase59?.runtimeEnablementReleaseTicketRecorded, true);
+  assert.equal(report.phase59?.runtimeEnablementApprovalEvidenceComplete, true);
+  assert.equal(report.phase59?.runtimeSupport, false);
+  assert.equal(report.phase59?.runtimeSupported, false);
+  assert.equal(report.phase59?.multiWriterSupported, false);
+  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.phase59?.releaseAllowed, false);
+  assert.equal(report.phase59?.strictBlocker, false);
+  assert.match(String(report.phase59?.summary), /Phase 59/);
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+  assert.doesNotMatch(output, /tickets\.example\.com/);
+});
+
+test("formatDeploymentCliJson preserves nested Phase 59 enablement reports while blocking support claims", () => {
+  const output = formatDeploymentCliJson({
+    releaseEvidence: {
+      phase59MultiWriterRuntimeEnablementGate: {
+        runtimeEnablementDecision: "approved",
+        runtimeEnablementApprover: "release-council",
+        runtimeEnablementRolloutWindow: "maintenance-window-59",
+        runtimeEnablementMonitoringSignoff: "observability-ready",
+        runtimeEnablementAbortPlan: "https://runbooks.example.com/phase59/abort",
+        runtimeEnablementReleaseTicket: "MW-59",
+        runtimeEnablementApprovalEvidenceComplete: true,
+        approvalEvidenceUrl: "https://evidence.example.com/phase59/approval",
+        runtimeSupport: true,
+        runtimeSupported: true,
+        multiWriterSupported: true,
+        runtimeImplementationBlocked: false,
+        runtimeSupportBlocked: false,
+        releaseAllowed: true,
+        strictBlocker: false,
+        approvalSecret: "phase59-approval-secret",
+        summary: "Phase 59 release enablement approval evidence is recorded.",
+      },
+    },
+  }, { TASKLOOM_DATABASE_TOPOLOGY: "distributed" } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    releaseEvidence?: {
+      phase59MultiWriterRuntimeEnablementGate?: {
+        runtimeEnablementAbortPlan?: unknown;
+        approvalEvidenceUrl?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        approvalSecret?: unknown;
+      };
+    };
+    phase59?: {
+      phase?: unknown;
+      runtimeEnablementDecision?: unknown;
+      runtimeEnablementApprover?: unknown;
+      runtimeEnablementRolloutWindow?: unknown;
+      runtimeEnablementMonitoringSignoff?: unknown;
+      runtimeEnablementAbortPlan?: unknown;
+      runtimeEnablementReleaseTicket?: unknown;
+      runtimeEnablementApprovalEvidenceComplete?: unknown;
+      approvalEvidenceUrl?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      approvalSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase59?.phase, "59");
+  assert.equal(report.phase59?.runtimeEnablementDecision, "approved");
+  assert.equal(report.phase59?.runtimeEnablementApprover, "release-council");
+  assert.equal(report.phase59?.runtimeEnablementRolloutWindow, "maintenance-window-59");
+  assert.equal(report.phase59?.runtimeEnablementMonitoringSignoff, "observability-ready");
+  assert.equal(report.phase59?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.phase59?.runtimeEnablementReleaseTicket, "MW-59");
+  assert.equal(report.phase59?.runtimeEnablementApprovalEvidenceComplete, true);
+  assert.equal(report.phase59?.approvalEvidenceUrl, "[redacted]");
+  assert.equal(report.phase59?.runtimeSupport, false);
+  assert.equal(report.phase59?.runtimeSupported, false);
+  assert.equal(report.phase59?.multiWriterSupported, false);
+  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.phase59?.releaseAllowed, false);
+  assert.equal(report.phase59?.strictBlocker, false);
+  assert.equal(report.phase59?.approvalSecret, "[redacted]");
+  assert.equal(report.phase59?.summary, "Phase 59 release enablement approval evidence is recorded.");
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.approvalEvidenceUrl, "[redacted]");
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.runtimeSupport, false);
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.runtimeSupported, false);
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.multiWriterSupported, false);
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.runtimeImplementationBlocked, true);
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.runtimeSupportBlocked, true);
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.releaseAllowed, false);
+  assert.equal(report.releaseEvidence?.phase59MultiWriterRuntimeEnablementGate?.approvalSecret, "[redacted]");
+  assert.doesNotMatch(output, /runbooks\.example\.com/);
+  assert.doesNotMatch(output, /evidence\.example\.com/);
+  assert.doesNotMatch(output, /phase59-approval-secret/);
+});

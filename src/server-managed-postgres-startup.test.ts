@@ -34,6 +34,15 @@ type Phase58ManagedDatabaseRuntimeGuardEnv = Phase57ManagedDatabaseRuntimeGuardE
   TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF?: string;
 };
 
+type Phase59ManagedDatabaseRuntimeGuardEnv = Phase58ManagedDatabaseRuntimeGuardEnv & {
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN?: string;
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET?: string;
+};
+
 const COMPLETE_MULTI_WRITER_TOPOLOGY_REVIEW_AUTHORIZATION_EVIDENCE = {
   TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/multi-writer-requirements.md",
   TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/multi-writer-design.md",
@@ -81,6 +90,16 @@ const COMPLETE_MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE = {
   TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "docs/phase-58/runtime-release-signoff.md",
 } satisfies Partial<Phase58ManagedDatabaseRuntimeGuardEnv>;
 
+const COMPLETE_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_GATE_EVIDENCE = {
+  ...COMPLETE_MULTI_WRITER_RUNTIME_IMPLEMENTATION_VALIDATION_EVIDENCE,
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-release-window",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "release-captain",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-04T15:00:00Z/2026-05-04T17:00:00Z",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "docs/phase-59/monitoring-signoff.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "docs/phase-59/abort-plan.md",
+  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "TASKLOOM-59",
+} satisfies Partial<Phase59ManagedDatabaseRuntimeGuardEnv>;
+
 type Phase56RuntimeGuardReport = {
   phase56?: {
     implementationReadinessGatePassed?: boolean;
@@ -101,7 +120,7 @@ type Phase57RuntimeGuardReport = Phase56RuntimeGuardReport & {
   };
 };
 
-function assertServerStartupRuntimeSupported(env: Phase58ManagedDatabaseRuntimeGuardEnv) {
+function assertServerStartupRuntimeSupported(env: Phase59ManagedDatabaseRuntimeGuardEnv) {
   return assertManagedDatabaseRuntimeSupported(env, {
     phase51: {
       remainingSyncCallSiteGroups: [],
@@ -260,6 +279,28 @@ test("server startup guard keeps single-writer managed Postgres allowed with Pha
   }
 });
 
+test("server startup guard keeps single-writer managed Postgres allowed with Phase 59 enablement evidence present", () => {
+  const report = assertServerStartupRuntimeSupported({
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "single-writer",
+    ...COMPLETE_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_GATE_EVIDENCE,
+  });
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
+  assert.equal(report.phase50?.asyncAdapterAvailable, true);
+  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
+  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
+  assert.equal(report.phase55?.multiWriterTopologyRequested, false);
+  assert.equal(report.phase55?.runtimeSupport, false);
+  assert.equal(report.phase58?.runtimeSupport, false);
+  assert.equal(report.phase58?.releaseAllowed, false);
+  assert.match(report.phase58?.summary ?? "", /No multi-writer, distributed, or active-active topology requested/i);
+});
+
 test("server startup guard blocks unsupported store posture even with Phase 57 implementation-scope evidence", () => {
   assert.throws(
     () =>
@@ -307,6 +348,59 @@ test("server startup guard blocks unsupported store posture even with Phase 58 r
       return true;
     },
   );
+});
+
+test("server startup guard blocks unsupported store posture even with Phase 59 enablement evidence", () => {
+  assert.throws(
+    () =>
+      assertServerStartupRuntimeSupported({
+        TASKLOOM_STORE: "memory",
+        ...COMPLETE_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_GATE_EVIDENCE,
+      }),
+    (error) => {
+      assert.ok(error instanceof ManagedDatabaseRuntimeGuardError);
+      assert.equal(error.report.allowed, false);
+      assert.equal(error.report.classification, "unsupported-store");
+      assert.equal(error.report.observed.store, "memory");
+      assert.ok(error.report.blockers.some((blocker) => blocker.includes("TASKLOOM_STORE=memory")));
+      assert.equal(error.report.phase58?.runtimeSupport, false);
+      assert.equal(error.report.phase58?.releaseAllowed, false);
+      return true;
+    },
+  );
+});
+
+test("server startup guard blocks multi-writer runtime even with Phase 59 enablement evidence", () => {
+  const blockedTopologies = ["multi-writer", "distributed", "active-active"] as const;
+
+  for (const topology of blockedTopologies) {
+    assert.throws(
+      () =>
+        assertServerStartupRuntimeSupported({
+          TASKLOOM_STORE: "postgres",
+          TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+          TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+          TASKLOOM_DATABASE_TOPOLOGY: topology,
+          ...COMPLETE_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_GATE_EVIDENCE,
+        }),
+      (error) => {
+        assert.ok(error instanceof ManagedDatabaseRuntimeGuardError);
+        assert.equal(error.report.allowed, false);
+        assert.equal(error.report.classification, "multi-writer-blocked");
+        assert.equal(error.report.managedDatabaseRuntimeBlocked, true);
+        assert.equal(error.report.observed.databaseTopology, topology);
+        assert.equal(error.report.phase52?.managedPostgresStartupSupported, false);
+        assert.equal(error.report.phase55?.implementationAuthorizationGatePassed, true);
+        assert.equal(error.report.phase55?.runtimeSupport, false);
+        assert.equal(error.report.phase58?.runtimeImplementationValidationGatePassed, true);
+        assert.equal(error.report.phase58?.runtimeSupport, false);
+        assert.equal(error.report.phase58?.releaseAllowed, false);
+        assert.match(error.report.summary, /blocked unsupported managed database or multi-writer runtime/i);
+        assert.ok(error.report.blockers.some((blocker) => blocker.includes("TASKLOOM_DATABASE_TOPOLOGY")));
+        return true;
+      },
+    );
+  }
 });
 
 test("server startup guard blocks multi-writer runtime even with Phase 58 runtime implementation evidence", () => {

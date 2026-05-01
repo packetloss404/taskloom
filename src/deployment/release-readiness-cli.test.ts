@@ -273,6 +273,94 @@ test("runReleaseReadinessCli preserves Phase 58 validation fields while blocking
   assert.doesNotMatch(output[0] ?? "", /phase58-readiness-secret/);
 });
 
+test("runReleaseReadinessCli preserves Phase 59 enablement fields while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "multi-region",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runReleaseReadinessCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildReleaseReadinessReport: () => ({
+      readyForRelease: false,
+      managedDatabaseRuntimeGuard: {
+        phase59: {
+          runtimeEnablementDecision: "approved",
+          runtimeEnablementApprover: "release-council",
+          runtimeEnablementRolloutWindow: "maintenance-window-59",
+          runtimeEnablementMonitoringSignoff: "observability-ready",
+          runtimeEnablementAbortPlan: "https://runbooks.example.com/phase59/readiness-abort",
+          runtimeEnablementReleaseTicket: "MW-59",
+          runtimeEnablementApprovalEvidenceComplete: true,
+          runtimeSupport: true,
+          runtimeSupported: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          approvalSecret: "phase59-readiness-secret",
+          summary: "Phase 59 release readiness enablement approval is recorded.",
+        },
+      },
+    }),
+  });
+  const report = parseJsonOutput(output) as {
+    managedDatabaseRuntimeGuard?: {
+      phase59?: {
+        runtimeEnablementAbortPlan?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        approvalSecret?: unknown;
+      };
+    };
+    phase59?: {
+      phase?: unknown;
+      runtimeEnablementDecision?: unknown;
+      runtimeEnablementAbortPlan?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      approvalSecret?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase59?.phase, "59");
+  assert.equal(report.phase59?.runtimeEnablementDecision, "approved");
+  assert.equal(report.phase59?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.phase59?.runtimeSupport, false);
+  assert.equal(report.phase59?.runtimeSupported, false);
+  assert.equal(report.phase59?.multiWriterSupported, false);
+  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.phase59?.releaseAllowed, false);
+  assert.equal(report.phase59?.strictBlocker, false);
+  assert.equal(report.phase59?.approvalSecret, "[redacted]");
+  assert.equal(report.phase59?.summary, "Phase 59 release readiness enablement approval is recorded.");
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.runtimeSupport, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.runtimeSupported, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.multiWriterSupported, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.releaseAllowed, false);
+  assert.equal(report.managedDatabaseRuntimeGuard?.phase59?.approvalSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /runbooks\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase59-readiness-secret/);
+});
+
 test("runReleaseReadinessCli returns an error exit code when the builder throws", async () => {
   const errors: string[] = [];
 

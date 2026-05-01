@@ -22,6 +22,43 @@ function evidenceEntry(entries: ReleaseEvidenceEntry[], name: string): ReleaseEv
   return entry;
 }
 
+function phase58CompleteMultiWriterEvidenceEnv() {
+  return {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
+    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
+    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
+    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
+    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
+    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
+    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
+    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "readiness://phase56",
+    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
+    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "scope-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "feature-flag://multi-writer-runtime-disabled",
+    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "validation://phase57",
+    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "cutover-lock://phase57",
+    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "signoff://phase57",
+    TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "runtime-implementation://phase58",
+    TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "consistency-validation://phase58",
+    TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "failover-validation://phase58",
+    TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "data-integrity-validation://phase58",
+    TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "operations-runbook://phase58",
+    TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "runtime-signoff://phase58",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -822,38 +859,9 @@ test("strict evidence records redacted Phase 57 implementation scope attachments
 
 test("strict evidence records redacted Phase 58 runtime validation attachments while runtime stays blocked", () => {
   const env = {
-    NODE_ENV: "production",
-    TASKLOOM_STORE: "sqlite",
-    TASKLOOM_DB_PATH: "/srv/taskloom/taskloom.sqlite",
-    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
-    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
-    TASKLOOM_ACCESS_LOG_MODE: "stdout",
-    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
-    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-    TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "requirements://phase53",
-    TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "design://phase53",
-    TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "storage-platform",
-    TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "workspace leader plus conflict runbook",
-    TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "failover-pitr-runbook",
-    TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "migration-backfill-runbook",
-    TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "topology-observability-dashboard",
-    TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "rollback-runbook",
-    TASKLOOM_MULTI_WRITER_DESIGN_PACKAGE_REVIEW: "review://phase55",
-    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_AUTHORIZATION: "authorization://phase55",
-    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "readiness://phase56",
-    TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "rollout-safety://phase56",
-    TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "scope-lock://phase57",
-    TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "feature-flag://multi-writer-runtime-disabled",
-    TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "validation://phase57",
-    TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "cutover-lock://phase57",
-    TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "signoff://phase57",
+    ...phase58CompleteMultiWriterEvidenceEnv(),
     TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "https://validator:secret@runtime.internal/phase58",
-    TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "consistency-validation://phase58",
     TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "https://failover:secret@validation.internal/phase58",
-    TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "data-integrity-validation://phase58",
-    TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "operations-runbook://phase58",
-    TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "runtime-signoff://phase58",
   };
   const bundle = assessReleaseEvidence({
     env,
@@ -897,6 +905,78 @@ test("strict evidence records redacted Phase 58 runtime validation attachments w
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE").value, "[redacted]");
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE").value, "[redacted]");
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 58 runtime implementation validation evidence attached")));
+});
+
+test("strict evidence records missing Phase 59 approval evidence while runtime stays blocked", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase58CompleteMultiWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T01:30:00.000Z",
+    strict: true,
+  });
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase58MultiWriterRuntimeImplementationValidationComplete, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeEnablementApprovalGateRequired, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeImplementationValidationComplete, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterEnablementDecisionEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterEnablementApproverEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRolloutWindowEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterMonitoringSignoffEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterAbortPlanEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterReleaseTicketEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeEnablementApprovalComplete, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase59MultiWriterRuntimeEnablementApprovalGate?.releaseAllowed, false);
+  assert.ok(bundle.summary.includes("Phase 59 release-enable approval evidence is required"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION")));
+  assert.ok(bundle.attachments.some((attachment) => attachment.id === "phase-59-multi-writer-runtime-enablement-decision" && attachment.required));
+});
+
+test("strict evidence records redacted Phase 59 approval attachments while runtime stays blocked", () => {
+  const env = {
+    ...phase58CompleteMultiWriterEvidenceEnv(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "decision://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "https://approver:secret@release.internal/phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-04T16:00:00Z/2026-05-04T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "monitoring-signoff://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "abort-plan://phase59",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "release-ticket://phase59",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T02:00:00.000Z",
+    strict: true,
+  });
+  const approverAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-59-multi-writer-runtime-enablement-approver");
+  const ticketAttachment = bundle.attachments.find((attachment) => attachment.id === "phase-59-multi-writer-runtime-enablement-release-ticket");
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeEnablementApprovalGateRequired, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterEnablementDecisionEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterEnablementApproverEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRolloutWindowEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterMonitoringSignoffEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterAbortPlanEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterReleaseTicketEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeEnablementApprovalComplete, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterRuntimeSupportBlocked, true);
+  assert.equal(bundle.evidence.config.phase59MultiWriterTopologyReleaseAllowed, false);
+  assert.equal(bundle.asyncStoreBoundary.phase59MultiWriterRuntimeEnablementApprovalGate?.releaseAllowed, false);
+  assert.equal(approverAttachment?.configured, true);
+  assert.equal(approverAttachment?.redacted, true);
+  assert.equal(approverAttachment?.value, "[redacted]");
+  assert.equal(ticketAttachment?.configured, true);
+  assert.equal(ticketAttachment?.value, "release-ticket://phase59");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER").value, "[redacted]");
+  assert.ok(bundle.summary.includes("Phase 59 release-enable approval evidence is attached"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 59 release-enable approval evidence attached")));
 });
 
 test("release readiness managed reports are reused when present", () => {

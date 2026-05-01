@@ -488,6 +488,94 @@ test("runManagedDatabaseTopologyCli preserves Phase 58 validation fields while b
   assert.doesNotMatch(output[0] ?? "", /phase58-topology-secret/);
 });
 
+test("runManagedDatabaseTopologyCli preserves Phase 59 enablement fields while blocking release claims", async () => {
+  const output: string[] = [];
+  const env = {
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as NodeJS.ProcessEnv;
+
+  const exitCode = await runManagedDatabaseTopologyCli({
+    argv: [],
+    env,
+    out: (line) => output.push(line),
+    buildManagedDatabaseTopologyReport: () => ({
+      ready: false,
+      managedDatabase: {
+        phase59: {
+          runtimeEnablementDecision: "approved",
+          runtimeEnablementApprover: "release-council",
+          runtimeEnablementRolloutWindow: "maintenance-window-59",
+          runtimeEnablementMonitoringSignoff: "observability-ready",
+          runtimeEnablementAbortPlan: "https://runbooks.example.com/phase59/topology-abort",
+          runtimeEnablementReleaseTicket: "MW-59",
+          runtimeEnablementApprovalEvidenceComplete: true,
+          runtimeSupport: true,
+          runtimeSupported: true,
+          multiWriterSupported: true,
+          runtimeImplementationBlocked: false,
+          runtimeSupportBlocked: false,
+          releaseAllowed: true,
+          strictBlocker: false,
+          approvalSecret: "phase59-topology-secret",
+          summary: "Phase 59 topology release enablement approval is recorded.",
+        },
+      },
+    }),
+  });
+  const report = JSON.parse(output[0] ?? "") as {
+    phase59?: {
+      phase?: unknown;
+      runtimeEnablementDecision?: unknown;
+      runtimeEnablementAbortPlan?: unknown;
+      runtimeSupport?: unknown;
+      runtimeSupported?: unknown;
+      multiWriterSupported?: unknown;
+      runtimeImplementationBlocked?: unknown;
+      runtimeSupportBlocked?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      approvalSecret?: unknown;
+      summary?: unknown;
+    };
+    managedDatabase?: {
+      phase59?: {
+        runtimeEnablementAbortPlan?: unknown;
+        runtimeSupport?: unknown;
+        runtimeSupported?: unknown;
+        multiWriterSupported?: unknown;
+        runtimeImplementationBlocked?: unknown;
+        runtimeSupportBlocked?: unknown;
+        releaseAllowed?: unknown;
+        approvalSecret?: unknown;
+      };
+    };
+  };
+
+  assert.equal(exitCode, 0);
+  assert.equal(report.phase59?.phase, "59");
+  assert.equal(report.phase59?.runtimeEnablementDecision, "approved");
+  assert.equal(report.phase59?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.phase59?.runtimeSupport, false);
+  assert.equal(report.phase59?.runtimeSupported, false);
+  assert.equal(report.phase59?.multiWriterSupported, false);
+  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.phase59?.releaseAllowed, false);
+  assert.equal(report.phase59?.strictBlocker, false);
+  assert.equal(report.phase59?.approvalSecret, "[redacted]");
+  assert.equal(report.phase59?.summary, "Phase 59 topology release enablement approval is recorded.");
+  assert.equal(report.managedDatabase?.phase59?.runtimeEnablementAbortPlan, "[redacted]");
+  assert.equal(report.managedDatabase?.phase59?.runtimeSupport, false);
+  assert.equal(report.managedDatabase?.phase59?.runtimeSupported, false);
+  assert.equal(report.managedDatabase?.phase59?.multiWriterSupported, false);
+  assert.equal(report.managedDatabase?.phase59?.runtimeImplementationBlocked, true);
+  assert.equal(report.managedDatabase?.phase59?.runtimeSupportBlocked, true);
+  assert.equal(report.managedDatabase?.phase59?.releaseAllowed, false);
+  assert.equal(report.managedDatabase?.phase59?.approvalSecret, "[redacted]");
+  assert.doesNotMatch(output[0] ?? "", /runbooks\.example\.com/);
+  assert.doesNotMatch(output[0] ?? "", /phase59-topology-secret/);
+});
+
 test("runManagedDatabaseTopologyCli preserves detailed Phase 54 design-package reports from the builder", async () => {
   const output: string[] = [];
   const env = {

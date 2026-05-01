@@ -76,6 +76,19 @@ function completeMultiWriterPhase58Env(): NodeJS.ProcessEnv {
   };
 }
 
+function completeMultiWriterPhase59Env(): NodeJS.ProcessEnv {
+  return {
+    ...completeMultiWriterPhase58Env(),
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-release-gate-only",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "platform-release-owner",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-02T02:00:00Z/2026-05-02T04:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF:
+      "artifacts/phase59/monitoring-signoff.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "artifacts/phase59/abort-plan.md",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "TASKLOOM-59",
+  };
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -110,6 +123,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase, "59");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.status, "not-required");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -983,6 +1001,147 @@ test("multiWriterRuntimeImplementationValidation can derive evidence from deploy
   );
   assert.equal(status.multiWriterRuntimeImplementationValidation.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeImplementationValidation.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeReleaseEnablementApproval is not required without multi-writer intent", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase, "59");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.status, "not-required");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.approvalStatus, "not-required");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.required, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.status, "not-required");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+});
+
+test("multiWriterRuntimeReleaseEnablementApproval is blocked until Phase 58 validation is complete", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeMultiWriterPhase57Env(),
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "approved-for-release-gate-only",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "platform-release-owner",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW:
+        "2026-05-02T02:00:00Z/2026-05-02T04:00:00Z",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF:
+        "artifacts/phase59/monitoring-signoff.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "artifacts/phase59/abort-plan.md",
+      TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "TASKLOOM-59",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase, "59");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.status, "blocked");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.approvalStatus, "blocked");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase58RuntimeValidationComplete, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseEnablementApprovalComplete, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.configured, true);
+  assert.deepEqual(status.multiWriterRuntimeReleaseEnablementApproval.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeReleaseEnablementApproval.summary, /blocked until Phase 58/i);
+});
+
+test("multiWriterRuntimeReleaseEnablementApproval reports missing Phase 59 approval evidence", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase58Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase, "59");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.status, "blocked");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.approvalStatus, "missing");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase58RuntimeValidationComplete, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseEnablementApprovalComplete, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.status, "missing");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseTicket.status, "missing");
+  assert.deepEqual(status.multiWriterRuntimeReleaseEnablementApproval.missingEvidence, [
+    "enablementDecision",
+    "approver",
+    "rolloutWindow",
+    "monitoringSignoff",
+    "abortPlan",
+    "releaseTicket",
+  ]);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeReleaseEnablementApproval.summary, /blocked pending enablementDecision/i);
+});
+
+test("multiWriterRuntimeReleaseEnablementApproval records complete approval evidence without enabling runtime", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase59Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase, "59");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.status, "approval-complete");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.approvalStatus, "complete");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.phase58RuntimeValidationComplete, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseEnablementApprovalComplete, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.status, "provided");
+  assert.equal(
+    status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.value,
+    "approved-for-release-gate-only",
+  );
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.approver.status, "provided");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.rolloutWindow.status, "provided");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.monitoringSignoff.status, "provided");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.abortPlan.status, "provided");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseTicket.status, "provided");
+  assert.deepEqual(status.multiWriterRuntimeReleaseEnablementApproval.missingEvidence, []);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeImplementationBlocked, true);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
+  assert.match(status.multiWriterRuntimeReleaseEnablementApproval.summary, /visible for approval audit/i);
+  assert.match(status.multiWriterRuntimeReleaseEnablementApproval.summary, /runtimeSupported=false/);
+  assert.match(status.multiWriterRuntimeReleaseEnablementApproval.summary, /releaseAllowed=false/);
+});
+
+test("multiWriterRuntimeReleaseEnablementApproval can derive evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeMultiWriterPhase58Env(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseEvidenceBundle: () => ({
+      phase59: {
+        multiWriterIntentDetected: true,
+        topologyIntent: "multi-writer",
+        enablementDecision: "report-approved-for-release-gate-only",
+        approver: "release-owner-from-report",
+        rolloutWindow: "2026-05-02T02:00:00Z/2026-05-02T04:00:00Z",
+        monitoringSignoff: "artifacts/reports/phase59-monitoring-signoff.md",
+        abortPlan: "artifacts/reports/phase59-abort-plan.md",
+        releaseTicket: "TASKLOOM-59",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.status, "approval-complete");
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.source, "releaseEvidence");
+  assert.equal(
+    status.multiWriterRuntimeReleaseEnablementApproval.enablementDecision.value,
+    "report-approved-for-release-gate-only",
+  );
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.runtimeSupported, false);
+  assert.equal(status.multiWriterRuntimeReleaseEnablementApproval.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {
