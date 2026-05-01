@@ -19,6 +19,7 @@ import {
   type Phase59MultiWriterRuntimeEnablementApprovalGateReport,
   type Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport,
   type Phase61MultiWriterRuntimeActivationControlsGateReport,
+  type Phase62ManagedPostgresHorizontalWriterHardeningGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -241,6 +242,28 @@ export interface ReleaseEvidenceBundle {
       phase61MultiWriterActivationReady: boolean;
       phase61MultiWriterRuntimeSupportBlocked: boolean;
       phase61MultiWriterTopologyReleaseAllowed: boolean;
+      phase62ManagedPostgresHorizontalWriterHardeningGateRequired: boolean;
+      phase62HorizontalWriterTopologyRequested: boolean;
+      phase62ManagedPostgresStartupSupported: boolean;
+      phase62Phase61ActivationControlsReady: boolean;
+      phase62Phase61ActivationGatePassed: boolean;
+      phase62Phase61ActivationReady: boolean;
+      phase62HorizontalWriterHardeningImplementationRequired: boolean;
+      phase62HorizontalWriterHardeningImplementationAttached: boolean;
+      phase62HorizontalWriterConcurrencyTestEvidenceRequired: boolean;
+      phase62HorizontalWriterConcurrencyTestEvidenceAttached: boolean;
+      phase62HorizontalWriterTransactionRetryEvidenceRequired: boolean;
+      phase62HorizontalWriterTransactionRetryEvidenceAttached: boolean;
+      phase62HorizontalWriterHardeningReady: boolean;
+      phase62HorizontalWriterRuntimeSupported: boolean;
+      phase62ActiveActiveSupported: false;
+      phase62RegionalFailoverSupported: false;
+      phase62PitrRuntimeSupported: false;
+      phase62DistributedSqliteSupported: false;
+      phase62GenericMultiWriterDatabaseSupported: false;
+      phase62Phases63To66Pending: boolean;
+      phase62PendingPhases: string[];
+      phase62TopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -372,6 +395,9 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
   "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
   "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
+  "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
+  "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -945,6 +971,39 @@ function phase61MultiWriterRuntimeActivationControlsGate(
   };
 }
 
+function phase62ManagedPostgresHorizontalWriterHardeningGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+): Phase62ManagedPostgresHorizontalWriterHardeningGateReport {
+  return asyncStoreBoundary.phase62ManagedPostgresHorizontalWriterHardeningGate ?? {
+    phase: "62",
+    required: false,
+    horizontalWriterTopologyRequested: false,
+    managedPostgresStartupSupported: asyncStoreBoundary.phase52ManagedStartupSupported,
+    phase61ActivationControlsReady: false,
+    phase61ActivationGatePassed: false,
+    phase61ActivationReady: false,
+    horizontalWriterHardeningImplementationRequired: false,
+    horizontalWriterHardeningImplementationAttached: false,
+    horizontalWriterConcurrencyTestEvidenceRequired: false,
+    horizontalWriterConcurrencyTestEvidenceAttached: false,
+    horizontalWriterTransactionRetryEvidenceRequired: false,
+    horizontalWriterTransactionRetryEvidenceAttached: false,
+    horizontalWriterHardeningReady: false,
+    horizontalWriterRuntimeSupported: false,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    genericMultiWriterDatabaseSupported: false,
+    phases63To66Pending: false,
+    pendingPhases: [],
+    releaseAllowed: true,
+    summary: "Phase 62 managed Postgres horizontal app-writer hardening is not required for this release posture.",
+    blockers: [],
+    nextSteps: ["Keep Phase 62 managed Postgres horizontal app-writer concurrency evidence ready before any future horizontal writer activation claim."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -1199,6 +1258,24 @@ function phase61ReleaseAutomationAssertionAttachmentEvidence(
   return attachmentEvidence(env, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION");
 }
 
+function phase62HorizontalWriterHardeningImplementationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION");
+}
+
+function phase62HorizontalWriterConcurrencyTestAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE");
+}
+
+function phase62HorizontalWriterTransactionRetryAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -1217,6 +1294,7 @@ function buildAttachments(
   const phase59Gate = phase59MultiWriterRuntimeEnablementApprovalGate(asyncStoreBoundary, phase58Gate);
   const phase60Gate = phase60MultiWriterRuntimeSupportPresenceAssertionGate(asyncStoreBoundary, phase59Gate);
   const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
+  const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
   return [
     {
       id: "phase-42-storage-topology",
@@ -1635,6 +1713,36 @@ function buildAttachments(
       ...phase61ReleaseAutomationAssertionAttachmentEvidence(env),
     },
     {
+      id: "phase-62-managed-postgres-horizontal-writer-hardening-implementation",
+      label: "Phase 62 managed Postgres horizontal app-writer hardening implementation evidence",
+      format: "json",
+      required: phase62Gate.horizontalWriterHardeningImplementationRequired,
+      summary: phase62Gate.horizontalWriterHardeningImplementationAttached
+        ? "Phase 62 managed Postgres horizontal app-writer hardening implementation evidence is attached."
+        : "Phase 62 managed Postgres horizontal app-writer hardening implementation evidence is required before claiming concurrency hardening.",
+      ...phase62HorizontalWriterHardeningImplementationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-62-managed-postgres-horizontal-writer-concurrency-test-evidence",
+      label: "Phase 62 managed Postgres horizontal app-writer concurrency test evidence",
+      format: "json",
+      required: phase62Gate.horizontalWriterConcurrencyTestEvidenceRequired,
+      summary: phase62Gate.horizontalWriterConcurrencyTestEvidenceAttached
+        ? "Phase 62 managed Postgres concurrent app-writer test evidence is attached."
+        : "Phase 62 managed Postgres concurrent app-writer test evidence is required before claiming concurrency hardening.",
+      ...phase62HorizontalWriterConcurrencyTestAttachmentEvidence(env),
+    },
+    {
+      id: "phase-62-managed-postgres-horizontal-writer-transaction-retry-evidence",
+      label: "Phase 62 managed Postgres transaction retry or compare-and-swap evidence",
+      format: "json",
+      required: phase62Gate.horizontalWriterTransactionRetryEvidenceRequired,
+      summary: phase62Gate.horizontalWriterTransactionRetryEvidenceAttached
+        ? "Phase 62 managed Postgres transaction retry or compare-and-swap evidence is attached."
+        : "Phase 62 managed Postgres transaction retry or compare-and-swap evidence is required before claiming concurrency hardening.",
+      ...phase62HorizontalWriterTransactionRetryAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -1759,6 +1867,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase59Gate = phase59MultiWriterRuntimeEnablementApprovalGate(asyncStoreBoundary, phase58Gate);
   const phase60Gate = phase60MultiWriterRuntimeSupportPresenceAssertionGate(asyncStoreBoundary, phase59Gate);
   const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
+  const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
 
   return {
     phase: "44",
@@ -1947,6 +2056,28 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase61MultiWriterActivationReady: phase61Gate.activationReady,
         phase61MultiWriterRuntimeSupportBlocked: phase61Gate.runtimeSupportBlocked,
         phase61MultiWriterTopologyReleaseAllowed: phase61Gate.releaseAllowed,
+        phase62ManagedPostgresHorizontalWriterHardeningGateRequired: phase62Gate.required,
+        phase62HorizontalWriterTopologyRequested: phase62Gate.horizontalWriterTopologyRequested,
+        phase62ManagedPostgresStartupSupported: phase62Gate.managedPostgresStartupSupported,
+        phase62Phase61ActivationControlsReady: phase62Gate.phase61ActivationControlsReady,
+        phase62Phase61ActivationGatePassed: phase62Gate.phase61ActivationGatePassed,
+        phase62Phase61ActivationReady: phase62Gate.phase61ActivationReady,
+        phase62HorizontalWriterHardeningImplementationRequired: phase62Gate.horizontalWriterHardeningImplementationRequired,
+        phase62HorizontalWriterHardeningImplementationAttached: phase62Gate.horizontalWriterHardeningImplementationAttached,
+        phase62HorizontalWriterConcurrencyTestEvidenceRequired: phase62Gate.horizontalWriterConcurrencyTestEvidenceRequired,
+        phase62HorizontalWriterConcurrencyTestEvidenceAttached: phase62Gate.horizontalWriterConcurrencyTestEvidenceAttached,
+        phase62HorizontalWriterTransactionRetryEvidenceRequired: phase62Gate.horizontalWriterTransactionRetryEvidenceRequired,
+        phase62HorizontalWriterTransactionRetryEvidenceAttached: phase62Gate.horizontalWriterTransactionRetryEvidenceAttached,
+        phase62HorizontalWriterHardeningReady: phase62Gate.horizontalWriterHardeningReady,
+        phase62HorizontalWriterRuntimeSupported: phase62Gate.horizontalWriterRuntimeSupported,
+        phase62ActiveActiveSupported: phase62Gate.activeActiveSupported,
+        phase62RegionalFailoverSupported: phase62Gate.regionalFailoverSupported,
+        phase62PitrRuntimeSupported: phase62Gate.pitrRuntimeSupported,
+        phase62DistributedSqliteSupported: phase62Gate.distributedSqliteSupported,
+        phase62GenericMultiWriterDatabaseSupported: phase62Gate.genericMultiWriterDatabaseSupported,
+        phase62Phases63To66Pending: phase62Gate.phases63To66Pending,
+        phase62PendingPhases: phase62Gate.pendingPhases,
+        phase62TopologyReleaseAllowed: phase62Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

@@ -84,6 +84,7 @@ test("operations health route returns the report shape for an admin-equivalent o
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeReleaseEnablementApproval"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeSupportPresenceAssertion"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "multiWriterRuntimeActivationControls"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "managedPostgresHorizontalWriterConcurrency"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {
@@ -103,6 +104,8 @@ test("operations health surfaces supported single-writer managed Postgres topolo
     },
     now: () => new Date("2026-04-26T10:00:01.000Z"),
     fileExists: () => true,
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }),
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }),
   });
 
   const gate = findSubsystem(report, "managedPostgresTopologyGate");
@@ -147,6 +150,10 @@ test("operations health surfaces supported single-writer managed Postgres topolo
   assert.equal(activationControls.status, "disabled");
   assert.match(activationControls.detail, /Phase 61 runtime activation controls are not required/i);
   assert.match(activationControls.detail, /runtimeSupported=false/);
+  const horizontalWriterConcurrency = findSubsystem(report, "managedPostgresHorizontalWriterConcurrency");
+  assert.equal(horizontalWriterConcurrency.status, "disabled");
+  assert.match(horizontalWriterConcurrency.detail, /Phase 62 managed Postgres horizontal app-writer concurrency hardening is not configured/i);
+  assert.match(horizontalWriterConcurrency.detail, /multi-writer database support remain separate blocked capabilities/i);
   assert.equal(report.overall, "ok");
 });
 
@@ -168,6 +175,8 @@ test("operations health degrades for blocked multi-writer topology intent", () =
     },
     now: () => new Date("2026-04-26T10:00:01.000Z"),
     fileExists: () => true,
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }),
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }),
   });
 
   const gate = findSubsystem(report, "managedPostgresTopologyGate");
@@ -279,6 +288,105 @@ test("operations health reports Phase 61 activation controls complete from deplo
   assert.match(activationControls.detail, /runtimeImplementationBlocked=true/);
   assert.match(activationControls.detail, /runtimeSupported=false/);
   assert.match(activationControls.detail, /releaseAllowed=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("operations health reports Phase 62 horizontal app-writer hardening separately from database multi-writer support", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_AUDIT:
+        "artifacts/phase62/write-path-concurrency-audit.md",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TESTS:
+        "artifacts/phase62/concurrent-writer-tests.tap",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_CONTROL:
+        "row-version compare-and-swap on document updates",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY:
+        "artifacts/phase62/transaction-retry-idempotency.md",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_RELEASE_ASSERTION:
+        "artifacts/phase62/horizontal-writer-release-assertion.md",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const horizontalWriterConcurrency = findSubsystem(report, "managedPostgresHorizontalWriterConcurrency");
+  assert.equal(horizontalWriterConcurrency.status, "ok");
+  assert.match(horizontalWriterConcurrency.detail, /Phase 62 managed Postgres horizontal app-writer concurrency hardening is complete/i);
+  assert.match(horizontalWriterConcurrency.detail, /multiple Taskloom app processes writing to one managed Postgres primary/i);
+  assert.match(horizontalWriterConcurrency.detail, /multi-writer database support remain unsupported/i);
+  assert.match(horizontalWriterConcurrency.detail, /releaseAllowed=false/);
+  assert.equal(report.overall, "ok");
+});
+
+test("operations health accepts canonical Phase 62 release evidence env keys", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+        "artifacts/phase62/horizontal-writer-hardening.md",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+        "artifacts/phase62/concurrency-tests.tap",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+        "artifacts/phase62/transaction-retry.md",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const horizontalWriterConcurrency = findSubsystem(report, "managedPostgresHorizontalWriterConcurrency");
+  assert.equal(horizontalWriterConcurrency.status, "ok");
+  assert.match(horizontalWriterConcurrency.detail, /Phase 62 managed Postgres horizontal app-writer concurrency hardening is complete/i);
+});
+
+test("operations health degrades Phase 62 when horizontal app-writer evidence is missing", () => {
+  const report = getOperationsHealth({
+    loadStore: () => ({ ok: true }),
+    schedulerHeartbeat: () => ({
+      schedulerStartedAt: "2026-04-26T09:59:00.000Z",
+      lastTickStartedAt: "2026-04-26T10:00:00.000Z",
+      lastTickEndedAt: "2026-04-26T10:00:00.500Z",
+      lastTickDurationMs: 500,
+      ticksSinceStart: 7,
+    }),
+    env: {
+      TASKLOOM_ACCESS_LOG_MODE: "off",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+    },
+    now: () => new Date("2026-04-26T10:00:01.000Z"),
+    fileExists: () => true,
+  });
+
+  const horizontalWriterConcurrency = findSubsystem(report, "managedPostgresHorizontalWriterConcurrency");
+  assert.equal(horizontalWriterConcurrency.status, "degraded");
+  assert.match(horizontalWriterConcurrency.detail, /Phase 62 managed Postgres horizontal app-writer concurrency hardening is blocked/i);
+  assert.match(horizontalWriterConcurrency.detail, /managed Postgres write-path concurrency audit/i);
+  assert.match(horizontalWriterConcurrency.detail, /managed Postgres horizontal-writer release assertion/i);
+  assert.match(horizontalWriterConcurrency.detail, /multi-writer database support remain unsupported/i);
   assert.equal(report.overall, "degraded");
 });
 

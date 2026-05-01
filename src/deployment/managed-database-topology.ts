@@ -65,6 +65,9 @@ export interface ManagedDatabaseTopologyEnv {
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION?: string;
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION?: string;
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE?: string;
 }
 
 export interface ManagedDatabaseTopologyObservedEnvValue {
@@ -257,6 +260,25 @@ export interface ManagedDatabaseTopologyReport {
       strictBlocker: boolean;
       summary: string;
     };
+    phase62?: {
+      horizontalWriterTopologyRequested: boolean;
+      managedPostgresStartupSupported: boolean;
+      phase61ActivationControlsReady: boolean;
+      phase61ActivationGatePassed: boolean;
+      phase61ActivationReady: boolean;
+      horizontalWriterHardeningImplementationConfigured: boolean;
+      horizontalWriterConcurrencyTestEvidenceConfigured: boolean;
+      horizontalWriterTransactionRetryEvidenceConfigured: boolean;
+      horizontalWriterHardeningReady: boolean;
+      horizontalWriterRuntimeSupported: boolean;
+      activeActiveSupported: false;
+      regionalFailoverSupported: false;
+      pitrRuntimeSupported: false;
+      distributedSqliteSupported: false;
+      genericMultiWriterDatabaseSupported: false;
+      strictBlocker: boolean;
+      summary: string;
+    };
   };
 }
 
@@ -327,6 +349,9 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW",
   "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG",
   "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
+  "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
+  "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
 const MANAGED_TOPOLOGY_HINTS = new Set([
@@ -352,6 +377,14 @@ const MULTI_WRITER_TOPOLOGY_HINTS = new Set([
   "regional-pitr",
   "pitr",
   "failover-pitr",
+]);
+const HORIZONTAL_WRITER_TOPOLOGY_HINTS = new Set([
+  "horizontal-app-writers",
+  "horizontal-writers",
+  "managed-postgres-horizontal-app-writers",
+  "managed-postgres-horizontal-writers",
+  "postgres-horizontal-app-writers",
+  "postgres-horizontal-writers",
 ]);
 const PHASE_50_MANAGED_DATABASE_ADAPTERS = new Set([
   "postgres",
@@ -905,12 +938,72 @@ function phase61MultiWriterRuntimeActivationControlsGate(
   };
 }
 
+function phase62ManagedPostgresHorizontalWriterHardeningGate(
+  env: ManagedDatabaseTopologyEnv,
+  horizontalWriterTopologyRequested: boolean,
+  managedPostgresStartupSupported: boolean,
+  phase61: ReturnType<typeof phase61MultiWriterRuntimeActivationControlsGate>,
+) {
+  const horizontalWriterHardeningImplementationConfigured = configured(
+    env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION,
+  );
+  const horizontalWriterConcurrencyTestEvidenceConfigured = configured(
+    env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE,
+  );
+  const horizontalWriterTransactionRetryEvidenceConfigured = configured(
+    env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE,
+  );
+  const phase61ActivationReady = phase61.activationControlsReady && phase61.activationGatePassed;
+  const horizontalWriterHardeningReady =
+    !horizontalWriterTopologyRequested ||
+    (managedPostgresStartupSupported &&
+      phase61ActivationReady &&
+      horizontalWriterHardeningImplementationConfigured &&
+      horizontalWriterConcurrencyTestEvidenceConfigured &&
+      horizontalWriterTransactionRetryEvidenceConfigured);
+  const strictBlocker = horizontalWriterTopologyRequested && !horizontalWriterHardeningReady;
+  const summary = horizontalWriterTopologyRequested
+    ? horizontalWriterHardeningReady
+      ? "Phase 62 managed Postgres horizontal app-writer concurrency hardening is configured; this supports horizontal Taskloom app writers on one managed Postgres database only."
+      : "Phase 62 requires Phase 61 activation controls, managed Postgres startup support, hardening implementation evidence, concurrency test evidence, and transaction retry or compare-and-swap evidence before horizontal app-writer posture is hardened."
+    : "No managed Postgres horizontal app-writer topology requested for Phase 62.";
+
+  return {
+    horizontalWriterTopologyRequested,
+    managedPostgresStartupSupported,
+    phase61ActivationControlsReady: phase61.activationControlsReady,
+    phase61ActivationGatePassed: phase61.activationGatePassed,
+    phase61ActivationReady,
+    horizontalWriterHardeningImplementationConfigured,
+    horizontalWriterConcurrencyTestEvidenceConfigured,
+    horizontalWriterTransactionRetryEvidenceConfigured,
+    horizontalWriterHardeningReady,
+    horizontalWriterRuntimeSupported:
+      horizontalWriterTopologyRequested && horizontalWriterHardeningReady,
+    activeActiveSupported: false as const,
+    regionalFailoverSupported: false as const,
+    pitrRuntimeSupported: false as const,
+    distributedSqliteSupported: false as const,
+    genericMultiWriterDatabaseSupported: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
-  return MANAGED_TOPOLOGY_HINTS.has(topology) || MANAGED_TOPOLOGY_HINTS.has(store);
+  return (
+    MANAGED_TOPOLOGY_HINTS.has(topology) ||
+    HORIZONTAL_WRITER_TOPOLOGY_HINTS.has(topology) ||
+    MANAGED_TOPOLOGY_HINTS.has(store)
+  );
 }
 
 function multiWriterTopologyRequested(topology: string): boolean {
   return MULTI_WRITER_TOPOLOGY_HINTS.has(topology);
+}
+
+function horizontalWriterTopologyRequested(topology: string): boolean {
+  return HORIZONTAL_WRITER_TOPOLOGY_HINTS.has(topology);
 }
 
 function buildNextSteps(
@@ -924,6 +1017,7 @@ function buildNextSteps(
   phase59: ReturnType<typeof phase59MultiWriterRuntimeReleaseEnablementApprovalGate>,
   phase60: ReturnType<typeof phase60MultiWriterRuntimeSupportPresenceAssertionGate>,
   phase61: ReturnType<typeof phase61MultiWriterRuntimeActivationControlsGate>,
+  phase62: ReturnType<typeof phase62ManagedPostgresHorizontalWriterHardeningGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -1133,6 +1227,23 @@ function buildNextSteps(
         steps.add("Keep multi-writer runtime support and release disabled; Phase 61 records activation controls only.");
       }
     }
+    if (check.id === "phase62-managed-postgres-horizontal-writer-hardening") {
+      if (!phase62.managedPostgresStartupSupported) {
+        steps.add("Configure the Phase 50 Postgres adapter and managed database URL so Phase 52 managed Postgres startup support is available.");
+      }
+      if (!phase62.phase61ActivationReady) {
+        steps.add("Complete Phase 61 activation controls before claiming Phase 62 horizontal app-writer hardening.");
+      }
+      if (!phase62.horizontalWriterHardeningImplementationConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION with the Phase 62 hardening implementation evidence.");
+      }
+      if (!phase62.horizontalWriterConcurrencyTestEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE with concurrent managed Postgres writer test evidence.");
+      }
+      if (!phase62.horizontalWriterTransactionRetryEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE with transaction retry or compare-and-swap evidence.");
+      }
+    }
   }
 
   if (steps.size === 0) {
@@ -1155,6 +1266,7 @@ export function assessManagedDatabaseTopology(
   const phase50 = phase50AsyncAdapter(env, hasManagedDatabaseUrl);
   const hasManagedIntent = hasManagedDatabaseUrl || managedTopologyRequested(databaseTopology, store);
   const hasMultiWriterIntent = multiWriterTopologyRequested(databaseTopology);
+  const hasHorizontalWriterIntent = horizontalWriterTopologyRequested(databaseTopology);
   const phase52 = phase52ManagedPostgresStartupSupport(phase50, hasMultiWriterIntent);
   const phase53 = phase53MultiWriterTopologyGate(env, hasMultiWriterIntent);
   const phase54 = phase54MultiWriterTopologyDesignPackageGate(env, hasMultiWriterIntent);
@@ -1194,6 +1306,12 @@ export function assessManagedDatabaseTopology(
     phase60.runtimeSupportPresenceAssertionGatePassed,
   );
   const hasManagedPostgresStartupSupport = phase52.managedPostgresStartupSupported;
+  const phase62 = phase62ManagedPostgresHorizontalWriterHardeningGate(
+    env,
+    hasHorizontalWriterIntent,
+    hasManagedPostgresStartupSupport,
+    phase61,
+  );
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseTopologyCheck[] = [];
   const warnings: string[] = [];
@@ -1305,6 +1423,13 @@ export function assessManagedDatabaseTopology(
 
   pushCheck(
     checks,
+    "phase62-managed-postgres-horizontal-writer-hardening",
+    phase62.strictBlocker ? "fail" : "pass",
+    phase62.summary,
+  );
+
+  pushCheck(
+    checks,
     "production-topology",
     isProductionEnv && store === "json" ? "fail" : "pass",
     isProductionEnv && store === "json"
@@ -1314,7 +1439,7 @@ export function assessManagedDatabaseTopology(
         : "NODE_ENV is not production; local JSON/SQLite posture can be reported as advisory-supported.",
   );
 
-  if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent) {
+  if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent && !hasHorizontalWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
   if (store === "sqlite" && !configured(env.TASKLOOM_DB_PATH)) {
@@ -1346,6 +1471,9 @@ export function assessManagedDatabaseTopology(
     warnings.push(phase60.summary);
     warnings.push(phase61.summary);
   }
+  if (hasHorizontalWriterIntent) {
+    warnings.push(phase62.summary);
+  }
 
   const status = statusFromChecks(checks);
   const blockers = checks.filter((check) => check.status === "fail").map((check) => check.summary);
@@ -1364,12 +1492,16 @@ export function assessManagedDatabaseTopology(
 
   const ready = blockers.length === 0;
   const summary = ready
-    ? hasManagedIntent && hasManagedPostgresStartupSupport
+    ? hasHorizontalWriterIntent && phase62.horizontalWriterHardeningReady
+      ? "Phase 62 managed database topology report found hardened managed Postgres horizontal app-writer posture."
+      : hasManagedIntent && hasManagedPostgresStartupSupport
       ? "Phase 52 managed database topology report found single-writer managed Postgres startup support."
       : store === "sqlite"
       ? "Phase 45 managed database topology report found supported single-node SQLite posture and no managed database request."
       : "Phase 45 managed database topology report found supported local JSON posture and no managed database request."
-    : hasManagedIntent
+    : hasHorizontalWriterIntent
+      ? "Phase 62 managed database topology report found managed Postgres horizontal app-writer hardening blockers."
+      : hasManagedIntent
       ? "Phase 45 managed database topology report found a managed database runtime boundary; Phase 52 managed Postgres startup support is not available."
       : "Phase 45 managed database topology report found blockers for managed production database readiness.";
   const observedEnv = buildObservedEnv(env);
@@ -1394,6 +1526,7 @@ export function assessManagedDatabaseTopology(
       phase59,
       phase60,
       phase61,
+      phase62,
     ),
     observed: {
       nodeEnv,
@@ -1408,7 +1541,7 @@ export function assessManagedDatabaseTopology(
       env: observedEnv,
     },
     managedDatabase: {
-      requested: hasManagedIntent || hasMultiWriterIntent,
+      requested: hasManagedIntent || hasMultiWriterIntent || hasHorizontalWriterIntent,
       configured: hasManagedDatabaseUrl,
       supported: hasManagedPostgresStartupSupport,
       syncStartupSupported: hasManagedPostgresStartupSupport,
@@ -1423,6 +1556,7 @@ export function assessManagedDatabaseTopology(
       phase59,
       phase60,
       phase61,
+      phase62,
     },
   };
 }

@@ -115,6 +115,25 @@ function completeMultiWriterPhase61Env(): NodeJS.ProcessEnv {
   };
 }
 
+function completeManagedPostgresHorizontalWriterEnv(): NodeJS.ProcessEnv {
+  return {
+    TASKLOOM_STORE: "sqlite",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_AUDIT:
+      "artifacts/phase62/write-path-concurrency-audit.md",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TESTS:
+      "artifacts/phase62/concurrent-writer-tests.tap",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_CONTROL:
+      "row-version compare-and-swap on document updates",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY:
+      "artifacts/phase62/transaction-retry-idempotency.md",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_RELEASE_ASSERTION:
+      "artifacts/phase62/horizontal-writer-release-assertion.md",
+  };
+}
+
 test("default env yields json store, off leader mode, off access log, default knobs", () => {
   const status = getOperationsStatus({
     loadStore: () => emptyStore(),
@@ -164,6 +183,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.phase, "62");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "not-configured");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -903,6 +927,8 @@ test("multiWriterRuntimeImplementationValidation is not required without multi-w
       DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
     },
     now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
   });
 
   assert.equal(status.multiWriterRuntimeImplementationValidation.phase, "58");
@@ -1454,6 +1480,163 @@ test("multiWriterRuntimeActivationControls can derive controls from deployment r
   );
   assert.equal(status.multiWriterRuntimeActivationControls.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeActivationControls.releaseAllowed, false);
+});
+
+test("managedPostgresHorizontalWriterConcurrency is not configured without horizontal app-writer intent", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+  });
+
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.phase, "62");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "not-configured");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.hardeningStatus, "not-configured");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.required, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.multiWriterDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.regionalDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.pitrRuntimeSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.sqliteDistributedSupported, false);
+});
+
+test("managedPostgresHorizontalWriterConcurrency reports missing Phase 62 evidence", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.phase, "62");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "blocked");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.hardeningStatus, "missing");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWriterIntentDetected, true);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.managedPostgresStartupSupported, true);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.supportedManagedPostgresTopology, true);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.writePathAudit.status, "missing");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.releaseAssertion.status, "missing");
+  assert.deepEqual(status.managedPostgresHorizontalWriterConcurrency.missingEvidence, [
+    "writePathAudit",
+    "concurrentWriterTests",
+    "concurrencyControl",
+    "transactionRetry",
+    "releaseAssertion",
+  ]);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
+  assert.match(status.managedPostgresHorizontalWriterConcurrency.summary, /blocked pending writePathAudit/i);
+});
+
+test("managedPostgresHorizontalWriterConcurrency supports horizontal app writers without database multi-writer support", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeManagedPostgresHorizontalWriterEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.phase, "62");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "hardening-complete");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.hardeningStatus, "complete");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.managedPostgresHorizontalWriterHardeningComplete, true);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, true);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.multiWriterDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.regionalDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.pitrRuntimeSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.writePathAudit.status, "provided");
+  assert.equal(
+    status.managedPostgresHorizontalWriterConcurrency.concurrencyControl.value,
+    "row-version compare-and-swap on document updates",
+  );
+  assert.match(status.managedPostgresHorizontalWriterConcurrency.summary, /multiple Taskloom app processes/i);
+  assert.match(status.managedPostgresHorizontalWriterConcurrency.summary, /multi-writer database support remain unsupported/i);
+});
+
+test("managedPostgresHorizontalWriterConcurrency accepts canonical Phase 62 release evidence env keys", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+        "artifacts/phase62/horizontal-writer-hardening.md",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+        "artifacts/phase62/concurrency-tests.tap",
+      TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+        "artifacts/phase62/transaction-retry.md",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "hardening-complete");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.writePathAudit.source, "env");
+  assert.equal(
+    status.managedPostgresHorizontalWriterConcurrency.concurrentWriterTests.value,
+    "artifacts/phase62/concurrency-tests.tap",
+  );
+  assert.equal(
+    status.managedPostgresHorizontalWriterConcurrency.transactionRetry.value,
+    "artifacts/phase62/transaction-retry.md",
+  );
+  assert.deepEqual(status.managedPostgresHorizontalWriterConcurrency.missingEvidence, []);
+});
+
+test("managedPostgresHorizontalWriterConcurrency can derive Phase 62 evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      TASKLOOM_STORE: "sqlite",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+      TASKLOOM_APP_WRITER_TOPOLOGY: "horizontal",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({
+      phase62: {
+        horizontalAppWriterIntentDetected: true,
+        managedPostgresIntentDetected: true,
+        managedPostgresStartupSupported: true,
+        supportedManagedPostgresTopology: true,
+        writePathAudit: "artifacts/reports/phase62-audit.md",
+        concurrentWriterTests: "artifacts/reports/phase62-concurrency-tests.tap",
+        concurrencyControl: "row-version cas",
+        transactionRetry: "serializable retry evidence",
+        releaseAssertion: "artifacts/reports/phase62-release-assertion.md",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "hardening-complete");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.writePathAudit.source, "releaseEvidence");
+  assert.equal(
+    status.managedPostgresHorizontalWriterConcurrency.writePathAudit.value,
+    "artifacts/reports/phase62-audit.md",
+  );
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, true);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.multiWriterDatabaseSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

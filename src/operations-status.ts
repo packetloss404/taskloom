@@ -496,6 +496,63 @@ export interface MultiWriterRuntimeActivationControlsStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type ManagedPostgresHorizontalWriterConcurrencyEvidenceKey =
+  | "writePathAudit"
+  | "concurrentWriterTests"
+  | "concurrencyControl"
+  | "transactionRetry"
+  | "releaseAssertion";
+
+export interface ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus {
+  key: ManagedPostgresHorizontalWriterConcurrencyEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source:
+    | "env"
+    | "managedDatabaseRuntimeGuard"
+    | "managedDatabaseTopology"
+    | "releaseReadiness"
+    | "releaseEvidence"
+    | "derived";
+}
+
+export interface ManagedPostgresHorizontalWriterConcurrencyStatus {
+  phase: "62";
+  status: "hardening-complete" | "blocked" | "not-configured";
+  hardeningStatus: "complete" | "blocked" | "missing" | "not-configured";
+  summary: string;
+  required: boolean;
+  horizontalAppWriterIntentDetected: boolean;
+  managedPostgresIntentDetected: boolean;
+  managedPostgresStartupSupported: boolean;
+  supportedManagedPostgresTopology: boolean;
+  managedPostgresHorizontalWriterHardeningComplete: boolean;
+  horizontalAppWritersSupported: boolean;
+  multiWriterDatabaseSupported: false;
+  activeActiveDatabaseSupported: false;
+  regionalDatabaseSupported: false;
+  pitrRuntimeSupported: false;
+  sqliteDistributedSupported: false;
+  releaseAllowed: false;
+  managedPostgresStartupSupportStatus: ManagedPostgresStartupSupportStatus["status"];
+  managedPostgresTopologyGateStatus: ManagedPostgresTopologyGateStatus["status"];
+  evidence: Record<
+    ManagedPostgresHorizontalWriterConcurrencyEvidenceKey,
+    ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus
+  >;
+  writePathAudit: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus;
+  concurrentWriterTests: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus;
+  concurrencyControl: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus;
+  transactionRetry: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus;
+  releaseAssertion: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus;
+  missingEvidence: ManagedPostgresHorizontalWriterConcurrencyEvidenceKey[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -528,6 +585,7 @@ export interface OperationsStatus {
   multiWriterRuntimeReleaseEnablementApproval: MultiWriterRuntimeReleaseEnablementApprovalStatus;
   multiWriterRuntimeSupportPresenceAssertion: MultiWriterRuntimeSupportPresenceAssertionStatus;
   multiWriterRuntimeActivationControls: MultiWriterRuntimeActivationControlsStatus;
+  managedPostgresHorizontalWriterConcurrency: ManagedPostgresHorizontalWriterConcurrencyStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -1043,6 +1101,94 @@ const MULTI_WRITER_RUNTIME_ACTIVATION_CONTROLS_EVIDENCE = [
   key: MultiWriterRuntimeActivationControlsEvidenceKey;
   label: string;
   envKey: string;
+  reportKeys: readonly string[];
+}>;
+const MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_EVIDENCE = [
+  {
+    key: "writePathAudit",
+    label: "managed Postgres write-path concurrency audit",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_AUDIT",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_AUDIT",
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
+    ],
+    reportKeys: [
+      "writePathAudit",
+      "horizontalWriterAudit",
+      "concurrencyAudit",
+      "staleWriteAudit",
+      "audit",
+    ],
+  },
+  {
+    key: "concurrentWriterTests",
+    label: "managed Postgres concurrent-writer tests",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TESTS",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TESTS",
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
+    ],
+    reportKeys: [
+      "concurrentWriterTests",
+      "horizontalWriterTests",
+      "concurrencyTests",
+      "runtimeTests",
+      "tests",
+    ],
+  },
+  {
+    key: "concurrencyControl",
+    label: "managed Postgres concurrency-control implementation",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_CONTROL",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_CONTROL",
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
+    ],
+    reportKeys: [
+      "concurrencyControl",
+      "compareAndSwap",
+      "rowVersion",
+      "advisoryLock",
+      "optimisticConcurrency",
+    ],
+  },
+  {
+    key: "transactionRetry",
+    label: "managed Postgres transaction retry/idempotency proof",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY",
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
+    ],
+    reportKeys: [
+      "transactionRetry",
+      "retryBehavior",
+      "transactionBoundaries",
+      "idempotencyProof",
+      "idempotency",
+    ],
+  },
+  {
+    key: "releaseAssertion",
+    label: "managed Postgres horizontal-writer release assertion",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_RELEASE_ASSERTION",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_RELEASE_ASSERTION",
+      "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION",
+    ],
+    reportKeys: [
+      "releaseAssertion",
+      "horizontalWriterReleaseAssertion",
+      "hardeningReleaseAssertion",
+      "releaseAutomationAssertion",
+      "assertion",
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  key: ManagedPostgresHorizontalWriterConcurrencyEvidenceKey;
+  label: string;
+  envKey: string;
+  envKeys?: readonly string[];
   reportKeys: readonly string[];
 }>;
 const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
@@ -1571,6 +1717,32 @@ function runtimeActivationControlsRecord(
     findNestedRecord(
       report,
       ["releaseReadiness", "asyncStoreBoundary", "multiWriterRuntimeActivationControls"],
+    );
+}
+
+function horizontalWriterConcurrencyRecord(
+  report: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase62"]) ??
+    findNestedRecord(report, ["managedPostgresHorizontalWriterConcurrency"]) ??
+    findNestedRecord(report, ["managedPostgresHorizontalWriterConcurrencyHardening"]) ??
+    findNestedRecord(report, ["horizontalWriterConcurrency"]) ??
+    findNestedRecord(report, ["horizontalWriterConcurrencyHardening"]) ??
+    findNestedRecord(report, ["managedDatabase", "phase62"]) ??
+    findNestedRecord(report, ["managedPostgres", "phase62"]) ??
+    findNestedRecord(report, ["managedPostgres", "horizontalWriterConcurrency"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase62"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "phase62ManagedPostgresHorizontalWriterHardeningGate"]) ??
+    findNestedRecord(report, ["asyncStoreBoundary", "managedPostgresHorizontalWriterConcurrency"]) ??
+    findNestedRecord(report, ["releaseReadiness", "asyncStoreBoundary", "phase62"]) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ) ??
+    findNestedRecord(
+      report,
+      ["releaseReadiness", "asyncStoreBoundary", "managedPostgresHorizontalWriterConcurrency"],
     );
 }
 
@@ -2750,6 +2922,195 @@ function deriveMultiWriterRuntimeActivationControls(
   };
 }
 
+function horizontalAppWriterIntentFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const topology = stringValue(env.TASKLOOM_APP_WRITER_TOPOLOGY).toLowerCase();
+  const horizontalWriterMode = stringValue(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_MODE).toLowerCase();
+  const horizontalWriterFlag = stringValue(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_APP_WRITERS).toLowerCase();
+  return [
+    "horizontal",
+    "horizontal-writer",
+    "horizontal-writers",
+    "horizontal-app-writer",
+    "horizontal-app-writers",
+    "multi-process",
+    "multi-process-writers",
+  ].includes(topology) ||
+    ["enabled", "required", "supported", "hardened"].includes(horizontalWriterMode) ||
+    ["1", "true", "yes", "enabled", "required"].includes(horizontalWriterFlag);
+}
+
+function valueFromEnvKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = stringValue(env[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function phase62ReportHardeningComplete(records: readonly Record<string, unknown>[]): boolean {
+  return records.some((record) => {
+    const required =
+      booleanValue(record.required) === true ||
+      booleanValue(record.horizontalWriterTopologyRequested) === true ||
+      booleanValue(record.horizontalAppWriterIntentDetected) === true ||
+      booleanValue(record.phase62HorizontalWriterTopologyRequested) === true;
+    return required &&
+      (booleanValue(record.managedPostgresHorizontalWriterHardeningComplete) === true ||
+        booleanValue(record.horizontalWriterHardeningReady) === true ||
+        booleanValue(record.horizontalWriterRuntimeSupported) === true ||
+        booleanValue(record.phase62HorizontalWriterHardeningReady) === true ||
+        booleanValue(record.phase62HorizontalWriterRuntimeSupported) === true);
+  });
+}
+
+function deriveManagedPostgresHorizontalWriterConcurrency(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  managedPostgresCapability: ManagedPostgresCapabilityStatus,
+  managedPostgresStartupSupport: ManagedPostgresStartupSupportStatus,
+  managedPostgresTopologyGate: ManagedPostgresTopologyGateStatus,
+): ManagedPostgresHorizontalWriterConcurrencyStatus {
+  const reportSources: Array<{
+    source: Exclude<ManagedPostgresHorizontalWriterConcurrencyStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = horizontalWriterConcurrencyRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase62 = reportSources[0];
+  const reportIntent = reportSources.reduce<boolean | null>((result, candidate) => {
+    if (result !== null) return result;
+    return booleanValue(candidate.record.horizontalAppWriterIntentDetected) ??
+      booleanValue(candidate.record.horizontalWriterIntentDetected) ??
+      booleanValue(candidate.record.managedPostgresHorizontalWriterIntentDetected) ??
+      booleanValue(candidate.record.horizontalWriterTopologyRequested) ??
+      null;
+  }, null);
+  const horizontalAppWriterIntentDetected = horizontalAppWriterIntentFromEnv(env) || reportIntent === true;
+  const required = horizontalAppWriterIntentDetected;
+  const managedPostgresIntentDetected = managedPostgresCapability.managedIntentDetected ||
+    reportSources.some((candidate) => booleanValue(candidate.record.managedPostgresIntentDetected) === true);
+  const managedPostgresStartupSupported =
+    managedPostgresStartupSupport.startupSupported ||
+    reportSources.some((candidate) => booleanValue(candidate.record.managedPostgresStartupSupported) === true);
+  const supportedManagedPostgresTopology =
+    managedPostgresTopologyGate.status === "supported" ||
+    reportSources.some((candidate) => booleanValue(candidate.record.supportedManagedPostgresTopology) === true);
+  const reportHardeningComplete = phase62ReportHardeningComplete(reportSources.map((source) => source.record));
+
+  const evidenceEntries = MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_EVIDENCE.map((definition) => {
+    let value = valueFromEnvKeys(env, definition.envKeys ?? [definition.envKey]);
+    let source: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys);
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        value = direct || nested;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+    if (!value && reportHardeningComplete && phase62) {
+      value = "phase62 report hardening complete";
+      source = phase62.source;
+    }
+
+    const configured = value.length > 0;
+    const status: ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<
+    ManagedPostgresHorizontalWriterConcurrencyEvidenceKey,
+    ManagedPostgresHorizontalWriterConcurrencyEvidenceStatus
+  >;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const allEvidenceConfigured = evidenceEntries.every((entry) => entry.configured);
+  const managedPostgresHorizontalWriterHardeningComplete =
+    required &&
+    managedPostgresStartupSupported &&
+    supportedManagedPostgresTopology &&
+    (allEvidenceConfigured || reportHardeningComplete);
+  const hardeningStatus: ManagedPostgresHorizontalWriterConcurrencyStatus["hardeningStatus"] = required
+    ? managedPostgresHorizontalWriterHardeningComplete
+      ? "complete"
+      : !managedPostgresStartupSupported || !supportedManagedPostgresTopology
+        ? "blocked"
+        : "missing"
+    : "not-configured";
+  const status: ManagedPostgresHorizontalWriterConcurrencyStatus["status"] = required
+    ? managedPostgresHorizontalWriterHardeningComplete ? "hardening-complete" : "blocked"
+    : "not-configured";
+  const missingEvidenceSummary = missingEvidence.join(", ") || "Phase 62 horizontal-writer evidence";
+  const summary = required
+    ? !managedPostgresStartupSupported
+      ? "Phase 62 managed Postgres horizontal app-writer concurrency hardening is blocked until Phase 52 managed Postgres startup support is available; horizontalAppWritersSupported=false; activeActiveDatabaseSupported=false; regionalDatabaseSupported=false; pitrRuntimeSupported=false."
+      : !supportedManagedPostgresTopology
+        ? "Phase 62 managed Postgres horizontal app-writer concurrency hardening is blocked because the requested topology is outside the supported single-primary managed Postgres posture; active-active, regional, PITR runtime, and multi-writer database support remain blocked."
+        : managedPostgresHorizontalWriterHardeningComplete
+          ? "Phase 62 managed Postgres horizontal app-writer concurrency hardening is complete for multiple Taskloom app processes writing to one managed Postgres primary; active-active, regional/PITR runtime, SQLite-distributed, and multi-writer database support remain unsupported; releaseAllowed=false."
+          : `Phase 62 managed Postgres horizontal app-writer concurrency hardening is blocked pending ${missingEvidenceSummary}; active-active, regional/PITR runtime, SQLite-distributed, and multi-writer database support remain unsupported; releaseAllowed=false.`
+    : "Phase 62 managed Postgres horizontal app-writer concurrency hardening is not configured; ordinary local JSON, single-node SQLite, and single-writer managed Postgres status are reported separately.";
+
+  return {
+    phase: "62",
+    status,
+    hardeningStatus,
+    summary,
+    required,
+    horizontalAppWriterIntentDetected,
+    managedPostgresIntentDetected,
+    managedPostgresStartupSupported,
+    supportedManagedPostgresTopology,
+    managedPostgresHorizontalWriterHardeningComplete,
+    horizontalAppWritersSupported: managedPostgresHorizontalWriterHardeningComplete,
+    multiWriterDatabaseSupported: false,
+    activeActiveDatabaseSupported: false,
+    regionalDatabaseSupported: false,
+    pitrRuntimeSupported: false,
+    sqliteDistributedSupported: false,
+    releaseAllowed: false,
+    managedPostgresStartupSupportStatus: managedPostgresStartupSupport.status,
+    managedPostgresTopologyGateStatus: managedPostgresTopologyGate.status,
+    evidence: evidenceByKey,
+    writePathAudit: evidenceByKey.writePathAudit,
+    concurrentWriterTests: evidenceByKey.concurrentWriterTests,
+    concurrencyControl: evidenceByKey.concurrencyControl,
+    transactionRetry: evidenceByKey.transactionRetry,
+    releaseAssertion: evidenceByKey.releaseAssertion,
+    missingEvidence,
+    source: phase62?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -2919,6 +3280,17 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
       releaseEvidence,
       multiWriterRuntimeSupportPresenceAssertion,
     );
+  const managedPostgresHorizontalWriterConcurrency =
+    deriveManagedPostgresHorizontalWriterConcurrency(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      managedPostgresCapability,
+      managedPostgresStartupSupport,
+      managedPostgresTopologyGate,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -2966,6 +3338,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     multiWriterRuntimeReleaseEnablementApproval,
     multiWriterRuntimeSupportPresenceAssertion,
     multiWriterRuntimeActivationControls,
+    managedPostgresHorizontalWriterConcurrency,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -3094,6 +3467,17 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
       releaseEvidence,
       multiWriterRuntimeSupportPresenceAssertion,
     );
+  const managedPostgresHorizontalWriterConcurrency =
+    deriveManagedPostgresHorizontalWriterConcurrency(
+      env,
+      managedDatabaseRuntimeGuard,
+      managedDatabaseTopology,
+      releaseReadiness,
+      releaseEvidence,
+      managedPostgresCapability,
+      managedPostgresStartupSupport,
+      managedPostgresTopologyGate,
+    );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -3141,6 +3525,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     multiWriterRuntimeReleaseEnablementApproval,
     multiWriterRuntimeSupportPresenceAssertion,
     multiWriterRuntimeActivationControls,
+    managedPostgresHorizontalWriterConcurrency,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

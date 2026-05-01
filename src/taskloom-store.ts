@@ -600,6 +600,16 @@ export interface ManagedPostgresStoreQueryClient {
     sql: string,
     params?: readonly unknown[],
   ): Promise<ManagedPostgresStoreQueryResult<TRow>>;
+  connect?(): Promise<ManagedPostgresStoreTransactionClient>;
+  close?(): Promise<void> | void;
+}
+
+export interface ManagedPostgresStoreTransactionClient {
+  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<ManagedPostgresStoreQueryResult<TRow>>;
+  release?(): Promise<void> | void;
   close?(): Promise<void> | void;
 }
 
@@ -1009,6 +1019,9 @@ async function createDefaultManagedPostgresStoreClient(config: ManagedPostgresSt
     query(sql, params) {
       return pool.query(sql, params);
     },
+    connect() {
+      return pool.connect?.() ?? Promise.resolve(pool);
+    },
     close() {
       return pool.end?.() ?? pool.close?.();
     },
@@ -1041,14 +1054,25 @@ async function ensureManagedPostgresDocumentStore(client: ManagedPostgresStoreQu
 }
 
 async function loadManagedPostgresStore(config: ManagedPostgresStoreClientConfig): Promise<TaskloomData> {
+  const backendKey = managedPostgresBackendKey(config);
   return withManagedPostgresClient(config, async (client) => {
     await ensureManagedPostgresDocumentStore(client);
     const loaded = await readManagedPostgresStore(client);
     if (loaded) return loaded;
 
-    const seeded = seedStore();
-    await persistManagedPostgresStore(client, seeded);
-    return seeded;
+    return withManagedPostgresMutationRetry(async () => {
+      return withManagedPostgresTransactionClient(client, async (transactionClient) => {
+        await transactionClient.query("select pg_advisory_xact_lock(hashtext($1))", [MANAGED_POSTGRES_DOCUMENT_KEY]);
+        const existing = await readManagedPostgresStore(transactionClient, true);
+        if (existing) return existing;
+
+        const seeded = seedStore();
+        await persistManagedPostgresStore(transactionClient, seeded);
+        cache = seeded;
+        cacheBackendKey = backendKey;
+        return seeded;
+      });
+    });
   });
 }
 
@@ -1057,23 +1081,90 @@ async function mutateManagedPostgresStore<T>(
   mutator: (data: TaskloomData) => T | Promise<T>,
 ): Promise<T> {
   const backendKey = managedPostgresBackendKey(config);
-  return withManagedPostgresClient(config, async (client) => {
+  return withManagedPostgresMutationRetry(() => withManagedPostgresClient(config, async (client) => {
     await ensureManagedPostgresDocumentStore(client);
-    await client.query("begin");
-    try {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [MANAGED_POSTGRES_DOCUMENT_KEY]);
-      const data = await readManagedPostgresStore(client, true) ?? seedStore();
+    return withManagedPostgresTransactionClient(client, async (transactionClient) => {
+      await transactionClient.query("select pg_advisory_xact_lock(hashtext($1))", [MANAGED_POSTGRES_DOCUMENT_KEY]);
+      const data = await readManagedPostgresStore(transactionClient, true) ?? seedStore();
       const result = await mutator(data);
-      await persistManagedPostgresStore(client, data);
-      await client.query("commit");
+      await persistManagedPostgresStore(transactionClient, data);
       cache = data;
       cacheBackendKey = backendKey;
       return result;
+    });
+  }));
+}
+
+async function withManagedPostgresTransactionClient<T>(
+  client: ManagedPostgresStoreQueryClient,
+  run: (client: ManagedPostgresStoreTransactionClient) => Promise<T>,
+): Promise<T> {
+  const transactionClient = await acquireManagedPostgresTransactionClient(client);
+  try {
+    await transactionClient.query("begin");
+    try {
+      const result = await run(transactionClient);
+      await transactionClient.query("commit");
+      return result;
     } catch (error) {
-      await client.query("rollback");
-      throw error;
+      return await rollbackManagedPostgresTransaction(transactionClient, error);
     }
-  });
+  } finally {
+    await releaseManagedPostgresTransactionClient(transactionClient, client);
+  }
+}
+
+async function acquireManagedPostgresTransactionClient(
+  client: ManagedPostgresStoreQueryClient,
+): Promise<ManagedPostgresStoreTransactionClient> {
+  return client.connect?.() ?? client;
+}
+
+async function rollbackManagedPostgresTransaction(
+  client: ManagedPostgresStoreTransactionClient,
+  cause: unknown,
+): Promise<never> {
+  try {
+    await client.query("rollback");
+  } catch {
+    // Preserve the original mutation error; rollback failures are secondary here.
+  }
+  throw cause;
+}
+
+async function releaseManagedPostgresTransactionClient(
+  transactionClient: ManagedPostgresStoreTransactionClient,
+  parentClient: ManagedPostgresStoreQueryClient,
+): Promise<void> {
+  if (transactionClient === parentClient) return;
+  if (transactionClient.release) {
+    await transactionClient.release();
+    return;
+  }
+  await transactionClient.close?.();
+}
+
+async function withManagedPostgresMutationRetry<T>(run: () => Promise<T>): Promise<T> {
+  const maxAttempts = 3;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt >= maxAttempts || !isRetryableManagedPostgresTransactionError(error)) throw error;
+      await delayManagedPostgresRetry(attempt);
+    }
+  }
+}
+
+function isRetryableManagedPostgresTransactionError(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  return code === "40001" || code === "40P01" || code === "55P03" || code === "57014";
+}
+
+function delayManagedPostgresRetry(attempt: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 10));
 }
 
 function managedPostgresBackendKey(config: ManagedPostgresStoreClientConfig): string {

@@ -67,6 +67,9 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG?: string;
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION?: string;
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION?: string;
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -128,6 +131,7 @@ export interface AsyncStoreBoundaryReport {
   phase59MultiWriterRuntimeEnablementApprovalGate?: Phase59MultiWriterRuntimeEnablementApprovalGateReport;
   phase60MultiWriterRuntimeSupportPresenceAssertionGate?: Phase60MultiWriterRuntimeSupportPresenceAssertionGateReport;
   phase61MultiWriterRuntimeActivationControlsGate?: Phase61MultiWriterRuntimeActivationControlsGateReport;
+  phase62ManagedPostgresHorizontalWriterHardeningGate?: Phase62ManagedPostgresHorizontalWriterHardeningGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -318,6 +322,35 @@ export interface Phase61MultiWriterRuntimeActivationControlsGateReport {
   nextSteps: string[];
 }
 
+export interface Phase62ManagedPostgresHorizontalWriterHardeningGateReport {
+  phase: "62";
+  required: boolean;
+  horizontalWriterTopologyRequested: boolean;
+  managedPostgresStartupSupported: boolean;
+  phase61ActivationControlsReady: boolean;
+  phase61ActivationGatePassed: boolean;
+  phase61ActivationReady: boolean;
+  horizontalWriterHardeningImplementationRequired: boolean;
+  horizontalWriterHardeningImplementationAttached: boolean;
+  horizontalWriterConcurrencyTestEvidenceRequired: boolean;
+  horizontalWriterConcurrencyTestEvidenceAttached: boolean;
+  horizontalWriterTransactionRetryEvidenceRequired: boolean;
+  horizontalWriterTransactionRetryEvidenceAttached: boolean;
+  horizontalWriterHardeningReady: boolean;
+  horizontalWriterRuntimeSupported: boolean;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  genericMultiWriterDatabaseSupported: false;
+  phases63To66Pending: boolean;
+  pendingPhases: string[];
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
 export interface Phase53MultiWriterTopologyEvidenceItem {
   id:
     | "topology-owner"
@@ -389,6 +422,13 @@ const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
   "authorized",
   "implementation-approved",
   "implementation-authorized",
+]);
+
+const HORIZONTAL_WRITER_TOPOLOGY_HINTS = new Set([
+  "managed-postgres-horizontal-app-writers",
+  "managed-postgres-horizontal-writers",
+  "postgres-horizontal-app-writers",
+  "postgres-horizontal-writers",
 ]);
 
 function parentPath(path: string): string | null {
@@ -1498,6 +1538,135 @@ function buildPhase61MultiWriterRuntimeActivationControlsGate(
   };
 }
 
+function horizontalWriterTopologyRequested(env: ReleaseReadinessEnv): boolean {
+  return HORIZONTAL_WRITER_TOPOLOGY_HINTS.has(normalize(env.TASKLOOM_DATABASE_TOPOLOGY));
+}
+
+function buildPhase62ManagedPostgresHorizontalWriterHardeningGate(
+  horizontalWriterIntent: boolean,
+  managedPostgresStartupSupported: boolean,
+  phase61Gate: Phase61MultiWriterRuntimeActivationControlsGateReport,
+  env: ReleaseReadinessEnv,
+): Phase62ManagedPostgresHorizontalWriterHardeningGateReport {
+  const horizontalWriterHardeningImplementationAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION).length > 0;
+  const horizontalWriterConcurrencyTestEvidenceAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE).length > 0;
+  const horizontalWriterTransactionRetryEvidenceAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE).length > 0;
+  const phase61ActivationControlsReady = phase61Gate.activationControlsReady;
+  const phase61ActivationGatePassed =
+    phase61Gate.activationGatePassed || (horizontalWriterIntent && phase61ActivationControlsReady);
+  const phase61ActivationReady = phase61ActivationControlsReady && phase61ActivationGatePassed;
+  const horizontalWriterHardeningReady =
+    horizontalWriterIntent &&
+    managedPostgresStartupSupported &&
+    phase61ActivationReady &&
+    horizontalWriterHardeningImplementationAttached &&
+    horizontalWriterConcurrencyTestEvidenceAttached &&
+    horizontalWriterTransactionRetryEvidenceAttached;
+  const pendingPhases = horizontalWriterIntent ? ["63", "64", "65", "66"] : [];
+
+  if (!horizontalWriterIntent) {
+    return {
+      phase: "62",
+      required: false,
+      horizontalWriterTopologyRequested: false,
+      managedPostgresStartupSupported,
+      phase61ActivationControlsReady,
+      phase61ActivationGatePassed: false,
+      phase61ActivationReady: false,
+      horizontalWriterHardeningImplementationRequired: false,
+      horizontalWriterHardeningImplementationAttached,
+      horizontalWriterConcurrencyTestEvidenceRequired: false,
+      horizontalWriterConcurrencyTestEvidenceAttached,
+      horizontalWriterTransactionRetryEvidenceRequired: false,
+      horizontalWriterTransactionRetryEvidenceAttached,
+      horizontalWriterHardeningReady: false,
+      horizontalWriterRuntimeSupported: false,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      genericMultiWriterDatabaseSupported: false,
+      phases63To66Pending: false,
+      pendingPhases,
+      releaseAllowed: true,
+      summary: "Phase 62 managed Postgres horizontal app-writer hardening is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 62 managed Postgres horizontal app-writer concurrency evidence ready before any future horizontal writer activation claim."],
+    };
+  }
+
+  return {
+    phase: "62",
+    required: true,
+    horizontalWriterTopologyRequested: true,
+    managedPostgresStartupSupported,
+    phase61ActivationControlsReady,
+    phase61ActivationGatePassed,
+    phase61ActivationReady,
+    horizontalWriterHardeningImplementationRequired: true,
+    horizontalWriterHardeningImplementationAttached,
+    horizontalWriterConcurrencyTestEvidenceRequired: true,
+    horizontalWriterConcurrencyTestEvidenceAttached,
+    horizontalWriterTransactionRetryEvidenceRequired: true,
+    horizontalWriterTransactionRetryEvidenceAttached,
+    horizontalWriterHardeningReady,
+    horizontalWriterRuntimeSupported: horizontalWriterHardeningReady,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    genericMultiWriterDatabaseSupported: false,
+    phases63To66Pending: true,
+    pendingPhases,
+    releaseAllowed: false,
+    summary: horizontalWriterHardeningReady
+      ? "Phase 62 managed Postgres horizontal app-writer concurrency hardening is complete for the supported single managed Postgres database posture; active-active, regional failover, PITR runtime, distributed SQLite, and final release remain blocked pending Phases 63-66."
+      : "Phase 62 managed Postgres horizontal app-writer concurrency hardening requires Phase 61 activation controls, managed Postgres startup support, implementation evidence, concurrent writer tests, and transaction retry or compare-and-swap evidence.",
+    blockers: [
+      ...(!managedPostgresStartupSupported
+        ? ["Phase 62 managed Postgres horizontal app-writer hardening requires Phase 52 managed Postgres startup support first."]
+        : []),
+      ...(!phase61ActivationReady
+        ? ["Phase 62 managed Postgres horizontal app-writer hardening requires Phase 61 activation controls first."]
+        : []),
+      ...(!horizontalWriterHardeningImplementationAttached
+        ? ["Phase 62 managed Postgres horizontal app-writer hardening implementation evidence is required."]
+        : []),
+      ...(!horizontalWriterConcurrencyTestEvidenceAttached
+        ? ["Phase 62 managed Postgres horizontal app-writer concurrent writer test evidence is required."]
+        : []),
+      ...(!horizontalWriterTransactionRetryEvidenceAttached
+        ? ["Phase 62 managed Postgres transaction retry or compare-and-swap evidence is required."]
+        : []),
+      ...(horizontalWriterHardeningReady
+        ? ["Phases 63-66 remain pending before release activation can be approved for the supported managed Postgres horizontal app-writer posture."]
+        : []),
+      "Phase 62 does not enable active-active, regional failover, PITR runtime, distributed SQLite, or generic multi-writer database support.",
+    ],
+    nextSteps: [
+      ...(!managedPostgresStartupSupported
+        ? ["Configure Phase 50 Postgres adapter evidence and managed database URL so Phase 52 managed Postgres startup support is available."]
+        : []),
+      ...(!phase61ActivationReady
+        ? ["Complete Phase 61 activation controls before claiming Phase 62 horizontal app-writer hardening."]
+        : []),
+      ...(!horizontalWriterHardeningImplementationAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION before claiming Phase 62 hardening."]
+        : []),
+      ...(!horizontalWriterConcurrencyTestEvidenceAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE with concurrent managed Postgres writer tests."]
+        : []),
+      ...(!horizontalWriterTransactionRetryEvidenceAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE with transaction retry or compare-and-swap proof."]
+        : []),
+      "Keep activation/release blocked until Phase 63 distributed dependency enforcement, Phase 64 recovery validation, Phase 65 cutover/rollback automation, and Phase 66 final release closure complete.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -1633,6 +1802,7 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseTopology.classification === "production-blocked" ||
     managedDatabaseRuntimeGuard.classification === "multi-writer-blocked" ||
     managedDatabaseRuntimeBoundary.classification === "multi-writer-blocked";
+  const horizontalWriterIntent = horizontalWriterTopologyRequested(env);
   const phase53MultiWriterTopologyGate = buildPhase53MultiWriterTopologyGate(multiWriterIntent, env);
   const phase55MultiWriterImplementationAuthorizationGate =
     buildPhase55MultiWriterImplementationAuthorizationGate(
@@ -1680,6 +1850,13 @@ export function buildAsyncStoreBoundaryReport(
     managedDatabaseTopology.classification === "unsupported-store" ||
     managedDatabaseRuntimeGuard.classification === "unsupported-store" ||
     managedDatabaseRuntimeBoundary.classification === "unsupported-store";
+  const phase62ManagedPostgresHorizontalWriterHardeningGate =
+    buildPhase62ManagedPostgresHorizontalWriterHardeningGate(
+      horizontalWriterIntent,
+      managedStartupSupported && !unsupportedStore,
+      phase61MultiWriterRuntimeActivationControlsGate,
+      env,
+    );
   const effectivePhase52ManagedStartupSupported =
     managedStartupSupported && !multiWriterIntent && !unsupportedStore;
   const bypassed =
@@ -1697,6 +1874,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase59MultiWriterRuntimeEnablementApprovalGate.blockers,
     ...phase60MultiWriterRuntimeSupportPresenceAssertionGate.blockers,
     ...phase61MultiWriterRuntimeActivationControlsGate.blockers,
+    ...phase62ManagedPostgresHorizontalWriterHardeningGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -1715,6 +1893,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase59MultiWriterRuntimeEnablementApprovalGate.nextSteps,
     ...phase60MultiWriterRuntimeSupportPresenceAssertionGate.nextSteps,
     ...phase61MultiWriterRuntimeActivationControlsGate.nextSteps,
+    ...phase62ManagedPostgresHorizontalWriterHardeningGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -1774,6 +1953,13 @@ export function buildAsyncStoreBoundaryReport(
       nextSteps.add("Keep multi-writer database topology blocked until Phase 54 design-package evidence is attached and a later release gate explicitly allows the topology.");
     }
   }
+  if (horizontalWriterIntent) {
+    if (phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady) {
+      nextSteps.add("Treat Phase 62 as concurrency hardening for managed Postgres horizontal app writers only; keep activation/release blocked until Phases 63-66 finish.");
+    } else {
+      nextSteps.add("Keep managed Postgres horizontal app-writer activation blocked until Phase 62 concurrency hardening evidence is complete.");
+    }
+  }
 
   const releaseAllowed =
     managedDatabaseRuntimeBoundary.allowed &&
@@ -1787,6 +1973,7 @@ export function buildAsyncStoreBoundaryReport(
     phase59MultiWriterRuntimeEnablementApprovalGate.releaseAllowed &&
     phase60MultiWriterRuntimeSupportPresenceAssertionGate.releaseAllowed &&
     phase61MultiWriterRuntimeActivationControlsGate.releaseAllowed &&
+    phase62ManagedPostgresHorizontalWriterHardeningGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -1794,7 +1981,11 @@ export function buildAsyncStoreBoundaryReport(
       : "pass"
     : "fail";
   let summary: string;
-  if (managedIntent && effectivePhase52ManagedStartupSupported) {
+  if (horizontalWriterIntent) {
+    summary = phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady
+      ? "Phase 49 async-store boundary exists as foundation and Phase 62 concurrency hardening is complete for managed Postgres horizontal app writers, but activation/release remains blocked pending Phases 63-66."
+      : "Phase 49 async-store boundary exists as foundation, but Phase 62 managed Postgres horizontal app-writer concurrency hardening is incomplete."
+  } else if (managedIntent && effectivePhase52ManagedStartupSupported) {
     summary = "Phase 52 managed Postgres startup support is asserted with Phase 50 adapter/backfill capability and Phase 51 migrated call-site evidence.";
   } else if (multiWriterIntent) {
     summary = phase61MultiWriterRuntimeActivationControlsGate.activationGatePassed
@@ -1852,6 +2043,7 @@ export function buildAsyncStoreBoundaryReport(
     phase59MultiWriterRuntimeEnablementApprovalGate,
     phase60MultiWriterRuntimeSupportPresenceAssertionGate,
     phase61MultiWriterRuntimeActivationControlsGate,
+    phase62ManagedPostgresHorizontalWriterHardeningGate,
     classification,
     summary,
     blockers,

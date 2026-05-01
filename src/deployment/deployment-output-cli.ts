@@ -18,12 +18,15 @@ const PHASE58_REPORT_KEY_PATTERN = /^phase58/i;
 const PHASE59_REPORT_KEY_PATTERN = /^phase59/i;
 const PHASE60_REPORT_KEY_PATTERN = /^phase60/i;
 const PHASE61_REPORT_KEY_PATTERN = /^phase61/i;
+const PHASE62_REPORT_KEY_PATTERN = /^phase62/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 const PHASE60_URL_REDACTION_KEY_PATTERN =
   /(implementation|statement|matrix|evidence|cutover|approval|acceptance|support)/i;
 const PHASE61_URL_REDACTION_KEY_PATTERN =
   /(active|regional|pitr|sqlite|distributed|support|claim|evidence|ticket|approval|url)/i;
+const PHASE62_URL_REDACTION_KEY_PATTERN =
+  /(implementation|hardening|concurrency|transaction|retry|compare|swap|evidence|url)/i;
 const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
   /(activeactive|active_active|active-active).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
   /(support|supported|releaseallowed|releasesupported|runtimesupport).*(activeactive|active_active|active-active)/i,
@@ -34,6 +37,12 @@ const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
   /(sqlitedistributed|sqlite_distributed|sqlite-distributed|distributedsqlite|distributed_sqlite|distributed-sqlite).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
   /(support|supported|releaseallowed|releasesupported|runtimesupport).*(sqlitedistributed|sqlite_distributed|sqlite-distributed|distributedsqlite|distributed_sqlite|distributed-sqlite)/i,
 ];
+const HORIZONTAL_WRITER_TOPOLOGY_HINTS = new Set([
+  "managed-postgres-horizontal-app-writers",
+  "managed-postgres-horizontal-writers",
+  "postgres-horizontal-app-writers",
+  "postgres-horizontal-writers",
+]);
 
 function clean(value: string | undefined): string {
   return (value ?? "").trim();
@@ -45,6 +54,10 @@ function normalize(value: string | undefined): string {
 
 function hasMultiWriterTopologyIntent(env: NodeJS.ProcessEnv): boolean {
   return MULTI_WRITER_TOPOLOGY_HINTS.has(normalize(env.TASKLOOM_DATABASE_TOPOLOGY));
+}
+
+function hasHorizontalWriterTopologyIntent(env: NodeJS.ProcessEnv): boolean {
+  return HORIZONTAL_WRITER_TOPOLOGY_HINTS.has(normalize(env.TASKLOOM_DATABASE_TOPOLOGY));
 }
 
 function isReport(value: unknown): value is DeploymentCliReport {
@@ -119,15 +132,18 @@ function redactValue(
         PHASE58_REPORT_KEY_PATTERN.test(key) ||
         PHASE59_REPORT_KEY_PATTERN.test(key) ||
         PHASE60_REPORT_KEY_PATTERN.test(key) ||
-        PHASE61_REPORT_KEY_PATTERN.test(key);
+        PHASE61_REPORT_KEY_PATTERN.test(key) ||
+        PHASE62_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase61Report = inPhase61Report || PHASE61_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase62Report = PHASE62_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase60Report && PHASE60_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase61Report && PHASE61_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase62Report && PHASE62_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -570,6 +586,11 @@ function phase61EnvValue(env: NodeJS.ProcessEnv, keys: string[]): string | undef
   return undefined;
 }
 
+function phase62EnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = clean(env[key]);
+  return value ? value : undefined;
+}
+
 function withPhase59Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   if (!hasMultiWriterTopologyIntent(env) || !isReport(report)) {
     return report;
@@ -936,15 +957,142 @@ function withPhase61Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   }));
 }
 
+function withPhase62Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!isReport(report)) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const nestedPhase62 = firstReportAt(report, [
+    ["phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["phase62ManagedPostgresHorizontalWriterHardeningReport"],
+    ["managedDatabase", "phase62"],
+    ["managedDatabase", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["managedDatabaseTopology", "phase62"],
+    ["managedDatabaseTopology", "managedDatabase", "phase62"],
+    ["managedDatabaseTopology", "managedDatabase", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["managedDatabaseRuntimeGuard", "phase62"],
+    ["managedDatabaseRuntimeGuard", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["releaseReadiness", "phase62"],
+    ["releaseReadiness", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["releaseEvidence", "phase62"],
+    ["releaseEvidence", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["evidence", "phase62"],
+    ["evidence", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+    ["asyncStoreBoundary", "phase62"],
+    ["asyncStoreBoundary", "phase62ManagedPostgresHorizontalWriterHardeningGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE62_REPORT_KEY_PATTERN.test(key));
+  const existingPhase62 = reportAt(report, ["phase62"]) ?? nestedPhase62 ?? {};
+  const horizontalWriterIntent =
+    existingPhase62.horizontalWriterTopologyRequested === true ||
+    existingPhase62.required === true ||
+    hasHorizontalWriterTopologyIntent(env);
+  const hasPhase62EnvEvidence =
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE") !== undefined;
+
+  if (!horizontalWriterIntent && !nestedPhase62 && !reportAt(report, ["phase62"]) && !hasPhase62EnvEvidence) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const horizontalWriterHardeningImplementation =
+    existingPhase62.horizontalWriterHardeningImplementation ??
+    existingPhase62.hardeningImplementation ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION");
+  const horizontalWriterConcurrencyTestEvidence =
+    existingPhase62.horizontalWriterConcurrencyTestEvidence ??
+    existingPhase62.concurrencyTestEvidence ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE");
+  const horizontalWriterTransactionRetryEvidence =
+    existingPhase62.horizontalWriterTransactionRetryEvidence ??
+    existingPhase62.transactionRetryEvidence ??
+    existingPhase62.compareAndSwapEvidence ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE");
+
+  const horizontalWriterHardeningImplementationRecorded =
+    existingPhase62.horizontalWriterHardeningImplementationRecorded ??
+    existingPhase62.horizontalWriterHardeningImplementationAttached ??
+    horizontalWriterHardeningImplementation !== undefined;
+  const horizontalWriterConcurrencyTestEvidenceRecorded =
+    existingPhase62.horizontalWriterConcurrencyTestEvidenceRecorded ??
+    existingPhase62.horizontalWriterConcurrencyTestEvidenceAttached ??
+    horizontalWriterConcurrencyTestEvidence !== undefined;
+  const horizontalWriterTransactionRetryEvidenceRecorded =
+    existingPhase62.horizontalWriterTransactionRetryEvidenceRecorded ??
+    existingPhase62.horizontalWriterTransactionRetryEvidenceAttached ??
+    horizontalWriterTransactionRetryEvidence !== undefined;
+  const phase61ActivationReady =
+    existingPhase62.phase61ActivationReady ??
+    existingPhase62.phase61ActivationGatePassed ??
+    reportAt(report, ["phase61"])?.activationReady ??
+    reportAt(report, ["phase61"])?.activationGatePassed ??
+    false;
+  const managedPostgresStartupSupported =
+    existingPhase62.managedPostgresStartupSupported ??
+    existingPhase62.phase52ManagedStartupSupported ??
+    reportAt(report, ["asyncStoreBoundary"])?.phase52ManagedStartupSupported ??
+    false;
+  const horizontalWriterHardeningReady =
+    existingPhase62.horizontalWriterHardeningReady ??
+    existingPhase62.horizontalWriterHardeningGatePassed ??
+    (
+      horizontalWriterIntent &&
+      managedPostgresStartupSupported === true &&
+      phase61ActivationReady === true &&
+      horizontalWriterHardeningImplementationRecorded === true &&
+      horizontalWriterConcurrencyTestEvidenceRecorded === true &&
+      horizontalWriterTransactionRetryEvidenceRecorded === true
+    );
+
+  return blockUnsupportedRuntimeReleaseClaims({
+    ...report,
+    phase62: {
+      ...existingPhase62,
+      phase: existingPhase62.phase ?? "62",
+      required: existingPhase62.required ?? horizontalWriterIntent,
+      horizontalWriterTopologyRequested: horizontalWriterIntent,
+      managedPostgresStartupSupported,
+      phase61ActivationReady,
+      horizontalWriterHardeningImplementation,
+      horizontalWriterConcurrencyTestEvidence,
+      horizontalWriterTransactionRetryEvidence,
+      horizontalWriterHardeningImplementationRecorded,
+      horizontalWriterConcurrencyTestEvidenceRecorded,
+      horizontalWriterTransactionRetryEvidenceRecorded,
+      horizontalWriterHardeningReady,
+      horizontalWriterHardeningGatePassed: horizontalWriterHardeningReady,
+      horizontalWriterRuntimeSupported: horizontalWriterHardeningReady,
+      managedPostgresHorizontalWriterSupported: horizontalWriterHardeningReady,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      genericMultiWriterDatabaseSupported: false,
+      phases63To66Pending: horizontalWriterIntent,
+      pendingPhases: horizontalWriterIntent ? ["63", "64", "65", "66"] : [],
+      releaseAllowed: false,
+      strictBlocker: existingPhase62.strictBlocker ?? horizontalWriterHardeningReady !== true,
+      summary: existingPhase62.summary ?? (
+        horizontalWriterHardeningReady
+          ? "Phase 62 records managed Postgres horizontal app-writer concurrency hardening; active-active, regional failover, PITR runtime, distributed SQLite, and final release remain blocked pending Phases 63-66."
+          : "Phase 62 requires managed Postgres horizontal app-writer concurrency hardening evidence before the supported horizontal writer posture can be claimed."
+      ),
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
     redactValue(
-      withPhase61Status(
-        withPhase60Status(
-          withPhase59Status(
-            withPhase58Status(
-              withPhase57Status(
-                withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+      withPhase62Status(
+        withPhase61Status(
+          withPhase60Status(
+            withPhase59Status(
+              withPhase58Status(
+                withPhase57Status(
+                  withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+                  env,
+                ),
                 env,
               ),
               env,

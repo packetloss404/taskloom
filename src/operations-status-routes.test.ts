@@ -167,6 +167,16 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(multiWriterRuntimeActivationControls.runtimeSupported, false);
   assert.equal(multiWriterRuntimeActivationControls.runtimeImplementationBlocked, true);
   assert.equal(multiWriterRuntimeActivationControls.releaseAllowed, false);
+  assert.ok(
+    body.managedPostgresHorizontalWriterConcurrency &&
+      typeof body.managedPostgresHorizontalWriterConcurrency === "object",
+  );
+  const managedPostgresHorizontalWriterConcurrency =
+    body.managedPostgresHorizontalWriterConcurrency as Record<string, unknown>;
+  assert.equal(managedPostgresHorizontalWriterConcurrency.phase, "62");
+  assert.equal(managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
+  assert.equal(managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
+  assert.equal(managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);
@@ -240,6 +250,10 @@ test("operations status report surfaces Phase 52 managed Postgres startup suppor
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeSupported, false);
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.runtimeImplementationBlocked, true);
   assert.equal(status.multiWriterRuntimeSupportPresenceAssertion.releaseAllowed, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.phase, "62");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.status, "not-configured");
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
+  assert.equal(status.managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
 });
 
 test("operations status report keeps multi-writer managed Postgres startup unsupported", () => {

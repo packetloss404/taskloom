@@ -96,6 +96,20 @@ const distributedRuntimePhase61Env = {
   TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "REL-AUTO-61",
 } as const;
 
+const managedPostgresHorizontalWriterPhase62Env = {
+  TASKLOOM_STORE: "postgres",
+  TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+  TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+  TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+  ...distributedRuntimePhase61Env,
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+    "docs/phase-62/horizontal-writer-hardening.md",
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+    "docs/phase-62/concurrency-tests.md",
+  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+    "docs/phase-62/transaction-retry.md",
+} as const;
+
 test("local JSON runtime is allowed by default", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: {} });
 
@@ -1169,6 +1183,126 @@ test("Phase 61 activation controls do not bypass SQLite regional PITR runtime", 
     report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"),
   );
   assert.ok(report.blockers.some((blocker) => blocker.includes("multi-region")));
+  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
+});
+
+test("managed Postgres horizontal app-writer runtime requires Phase 61 controls and Phase 62 evidence", () => {
+  const env = {
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+  };
+  const report = assessManagedDatabaseRuntimeGuard({ env });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
+  assert.equal(report.phase61?.activationControlsReady, false);
+  assert.equal(report.phase61?.activationGatePassed, true);
+  assert.equal(report.phase62?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.phase62?.managedPostgresStartupSupported, true);
+  assert.equal(report.phase62?.phase61ActivationReady, false);
+  assert.equal(report.phase62?.horizontalWriterHardeningImplementationConfigured, false);
+  assert.equal(report.phase62?.horizontalWriterConcurrencyTestEvidenceConfigured, false);
+  assert.equal(report.phase62?.horizontalWriterTransactionRetryEvidenceConfigured, false);
+  assert.equal(report.phase62?.horizontalWriterHardeningReady, false);
+  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, false);
+  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
+  assert.equal(report.phase62?.activeActiveSupported, false);
+  assert.equal(report.phase62?.regionalFailoverSupported, false);
+  assert.equal(report.phase62?.pitrRuntimeSupported, false);
+  assert.equal(report.phase62?.distributedSqliteSupported, false);
+  assert.equal(report.phase62?.strictBlocker, true);
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase62-managed-postgres-horizontal-writer-hardening" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 62 requires Phase 61 activation controls")));
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE"),
+    ),
+  );
+  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
+});
+
+test("managed Postgres horizontal app-writer runtime is allowed after Phase 62 hardening evidence", () => {
+  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase62Env });
+  const concurrencyEvidence = observedEnvValue(
+    report,
+    "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
+  );
+  const retryEvidence = observedEnvValue(
+    report,
+    "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
+  );
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
+  assert.equal(report.phase62?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.phase62?.managedPostgresStartupSupported, true);
+  assert.equal(report.phase62?.phase61ActivationControlsReady, true);
+  assert.equal(report.phase62?.phase61ActivationGatePassed, true);
+  assert.equal(report.phase62?.phase61ActivationReady, true);
+  assert.equal(report.phase62?.horizontalWriterHardeningImplementationConfigured, true);
+  assert.equal(report.phase62?.horizontalWriterConcurrencyTestEvidenceConfigured, true);
+  assert.equal(report.phase62?.horizontalWriterTransactionRetryEvidenceConfigured, true);
+  assert.equal(report.phase62?.horizontalWriterHardeningReady, true);
+  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
+  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
+  assert.equal(report.phase62?.activeActiveSupported, false);
+  assert.equal(report.phase62?.regionalFailoverSupported, false);
+  assert.equal(report.phase62?.pitrRuntimeSupported, false);
+  assert.equal(report.phase62?.distributedSqliteSupported, false);
+  assert.equal(concurrencyEvidence.value, "docs/phase-62/concurrency-tests.md");
+  assert.equal(concurrencyEvidence.redacted, false);
+  assert.equal(retryEvidence.value, "docs/phase-62/transaction-retry.md");
+  assert.equal(retryEvidence.redacted, false);
+  assert.ok(report.summary.includes("Phase 62"));
+  assert.ok(report.warnings.some((warning) => warning.includes("horizontal app-writer")));
+  assert.equal(report.blockers.length, 0);
+  assert.doesNotThrow(() =>
+    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase62Env),
+  );
+});
+
+test("Phase 62 horizontal app-writer evidence does not unblock active-active runtime", () => {
+  const env = {
+    ...managedPostgresHorizontalWriterPhase62Env,
+    ...distributedRuntimePhase56BundledEnv,
+    ...distributedRuntimePhase57Env,
+    ...distributedRuntimePhase58Env,
+    ...distributedRuntimePhase59Env,
+    ...distributedRuntimePhase60Env,
+    ...distributedRuntimePhase61Env,
+    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
+  };
+  const report = assessManagedDatabaseRuntimeGuard({ env });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "multi-writer-blocked");
+  assert.equal(report.phase62?.horizontalWriterTopologyRequested, false);
+  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, false);
+  assert.equal(report.phase62?.activeActiveSupported, false);
+  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
+  assert.equal(report.phase61?.multiWriterTopologyRequested, true);
+  assert.equal(report.phase61?.runtimeSupported, false);
+  assert.equal(report.phase61?.multiWriterSupported, false);
+  assert.ok(
+    report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("active-active")));
   assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
 });
 

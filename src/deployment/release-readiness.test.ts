@@ -80,6 +80,24 @@ function phase60CompleteMultiWriterEnv(): ReleaseReadinessEnv {
   };
 }
 
+function phase61CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
+  return {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "activation-decision://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "activation-owner://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-05T16:00:00Z/2026-05-05T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "feature-flag://horizontal-app-writers",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "release-automation-assertion://phase61",
+  };
+}
+
 test("local JSON development produces warnings instead of release blockers", () => {
   const report = assessReleaseReadiness({ env: {} });
 
@@ -900,6 +918,71 @@ test("Phase 61 runtime activation controls attach but still block multi-writer r
   assert.ok(report.asyncStoreBoundary.summary.includes("Phase 61 runtime activation controls are attached"));
   assert.ok(!report.asyncStoreBoundary.summary.includes("Phase 62"));
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 61 runtime activation controls attached")));
+});
+
+test("Phase 62 horizontal writer hardening evidence is required for managed Postgres horizontal app writers", () => {
+  const report = assessReleaseReadiness({
+    env: phase61CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase62Gate = report.asyncStoreBoundary.phase62ManagedPostgresHorizontalWriterHardeningGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.managedDatabaseTopology.managedDatabase.phase62?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, false);
+  assert.equal(phase62Gate?.required, true);
+  assert.equal(phase62Gate?.managedPostgresStartupSupported, true);
+  assert.equal(phase62Gate?.phase61ActivationReady, true);
+  assert.equal(phase62Gate?.horizontalWriterHardeningImplementationAttached, false);
+  assert.equal(phase62Gate?.horizontalWriterConcurrencyTestEvidenceAttached, false);
+  assert.equal(phase62Gate?.horizontalWriterTransactionRetryEvidenceAttached, false);
+  assert.equal(phase62Gate?.horizontalWriterHardeningReady, false);
+  assert.equal(phase62Gate?.horizontalWriterRuntimeSupported, false);
+  assert.equal(phase62Gate?.activeActiveSupported, false);
+  assert.equal(phase62Gate?.distributedSqliteSupported, false);
+  assert.equal(phase62Gate?.phases63To66Pending, true);
+  assert.equal(phase62Gate?.releaseAllowed, false);
+  assert.ok(phase62Gate?.blockers.some((blocker) => blocker.includes("hardening implementation evidence")));
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 62 managed Postgres horizontal app-writer concurrency hardening is incomplete"));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION")));
+});
+
+test("Phase 62 horizontal writer hardening completes only the supported managed Postgres app-writer posture", () => {
+  const env: ReleaseReadinessEnv = {
+    ...phase61CompleteHorizontalWriterEnv(),
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "concurrency-test://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+  };
+  const report = assessReleaseReadiness({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const phase62Gate = report.asyncStoreBoundary.phase62ManagedPostgresHorizontalWriterHardeningGate;
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(report.managedDatabaseTopology.managedDatabase.phase62?.horizontalWriterHardeningReady, true);
+  assert.equal(phase62Gate?.required, true);
+  assert.equal(phase62Gate?.horizontalWriterHardeningImplementationAttached, true);
+  assert.equal(phase62Gate?.horizontalWriterConcurrencyTestEvidenceAttached, true);
+  assert.equal(phase62Gate?.horizontalWriterTransactionRetryEvidenceAttached, true);
+  assert.equal(phase62Gate?.horizontalWriterHardeningReady, true);
+  assert.equal(phase62Gate?.horizontalWriterRuntimeSupported, true);
+  assert.equal(phase62Gate?.activeActiveSupported, false);
+  assert.equal(phase62Gate?.regionalFailoverSupported, false);
+  assert.equal(phase62Gate?.pitrRuntimeSupported, false);
+  assert.equal(phase62Gate?.distributedSqliteSupported, false);
+  assert.equal(phase62Gate?.genericMultiWriterDatabaseSupported, false);
+  assert.deepEqual(phase62Gate?.pendingPhases, ["63", "64", "65", "66"]);
+  assert.equal(phase62Gate?.releaseAllowed, false);
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 62 concurrency hardening is complete"));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 63 distributed dependency enforcement")));
 });
 
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {

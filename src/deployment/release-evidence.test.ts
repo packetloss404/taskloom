@@ -83,6 +83,24 @@ function phase60CompleteMultiWriterEvidenceEnv() {
   };
 }
 
+function phase61CompleteHorizontalWriterEvidenceEnv() {
+  return {
+    NODE_ENV: "production",
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_BACKUP_DIR: "/srv/taskloom/backups",
+    TASKLOOM_RESTORE_DRILL_AT: "2026-04-28T16:30:00Z",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "activation-decision://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "activation-owner://phase61",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-05T16:00:00Z/2026-05-05T18:00:00Z",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "feature-flag://horizontal-app-writers",
+    TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "release-automation-assertion://phase61",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -1176,6 +1194,79 @@ test("strict evidence redacts sensitive Phase 61 activation attachments while ru
   assert.equal(ownerAttachment?.value, "[redacted]");
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER").value, "[redacted]");
   assert.ok(bundle.summary.includes("Phase 61 runtime activation controls are attached"));
+});
+
+test("strict evidence records missing Phase 62 horizontal writer hardening for managed Postgres app writers", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase61CompleteHorizontalWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T05:00:00.000Z",
+    strict: true,
+  });
+  const implementationAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-62-managed-postgres-horizontal-writer-hardening-implementation"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase62ManagedPostgresHorizontalWriterHardeningGateRequired, true);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterTopologyRequested, true);
+  assert.equal(bundle.evidence.config.phase62ManagedPostgresStartupSupported, true);
+  assert.equal(bundle.evidence.config.phase62Phase61ActivationReady, true);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterHardeningImplementationAttached, false);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterConcurrencyTestEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterTransactionRetryEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterHardeningReady, false);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterRuntimeSupported, false);
+  assert.equal(bundle.evidence.config.phase62ActiveActiveSupported, false);
+  assert.equal(bundle.evidence.config.phase62DistributedSqliteSupported, false);
+  assert.equal(bundle.evidence.config.phase62Phases63To66Pending, true);
+  assert.equal(bundle.evidence.config.phase62TopologyReleaseAllowed, false);
+  assert.equal(implementationAttachment?.required, true);
+  assert.equal(implementationAttachment?.configured, false);
+  assert.ok(bundle.summary.includes("Phase 62 managed Postgres horizontal app-writer concurrency hardening is incomplete"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE")));
+});
+
+test("strict evidence records complete Phase 62 hardening without claiming active-active or final release", () => {
+  const env = {
+    ...phase61CompleteHorizontalWriterEvidenceEnv(),
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "https://tests:secret@evidence.internal/phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T05:30:00.000Z",
+    strict: true,
+  });
+  const concurrencyAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-62-managed-postgres-horizontal-writer-concurrency-test-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterHardeningImplementationAttached, true);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterConcurrencyTestEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterTransactionRetryEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterHardeningReady, true);
+  assert.equal(bundle.evidence.config.phase62HorizontalWriterRuntimeSupported, true);
+  assert.equal(bundle.evidence.config.phase62ActiveActiveSupported, false);
+  assert.equal(bundle.evidence.config.phase62RegionalFailoverSupported, false);
+  assert.equal(bundle.evidence.config.phase62PitrRuntimeSupported, false);
+  assert.equal(bundle.evidence.config.phase62DistributedSqliteSupported, false);
+  assert.equal(bundle.evidence.config.phase62GenericMultiWriterDatabaseSupported, false);
+  assert.deepEqual(bundle.evidence.config.phase62PendingPhases, ["63", "64", "65", "66"]);
+  assert.equal(bundle.evidence.config.phase62TopologyReleaseAllowed, false);
+  assert.equal(concurrencyAttachment?.configured, true);
+  assert.equal(concurrencyAttachment?.redacted, true);
+  assert.equal(concurrencyAttachment?.value, "[redacted]");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE").value, "[redacted]");
+  assert.ok(bundle.summary.includes("Phase 62 concurrency hardening is complete"));
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 66 final release closure")));
 });
 
 test("release readiness managed reports are reused when present", () => {

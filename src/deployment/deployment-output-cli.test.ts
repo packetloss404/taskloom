@@ -1187,3 +1187,72 @@ test("formatDeploymentCliJson preserves nested Phase 61 reports while blocking u
   assert.doesNotMatch(output, /evidence\.example\.com/);
   assert.doesNotMatch(output, /phase61-claim-secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 62 horizontal writer hardening while blocking unsupported topologies", () => {
+  const output = formatDeploymentCliJson({
+    asyncStoreBoundary: {
+      phase52ManagedStartupSupported: true,
+    },
+    phase61: {
+      activationReady: true,
+    },
+    runtimeClaims: {
+      activeActiveSupport: true,
+      pitrSupport: true,
+      sqliteDistributedSupport: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "https://tests:secret@evidence.internal/phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    runtimeClaims?: {
+      activeActiveSupport?: unknown;
+      pitrSupport?: unknown;
+      sqliteDistributedSupport?: unknown;
+    };
+    phase62?: {
+      phase?: unknown;
+      horizontalWriterTopologyRequested?: unknown;
+      horizontalWriterHardeningImplementation?: unknown;
+      horizontalWriterConcurrencyTestEvidence?: unknown;
+      horizontalWriterTransactionRetryEvidence?: unknown;
+      horizontalWriterHardeningReady?: unknown;
+      horizontalWriterRuntimeSupported?: unknown;
+      managedPostgresHorizontalWriterSupported?: unknown;
+      activeActiveSupported?: unknown;
+      regionalFailoverSupported?: unknown;
+      pitrRuntimeSupported?: unknown;
+      distributedSqliteSupported?: unknown;
+      genericMultiWriterDatabaseSupported?: unknown;
+      phases63To66Pending?: unknown;
+      pendingPhases?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+    };
+  };
+
+  assert.equal(report.runtimeClaims?.activeActiveSupport, false);
+  assert.equal(report.runtimeClaims?.pitrSupport, false);
+  assert.equal(report.runtimeClaims?.sqliteDistributedSupport, false);
+  assert.equal(report.phase62?.phase, "62");
+  assert.equal(report.phase62?.horizontalWriterTopologyRequested, true);
+  assert.equal(report.phase62?.horizontalWriterHardeningImplementation, "hardening://phase62");
+  assert.equal(report.phase62?.horizontalWriterConcurrencyTestEvidence, "[redacted]");
+  assert.equal(report.phase62?.horizontalWriterTransactionRetryEvidence, "[redacted]");
+  assert.equal(report.phase62?.horizontalWriterHardeningReady, true);
+  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
+  assert.equal(report.phase62?.managedPostgresHorizontalWriterSupported, true);
+  assert.equal(report.phase62?.activeActiveSupported, false);
+  assert.equal(report.phase62?.regionalFailoverSupported, false);
+  assert.equal(report.phase62?.pitrRuntimeSupported, false);
+  assert.equal(report.phase62?.distributedSqliteSupported, false);
+  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
+  assert.equal(report.phase62?.phases63To66Pending, true);
+  assert.deepEqual(report.phase62?.pendingPhases, ["63", "64", "65", "66"]);
+  assert.equal(report.phase62?.releaseAllowed, false);
+  assert.equal(report.phase62?.strictBlocker, false);
+  assert.doesNotMatch(output, /tests:secret/);
+});
