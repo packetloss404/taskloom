@@ -85,6 +85,11 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_ALERT_DELIVERY_EVIDENCE?: string;
   TASKLOOM_HEALTH_MONITORING_ASSERTION?: string;
   TASKLOOM_HEALTH_MONITORING_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -341,6 +346,28 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase64?: {
+    required: boolean;
+    horizontalWriterTopologyRequested: boolean;
+    phase63DistributedDependencyEnforcementReady: boolean;
+    backupRestoreEvidenceConfigured: boolean;
+    pitrRehearsalEvidenceConfigured: boolean;
+    failoverRehearsalEvidenceConfigured: boolean;
+    dataIntegrityValidationEvidenceConfigured: boolean;
+    recoveryTimeExpectationConfigured: boolean;
+    recoveryValidationReady: boolean;
+    managedPostgresRecoveryClaimsValidated: boolean;
+    supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr";
+    providerOwnedHaPitrRequired: true;
+    appOwnedRegionalFailoverSupported: false;
+    appOwnedPitrRuntimeSupported: false;
+    activeActiveSupported: false;
+    distributedSqliteSupported: false;
+    activationAllowed: boolean;
+    releaseAllowed: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -438,6 +465,11 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_ALERT_DELIVERY_EVIDENCE",
   "TASKLOOM_HEALTH_MONITORING_ASSERTION",
   "TASKLOOM_HEALTH_MONITORING_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -1188,6 +1220,57 @@ function phase63DistributedDependencyEnforcementGate(
   };
 }
 
+function phase64ManagedPostgresRecoveryValidationGate(
+  env: ManagedDatabaseRuntimeGuardEnv,
+  horizontalWriterTopologyRequested: boolean,
+  phase63: ReturnType<typeof phase63DistributedDependencyEnforcementGate>,
+) {
+  const backupRestoreEvidenceConfigured = configured(env.TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE);
+  const pitrRehearsalEvidenceConfigured = configured(env.TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE);
+  const failoverRehearsalEvidenceConfigured = configured(env.TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE);
+  const dataIntegrityValidationEvidenceConfigured = configured(
+    env.TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE,
+  );
+  const recoveryTimeExpectationConfigured = configured(env.TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION);
+  const recoveryValidationReady =
+    !horizontalWriterTopologyRequested ||
+    (phase63.distributedDependencyEnforcementReady &&
+      backupRestoreEvidenceConfigured &&
+      pitrRehearsalEvidenceConfigured &&
+      failoverRehearsalEvidenceConfigured &&
+      dataIntegrityValidationEvidenceConfigured &&
+      recoveryTimeExpectationConfigured);
+  const strictBlocker = horizontalWriterTopologyRequested && !recoveryValidationReady;
+  const summary = horizontalWriterTopologyRequested
+    ? recoveryValidationReady
+      ? "Phase 64 recovery validation is configured; backup restore, PITR rehearsal, failover rehearsal, data-integrity validation, and recovery-time expectations are recorded for managed Postgres provider-owned HA/PITR."
+      : "Phase 64 requires completed Phase 63 distributed dependencies plus backup restore evidence, PITR rehearsal evidence, failover rehearsal evidence, data-integrity validation evidence, and recovery-time expectations before horizontal app-writer recovery claims are valid."
+    : "No managed Postgres horizontal app-writer topology requested for Phase 64 recovery validation.";
+
+  return {
+    required: horizontalWriterTopologyRequested,
+    horizontalWriterTopologyRequested,
+    phase63DistributedDependencyEnforcementReady: phase63.distributedDependencyEnforcementReady,
+    backupRestoreEvidenceConfigured,
+    pitrRehearsalEvidenceConfigured,
+    failoverRehearsalEvidenceConfigured,
+    dataIntegrityValidationEvidenceConfigured,
+    recoveryTimeExpectationConfigured,
+    recoveryValidationReady,
+    managedPostgresRecoveryClaimsValidated: horizontalWriterTopologyRequested && recoveryValidationReady,
+    supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr" as const,
+    providerOwnedHaPitrRequired: true as const,
+    appOwnedRegionalFailoverSupported: false as const,
+    appOwnedPitrRuntimeSupported: false as const,
+    activeActiveSupported: false as const,
+    distributedSqliteSupported: false as const,
+    activationAllowed: horizontalWriterTopologyRequested && recoveryValidationReady,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return (
     MANAGED_TOPOLOGY_HINTS.has(topology) ||
@@ -1228,6 +1311,7 @@ function buildNextSteps(
   phase61: ReturnType<typeof phase61MultiWriterRuntimeActivationControlsGate>,
   phase62: ReturnType<typeof phase62ManagedPostgresHorizontalWriterHardeningGate>,
   phase63: ReturnType<typeof phase63DistributedDependencyEnforcementGate>,
+  phase64: ReturnType<typeof phase64ManagedPostgresRecoveryValidationGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -1479,6 +1563,26 @@ function buildNextSteps(
         steps.add("Configure TASKLOOM_HEALTH_MONITORING_ASSERTION with the external monitor or readiness-probe evidence for the activated deployment.");
       }
     }
+    if (check.id === "phase64-managed-postgres-recovery-validation") {
+      if (!phase64.phase63DistributedDependencyEnforcementReady) {
+        steps.add("Complete Phase 63 distributed dependency enforcement before recording Phase 64 recovery validation.");
+      }
+      if (!phase64.backupRestoreEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE with backup restore test evidence.");
+      }
+      if (!phase64.pitrRehearsalEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE with managed Postgres PITR rehearsal evidence.");
+      }
+      if (!phase64.failoverRehearsalEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE with provider-owned HA/failover rehearsal evidence.");
+      }
+      if (!phase64.dataIntegrityValidationEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE with post-recovery data-integrity validation evidence.");
+      }
+      if (!phase64.recoveryTimeExpectationConfigured) {
+        steps.add("Configure TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION with the expected RTO/RPO or provider recovery-time target.");
+      }
+    }
   }
 
   if (bypassEnabled) {
@@ -1552,6 +1656,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase61,
   );
   const phase63 = phase63DistributedDependencyEnforcementGate(env, hasHorizontalWriterIntent, phase62);
+  const phase64 = phase64ManagedPostgresRecoveryValidationGate(env, hasHorizontalWriterIntent, phase63);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseRuntimeGuardCheck[] = [];
   const warnings: string[] = [];
@@ -1675,6 +1780,13 @@ export function assessManagedDatabaseRuntimeGuard(
     phase63.summary,
   );
 
+  pushCheck(
+    checks,
+    "phase64-managed-postgres-recovery-validation",
+    phase64.strictBlocker ? "fail" : "pass",
+    phase64.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent && !hasHorizontalWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -1717,6 +1829,7 @@ export function assessManagedDatabaseRuntimeGuard(
   if (hasHorizontalWriterIntent) {
     warnings.push(phase62.summary);
     warnings.push(phase63.summary);
+    warnings.push(phase64.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -1727,7 +1840,8 @@ export function assessManagedDatabaseRuntimeGuard(
     (hasManagedIntent && !hasManagedPostgresStartupSupport) ||
     hasMultiWriterIntent ||
     phase62.strictBlocker ||
-    phase63.strictBlocker;
+    phase63.strictBlocker ||
+    phase64.strictBlocker;
   const allowed = blockers.length === 0 || bypassEnabled;
   const status = statusFromChecks(checks, bypassEnabled);
   let classification: ManagedDatabaseRuntimeGuardClassification;
@@ -1748,8 +1862,8 @@ export function assessManagedDatabaseRuntimeGuard(
   const summary = allowed
     ? bypassEnabled
       ? "Phase 46 managed database runtime guard was bypassed; unsupported runtime configuration remains present."
-      : hasHorizontalWriterIntent && phase63.distributedDependencyEnforcementReady
-        ? "Phase 63 managed database runtime guard allows hardened managed Postgres horizontal app-writer posture with distributed dependency enforcement."
+      : hasHorizontalWriterIntent && phase64.recoveryValidationReady
+        ? "Phase 64 managed database runtime guard allows hardened managed Postgres horizontal app-writer posture with validated provider-owned HA/PITR recovery evidence."
       : hasManagedIntent && hasManagedPostgresStartupSupport
         ? "Phase 52 managed database runtime guard allows single-writer managed Postgres startup."
         : store === "sqlite"
@@ -1784,6 +1898,7 @@ export function assessManagedDatabaseRuntimeGuard(
       phase61,
       phase62,
       phase63,
+      phase64,
     ),
     observed: {
       nodeEnv,
@@ -1811,6 +1926,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase61,
     phase62,
     phase63,
+    phase64,
   };
 }
 

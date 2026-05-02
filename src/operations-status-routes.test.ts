@@ -189,6 +189,17 @@ test("operations status route returns the report shape for an admin-equivalent o
     distributedDependencyEnforcement.dependencies &&
       typeof distributedDependencyEnforcement.dependencies === "object",
   );
+  assert.ok(
+    body.managedPostgresRecoveryValidation &&
+      typeof body.managedPostgresRecoveryValidation === "object",
+  );
+  const managedPostgresRecoveryValidation =
+    body.managedPostgresRecoveryValidation as Record<string, unknown>;
+  assert.equal(managedPostgresRecoveryValidation.phase, "64");
+  assert.equal(managedPostgresRecoveryValidation.activationAllowed, false);
+  assert.equal(managedPostgresRecoveryValidation.activeActiveDatabaseSupported, false);
+  assert.equal(managedPostgresRecoveryValidation.regionalRuntimeSupported, false);
+  assert.equal(managedPostgresRecoveryValidation.pitrRuntimeSupported, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);

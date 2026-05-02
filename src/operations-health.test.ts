@@ -43,6 +43,7 @@ test("default healthy deps yield overall ok with disabled accessLog", () => {
   assert.equal(findSubsystem(report, "store").status, "ok");
   assert.equal(findSubsystem(report, "scheduler").status, "ok");
   assert.equal(findSubsystem(report, "accessLog").status, "disabled");
+  assert.equal(findSubsystem(report, "managedPostgresRecoveryValidation").status, "disabled");
   assert.match(findSubsystem(report, "scheduler").detail, /ticksSinceStart=7/);
   assert.equal(report.generatedAt, "2026-04-26T10:00:01.000Z");
 });
@@ -266,4 +267,53 @@ test("distributed dependency health is ok when all Phase 63 dependencies are pro
   assert.match(dependencies.detail, /Phase 63/);
   assert.match(dependencies.detail, /activationAllowed=true/);
   assert.match(dependencies.detail, /releaseAllowed=false/);
+  const recovery = findSubsystem(report, "managedPostgresRecoveryValidation");
+  assert.equal(recovery.status, "degraded");
+  assert.match(recovery.detail, /Phase 64/);
+  assert.match(recovery.detail, /backup restore evidence/);
+  assert.match(recovery.detail, /PITR rehearsal evidence/);
+  assert.match(recovery.detail, /activationAllowed=false/);
+});
+
+test("managed Postgres recovery validation health is ok when Phase 64 evidence is present", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: {
+        TASKLOOM_STORE: "postgres",
+        TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+        TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+        TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+          "artifacts/phase62/horizontal-writer-hardening.md",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+          "artifacts/phase62/concurrency-tests.tap",
+        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+          "artifacts/phase62/transaction-retry.md",
+        TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.example.com/taskloom/check",
+        TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+        TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://coord.example.com/taskloom/scheduler-leader",
+        TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+        TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63/durable",
+        TASKLOOM_ACCESS_LOG_MODE: "stdout",
+        TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63/stdout-shipper",
+        TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
+        TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.example.com/taskloom",
+        TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63/webhook",
+        TASKLOOM_HEALTH_MONITORING_EVIDENCE: "monitoring://phase63/health",
+        TASKLOOM_RECOVERY_BACKUP_RESTORE_EVIDENCE: "artifacts/phase64/backup-restore.md",
+        TASKLOOM_RECOVERY_PITR_REHEARSAL_EVIDENCE: "artifacts/phase64/pitr.md",
+        TASKLOOM_RECOVERY_FAILOVER_REHEARSAL_EVIDENCE: "artifacts/phase64/failover.md",
+        TASKLOOM_RECOVERY_DATA_INTEGRITY_VALIDATION: "artifacts/phase64/integrity.md",
+        TASKLOOM_RECOVERY_TIME_EXPECTATIONS: "RTO<=15m RPO<=5m",
+      },
+    }),
+  );
+  const recovery = findSubsystem(report, "managedPostgresRecoveryValidation");
+
+  assert.equal(recovery.status, "ok");
+  assert.match(recovery.detail, /backup restore, PITR rehearsal, failover rehearsal/i);
+  assert.match(recovery.detail, /provider-owned HA\/PITR is validated/i);
+  assert.match(recovery.detail, /active-active, regional runtime, and SQLite-distributed support remain unsupported/i);
+  assert.match(recovery.detail, /activationAllowed=true/);
+  assert.match(recovery.detail, /releaseAllowed=false/);
 });

@@ -120,6 +120,17 @@ function phase63CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
   } as ReleaseReadinessEnv;
 }
 
+function phase64CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
+  return {
+    ...phase63CompleteHorizontalWriterEnv(),
+    TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE: "restore://phase64/backup",
+    TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE: "pitr://phase64/rehearsal",
+    TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE: "failover://phase64/rehearsal",
+    TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE: "integrity://phase64/post-recovery",
+    TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION: "rto=15m;rpo=5m",
+  };
+}
+
 interface Phase63ReadinessGateContract {
   phase: "63";
   required: boolean;
@@ -137,12 +148,42 @@ interface Phase63ReadinessGateContract {
   blockers: string[];
 }
 
+interface Phase64ReadinessGateContract {
+  phase: "64";
+  required: boolean;
+  phase63ActivationDependencyGatePassed: boolean;
+  backupRestoreEvidenceAttached: boolean;
+  pitrRehearsalEvidenceAttached: boolean;
+  failoverRehearsalEvidenceAttached: boolean;
+  dataIntegrityValidationEvidenceAttached: boolean;
+  recoveryTimeExpectationAttached: boolean;
+  managedPostgresRecoveryValidationReady: boolean;
+  providerOwnedHaPitrValidated: boolean;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  applicationManagedRegionalFailoverSupported: false;
+  applicationManagedPitrSupported: false;
+  pendingPhases: string[];
+  releaseAllowed: boolean;
+  blockers: string[];
+}
+
 function phase63Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase63ReadinessGateContract {
   const gate = (report.asyncStoreBoundary as unknown as {
     phase63DistributedDependencyEnforcementGate?: unknown;
   }).phase63DistributedDependencyEnforcementGate;
   assert.ok(gate && typeof gate === "object", "expected Phase 63 distributed dependency enforcement gate");
   return gate as Phase63ReadinessGateContract;
+}
+
+function phase64Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase64ReadinessGateContract {
+  const gate = (report.asyncStoreBoundary as unknown as {
+    phase64ManagedPostgresRecoveryValidationGate?: unknown;
+  }).phase64ManagedPostgresRecoveryValidationGate;
+  assert.ok(gate && typeof gate === "object", "expected Phase 64 managed Postgres recovery validation gate");
+  return gate as Phase64ReadinessGateContract;
 }
 
 test("local JSON development produces warnings instead of release blockers", () => {
@@ -1095,6 +1136,63 @@ test("Phase 63 dependency enforcement activation gate passes only when all six d
   assert.equal(report.readyForRelease, false);
   assert.ok(report.asyncStoreBoundary.summary.includes("Phase 63 distributed dependency enforcement is complete"));
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 64 recovery validation")));
+});
+
+test("Phase 64 recovery validation blocks strict activation when recovery evidence is missing", () => {
+  const report = assessReleaseReadiness({
+    env: phase63CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase64Gate(report);
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(gate.phase, "64");
+  assert.equal(gate.required, true);
+  assert.equal(gate.phase63ActivationDependencyGatePassed, true);
+  assert.equal(gate.backupRestoreEvidenceAttached, false);
+  assert.equal(gate.pitrRehearsalEvidenceAttached, false);
+  assert.equal(gate.failoverRehearsalEvidenceAttached, false);
+  assert.equal(gate.dataIntegrityValidationEvidenceAttached, false);
+  assert.equal(gate.recoveryTimeExpectationAttached, false);
+  assert.equal(gate.managedPostgresRecoveryValidationReady, false);
+  assert.equal(gate.providerOwnedHaPitrValidated, false);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase64-managed-postgres-recovery-validation"), "fail");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 64")));
+});
+
+test("Phase 64 recovery validation passes only when all recovery evidence is present", () => {
+  const report = assessReleaseReadiness({
+    env: phase64CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase64Gate(report);
+
+  assert.equal(gate.required, true);
+  assert.equal(gate.backupRestoreEvidenceAttached, true);
+  assert.equal(gate.pitrRehearsalEvidenceAttached, true);
+  assert.equal(gate.failoverRehearsalEvidenceAttached, true);
+  assert.equal(gate.dataIntegrityValidationEvidenceAttached, true);
+  assert.equal(gate.recoveryTimeExpectationAttached, true);
+  assert.equal(gate.managedPostgresRecoveryValidationReady, true);
+  assert.equal(gate.providerOwnedHaPitrValidated, true);
+  assert.equal(gate.activeActiveSupported, false);
+  assert.equal(gate.regionalFailoverSupported, false);
+  assert.equal(gate.pitrRuntimeSupported, false);
+  assert.equal(gate.distributedSqliteSupported, false);
+  assert.equal(gate.applicationManagedRegionalFailoverSupported, false);
+  assert.equal(gate.applicationManagedPitrSupported, false);
+  assert.deepEqual(gate.pendingPhases, ["65", "66"]);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase64-managed-postgres-recovery-validation"), "pass");
+  assert.equal(report.readyForRelease, false);
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 65 cutover/rollback automation")));
 });
 
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {

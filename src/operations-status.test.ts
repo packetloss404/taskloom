@@ -152,6 +152,17 @@ function completeDistributedDependencyEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function completeRecoveryValidationEnv(): NodeJS.ProcessEnv {
+  return {
+    ...completeDistributedDependencyEnv(),
+    TASKLOOM_RECOVERY_BACKUP_RESTORE_EVIDENCE: "artifacts/phase64/backup-restore.md",
+    TASKLOOM_RECOVERY_PITR_REHEARSAL_EVIDENCE: "artifacts/phase64/pitr-rehearsal.md",
+    TASKLOOM_RECOVERY_FAILOVER_REHEARSAL_EVIDENCE: "artifacts/phase64/failover-rehearsal.md",
+    TASKLOOM_RECOVERY_DATA_INTEGRITY_VALIDATION: "artifacts/phase64/data-integrity.md",
+    TASKLOOM_RECOVERY_TIME_EXPECTATIONS: "RTO<=15m RPO<=5m validated in phase64 rehearsal",
+  };
+}
+
 type DistributedDependencyKey =
   | "distributedRateLimiting"
   | "schedulerCoordination"
@@ -235,6 +246,13 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.managedPostgresHorizontalWriterConcurrency.horizontalAppWritersSupported, false);
   assert.equal(status.managedPostgresHorizontalWriterConcurrency.activeActiveDatabaseSupported, false);
   assert.equal(status.managedPostgresHorizontalWriterConcurrency.releaseAllowed, false);
+  assert.equal(status.managedPostgresRecoveryValidation.phase, "64");
+  assert.equal(status.managedPostgresRecoveryValidation.status, "not-required");
+  assert.equal(status.managedPostgresRecoveryValidation.recoveryValidationComplete, false);
+  assert.equal(status.managedPostgresRecoveryValidation.activationAllowed, false);
+  assert.equal(status.managedPostgresRecoveryValidation.activeActiveDatabaseSupported, false);
+  assert.equal(status.managedPostgresRecoveryValidation.regionalRuntimeSupported, false);
+  assert.equal(status.managedPostgresRecoveryValidation.pitrRuntimeSupported, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -1738,6 +1756,95 @@ test("distributedDependencyEnforcement reports activation allowed only when all 
   );
   assert.equal(dependencies.strictActivationBlocked, false);
   assert.equal(dependencies.strictActivationAllowed, true);
+});
+
+test("managedPostgresRecoveryValidation blocks activation when Phase 64 evidence is missing after Phase 63", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeDistributedDependencyEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresRecoveryValidation.phase, "64");
+  assert.equal(status.managedPostgresRecoveryValidation.required, true);
+  assert.equal(status.managedPostgresRecoveryValidation.phase63DistributedDependenciesReady, true);
+  assert.equal(status.managedPostgresRecoveryValidation.status, "blocked");
+  assert.equal(status.managedPostgresRecoveryValidation.validationStatus, "missing");
+  assert.deepEqual(status.managedPostgresRecoveryValidation.missingEvidence, [
+    "backupRestore",
+    "pitrRehearsal",
+    "failoverRehearsal",
+    "dataIntegrityValidation",
+    "recoveryTimeExpectations",
+  ]);
+  assert.equal(status.managedPostgresRecoveryValidation.backupRestore.status, "missing");
+  assert.equal(status.managedPostgresRecoveryValidation.activationAllowed, false);
+  assert.equal(status.managedPostgresRecoveryValidation.strictActivationBlocked, true);
+  assert.equal(status.managedPostgresRecoveryValidation.activeActiveDatabaseSupported, false);
+  assert.equal(status.managedPostgresRecoveryValidation.regionalRuntimeSupported, false);
+  assert.equal(status.managedPostgresRecoveryValidation.pitrRuntimeSupported, false);
+  assert.match(status.managedPostgresRecoveryValidation.summary, /blocks activation/i);
+});
+
+test("managedPostgresRecoveryValidation validates backup restore PITR failover integrity and recovery-time evidence", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeRecoveryValidationEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresRecoveryValidation.phase, "64");
+  assert.equal(status.managedPostgresRecoveryValidation.status, "recovery-validated");
+  assert.equal(status.managedPostgresRecoveryValidation.validationStatus, "complete");
+  assert.equal(status.managedPostgresRecoveryValidation.recoveryValidationComplete, true);
+  assert.equal(status.managedPostgresRecoveryValidation.managedPostgresRecoveryValidated, true);
+  assert.equal(status.managedPostgresRecoveryValidation.providerOwnedHaPitrValidated, true);
+  assert.deepEqual(status.managedPostgresRecoveryValidation.missingEvidence, []);
+  assert.equal(status.managedPostgresRecoveryValidation.backupRestore.source, "env");
+  assert.equal(
+    status.managedPostgresRecoveryValidation.recoveryTimeExpectations.value,
+    "RTO<=15m RPO<=5m validated in phase64 rehearsal",
+  );
+  assert.equal(status.managedPostgresRecoveryValidation.activationAllowed, true);
+  assert.equal(status.managedPostgresRecoveryValidation.strictActivationAllowed, true);
+  assert.equal(status.managedPostgresRecoveryValidation.releaseAllowed, false);
+  assert.equal(status.managedPostgresRecoveryValidation.activeActiveDatabaseSupported, false);
+  assert.equal(status.managedPostgresRecoveryValidation.regionalRuntimeSupported, false);
+  assert.equal(status.managedPostgresRecoveryValidation.pitrRuntimeSupported, false);
+});
+
+test("managedPostgresRecoveryValidation can derive Phase 64 evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeDistributedDependencyEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({
+      phase64: {
+        required: true,
+        backupRestore: "artifacts/reports/phase64-backup-restore.md",
+        pitrRehearsal: "artifacts/reports/phase64-pitr.md",
+        failoverRehearsal: "artifacts/reports/phase64-failover.md",
+        dataIntegrityValidation: "artifacts/reports/phase64-integrity.md",
+        recoveryTimeExpectations: "RTO<=15m RPO<=5m",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.managedPostgresRecoveryValidation.status, "recovery-validated");
+  assert.equal(status.managedPostgresRecoveryValidation.backupRestore.source, "releaseEvidence");
+  assert.equal(
+    status.managedPostgresRecoveryValidation.backupRestore.value,
+    "artifacts/reports/phase64-backup-restore.md",
+  );
+  assert.equal(status.managedPostgresRecoveryValidation.activationAllowed, true);
+  assert.equal(status.managedPostgresRecoveryValidation.releaseAllowed, false);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

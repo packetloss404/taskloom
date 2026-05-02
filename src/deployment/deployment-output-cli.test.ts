@@ -1349,3 +1349,65 @@ test("formatDeploymentCliJson synthesizes Phase 63 distributed dependency enforc
   assert.doesNotMatch(output, /auditor:secret/);
   assert.doesNotMatch(output, /alerts:secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 64 managed Postgres recovery validation", () => {
+  const output = formatDeploymentCliJson({
+    phase63: {
+      horizontalWriterTopologyRequested: true,
+      activationDependencyGatePassed: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE: "https://auditor:secret@evidence.internal/phase64-restore",
+    TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE: "pitr://phase64/rehearsal",
+    TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE: "failover://phase64/provider-ha",
+    TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE: "integrity://phase64/checks",
+    TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION: "RTO <= 30m; RPO <= 5m",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase64?: {
+      phase?: unknown;
+      required?: unknown;
+      phase63ActivationDependencyGatePassed?: unknown;
+      backupRestoreEvidence?: unknown;
+      backupRestoreEvidenceAttached?: unknown;
+      pitrRehearsalEvidenceAttached?: unknown;
+      failoverRehearsalEvidenceAttached?: unknown;
+      dataIntegrityValidationEvidenceAttached?: unknown;
+      recoveryTimeExpectationAttached?: unknown;
+      managedPostgresRecoveryValidationReady?: unknown;
+      providerOwnedHaPitrValidated?: unknown;
+      activeActiveSupported?: unknown;
+      regionalFailoverSupported?: unknown;
+      pitrRuntimeSupported?: unknown;
+      distributedSqliteSupported?: unknown;
+      applicationManagedRegionalFailoverSupported?: unknown;
+      applicationManagedPitrSupported?: unknown;
+      pendingPhases?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+    };
+  };
+
+  assert.equal(report.phase64?.phase, "64");
+  assert.equal(report.phase64?.required, true);
+  assert.equal(report.phase64?.phase63ActivationDependencyGatePassed, true);
+  assert.equal(report.phase64?.backupRestoreEvidence, "[redacted]");
+  assert.equal(report.phase64?.backupRestoreEvidenceAttached, true);
+  assert.equal(report.phase64?.pitrRehearsalEvidenceAttached, true);
+  assert.equal(report.phase64?.failoverRehearsalEvidenceAttached, true);
+  assert.equal(report.phase64?.dataIntegrityValidationEvidenceAttached, true);
+  assert.equal(report.phase64?.recoveryTimeExpectationAttached, true);
+  assert.equal(report.phase64?.managedPostgresRecoveryValidationReady, true);
+  assert.equal(report.phase64?.providerOwnedHaPitrValidated, true);
+  assert.equal(report.phase64?.activeActiveSupported, false);
+  assert.equal(report.phase64?.regionalFailoverSupported, false);
+  assert.equal(report.phase64?.pitrRuntimeSupported, false);
+  assert.equal(report.phase64?.distributedSqliteSupported, false);
+  assert.equal(report.phase64?.applicationManagedRegionalFailoverSupported, false);
+  assert.equal(report.phase64?.applicationManagedPitrSupported, false);
+  assert.deepEqual(report.phase64?.pendingPhases, ["65", "66"]);
+  assert.equal(report.phase64?.releaseAllowed, false);
+  assert.equal(report.phase64?.strictBlocker, false);
+  assert.doesNotMatch(output, /auditor:secret/);
+});

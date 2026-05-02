@@ -83,6 +83,11 @@ export interface ReleaseReadinessEnv
   TASKLOOM_ALERT_WEBHOOK_URL?: string;
   TASKLOOM_ALERT_DELIVERY_EVIDENCE?: string;
   TASKLOOM_HEALTH_MONITORING_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
+  TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -146,6 +151,7 @@ export interface AsyncStoreBoundaryReport {
   phase61MultiWriterRuntimeActivationControlsGate?: Phase61MultiWriterRuntimeActivationControlsGateReport;
   phase62ManagedPostgresHorizontalWriterHardeningGate?: Phase62ManagedPostgresHorizontalWriterHardeningGateReport;
   phase63DistributedDependencyEnforcementGate?: Phase63DistributedDependencyEnforcementGateReport;
+  phase64ManagedPostgresRecoveryValidationGate?: Phase64ManagedPostgresRecoveryValidationGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -409,6 +415,37 @@ export interface Phase63DistributedDependencyEnforcementGateReport {
   pitrRuntimeSupported: false;
   distributedSqliteSupported: false;
   phases64To66Pending: boolean;
+  pendingPhases: string[];
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
+export interface Phase64ManagedPostgresRecoveryValidationGateReport {
+  phase: "64";
+  required: boolean;
+  horizontalWriterTopologyRequested: boolean;
+  phase63ActivationDependencyGatePassed: boolean;
+  backupRestoreEvidenceRequired: boolean;
+  backupRestoreEvidenceAttached: boolean;
+  pitrRehearsalEvidenceRequired: boolean;
+  pitrRehearsalEvidenceAttached: boolean;
+  failoverRehearsalEvidenceRequired: boolean;
+  failoverRehearsalEvidenceAttached: boolean;
+  dataIntegrityValidationEvidenceRequired: boolean;
+  dataIntegrityValidationEvidenceAttached: boolean;
+  recoveryTimeExpectationRequired: boolean;
+  recoveryTimeExpectationAttached: boolean;
+  managedPostgresRecoveryValidationReady: boolean;
+  providerOwnedHaPitrValidated: boolean;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  applicationManagedRegionalFailoverSupported: false;
+  applicationManagedPitrSupported: false;
+  phases65To66Pending: boolean;
   pendingPhases: string[];
   releaseAllowed: boolean;
   summary: string;
@@ -1982,6 +2019,142 @@ function buildPhase63DistributedDependencyEnforcementGate(
   };
 }
 
+function buildPhase64ManagedPostgresRecoveryValidationGate(
+  horizontalWriterIntent: boolean,
+  phase63Gate: Phase63DistributedDependencyEnforcementGateReport,
+  env: ReleaseReadinessEnv,
+): Phase64ManagedPostgresRecoveryValidationGateReport {
+  const backupRestoreEvidenceAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE).length > 0;
+  const pitrRehearsalEvidenceAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE).length > 0;
+  const failoverRehearsalEvidenceAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE).length > 0;
+  const dataIntegrityValidationEvidenceAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE).length > 0;
+  const recoveryTimeExpectationAttached =
+    clean(env.TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION).length > 0;
+  const phase63ActivationDependencyGatePassed = phase63Gate.activationDependencyGatePassed;
+  const managedPostgresRecoveryValidationReady =
+    horizontalWriterIntent &&
+    phase63ActivationDependencyGatePassed &&
+    backupRestoreEvidenceAttached &&
+    pitrRehearsalEvidenceAttached &&
+    failoverRehearsalEvidenceAttached &&
+    dataIntegrityValidationEvidenceAttached &&
+    recoveryTimeExpectationAttached;
+  const pendingPhases = horizontalWriterIntent ? ["65", "66"] : [];
+
+  if (!horizontalWriterIntent) {
+    return {
+      phase: "64",
+      required: false,
+      horizontalWriterTopologyRequested: false,
+      phase63ActivationDependencyGatePassed,
+      backupRestoreEvidenceRequired: false,
+      backupRestoreEvidenceAttached,
+      pitrRehearsalEvidenceRequired: false,
+      pitrRehearsalEvidenceAttached,
+      failoverRehearsalEvidenceRequired: false,
+      failoverRehearsalEvidenceAttached,
+      dataIntegrityValidationEvidenceRequired: false,
+      dataIntegrityValidationEvidenceAttached,
+      recoveryTimeExpectationRequired: false,
+      recoveryTimeExpectationAttached,
+      managedPostgresRecoveryValidationReady: false,
+      providerOwnedHaPitrValidated: false,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      applicationManagedRegionalFailoverSupported: false,
+      applicationManagedPitrSupported: false,
+      phases65To66Pending: false,
+      pendingPhases,
+      releaseAllowed: true,
+      summary: "Phase 64 managed Postgres recovery validation is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 64 recovery validation evidence ready before any future horizontal writer activation claim."],
+    };
+  }
+
+  return {
+    phase: "64",
+    required: true,
+    horizontalWriterTopologyRequested: true,
+    phase63ActivationDependencyGatePassed,
+    backupRestoreEvidenceRequired: true,
+    backupRestoreEvidenceAttached,
+    pitrRehearsalEvidenceRequired: true,
+    pitrRehearsalEvidenceAttached,
+    failoverRehearsalEvidenceRequired: true,
+    failoverRehearsalEvidenceAttached,
+    dataIntegrityValidationEvidenceRequired: true,
+    dataIntegrityValidationEvidenceAttached,
+    recoveryTimeExpectationRequired: true,
+    recoveryTimeExpectationAttached,
+    managedPostgresRecoveryValidationReady,
+    providerOwnedHaPitrValidated: managedPostgresRecoveryValidationReady,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    applicationManagedRegionalFailoverSupported: false,
+    applicationManagedPitrSupported: false,
+    phases65To66Pending: true,
+    pendingPhases,
+    releaseAllowed: false,
+    summary: managedPostgresRecoveryValidationReady
+      ? "Phase 64 recovery validation is complete for managed Postgres horizontal app writers using provider-owned HA/PITR; cutover automation and final release closure remain blocked pending Phases 65-66."
+      : "Phase 64 recovery validation requires backup restore, PITR rehearsal, failover rehearsal, data-integrity validation, and recovery-time expectation evidence before activation.",
+    blockers: [
+      ...(!phase63ActivationDependencyGatePassed
+        ? ["Phase 64 recovery validation requires complete Phase 63 distributed dependency enforcement first."]
+        : []),
+      ...(!backupRestoreEvidenceAttached
+        ? ["Phase 64 backup restore evidence is required in TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE."]
+        : []),
+      ...(!pitrRehearsalEvidenceAttached
+        ? ["Phase 64 PITR rehearsal evidence is required in TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE."]
+        : []),
+      ...(!failoverRehearsalEvidenceAttached
+        ? ["Phase 64 failover rehearsal evidence is required in TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE."]
+        : []),
+      ...(!dataIntegrityValidationEvidenceAttached
+        ? ["Phase 64 data-integrity validation evidence is required in TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE."]
+        : []),
+      ...(!recoveryTimeExpectationAttached
+        ? ["Phase 64 recovery-time expectations are required in TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION."]
+        : []),
+      ...(managedPostgresRecoveryValidationReady
+        ? ["Phases 65-66 remain pending before release activation can be approved for the supported managed Postgres horizontal app-writer posture."]
+        : []),
+      "Phase 64 validates recovery evidence for provider-owned managed Postgres HA/PITR only; it does not enable active-active writes, application-managed regional failover, PITR runtime controls, distributed SQLite, cutover automation, final release closure, or release approval.",
+    ],
+    nextSteps: [
+      ...(!phase63ActivationDependencyGatePassed
+        ? ["Complete Phase 63 distributed dependency enforcement before claiming Phase 64 recovery validation."]
+        : []),
+      ...(!backupRestoreEvidenceAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE with backup restore rehearsal output."]
+        : []),
+      ...(!pitrRehearsalEvidenceAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE with point-in-time restore rehearsal output."]
+        : []),
+      ...(!failoverRehearsalEvidenceAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE with provider-owned HA/failover rehearsal output."]
+        : []),
+      ...(!dataIntegrityValidationEvidenceAttached
+        ? ["Attach TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE with post-restore and post-failover data-integrity checks."]
+        : []),
+      ...(!recoveryTimeExpectationAttached
+        ? ["Set TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION with the expected RTO/RPO or recovery-time acceptance threshold."]
+        : []),
+      "Keep activation/release blocked until Phase 65 cutover/rollback automation and Phase 66 final release closure complete.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -2178,6 +2351,12 @@ export function buildAsyncStoreBoundaryReport(
       phase62ManagedPostgresHorizontalWriterHardeningGate,
       env,
     );
+  const phase64ManagedPostgresRecoveryValidationGate =
+    buildPhase64ManagedPostgresRecoveryValidationGate(
+      horizontalWriterIntent,
+      phase63DistributedDependencyEnforcementGate,
+      env,
+    );
   const effectivePhase52ManagedStartupSupported =
     managedStartupSupported && !multiWriterIntent && !unsupportedStore;
   const bypassed =
@@ -2197,6 +2376,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase61MultiWriterRuntimeActivationControlsGate.blockers,
     ...phase62ManagedPostgresHorizontalWriterHardeningGate.blockers,
     ...phase63DistributedDependencyEnforcementGate.blockers,
+    ...phase64ManagedPostgresRecoveryValidationGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -2217,6 +2397,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase61MultiWriterRuntimeActivationControlsGate.nextSteps,
     ...phase62ManagedPostgresHorizontalWriterHardeningGate.nextSteps,
     ...phase63DistributedDependencyEnforcementGate.nextSteps,
+    ...phase64ManagedPostgresRecoveryValidationGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -2277,8 +2458,10 @@ export function buildAsyncStoreBoundaryReport(
     }
   }
   if (horizontalWriterIntent) {
-    if (phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed) {
-      nextSteps.add("Treat Phase 63 as distributed dependency enforcement for managed Postgres horizontal app writers only; keep activation/release blocked until Phases 64-66 finish.");
+    if (phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady) {
+      nextSteps.add("Treat Phase 64 as recovery validation for managed Postgres horizontal app writers with provider-owned HA/PITR only; keep activation/release blocked until Phases 65-66 finish.");
+    } else if (phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed) {
+      nextSteps.add("Treat Phase 63 as distributed dependency enforcement for managed Postgres horizontal app writers only; keep activation/release blocked until Phase 64 recovery validation and Phases 65-66 finish.");
     } else if (phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady) {
       nextSteps.add("Treat Phase 62 as concurrency hardening for managed Postgres horizontal app writers only; keep activation/release blocked until Phase 63 distributed dependency enforcement and Phases 64-66 finish.");
     } else {
@@ -2300,6 +2483,7 @@ export function buildAsyncStoreBoundaryReport(
     phase61MultiWriterRuntimeActivationControlsGate.releaseAllowed &&
     phase62ManagedPostgresHorizontalWriterHardeningGate.releaseAllowed &&
     phase63DistributedDependencyEnforcementGate.releaseAllowed &&
+    phase64ManagedPostgresRecoveryValidationGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -2308,8 +2492,10 @@ export function buildAsyncStoreBoundaryReport(
     : "fail";
   let summary: string;
   if (horizontalWriterIntent) {
-    summary = phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed
-      ? "Phase 49 async-store boundary exists as foundation and Phase 63 distributed dependency enforcement is complete for managed Postgres horizontal app writers, but activation/release remains blocked pending Phases 64-66."
+    summary = phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady
+      ? "Phase 49 async-store boundary exists as foundation and Phase 64 recovery validation is complete for managed Postgres horizontal app writers with provider-owned HA/PITR, but activation/release remains blocked pending Phases 65-66."
+      : phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed
+      ? "Phase 49 async-store boundary exists as foundation and Phase 63 distributed dependency enforcement is complete for managed Postgres horizontal app writers, but Phase 64 recovery validation is incomplete."
       : phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady
       ? "Phase 49 async-store boundary exists as foundation and Phase 62 concurrency hardening is complete for managed Postgres horizontal app writers, but Phase 63 distributed dependency enforcement is incomplete."
       : "Phase 49 async-store boundary exists as foundation, but Phase 62 managed Postgres horizontal app-writer concurrency hardening is incomplete."
@@ -2373,6 +2559,7 @@ export function buildAsyncStoreBoundaryReport(
     phase61MultiWriterRuntimeActivationControlsGate,
     phase62ManagedPostgresHorizontalWriterHardeningGate,
     phase63DistributedDependencyEnforcementGate,
+    phase64ManagedPostgresRecoveryValidationGate,
     classification,
     summary,
     blockers,
@@ -2405,7 +2592,11 @@ function buildNextSteps(
     if (check.id === "managed-database-runtime-boundary") {
       for (const step of managedDatabaseRuntimeBoundary.nextSteps) steps.add(step);
     }
-    if (check.id === "async-store-boundary" || check.id === "phase63-distributed-dependency-enforcement") {
+    if (
+      check.id === "async-store-boundary" ||
+      check.id === "phase63-distributed-dependency-enforcement" ||
+      check.id === "phase64-managed-postgres-recovery-validation"
+    ) {
       for (const step of asyncStoreBoundary.nextSteps) steps.add(step);
     }
     if (check.id === "backup-dir") {
@@ -2528,6 +2719,24 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
           ? `Phase 63 distributed dependency enforcement is complete: ${phase63Gate.summary}`
           : `Phase 63 distributed dependency enforcement blocks activation: ${phase63Gate.summary}`
         : phase63Gate.summary,
+    );
+  }
+
+  const phase64Gate = asyncStoreBoundary.phase64ManagedPostgresRecoveryValidationGate;
+  if (phase64Gate) {
+    pushCheck(
+      checks,
+      "phase64-managed-postgres-recovery-validation",
+      phase64Gate.required
+        ? phase64Gate.managedPostgresRecoveryValidationReady
+          ? "pass"
+          : chooseBlockingStatus(isGated)
+        : "pass",
+      phase64Gate.required
+        ? phase64Gate.managedPostgresRecoveryValidationReady
+          ? `Phase 64 managed Postgres recovery validation is complete: ${phase64Gate.summary}`
+          : `Phase 64 managed Postgres recovery validation blocks activation: ${phase64Gate.summary}`
+        : phase64Gate.summary,
     );
   }
 

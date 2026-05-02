@@ -101,6 +101,32 @@ function phase61CompleteHorizontalWriterEvidenceEnv() {
   };
 }
 
+function phase64CompleteHorizontalWriterEvidenceEnv() {
+  return {
+    ...phase61CompleteHorizontalWriterEvidenceEnv(),
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION: "hardening://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE: "concurrency://phase62",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: "transaction-retry://phase62",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.internal/taskloom",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_EVIDENCE: "rate-limit://phase63",
+    TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+    TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://scheduler.internal/leader",
+    TASKLOOM_SCHEDULER_COORDINATION_EVIDENCE: "scheduler://phase63",
+    TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+    TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63",
+    TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63",
+    TASKLOOM_ALERT_EVALUATE_CRON: "*/1 * * * *",
+    TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts:secret@hooks.internal/taskloom",
+    TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63",
+    TASKLOOM_HEALTH_MONITORING_EVIDENCE: "health://phase63",
+    TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE: "restore://phase64/backup",
+    TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE: "pitr://phase64/rehearsal",
+    TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE: "failover://phase64/rehearsal",
+    TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE: "integrity://phase64/post-recovery",
+    TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION: "rto=15m;rpo=5m",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -1321,6 +1347,69 @@ test("strict evidence records complete Phase 63 dependency enforcement with reda
   assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_ALERT_WEBHOOK_URL").value, "[redacted]");
   assert.ok(bundle.summary.includes("Phase 63 distributed dependency enforcement is complete"));
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 64 recovery validation")));
+});
+
+test("strict evidence blocks Phase 64 recovery validation until all recovery evidence is attached", () => {
+  const env = {
+    ...phase64CompleteHorizontalWriterEvidenceEnv(),
+    TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE: "",
+  };
+  const bundle = assessReleaseEvidence({
+    env,
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T06:30:00.000Z",
+    strict: true,
+  });
+  const pitrAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-64-managed-postgres-pitr-rehearsal-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase64ManagedPostgresRecoveryValidationGateRequired, true);
+  assert.equal(bundle.evidence.config.phase64Phase63ActivationDependencyGatePassed, true);
+  assert.equal(bundle.evidence.config.phase64BackupRestoreEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64PitrRehearsalEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase64FailoverRehearsalEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64DataIntegrityValidationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64RecoveryTimeExpectationAttached, true);
+  assert.equal(bundle.evidence.config.phase64ManagedPostgresRecoveryValidationReady, false);
+  assert.equal(bundle.evidence.config.phase64TopologyReleaseAllowed, false);
+  assert.equal(pitrAttachment?.required, true);
+  assert.equal(pitrAttachment?.configured, false);
+  assert.ok(bundle.summary.includes("Phase 64 recovery validation"));
+});
+
+test("strict evidence records complete Phase 64 recovery validation without claiming release readiness", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase64CompleteHorizontalWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T07:00:00.000Z",
+    strict: true,
+  });
+  const restoreAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-64-managed-postgres-backup-restore-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase64BackupRestoreEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64PitrRehearsalEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64FailoverRehearsalEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64DataIntegrityValidationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase64RecoveryTimeExpectationAttached, true);
+  assert.equal(bundle.evidence.config.phase64ManagedPostgresRecoveryValidationReady, true);
+  assert.equal(bundle.evidence.config.phase64ProviderOwnedHaPitrValidated, true);
+  assert.equal(bundle.evidence.config.phase64ActiveActiveSupported, false);
+  assert.equal(bundle.evidence.config.phase64ApplicationManagedRegionalFailoverSupported, false);
+  assert.deepEqual(bundle.evidence.config.phase64PendingPhases, ["65", "66"]);
+  assert.equal(bundle.evidence.config.phase64TopologyReleaseAllowed, false);
+  assert.equal(restoreAttachment?.configured, true);
+  assert.equal(restoreAttachment?.redacted, false);
+  assert.equal(restoreAttachment?.value, "restore://phase64/backup");
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 65 cutover/rollback automation")));
 });
 
 test("release readiness managed reports are reused when present", () => {

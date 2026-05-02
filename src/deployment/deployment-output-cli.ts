@@ -20,6 +20,7 @@ const PHASE60_REPORT_KEY_PATTERN = /^phase60/i;
 const PHASE61_REPORT_KEY_PATTERN = /^phase61/i;
 const PHASE62_REPORT_KEY_PATTERN = /^phase62/i;
 const PHASE63_REPORT_KEY_PATTERN = /^phase63/i;
+const PHASE64_REPORT_KEY_PATTERN = /^phase64/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 const PHASE60_URL_REDACTION_KEY_PATTERN =
@@ -30,6 +31,8 @@ const PHASE62_URL_REDACTION_KEY_PATTERN =
   /(implementation|hardening|concurrency|transaction|retry|compare|swap|evidence|url)/i;
 const PHASE63_URL_REDACTION_KEY_PATTERN =
   /(rate|limit|scheduler|coordination|durable|job|access|log|shipping|alert|delivery|health|monitoring|evidence|url)/i;
+const PHASE64_URL_REDACTION_KEY_PATTERN =
+  /(backup|restore|pitr|failover|rehearsal|integrity|recovery|time|expectation|evidence|url)/i;
 const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
   /(activeactive|active_active|active-active).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
   /(support|supported|releaseallowed|releasesupported|runtimesupport).*(activeactive|active_active|active-active)/i,
@@ -147,12 +150,14 @@ function redactValue(
         PHASE60_REPORT_KEY_PATTERN.test(key) ||
         PHASE61_REPORT_KEY_PATTERN.test(key) ||
         PHASE62_REPORT_KEY_PATTERN.test(key) ||
-        PHASE63_REPORT_KEY_PATTERN.test(key);
+        PHASE63_REPORT_KEY_PATTERN.test(key) ||
+        PHASE64_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase61Report = inPhase61Report || PHASE61_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase62Report = PHASE62_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase63Report = PHASE63_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase64Report = PHASE64_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
@@ -160,6 +165,7 @@ function redactValue(
         (nestedInPhase61Report && PHASE61_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase62Report && PHASE62_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase63Report && PHASE63_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase64Report && PHASE64_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -1318,17 +1324,146 @@ function withPhase63Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
+function withPhase64Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!isReport(report)) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const nestedPhase64 = firstReportAt(report, [
+    ["phase64ManagedPostgresRecoveryValidationGate"],
+    ["phase64ManagedPostgresRecoveryValidationReport"],
+    ["managedDatabase", "phase64"],
+    ["managedDatabase", "phase64ManagedPostgresRecoveryValidationGate"],
+    ["managedDatabaseTopology", "phase64"],
+    ["managedDatabaseTopology", "managedDatabase", "phase64"],
+    ["managedDatabaseRuntimeGuard", "phase64"],
+    ["managedDatabaseRuntimeGuard", "phase64ManagedPostgresRecoveryValidationGate"],
+    ["releaseReadiness", "phase64"],
+    ["releaseReadiness", "phase64ManagedPostgresRecoveryValidationGate"],
+    ["releaseEvidence", "phase64"],
+    ["releaseEvidence", "phase64ManagedPostgresRecoveryValidationGate"],
+    ["evidence", "phase64"],
+    ["evidence", "phase64ManagedPostgresRecoveryValidationGate"],
+    ["asyncStoreBoundary", "phase64"],
+    ["asyncStoreBoundary", "phase64ManagedPostgresRecoveryValidationGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE64_REPORT_KEY_PATTERN.test(key));
+  const existingPhase64 = reportAt(report, ["phase64"]) ?? nestedPhase64 ?? {};
+  const phase63 = reportAt(report, ["phase63"]) ?? {};
+  const horizontalWriterIntent =
+    existingPhase64.horizontalWriterTopologyRequested === true ||
+    existingPhase64.required === true ||
+    phase63.horizontalWriterTopologyRequested === true ||
+    hasHorizontalWriterTopologyIntent(env);
+  const hasPhase64EnvEvidence =
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION") !== undefined;
+
+  if (!horizontalWriterIntent && !nestedPhase64 && !reportAt(report, ["phase64"]) && !hasPhase64EnvEvidence) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const backupRestoreEvidence =
+    existingPhase64.backupRestoreEvidence ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE");
+  const pitrRehearsalEvidence =
+    existingPhase64.pitrRehearsalEvidence ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE");
+  const failoverRehearsalEvidence =
+    existingPhase64.failoverRehearsalEvidence ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE");
+  const dataIntegrityValidationEvidence =
+    existingPhase64.dataIntegrityValidationEvidence ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE");
+  const recoveryTimeExpectation =
+    existingPhase64.recoveryTimeExpectation ??
+    phase62EnvValue(env, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION");
+  const phase63ActivationDependencyGatePassed =
+    existingPhase64.phase63ActivationDependencyGatePassed ??
+    phase63.activationDependencyGatePassed ??
+    false;
+  const backupRestoreEvidenceAttached =
+    existingPhase64.backupRestoreEvidenceAttached ?? backupRestoreEvidence !== undefined;
+  const pitrRehearsalEvidenceAttached =
+    existingPhase64.pitrRehearsalEvidenceAttached ?? pitrRehearsalEvidence !== undefined;
+  const failoverRehearsalEvidenceAttached =
+    existingPhase64.failoverRehearsalEvidenceAttached ?? failoverRehearsalEvidence !== undefined;
+  const dataIntegrityValidationEvidenceAttached =
+    existingPhase64.dataIntegrityValidationEvidenceAttached ?? dataIntegrityValidationEvidence !== undefined;
+  const recoveryTimeExpectationAttached =
+    existingPhase64.recoveryTimeExpectationAttached ?? recoveryTimeExpectation !== undefined;
+  const managedPostgresRecoveryValidationReady =
+    existingPhase64.managedPostgresRecoveryValidationReady ??
+    (
+      horizontalWriterIntent &&
+      phase63ActivationDependencyGatePassed === true &&
+      backupRestoreEvidenceAttached === true &&
+      pitrRehearsalEvidenceAttached === true &&
+      failoverRehearsalEvidenceAttached === true &&
+      dataIntegrityValidationEvidenceAttached === true &&
+      recoveryTimeExpectationAttached === true
+    );
+
+  return blockUnsupportedRuntimeReleaseClaims({
+    ...report,
+    phase64: {
+      ...existingPhase64,
+      phase: existingPhase64.phase ?? "64",
+      required: existingPhase64.required ?? horizontalWriterIntent,
+      horizontalWriterTopologyRequested: horizontalWriterIntent,
+      phase63ActivationDependencyGatePassed,
+      backupRestoreEvidenceRequired: existingPhase64.backupRestoreEvidenceRequired ?? horizontalWriterIntent,
+      backupRestoreEvidence,
+      backupRestoreEvidenceAttached,
+      pitrRehearsalEvidenceRequired: existingPhase64.pitrRehearsalEvidenceRequired ?? horizontalWriterIntent,
+      pitrRehearsalEvidence,
+      pitrRehearsalEvidenceAttached,
+      failoverRehearsalEvidenceRequired: existingPhase64.failoverRehearsalEvidenceRequired ?? horizontalWriterIntent,
+      failoverRehearsalEvidence,
+      failoverRehearsalEvidenceAttached,
+      dataIntegrityValidationEvidenceRequired: existingPhase64.dataIntegrityValidationEvidenceRequired ?? horizontalWriterIntent,
+      dataIntegrityValidationEvidence,
+      dataIntegrityValidationEvidenceAttached,
+      recoveryTimeExpectationRequired: existingPhase64.recoveryTimeExpectationRequired ?? horizontalWriterIntent,
+      recoveryTimeExpectation,
+      recoveryTimeExpectationAttached,
+      managedPostgresRecoveryValidationReady,
+      providerOwnedHaPitrValidated: existingPhase64.providerOwnedHaPitrValidated ?? managedPostgresRecoveryValidationReady,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      applicationManagedRegionalFailoverSupported: false,
+      applicationManagedPitrSupported: false,
+      phases65To66Pending: horizontalWriterIntent,
+      pendingPhases: horizontalWriterIntent ? ["65", "66"] : [],
+      releaseAllowed: existingPhase64.releaseAllowed ?? !horizontalWriterIntent,
+      strictBlocker: existingPhase64.strictBlocker ?? (horizontalWriterIntent && managedPostgresRecoveryValidationReady !== true),
+      summary: existingPhase64.summary ?? (
+        managedPostgresRecoveryValidationReady
+          ? "Phase 64 records managed Postgres recovery validation for provider-owned HA/PITR; cutover automation, final release closure, and release approval remain blocked pending Phases 65-66."
+          : "Phase 64 requires backup restore, PITR rehearsal, failover rehearsal, data-integrity validation, and recovery-time expectation evidence before activation can proceed."
+      ),
+    },
+  });
+}
+
 export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
   return JSON.stringify(
     redactValue(
-      withPhase63Status(
-        withPhase62Status(
-          withPhase61Status(
-            withPhase60Status(
-              withPhase59Status(
-                withPhase58Status(
-                  withPhase57Status(
-                    withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+      withPhase64Status(
+        withPhase63Status(
+          withPhase62Status(
+            withPhase61Status(
+              withPhase60Status(
+                withPhase59Status(
+                  withPhase58Status(
+                    withPhase57Status(
+                      withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
+                      env,
+                    ),
                     env,
                   ),
                   env,

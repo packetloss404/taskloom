@@ -21,6 +21,7 @@ import {
   type Phase61MultiWriterRuntimeActivationControlsGateReport,
   type Phase62ManagedPostgresHorizontalWriterHardeningGateReport,
   type Phase63DistributedDependencyEnforcementGateReport,
+  type Phase64ManagedPostgresRecoveryValidationGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -309,6 +310,30 @@ export interface ReleaseEvidenceBundle {
       phase63Phases64To66Pending: boolean;
       phase63PendingPhases: string[];
       phase63TopologyReleaseAllowed: boolean;
+      phase64ManagedPostgresRecoveryValidationGateRequired: boolean;
+      phase64HorizontalWriterTopologyRequested: boolean;
+      phase64Phase63ActivationDependencyGatePassed: boolean;
+      phase64BackupRestoreEvidenceRequired: boolean;
+      phase64BackupRestoreEvidenceAttached: boolean;
+      phase64PitrRehearsalEvidenceRequired: boolean;
+      phase64PitrRehearsalEvidenceAttached: boolean;
+      phase64FailoverRehearsalEvidenceRequired: boolean;
+      phase64FailoverRehearsalEvidenceAttached: boolean;
+      phase64DataIntegrityValidationEvidenceRequired: boolean;
+      phase64DataIntegrityValidationEvidenceAttached: boolean;
+      phase64RecoveryTimeExpectationRequired: boolean;
+      phase64RecoveryTimeExpectationAttached: boolean;
+      phase64ManagedPostgresRecoveryValidationReady: boolean;
+      phase64ProviderOwnedHaPitrValidated: boolean;
+      phase64ActiveActiveSupported: false;
+      phase64RegionalFailoverSupported: false;
+      phase64PitrRuntimeSupported: false;
+      phase64DistributedSqliteSupported: false;
+      phase64ApplicationManagedRegionalFailoverSupported: false;
+      phase64ApplicationManagedPitrSupported: false;
+      phase64Phases65To66Pending: boolean;
+      phase64PendingPhases: string[];
+      phase64TopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -455,6 +480,11 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_ALERT_WEBHOOK_URL",
   "TASKLOOM_ALERT_DELIVERY_EVIDENCE",
   "TASKLOOM_HEALTH_MONITORING_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+  "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -1117,6 +1147,42 @@ function phase63DistributedDependencyEnforcementGate(
   };
 }
 
+function phase64ManagedPostgresRecoveryValidationGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase63Gate: Phase63DistributedDependencyEnforcementGateReport,
+): Phase64ManagedPostgresRecoveryValidationGateReport {
+  return asyncStoreBoundary.phase64ManagedPostgresRecoveryValidationGate ?? {
+    phase: "64",
+    required: false,
+    horizontalWriterTopologyRequested: false,
+    phase63ActivationDependencyGatePassed: phase63Gate.activationDependencyGatePassed,
+    backupRestoreEvidenceRequired: false,
+    backupRestoreEvidenceAttached: false,
+    pitrRehearsalEvidenceRequired: false,
+    pitrRehearsalEvidenceAttached: false,
+    failoverRehearsalEvidenceRequired: false,
+    failoverRehearsalEvidenceAttached: false,
+    dataIntegrityValidationEvidenceRequired: false,
+    dataIntegrityValidationEvidenceAttached: false,
+    recoveryTimeExpectationRequired: false,
+    recoveryTimeExpectationAttached: false,
+    managedPostgresRecoveryValidationReady: false,
+    providerOwnedHaPitrValidated: false,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    applicationManagedRegionalFailoverSupported: false,
+    applicationManagedPitrSupported: false,
+    phases65To66Pending: false,
+    pendingPhases: [],
+    releaseAllowed: true,
+    summary: "Phase 64 managed Postgres recovery validation is not required for this release posture.",
+    blockers: [],
+    nextSteps: ["Keep Phase 64 recovery validation evidence ready before any future horizontal writer activation claim."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -1425,6 +1491,36 @@ function phase63HealthMonitoringAttachmentEvidence(
   return attachmentEvidence(env, "TASKLOOM_HEALTH_MONITORING_EVIDENCE");
 }
 
+function phase64BackupRestoreAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE");
+}
+
+function phase64PitrRehearsalAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE");
+}
+
+function phase64FailoverRehearsalAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE");
+}
+
+function phase64DataIntegrityValidationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE");
+}
+
+function phase64RecoveryTimeExpectationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -1445,6 +1541,7 @@ function buildAttachments(
   const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
   const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
   const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
+  const phase64Gate = phase64ManagedPostgresRecoveryValidationGate(asyncStoreBoundary, phase63Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -1953,6 +2050,56 @@ function buildAttachments(
       ...phase63HealthMonitoringAttachmentEvidence(env),
     },
     {
+      id: "phase-64-managed-postgres-backup-restore-evidence",
+      label: "Phase 64 managed Postgres backup restore evidence",
+      format: "json",
+      required: phase64Gate.backupRestoreEvidenceRequired,
+      summary: phase64Gate.backupRestoreEvidenceAttached
+        ? "Phase 64 backup restore evidence is attached."
+        : "Phase 64 backup restore evidence is required before recovery validation can be claimed.",
+      ...phase64BackupRestoreAttachmentEvidence(env),
+    },
+    {
+      id: "phase-64-managed-postgres-pitr-rehearsal-evidence",
+      label: "Phase 64 managed Postgres PITR rehearsal evidence",
+      format: "json",
+      required: phase64Gate.pitrRehearsalEvidenceRequired,
+      summary: phase64Gate.pitrRehearsalEvidenceAttached
+        ? "Phase 64 point-in-time restore rehearsal evidence is attached."
+        : "Phase 64 point-in-time restore rehearsal evidence is required before recovery validation can be claimed.",
+      ...phase64PitrRehearsalAttachmentEvidence(env),
+    },
+    {
+      id: "phase-64-managed-postgres-failover-rehearsal-evidence",
+      label: "Phase 64 managed Postgres failover rehearsal evidence",
+      format: "json",
+      required: phase64Gate.failoverRehearsalEvidenceRequired,
+      summary: phase64Gate.failoverRehearsalEvidenceAttached
+        ? "Phase 64 provider-owned HA/failover rehearsal evidence is attached."
+        : "Phase 64 provider-owned HA/failover rehearsal evidence is required before recovery validation can be claimed.",
+      ...phase64FailoverRehearsalAttachmentEvidence(env),
+    },
+    {
+      id: "phase-64-managed-postgres-data-integrity-validation-evidence",
+      label: "Phase 64 managed Postgres data-integrity validation evidence",
+      format: "json",
+      required: phase64Gate.dataIntegrityValidationEvidenceRequired,
+      summary: phase64Gate.dataIntegrityValidationEvidenceAttached
+        ? "Phase 64 data-integrity validation evidence is attached."
+        : "Phase 64 data-integrity validation evidence is required before recovery validation can be claimed.",
+      ...phase64DataIntegrityValidationAttachmentEvidence(env),
+    },
+    {
+      id: "phase-64-managed-postgres-recovery-time-expectation",
+      label: "Phase 64 managed Postgres recovery-time expectation",
+      format: "json",
+      required: phase64Gate.recoveryTimeExpectationRequired,
+      summary: phase64Gate.recoveryTimeExpectationAttached
+        ? "Phase 64 recovery-time expectations are attached."
+        : "Phase 64 recovery-time expectations are required before recovery validation can be claimed.",
+      ...phase64RecoveryTimeExpectationAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -2079,6 +2226,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase61Gate = phase61MultiWriterRuntimeActivationControlsGate(asyncStoreBoundary, phase60Gate);
   const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
   const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
+  const phase64Gate = phase64ManagedPostgresRecoveryValidationGate(asyncStoreBoundary, phase63Gate);
 
   return {
     phase: "44",
@@ -2333,6 +2481,30 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase63Phases64To66Pending: phase63Gate.phases64To66Pending,
         phase63PendingPhases: phase63Gate.pendingPhases,
         phase63TopologyReleaseAllowed: phase63Gate.releaseAllowed,
+        phase64ManagedPostgresRecoveryValidationGateRequired: phase64Gate.required,
+        phase64HorizontalWriterTopologyRequested: phase64Gate.horizontalWriterTopologyRequested,
+        phase64Phase63ActivationDependencyGatePassed: phase64Gate.phase63ActivationDependencyGatePassed,
+        phase64BackupRestoreEvidenceRequired: phase64Gate.backupRestoreEvidenceRequired,
+        phase64BackupRestoreEvidenceAttached: phase64Gate.backupRestoreEvidenceAttached,
+        phase64PitrRehearsalEvidenceRequired: phase64Gate.pitrRehearsalEvidenceRequired,
+        phase64PitrRehearsalEvidenceAttached: phase64Gate.pitrRehearsalEvidenceAttached,
+        phase64FailoverRehearsalEvidenceRequired: phase64Gate.failoverRehearsalEvidenceRequired,
+        phase64FailoverRehearsalEvidenceAttached: phase64Gate.failoverRehearsalEvidenceAttached,
+        phase64DataIntegrityValidationEvidenceRequired: phase64Gate.dataIntegrityValidationEvidenceRequired,
+        phase64DataIntegrityValidationEvidenceAttached: phase64Gate.dataIntegrityValidationEvidenceAttached,
+        phase64RecoveryTimeExpectationRequired: phase64Gate.recoveryTimeExpectationRequired,
+        phase64RecoveryTimeExpectationAttached: phase64Gate.recoveryTimeExpectationAttached,
+        phase64ManagedPostgresRecoveryValidationReady: phase64Gate.managedPostgresRecoveryValidationReady,
+        phase64ProviderOwnedHaPitrValidated: phase64Gate.providerOwnedHaPitrValidated,
+        phase64ActiveActiveSupported: phase64Gate.activeActiveSupported,
+        phase64RegionalFailoverSupported: phase64Gate.regionalFailoverSupported,
+        phase64PitrRuntimeSupported: phase64Gate.pitrRuntimeSupported,
+        phase64DistributedSqliteSupported: phase64Gate.distributedSqliteSupported,
+        phase64ApplicationManagedRegionalFailoverSupported: phase64Gate.applicationManagedRegionalFailoverSupported,
+        phase64ApplicationManagedPitrSupported: phase64Gate.applicationManagedPitrSupported,
+        phase64Phases65To66Pending: phase64Gate.phases65To66Pending,
+        phase64PendingPhases: phase64Gate.pendingPhases,
+        phase64TopologyReleaseAllowed: phase64Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

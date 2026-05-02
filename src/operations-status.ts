@@ -598,6 +598,54 @@ export interface DistributedDependencyEnforcementStatus {
   source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
 }
 
+export type ManagedPostgresRecoveryValidationEvidenceKey =
+  | "backupRestore"
+  | "pitrRehearsal"
+  | "failoverRehearsal"
+  | "dataIntegrityValidation"
+  | "recoveryTimeExpectations";
+
+export interface ManagedPostgresRecoveryValidationEvidenceStatus {
+  key: ManagedPostgresRecoveryValidationEvidenceKey;
+  label: string;
+  envKey: string;
+  status: "provided" | "missing" | "not-required";
+  required: boolean;
+  configured: boolean;
+  value: string | null;
+  source: "env" | "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
+export interface ManagedPostgresRecoveryValidationStatus {
+  phase: "64";
+  status: "recovery-validated" | "blocked" | "not-required";
+  validationStatus: "complete" | "blocked" | "missing" | "not-required";
+  summary: string;
+  required: boolean;
+  phase63DistributedDependenciesReady: boolean;
+  recoveryValidationComplete: boolean;
+  horizontalAppWriterIntentDetected: boolean;
+  managedPostgresRecoveryValidated: boolean;
+  strictActivationBlocked: boolean;
+  strictActivationAllowed: boolean;
+  activationAllowed: boolean;
+  releaseAllowed: false;
+  providerOwnedHaPitrValidated: boolean;
+  activeActiveDatabaseSupported: false;
+  regionalRuntimeSupported: false;
+  pitrRuntimeSupported: false;
+  sqliteDistributedSupported: false;
+  evidence: Record<ManagedPostgresRecoveryValidationEvidenceKey, ManagedPostgresRecoveryValidationEvidenceStatus>;
+  backupRestore: ManagedPostgresRecoveryValidationEvidenceStatus;
+  pitrRehearsal: ManagedPostgresRecoveryValidationEvidenceStatus;
+  failoverRehearsal: ManagedPostgresRecoveryValidationEvidenceStatus;
+  dataIntegrityValidation: ManagedPostgresRecoveryValidationEvidenceStatus;
+  recoveryTimeExpectations: ManagedPostgresRecoveryValidationEvidenceStatus;
+  missingEvidence: ManagedPostgresRecoveryValidationEvidenceKey[];
+  blockers: string[];
+  source: "managedDatabaseRuntimeGuard" | "managedDatabaseTopology" | "releaseReadiness" | "releaseEvidence" | "derived";
+}
+
 export interface OperationsStatus {
   generatedAt: string;
   store: { mode: "json" | "sqlite" };
@@ -632,6 +680,7 @@ export interface OperationsStatus {
   multiWriterRuntimeActivationControls: MultiWriterRuntimeActivationControlsStatus;
   managedPostgresHorizontalWriterConcurrency: ManagedPostgresHorizontalWriterConcurrencyStatus;
   distributedDependencyEnforcement: DistributedDependencyEnforcementStatus;
+  managedPostgresRecoveryValidation: ManagedPostgresRecoveryValidationStatus;
   releaseReadiness: ReleaseReadinessReport;
   releaseEvidence: ReleaseEvidenceBundle;
   runtime: { nodeVersion: string };
@@ -1280,6 +1329,68 @@ const DURABLE_JOB_EXECUTION_POSTURES = new Set([
   "shared-managed-postgres",
   "external-durable-queue",
 ]);
+const MANAGED_POSTGRES_RECOVERY_VALIDATION_EVIDENCE = [
+  {
+    key: "backupRestore",
+    label: "backup restore evidence",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE",
+      "TASKLOOM_RECOVERY_BACKUP_RESTORE_EVIDENCE",
+    ],
+    reportKeys: ["backupRestore", "backupRestoreEvidence", "restoreValidation", "restoreEvidence"],
+  },
+  {
+    key: "pitrRehearsal",
+    label: "PITR rehearsal evidence",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE",
+      "TASKLOOM_RECOVERY_PITR_REHEARSAL_EVIDENCE",
+    ],
+    reportKeys: ["pitrRehearsal", "pitrRehearsalEvidence", "pointInTimeRecovery", "pitrEvidence"],
+  },
+  {
+    key: "failoverRehearsal",
+    label: "failover rehearsal evidence",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE",
+      "TASKLOOM_RECOVERY_FAILOVER_REHEARSAL_EVIDENCE",
+    ],
+    reportKeys: ["failoverRehearsal", "failoverRehearsalEvidence", "failoverValidation", "failoverEvidence"],
+  },
+  {
+    key: "dataIntegrityValidation",
+    label: "data-integrity validation",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE",
+      "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION",
+      "TASKLOOM_RECOVERY_DATA_INTEGRITY_VALIDATION",
+      "TASKLOOM_RECOVERY_DATA_INTEGRITY_EVIDENCE",
+    ],
+    reportKeys: ["dataIntegrityValidation", "dataIntegrityEvidence", "integrityValidation", "integrityEvidence"],
+  },
+  {
+    key: "recoveryTimeExpectations",
+    label: "recovery-time expectations",
+    envKey: "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION",
+    envKeys: [
+      "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION",
+      "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATIONS",
+      "TASKLOOM_RECOVERY_TIME_EXPECTATIONS",
+      "TASKLOOM_RECOVERY_RTO_RPO_EXPECTATIONS",
+    ],
+    reportKeys: ["recoveryTimeExpectations", "recoveryTimeEvidence", "rtoRpoExpectations", "rtoRpoEvidence"],
+  },
+] as const satisfies ReadonlyArray<{
+  key: ManagedPostgresRecoveryValidationEvidenceKey;
+  label: string;
+  envKey: string;
+  envKeys: readonly string[];
+  reportKeys: readonly string[];
+}>;
 const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
   "approved",
   "authorized",
@@ -1847,6 +1958,22 @@ function distributedDependencyEnforcementRecord(report: unknown): Record<string,
     findNestedRecord(report, ["releaseReadiness", "phase63"]) ??
     findNestedRecord(report, ["releaseReadiness", "distributedDependencyEnforcement"]) ??
     findNestedRecord(report, ["releaseReadiness", "distributedDependencies"]);
+}
+
+function recoveryValidationRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase64"]) ??
+    findNestedRecord(report, ["managedPostgresRecoveryValidation"]) ??
+    findNestedRecord(report, ["managedPostgresRecoveryValidationGate"]) ??
+    findNestedRecord(report, ["recoveryValidation"]) ??
+    findNestedRecord(report, ["failoverPitrRecoveryValidation"]) ??
+    findNestedRecord(report, ["managedDatabase", "phase64"]) ??
+    findNestedRecord(report, ["managedPostgres", "phase64"]) ??
+    findNestedRecord(report, ["managedPostgres", "recoveryValidation"]) ??
+    findNestedRecord(report, ["runtimeGuard", "phase64"]) ??
+    findNestedRecord(report, ["releaseReadiness", "phase64"]) ??
+    findNestedRecord(report, ["releaseReadiness", "managedPostgresRecoveryValidation"]) ??
+    findNestedRecord(report, ["releaseReadiness", "recoveryValidation"]);
 }
 
 function distributedDependencyRecord(
@@ -3289,6 +3416,30 @@ function reportPhase63Required(record: Record<string, unknown> | null): boolean 
     null;
 }
 
+function reportPhase64Required(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  return booleanValue(record.required) ??
+    booleanValue(record.phase64Required) ??
+    booleanValue(record.recoveryValidationRequired) ??
+    booleanValue(record.managedPostgresRecoveryValidationRequired) ??
+    null;
+}
+
+function phase64ReportValidationComplete(records: readonly Record<string, unknown>[]): boolean {
+  return records.some((record) => {
+    const required =
+      booleanValue(record.required) === true ||
+      booleanValue(record.phase64Required) === true ||
+      booleanValue(record.recoveryValidationRequired) === true ||
+      booleanValue(record.horizontalAppWriterIntentDetected) === true;
+    return required &&
+      (booleanValue(record.recoveryValidationComplete) === true ||
+        booleanValue(record.managedPostgresRecoveryValidated) === true ||
+        booleanValue(record.phase64RecoveryValidationComplete) === true ||
+        booleanValue(record.failoverPitrRecoveryValidated) === true);
+  });
+}
+
 function deriveDistributedDependencyEnforcement(
   env: NodeJS.ProcessEnv,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -3517,6 +3668,138 @@ function deriveDistributedDependencyEnforcement(
   };
 }
 
+function deriveManagedPostgresRecoveryValidation(
+  env: NodeJS.ProcessEnv,
+  managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
+  managedDatabaseTopology: ManagedDatabaseTopologyReport,
+  releaseReadiness: ReleaseReadinessReport,
+  releaseEvidence: ReleaseEvidenceBundle,
+  distributedDependencyEnforcement: DistributedDependencyEnforcementStatus,
+): ManagedPostgresRecoveryValidationStatus {
+  const reportSources: Array<{
+    source: Exclude<ManagedPostgresRecoveryValidationStatus["source"], "derived">;
+    record: Record<string, unknown>;
+  }> = [];
+  for (const { source, report } of [
+    { source: "managedDatabaseRuntimeGuard" as const, report: managedDatabaseRuntimeGuard },
+    { source: "managedDatabaseTopology" as const, report: managedDatabaseTopology },
+    { source: "releaseReadiness" as const, report: releaseReadiness },
+    { source: "releaseEvidence" as const, report: releaseEvidence },
+  ]) {
+    const record = recoveryValidationRecord(report);
+    if (record) reportSources.push({ source, record });
+  }
+
+  const phase64 = reportSources[0] ?? null;
+  const reportRequired = reportSources.reduce<boolean | null>((result, candidate) => {
+    if (result !== null) return result;
+    return reportPhase64Required(candidate.record);
+  }, null);
+  const reportValidationComplete = phase64ReportValidationComplete(reportSources.map((source) => source.record));
+  const required = reportRequired === true || distributedDependencyEnforcement.required;
+  const phase63DistributedDependenciesReady = distributedDependencyEnforcement.strictActivationAllowed;
+  const horizontalAppWriterIntentDetected = distributedDependencyEnforcement.horizontalAppWriterIntentDetected;
+
+  const evidenceEntries = MANAGED_POSTGRES_RECOVERY_VALIDATION_EVIDENCE.map((definition) => {
+    let value = valueFromEnvKeys(env, definition.envKeys);
+    let source: ManagedPostgresRecoveryValidationEvidenceStatus["source"] = value ? "env" : "derived";
+    if (!value) {
+      for (const candidate of reportSources) {
+        const direct = valueFromRecord(candidate.record, definition.reportKeys);
+        const nested = isRecord(candidate.record.evidence)
+          ? valueFromRecord(candidate.record.evidence, definition.reportKeys)
+          : "";
+        value = direct || nested;
+        if (value) {
+          source = candidate.source;
+          break;
+        }
+      }
+    }
+    if (!value && reportValidationComplete && phase64) {
+      value = "phase64 report recovery validation complete";
+      source = phase64.source;
+    }
+
+    const configured = value.length > 0;
+    const status: ManagedPostgresRecoveryValidationEvidenceStatus["status"] = required
+      ? configured ? "provided" : "missing"
+      : "not-required";
+    return {
+      key: definition.key,
+      label: definition.label,
+      envKey: definition.envKey,
+      status,
+      required,
+      configured,
+      value: configured ? value : null,
+      source,
+    };
+  });
+  const evidenceByKey = Object.fromEntries(
+    evidenceEntries.map((entry) => [entry.key, entry]),
+  ) as Record<ManagedPostgresRecoveryValidationEvidenceKey, ManagedPostgresRecoveryValidationEvidenceStatus>;
+  const missingEvidence = evidenceEntries
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.key);
+  const allEvidenceConfigured = evidenceEntries.every((entry) => entry.configured);
+  const recoveryValidationComplete =
+    required && phase63DistributedDependenciesReady && (allEvidenceConfigured || reportValidationComplete);
+  const validationStatus: ManagedPostgresRecoveryValidationStatus["validationStatus"] = required
+    ? recoveryValidationComplete
+      ? "complete"
+      : !phase63DistributedDependenciesReady
+        ? "blocked"
+        : "missing"
+    : "not-required";
+  const status: ManagedPostgresRecoveryValidationStatus["status"] = required
+    ? recoveryValidationComplete ? "recovery-validated" : "blocked"
+    : "not-required";
+  const missingEvidenceSummary = missingEvidence.join(", ") || "Phase 64 recovery validation evidence";
+  const blockers = required
+    ? !phase63DistributedDependenciesReady
+      ? ["Complete Phase 63 distributed dependency enforcement before recovery validation can allow activation."]
+      : missingEvidence.map((key) => `Provide ${evidenceByKey[key].label}.`)
+    : [];
+  const summary = required
+    ? !phase63DistributedDependenciesReady
+      ? "Phase 64 managed Postgres recovery validation is blocked until Phase 63 distributed dependencies are production-safe; activationAllowed=false; active-active and regional runtime remain unsupported."
+      : recoveryValidationComplete
+        ? "Phase 64 managed Postgres recovery validation is complete for backup restore, PITR rehearsal, failover rehearsal, data-integrity validation, and recovery-time expectations; provider-owned HA/PITR is validated while active-active, regional runtime, and SQLite-distributed support remain unsupported; releaseAllowed=false."
+        : `Phase 64 managed Postgres recovery validation blocks activation pending ${missingEvidenceSummary}; active-active, regional runtime, and SQLite-distributed support remain unsupported; activationAllowed=false.`
+    : "Phase 64 managed Postgres recovery validation is not required without horizontal app-writer activation intent.";
+
+  return {
+    phase: "64",
+    status,
+    validationStatus,
+    summary,
+    required,
+    phase63DistributedDependenciesReady,
+    recoveryValidationComplete,
+    horizontalAppWriterIntentDetected,
+    managedPostgresRecoveryValidated: recoveryValidationComplete,
+    strictActivationBlocked: required && !recoveryValidationComplete,
+    strictActivationAllowed: required && recoveryValidationComplete,
+    activationAllowed: required && recoveryValidationComplete,
+    releaseAllowed: false,
+    providerOwnedHaPitrValidated: recoveryValidationComplete,
+    activeActiveDatabaseSupported: false,
+    regionalRuntimeSupported: false,
+    pitrRuntimeSupported: false,
+    sqliteDistributedSupported: false,
+    evidence: evidenceByKey,
+    backupRestore: evidenceByKey.backupRestore,
+    pitrRehearsal: evidenceByKey.pitrRehearsal,
+    failoverRehearsal: evidenceByKey.failoverRehearsal,
+    dataIntegrityValidation: evidenceByKey.dataIntegrityValidation,
+    recoveryTimeExpectations: evidenceByKey.recoveryTimeExpectations,
+    missingEvidence,
+    blockers,
+    source: phase64?.source ?? "derived",
+  };
+}
+
 function deriveAsyncStoreBoundary(
   storeMode: StoreMode,
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
@@ -3706,6 +3989,14 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     multiWriterRuntimeActivationControls,
     managedPostgresHorizontalWriterConcurrency,
   );
+  const managedPostgresRecoveryValidation = deriveManagedPostgresRecoveryValidation(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+    distributedDependencyEnforcement,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -3755,6 +4046,7 @@ export function getOperationsStatus(deps: OperationsStatusDeps = {}): Operations
     multiWriterRuntimeActivationControls,
     managedPostgresHorizontalWriterConcurrency,
     distributedDependencyEnforcement,
+    managedPostgresRecoveryValidation,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },
@@ -3903,6 +4195,14 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     multiWriterRuntimeActivationControls,
     managedPostgresHorizontalWriterConcurrency,
   );
+  const managedPostgresRecoveryValidation = deriveManagedPostgresRecoveryValidation(
+    env,
+    managedDatabaseRuntimeGuard,
+    managedDatabaseTopology,
+    releaseReadiness,
+    releaseEvidence,
+    distributedDependencyEnforcement,
+  );
 
   const snapshotRows = (data.jobMetricSnapshots ?? []) as Array<{ capturedAt: string }>;
   const lastCapturedAt = snapshotRows.length === 0
@@ -3952,6 +4252,7 @@ export async function getOperationsStatusAsync(deps: OperationsStatusAsyncDeps =
     multiWriterRuntimeActivationControls,
     managedPostgresHorizontalWriterConcurrency,
     distributedDependencyEnforcement,
+    managedPostgresRecoveryValidation,
     releaseReadiness,
     releaseEvidence,
     runtime: { nodeVersion: process.versions.node },

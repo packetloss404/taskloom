@@ -125,6 +125,15 @@ const managedPostgresHorizontalWriterPhase63Env = {
   TASKLOOM_HEALTH_MONITORING_EVIDENCE: "monitoring://phase63/health",
 } as const;
 
+const managedPostgresHorizontalWriterPhase64Env = {
+  ...managedPostgresHorizontalWriterPhase63Env,
+  TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE: "docs/phase-64/backup-restore.md",
+  TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE: "docs/phase-64/pitr-rehearsal.md",
+  TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE: "docs/phase-64/failover-rehearsal.md",
+  TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE: "docs/phase-64/data-integrity.md",
+  TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION: "RTO<=15m; RPO<=5m",
+} as const;
+
 type Phase63DependencyKey =
   | "distributedRateLimiting"
   | "schedulerCoordination"
@@ -154,6 +163,32 @@ function phase63Report(report: ReturnType<typeof assessManagedDatabaseRuntimeGua
   const phase63 = (report as unknown as { phase63?: unknown }).phase63;
   assert.ok(phase63 && typeof phase63 === "object", "expected Phase 63 dependency enforcement report");
   return phase63 as Phase63RuntimeGuardReportContract;
+}
+
+interface Phase64RuntimeGuardReportContract {
+  required: boolean;
+  phase63DistributedDependencyEnforcementReady: boolean;
+  backupRestoreEvidenceConfigured: boolean;
+  pitrRehearsalEvidenceConfigured: boolean;
+  failoverRehearsalEvidenceConfigured: boolean;
+  dataIntegrityValidationEvidenceConfigured: boolean;
+  recoveryTimeExpectationConfigured: boolean;
+  recoveryValidationReady: boolean;
+  managedPostgresRecoveryClaimsValidated: boolean;
+  providerOwnedHaPitrRequired: true;
+  appOwnedRegionalFailoverSupported: false;
+  appOwnedPitrRuntimeSupported: false;
+  activeActiveSupported: false;
+  distributedSqliteSupported: false;
+  activationAllowed: boolean;
+  releaseAllowed: false;
+  strictBlocker: boolean;
+}
+
+function phase64Report(report: ReturnType<typeof assessManagedDatabaseRuntimeGuard>): Phase64RuntimeGuardReportContract {
+  const phase64 = (report as unknown as { phase64?: unknown }).phase64;
+  assert.ok(phase64 && typeof phase64 === "object", "expected Phase 64 recovery validation report");
+  return phase64 as Phase64RuntimeGuardReportContract;
 }
 
 test("local JSON runtime is allowed by default", () => {
@@ -1335,14 +1370,14 @@ test("managed Postgres horizontal app-writer runtime is blocked until Phase 63 d
   );
 });
 
-test("managed Postgres horizontal app-writer runtime is allowed after Phase 63 distributed dependency enforcement", () => {
+test("managed Postgres horizontal app-writer runtime is blocked until Phase 64 recovery validation", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase63Env });
   const limiterUrl = observedEnvValue(report, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL");
   const schedulerUrl = observedEnvValue(report, "TASKLOOM_SCHEDULER_LEADER_HTTP_URL");
 
-  assert.equal(report.allowed, true);
-  assert.equal(report.managedDatabaseRuntimeBlocked, false);
-  assert.equal(report.status, "pass");
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-postgres");
   assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
   assert.equal(report.phase63?.horizontalWriterTopologyRequested, true);
@@ -1362,14 +1397,76 @@ test("managed Postgres horizontal app-writer runtime is allowed after Phase 63 d
   assert.equal(report.phase63?.distributedDependencyEnforcementReady, true);
   assert.equal(report.phase63?.activationAllowed, true);
   assert.equal(report.phase63?.strictBlocker, false);
+  assert.equal(report.phase64?.phase63DistributedDependencyEnforcementReady, true);
+  assert.equal(report.phase64?.backupRestoreEvidenceConfigured, false);
+  assert.equal(report.phase64?.pitrRehearsalEvidenceConfigured, false);
+  assert.equal(report.phase64?.failoverRehearsalEvidenceConfigured, false);
+  assert.equal(report.phase64?.dataIntegrityValidationEvidenceConfigured, false);
+  assert.equal(report.phase64?.recoveryTimeExpectationConfigured, false);
+  assert.equal(report.phase64?.recoveryValidationReady, false);
+  assert.equal(report.phase64?.managedPostgresRecoveryClaimsValidated, false);
+  assert.equal(report.phase64?.providerOwnedHaPitrRequired, true);
+  assert.equal(report.phase64?.appOwnedRegionalFailoverSupported, false);
+  assert.equal(report.phase64?.appOwnedPitrRuntimeSupported, false);
+  assert.equal(report.phase64?.activeActiveSupported, false);
+  assert.equal(report.phase64?.distributedSqliteSupported, false);
+  assert.equal(report.phase64?.activationAllowed, false);
+  assert.equal(report.phase64?.releaseAllowed, false);
+  assert.equal(report.phase64?.strictBlocker, true);
   assert.equal(limiterUrl.value, "[redacted]");
   assert.equal(limiterUrl.redacted, true);
   assert.equal(schedulerUrl.value, "[redacted]");
   assert.equal(schedulerUrl.redacted, true);
-  assert.ok(report.summary.includes("Phase 63"));
+  assert.ok(report.summary.includes("blocked"));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 64")));
+  assert.ok(
+    report.nextSteps.some((step) =>
+      step.includes("TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE"),
+    ),
+  );
+  assert.throws(
+    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase63Env),
+    ManagedDatabaseRuntimeGuardError,
+  );
+});
+
+test("managed Postgres horizontal app-writer runtime is allowed after Phase 64 recovery validation", () => {
+  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase64Env });
+  const backupRestore = observedEnvValue(report, "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE");
+  const recoveryTime = observedEnvValue(report, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION");
+  const phase64 = phase64Report(report);
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.phase63?.distributedDependencyEnforcementReady, true);
+  assert.equal(phase64.required, true);
+  assert.equal(phase64.phase63DistributedDependencyEnforcementReady, true);
+  assert.equal(phase64.backupRestoreEvidenceConfigured, true);
+  assert.equal(phase64.pitrRehearsalEvidenceConfigured, true);
+  assert.equal(phase64.failoverRehearsalEvidenceConfigured, true);
+  assert.equal(phase64.dataIntegrityValidationEvidenceConfigured, true);
+  assert.equal(phase64.recoveryTimeExpectationConfigured, true);
+  assert.equal(phase64.recoveryValidationReady, true);
+  assert.equal(phase64.managedPostgresRecoveryClaimsValidated, true);
+  assert.equal(phase64.providerOwnedHaPitrRequired, true);
+  assert.equal(phase64.appOwnedRegionalFailoverSupported, false);
+  assert.equal(phase64.appOwnedPitrRuntimeSupported, false);
+  assert.equal(phase64.activeActiveSupported, false);
+  assert.equal(phase64.distributedSqliteSupported, false);
+  assert.equal(phase64.activationAllowed, true);
+  assert.equal(phase64.releaseAllowed, false);
+  assert.equal(phase64.strictBlocker, false);
+  assert.equal(backupRestore.value, "docs/phase-64/backup-restore.md");
+  assert.equal(backupRestore.redacted, false);
+  assert.equal(recoveryTime.value, "RTO<=15m; RPO<=5m");
+  assert.equal(recoveryTime.redacted, false);
+  assert.ok(report.summary.includes("Phase 64"));
+  assert.ok(report.warnings.some((warning) => warning.includes("provider-owned HA/PITR")));
   assert.equal(report.blockers.length, 0);
   assert.doesNotThrow(() =>
-    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase63Env),
+    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase64Env),
   );
 });
 
@@ -1435,6 +1532,7 @@ test("Phase 63 distributed dependency enforcement blocks horizontal activation w
 test("Phase 63 distributed dependency enforcement allows activation posture only when all six dependencies are production-safe", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase63Env });
   const phase63 = phase63Report(report);
+  const phase64 = phase64Report(report);
 
   assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
   assert.equal(phase63.phase62HorizontalWriterRuntimeSupported, true);
@@ -1447,8 +1545,12 @@ test("Phase 63 distributed dependency enforcement allows activation posture only
   assert.equal(phase63.distributedDependencyEnforcementReady, true);
   assert.equal(phase63.activationAllowed, true);
   assert.equal(phase63.strictBlocker, false);
-  assert.equal(report.allowed, true);
-  assert.doesNotThrow(() => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase63Env));
+  assert.equal(phase64.recoveryValidationReady, false);
+  assert.equal(report.allowed, false);
+  assert.throws(
+    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase63Env),
+    ManagedDatabaseRuntimeGuardError,
+  );
 });
 
 test("Phase 62 horizontal app-writer evidence does not unblock active-active runtime", () => {
