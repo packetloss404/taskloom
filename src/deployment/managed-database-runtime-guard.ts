@@ -90,6 +90,15 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE?: string;
   TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
   TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION?: string;
+  TASKLOOM_CUTOVER_PREFLIGHT_STATUS?: string;
+  TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE?: string;
+  TASKLOOM_ACTIVATION_DRY_RUN_STATUS?: string;
+  TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE?: string;
+  TASKLOOM_POST_ACTIVATION_SMOKE_STATUS?: string;
+  TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE?: string;
+  TASKLOOM_ROLLBACK_COMMAND_GUIDANCE?: string;
+  TASKLOOM_MONITORING_THRESHOLDS?: string;
+  TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -368,6 +377,42 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase65?: {
+    required: boolean;
+    horizontalWriterTopologyRequested: boolean;
+    phase64RecoveryValidationReady: boolean;
+    cutoverPreflightStatus: string | null;
+    cutoverPreflightEvidenceConfigured: boolean;
+    cutoverPreflightPassed: boolean;
+    cutoverPreflightFailed: boolean;
+    activationDryRunStatus: string | null;
+    activationDryRunEvidenceConfigured: boolean;
+    activationDryRunPassed: boolean;
+    activationDryRunFailed: boolean;
+    postActivationSmokeStatus: string | null;
+    postActivationSmokeEvidenceConfigured: boolean;
+    postActivationSmokePassed: boolean;
+    postActivationSmokeFailed: boolean;
+    rollbackCommandGuidanceConfigured: boolean;
+    monitoringThresholdsConfigured: boolean;
+    smokeFailureRollbackEvidenceConfigured: boolean;
+    rollbackRequired: boolean;
+    rollbackToPriorSafePostureReady: boolean;
+    cutoverAutomationGatePassed: boolean;
+    activationAllowed: boolean;
+    operationsHealthStatus: "blocked" | "ready" | "rollback-required";
+    releaseEvidenceStatus: "blocked" | "ready" | "rollback-required";
+    supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr";
+    providerOwnedHaPitrRequired: true;
+    appOwnedRegionalFailoverSupported: false;
+    appOwnedPitrRuntimeSupported: false;
+    activeActiveSupported: false;
+    distributedSqliteSupported: false;
+    finalReleaseApprovalGranted: false;
+    releaseAllowed: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -470,6 +515,15 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE",
   "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE",
   "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION",
+  "TASKLOOM_CUTOVER_PREFLIGHT_STATUS",
+  "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE",
+  "TASKLOOM_ACTIVATION_DRY_RUN_STATUS",
+  "TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE",
+  "TASKLOOM_POST_ACTIVATION_SMOKE_STATUS",
+  "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE",
+  "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE",
+  "TASKLOOM_MONITORING_THRESHOLDS",
+  "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -517,6 +571,22 @@ const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
   "implementation-approved",
   "implementation-authorized",
 ]);
+const PHASE_65_PASS_STATUSES = new Set([
+  "pass",
+  "passed",
+  "ok",
+  "ready",
+  "success",
+  "succeeded",
+]);
+const PHASE_65_FAIL_STATUSES = new Set([
+  "fail",
+  "failed",
+  "blocked",
+  "error",
+  "rollback",
+  "rollback-required",
+]);
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 
 function clean(value: string | undefined): string {
@@ -533,6 +603,14 @@ function configured(value: string | undefined): boolean {
 
 function truthy(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes(normalize(value));
+}
+
+function phase65StatusPassed(value: string | undefined): boolean {
+  return PHASE_65_PASS_STATUSES.has(normalize(value));
+}
+
+function phase65StatusFailed(value: string | undefined): boolean {
+  return PHASE_65_FAIL_STATUSES.has(normalize(value));
 }
 
 function redactedValue(key: string, value: string | undefined): Pick<ManagedDatabaseRuntimeGuardObservedEnvValue, "value" | "redacted"> {
@@ -1271,6 +1349,94 @@ function phase64ManagedPostgresRecoveryValidationGate(
   };
 }
 
+function phase65CutoverActivationAutomationGate(
+  env: ManagedDatabaseRuntimeGuardEnv,
+  horizontalWriterTopologyRequested: boolean,
+  phase64: ReturnType<typeof phase64ManagedPostgresRecoveryValidationGate>,
+) {
+  const cutoverPreflightStatus = normalize(env.TASKLOOM_CUTOVER_PREFLIGHT_STATUS);
+  const cutoverPreflightEvidenceConfigured = configured(env.TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE);
+  const cutoverPreflightPassed =
+    cutoverPreflightEvidenceConfigured && phase65StatusPassed(env.TASKLOOM_CUTOVER_PREFLIGHT_STATUS);
+  const cutoverPreflightFailed = phase65StatusFailed(env.TASKLOOM_CUTOVER_PREFLIGHT_STATUS);
+  const activationDryRunStatus = normalize(env.TASKLOOM_ACTIVATION_DRY_RUN_STATUS);
+  const activationDryRunEvidenceConfigured = configured(env.TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE);
+  const activationDryRunPassed =
+    activationDryRunEvidenceConfigured && phase65StatusPassed(env.TASKLOOM_ACTIVATION_DRY_RUN_STATUS);
+  const activationDryRunFailed = phase65StatusFailed(env.TASKLOOM_ACTIVATION_DRY_RUN_STATUS);
+  const postActivationSmokeStatus = normalize(env.TASKLOOM_POST_ACTIVATION_SMOKE_STATUS);
+  const postActivationSmokeEvidenceConfigured = configured(env.TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE);
+  const postActivationSmokePassed =
+    postActivationSmokeEvidenceConfigured && phase65StatusPassed(env.TASKLOOM_POST_ACTIVATION_SMOKE_STATUS);
+  const postActivationSmokeFailed = phase65StatusFailed(env.TASKLOOM_POST_ACTIVATION_SMOKE_STATUS);
+  const rollbackCommandGuidanceConfigured = configured(env.TASKLOOM_ROLLBACK_COMMAND_GUIDANCE);
+  const monitoringThresholdsConfigured = configured(env.TASKLOOM_MONITORING_THRESHOLDS);
+  const smokeFailureRollbackEvidenceConfigured = configured(env.TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE);
+  const rollbackRequired = cutoverPreflightFailed || activationDryRunFailed || postActivationSmokeFailed;
+  const rollbackToPriorSafePostureReady =
+    rollbackRequired && rollbackCommandGuidanceConfigured && smokeFailureRollbackEvidenceConfigured;
+  const cutoverAutomationGatePassed =
+    !horizontalWriterTopologyRequested ||
+    (phase64.recoveryValidationReady &&
+      cutoverPreflightPassed &&
+      activationDryRunPassed &&
+      postActivationSmokePassed &&
+      rollbackCommandGuidanceConfigured &&
+      monitoringThresholdsConfigured &&
+      !rollbackRequired);
+  const operationsHealthStatus = rollbackRequired
+    ? ("rollback-required" as const)
+    : cutoverAutomationGatePassed && horizontalWriterTopologyRequested
+      ? ("ready" as const)
+      : ("blocked" as const);
+  const releaseEvidenceStatus = operationsHealthStatus;
+  const strictBlocker = horizontalWriterTopologyRequested && !cutoverAutomationGatePassed;
+  const summary = horizontalWriterTopologyRequested
+    ? cutoverAutomationGatePassed
+      ? "Phase 65 cutover activation automation is ready; preflight, activation dry-run, post-activation smoke checks, rollback command guidance, and monitoring thresholds are recorded."
+      : rollbackRequired
+        ? "Phase 65 cutover activation automation detected a failed preflight, dry-run, or smoke check; activation remains blocked and operators must restore the prior safe posture before retrying."
+        : "Phase 65 requires completed Phase 64 recovery validation plus passing cutover preflight, activation dry-run, post-activation smoke checks, rollback command guidance, and monitoring thresholds before horizontal activation."
+    : "No managed Postgres horizontal app-writer topology requested for Phase 65 cutover activation automation.";
+
+  return {
+    required: horizontalWriterTopologyRequested,
+    horizontalWriterTopologyRequested,
+    phase64RecoveryValidationReady: phase64.recoveryValidationReady,
+    cutoverPreflightStatus: cutoverPreflightStatus || null,
+    cutoverPreflightEvidenceConfigured,
+    cutoverPreflightPassed,
+    cutoverPreflightFailed,
+    activationDryRunStatus: activationDryRunStatus || null,
+    activationDryRunEvidenceConfigured,
+    activationDryRunPassed,
+    activationDryRunFailed,
+    postActivationSmokeStatus: postActivationSmokeStatus || null,
+    postActivationSmokeEvidenceConfigured,
+    postActivationSmokePassed,
+    postActivationSmokeFailed,
+    rollbackCommandGuidanceConfigured,
+    monitoringThresholdsConfigured,
+    smokeFailureRollbackEvidenceConfigured,
+    rollbackRequired,
+    rollbackToPriorSafePostureReady,
+    cutoverAutomationGatePassed,
+    activationAllowed: horizontalWriterTopologyRequested && cutoverAutomationGatePassed,
+    operationsHealthStatus,
+    releaseEvidenceStatus,
+    supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr" as const,
+    providerOwnedHaPitrRequired: true as const,
+    appOwnedRegionalFailoverSupported: false as const,
+    appOwnedPitrRuntimeSupported: false as const,
+    activeActiveSupported: false as const,
+    distributedSqliteSupported: false as const,
+    finalReleaseApprovalGranted: false as const,
+    releaseAllowed: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return (
     MANAGED_TOPOLOGY_HINTS.has(topology) ||
@@ -1312,6 +1478,7 @@ function buildNextSteps(
   phase62: ReturnType<typeof phase62ManagedPostgresHorizontalWriterHardeningGate>,
   phase63: ReturnType<typeof phase63DistributedDependencyEnforcementGate>,
   phase64: ReturnType<typeof phase64ManagedPostgresRecoveryValidationGate>,
+  phase65: ReturnType<typeof phase65CutoverActivationAutomationGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -1583,6 +1750,32 @@ function buildNextSteps(
         steps.add("Configure TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION with the expected RTO/RPO or provider recovery-time target.");
       }
     }
+    if (check.id === "phase65-cutover-activation-automation") {
+      if (!phase65.phase64RecoveryValidationReady) {
+        steps.add("Complete Phase 64 recovery validation before running Phase 65 cutover activation automation.");
+      }
+      if (!phase65.cutoverPreflightPassed) {
+        steps.add("Configure TASKLOOM_CUTOVER_PREFLIGHT_STATUS=passed and TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE with cutover preflight evidence.");
+      }
+      if (!phase65.activationDryRunPassed) {
+        steps.add("Configure TASKLOOM_ACTIVATION_DRY_RUN_STATUS=passed and TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE with activation dry-run evidence.");
+      }
+      if (!phase65.postActivationSmokePassed) {
+        steps.add("Configure TASKLOOM_POST_ACTIVATION_SMOKE_STATUS=passed and TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE with post-activation smoke-check evidence.");
+      }
+      if (!phase65.rollbackCommandGuidanceConfigured) {
+        steps.add("Configure TASKLOOM_ROLLBACK_COMMAND_GUIDANCE with the operator rollback command guidance for restoring the prior safe posture.");
+      }
+      if (!phase65.monitoringThresholdsConfigured) {
+        steps.add("Configure TASKLOOM_MONITORING_THRESHOLDS with activation health thresholds and rollback trigger thresholds.");
+      }
+      if (phase65.rollbackRequired && !phase65.rollbackToPriorSafePostureReady) {
+        steps.add("Configure TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE with evidence that failed smoke/preflight automation restored the prior safe posture.");
+      }
+      if (phase65.rollbackRequired) {
+        steps.add("Keep activation blocked and follow rollback command guidance before retrying Phase 65 activation automation.");
+      }
+    }
   }
 
   if (bypassEnabled) {
@@ -1657,6 +1850,7 @@ export function assessManagedDatabaseRuntimeGuard(
   );
   const phase63 = phase63DistributedDependencyEnforcementGate(env, hasHorizontalWriterIntent, phase62);
   const phase64 = phase64ManagedPostgresRecoveryValidationGate(env, hasHorizontalWriterIntent, phase63);
+  const phase65 = phase65CutoverActivationAutomationGate(env, hasHorizontalWriterIntent, phase64);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseRuntimeGuardCheck[] = [];
   const warnings: string[] = [];
@@ -1787,6 +1981,13 @@ export function assessManagedDatabaseRuntimeGuard(
     phase64.summary,
   );
 
+  pushCheck(
+    checks,
+    "phase65-cutover-activation-automation",
+    phase65.strictBlocker ? "fail" : "pass",
+    phase65.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent && !hasHorizontalWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -1830,6 +2031,7 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(phase62.summary);
     warnings.push(phase63.summary);
     warnings.push(phase64.summary);
+    warnings.push(phase65.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -1841,7 +2043,8 @@ export function assessManagedDatabaseRuntimeGuard(
     hasMultiWriterIntent ||
     phase62.strictBlocker ||
     phase63.strictBlocker ||
-    phase64.strictBlocker;
+    phase64.strictBlocker ||
+    phase65.strictBlocker;
   const allowed = blockers.length === 0 || bypassEnabled;
   const status = statusFromChecks(checks, bypassEnabled);
   let classification: ManagedDatabaseRuntimeGuardClassification;
@@ -1862,8 +2065,8 @@ export function assessManagedDatabaseRuntimeGuard(
   const summary = allowed
     ? bypassEnabled
       ? "Phase 46 managed database runtime guard was bypassed; unsupported runtime configuration remains present."
-      : hasHorizontalWriterIntent && phase64.recoveryValidationReady
-        ? "Phase 64 managed database runtime guard allows hardened managed Postgres horizontal app-writer posture with validated provider-owned HA/PITR recovery evidence."
+      : hasHorizontalWriterIntent && phase65.cutoverAutomationGatePassed
+        ? "Phase 65 managed database runtime guard allows hardened managed Postgres horizontal app-writer activation with repeatable cutover, verify, monitor, and rollback automation evidence."
       : hasManagedIntent && hasManagedPostgresStartupSupport
         ? "Phase 52 managed database runtime guard allows single-writer managed Postgres startup."
         : store === "sqlite"
@@ -1899,6 +2102,7 @@ export function assessManagedDatabaseRuntimeGuard(
       phase62,
       phase63,
       phase64,
+      phase65,
     ),
     observed: {
       nodeEnv,
@@ -1927,6 +2131,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase62,
     phase63,
     phase64,
+    phase65,
   };
 }
 

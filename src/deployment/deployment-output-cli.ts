@@ -21,6 +21,7 @@ const PHASE61_REPORT_KEY_PATTERN = /^phase61/i;
 const PHASE62_REPORT_KEY_PATTERN = /^phase62/i;
 const PHASE63_REPORT_KEY_PATTERN = /^phase63/i;
 const PHASE64_REPORT_KEY_PATTERN = /^phase64/i;
+const PHASE65_REPORT_KEY_PATTERN = /^phase65/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 const PHASE60_URL_REDACTION_KEY_PATTERN =
@@ -33,6 +34,8 @@ const PHASE63_URL_REDACTION_KEY_PATTERN =
   /(rate|limit|scheduler|coordination|durable|job|access|log|shipping|alert|delivery|health|monitoring|evidence|url)/i;
 const PHASE64_URL_REDACTION_KEY_PATTERN =
   /(backup|restore|pitr|failover|rehearsal|integrity|recovery|time|expectation|evidence|url)/i;
+const PHASE65_URL_REDACTION_KEY_PATTERN =
+  /(cutover|preflight|activation|dry|run|smoke|rollback|command|guidance|monitoring|threshold|operations|health|status|safe|posture|evidence|url)/i;
 const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
   /(activeactive|active_active|active-active).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
   /(support|supported|releaseallowed|releasesupported|runtimesupport).*(activeactive|active_active|active-active)/i,
@@ -151,13 +154,15 @@ function redactValue(
         PHASE61_REPORT_KEY_PATTERN.test(key) ||
         PHASE62_REPORT_KEY_PATTERN.test(key) ||
         PHASE63_REPORT_KEY_PATTERN.test(key) ||
-        PHASE64_REPORT_KEY_PATTERN.test(key);
+        PHASE64_REPORT_KEY_PATTERN.test(key) ||
+        PHASE65_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase61Report = inPhase61Report || PHASE61_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase62Report = PHASE62_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase63Report = PHASE63_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase64Report = PHASE64_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase65Report = PHASE65_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
@@ -166,6 +171,7 @@ function redactValue(
         (nestedInPhase62Report && PHASE62_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase63Report && PHASE63_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase64Report && PHASE64_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase65Report && PHASE65_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -1450,36 +1456,232 @@ function withPhase64Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
   });
 }
 
-export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
-  return JSON.stringify(
-    redactValue(
-      withPhase64Status(
-        withPhase63Status(
-          withPhase62Status(
-            withPhase61Status(
-              withPhase60Status(
-                withPhase59Status(
-                  withPhase58Status(
-                    withPhase57Status(
-                      withPhase56Status(withPhase55Status(withPhase54Status(withPhase53Status(report, env), env), env), env),
-                      env,
-                    ),
-                    env,
-                  ),
-                  env,
-                ),
-                env,
-              ),
-              env,
-            ),
-            env,
-          ),
-          env,
-        ),
-        env,
-      ),
-    ),
-    null,
-    2,
+function withPhase65Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!isReport(report)) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const nestedPhase65 = firstReportAt(report, [
+    ["phase65CutoverRollbackAutomationGate"],
+    ["phase65CutoverRollbackAutomationReport"],
+    ["managedDatabase", "phase65"],
+    ["managedDatabase", "phase65CutoverRollbackAutomationGate"],
+    ["managedDatabaseTopology", "phase65"],
+    ["managedDatabaseTopology", "phase65CutoverRollbackAutomationGate"],
+    ["managedDatabaseRuntimeGuard", "phase65"],
+    ["managedDatabaseRuntimeGuard", "phase65CutoverRollbackAutomationGate"],
+    ["releaseReadiness", "phase65"],
+    ["releaseReadiness", "phase65CutoverRollbackAutomationGate"],
+    ["releaseEvidence", "phase65"],
+    ["releaseEvidence", "phase65CutoverRollbackAutomationGate"],
+    ["evidence", "phase65"],
+    ["evidence", "phase65CutoverRollbackAutomationGate"],
+    ["asyncStoreBoundary", "phase65"],
+    ["asyncStoreBoundary", "phase65CutoverRollbackAutomationGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE65_REPORT_KEY_PATTERN.test(key));
+  const existingPhase65 = reportAt(report, ["phase65"]) ?? nestedPhase65 ?? {};
+  const phase64 = reportAt(report, ["phase64"]) ?? {};
+  const horizontalWriterIntent =
+    existingPhase65.horizontalWriterTopologyRequested === true ||
+    existingPhase65.required === true ||
+    phase64.horizontalWriterTopologyRequested === true ||
+    hasHorizontalWriterTopologyIntent(env);
+  const hasPhase65EnvEvidence =
+    phase62EnvValue(env, "TASKLOOM_CUTOVER_PREFLIGHT_STATUS") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_CUTOVER_PREFLIGHT_FAILED") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ACTIVATION_DRY_RUN_STATUS") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ACTIVATION_DRY_RUN_FAILED") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_POST_ACTIVATION_SMOKE_STATUS") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MONITORING_THRESHOLDS") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_MONITORING_THRESHOLD_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE") !== undefined;
+
+  if (!horizontalWriterIntent && !nestedPhase65 && !reportAt(report, ["phase65"]) && !hasPhase65EnvEvidence) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const failedStatus = (value: string | undefined): boolean =>
+    ["failed", "fail", "error", "blocked", "down", "rollback"].includes(normalize(value));
+  const cutoverPreflightEvidence =
+    existingPhase65.cutoverPreflightEvidence ??
+    phase62EnvValue(env, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE");
+  const activationDryRunEvidence =
+    existingPhase65.activationDryRunEvidence ??
+    phase62EnvValue(env, "TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE");
+  const postActivationSmokeCheckEvidence =
+    existingPhase65.postActivationSmokeCheckEvidence ??
+    existingPhase65.postActivationSmokeEvidence ??
+    phase62EnvValue(env, "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE") ??
+    phase62EnvValue(env, "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE");
+  const rollbackCommandGuidance =
+    existingPhase65.rollbackCommandGuidance ??
+    phase62EnvValue(env, "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE");
+  const monitoringThresholdEvidence =
+    existingPhase65.monitoringThresholdEvidence ??
+    existingPhase65.monitoringThresholds ??
+    phase62EnvValue(env, "TASKLOOM_MONITORING_THRESHOLDS") ??
+    phase62EnvValue(env, "TASKLOOM_MONITORING_THRESHOLD_EVIDENCE");
+  const operationsHealthCutoverStatusEvidence =
+    existingPhase65.operationsHealthCutoverStatusEvidence ??
+    phase62EnvValue(env, "TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE");
+  const rollbackSafePostureEvidence =
+    existingPhase65.rollbackSafePostureEvidence ??
+    existingPhase65.smokeFailureRollbackEvidence ??
+    phase62EnvValue(env, "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE") ??
+    phase62EnvValue(env, "TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE");
+
+  const cutoverPreflightEvidenceAttached =
+    existingPhase65.cutoverPreflightEvidenceAttached ?? cutoverPreflightEvidence !== undefined;
+  const activationDryRunEvidenceAttached =
+    existingPhase65.activationDryRunEvidenceAttached ?? activationDryRunEvidence !== undefined;
+  const postActivationSmokeCheckEvidenceAttached =
+    existingPhase65.postActivationSmokeCheckEvidenceAttached ??
+    existingPhase65.postActivationSmokeEvidenceAttached ??
+    postActivationSmokeCheckEvidence !== undefined;
+  const rollbackCommandGuidanceAttached =
+    existingPhase65.rollbackCommandGuidanceAttached ?? rollbackCommandGuidance !== undefined;
+  const monitoringThresholdEvidenceAttached =
+    existingPhase65.monitoringThresholdEvidenceAttached ??
+    existingPhase65.monitoringThresholdsAttached ??
+    monitoringThresholdEvidence !== undefined;
+  const operationsHealthCutoverStatusEvidenceAttached =
+    existingPhase65.operationsHealthCutoverStatusEvidenceAttached ??
+    operationsHealthCutoverStatusEvidence !== undefined;
+  const rollbackSafePostureEvidenceAttached =
+    existingPhase65.rollbackSafePostureEvidenceAttached ??
+    existingPhase65.smokeFailureRollbackEvidenceAttached ??
+    rollbackSafePostureEvidence !== undefined;
+  const cutoverPreflightFailed =
+    existingPhase65.cutoverPreflightFailed ??
+    (truthy(env.TASKLOOM_CUTOVER_PREFLIGHT_FAILED) || failedStatus(env.TASKLOOM_CUTOVER_PREFLIGHT_STATUS));
+  const activationDryRunFailed =
+    existingPhase65.activationDryRunFailed ??
+    (truthy(env.TASKLOOM_ACTIVATION_DRY_RUN_FAILED) || failedStatus(env.TASKLOOM_ACTIVATION_DRY_RUN_STATUS));
+  const postActivationSmokeCheckFailed =
+    existingPhase65.postActivationSmokeCheckFailed ??
+    existingPhase65.postActivationSmokeFailed ??
+    (
+      truthy(env.TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED) ||
+      failedStatus(env.TASKLOOM_POST_ACTIVATION_SMOKE_STATUS)
+    );
+  const phase64ManagedPostgresRecoveryValidationReady =
+    existingPhase65.phase64ManagedPostgresRecoveryValidationReady ??
+    phase64.managedPostgresRecoveryValidationReady ??
+    false;
+  const rollbackToPriorSafePostureProven =
+    existingPhase65.rollbackToPriorSafePostureProven ??
+    existingPhase65.rollbackSafePostureEvidenceAttached ??
+    existingPhase65.smokeFailureRollbackEvidenceAttached ??
+    rollbackSafePostureEvidenceAttached;
+  const automationFailureDetected =
+    cutoverPreflightFailed === true ||
+    activationDryRunFailed === true ||
+    postActivationSmokeCheckFailed === true;
+  const cutoverRollbackAutomationReady =
+    existingPhase65.cutoverRollbackAutomationReady ??
+    (
+      horizontalWriterIntent &&
+      phase64ManagedPostgresRecoveryValidationReady === true &&
+      cutoverPreflightEvidenceAttached === true &&
+      activationDryRunEvidenceAttached === true &&
+      postActivationSmokeCheckEvidenceAttached === true &&
+      rollbackCommandGuidanceAttached === true &&
+      monitoringThresholdEvidenceAttached === true &&
+      operationsHealthCutoverStatusEvidenceAttached === true &&
+      rollbackToPriorSafePostureProven === true &&
+      automationFailureDetected !== true
+    );
+  const summary = existingPhase65.summary ?? (
+    cutoverRollbackAutomationReady
+      ? "Phase 65 records repeatable managed Postgres cutover, smoke-check, rollback, and observability automation; final release closure and release approval remain blocked pending Phase 66."
+      : automationFailureDetected
+        ? "Phase 65 cutover automation detected a failed preflight, dry-run, or smoke check; activation remains blocked until rollback to the prior safe posture is proven."
+        : "Phase 65 requires cutover preflight, activation dry-run, post-activation smoke, rollback command guidance, monitoring threshold, operations health status, and prior safe posture evidence before activation can proceed."
   );
+
+  return blockUnsupportedRuntimeReleaseClaims({
+    ...report,
+    phase65: {
+      ...existingPhase65,
+      phase: existingPhase65.phase ?? "65",
+      required: existingPhase65.required ?? horizontalWriterIntent,
+      horizontalWriterTopologyRequested: horizontalWriterIntent,
+      phase64ManagedPostgresRecoveryValidationReady,
+      cutoverPreflightEvidenceRequired: existingPhase65.cutoverPreflightEvidenceRequired ?? horizontalWriterIntent,
+      cutoverPreflightEvidence,
+      cutoverPreflightEvidenceAttached,
+      cutoverPreflightFailed,
+      activationDryRunEvidenceRequired: existingPhase65.activationDryRunEvidenceRequired ?? horizontalWriterIntent,
+      activationDryRunEvidence,
+      activationDryRunEvidenceAttached,
+      activationDryRunFailed,
+      postActivationSmokeCheckEvidenceRequired:
+        existingPhase65.postActivationSmokeCheckEvidenceRequired ?? horizontalWriterIntent,
+      postActivationSmokeCheckEvidence,
+      postActivationSmokeEvidence: postActivationSmokeCheckEvidence,
+      postActivationSmokeCheckEvidenceAttached,
+      postActivationSmokeEvidenceAttached: postActivationSmokeCheckEvidenceAttached,
+      postActivationSmokeCheckFailed,
+      postActivationSmokeFailed: postActivationSmokeCheckFailed,
+      rollbackCommandGuidanceRequired: existingPhase65.rollbackCommandGuidanceRequired ?? horizontalWriterIntent,
+      rollbackCommandGuidance,
+      rollbackCommandGuidanceAttached,
+      monitoringThresholdEvidenceRequired:
+        existingPhase65.monitoringThresholdEvidenceRequired ?? horizontalWriterIntent,
+      monitoringThresholdEvidence,
+      monitoringThresholds: monitoringThresholdEvidence,
+      monitoringThresholdEvidenceAttached,
+      monitoringThresholdsAttached: monitoringThresholdEvidenceAttached,
+      operationsHealthCutoverStatusEvidenceRequired:
+        existingPhase65.operationsHealthCutoverStatusEvidenceRequired ?? horizontalWriterIntent,
+      operationsHealthCutoverStatusEvidence,
+      operationsHealthCutoverStatusEvidenceAttached,
+      rollbackSafePostureEvidenceRequired: existingPhase65.rollbackSafePostureEvidenceRequired ?? horizontalWriterIntent,
+      rollbackSafePostureEvidence,
+      smokeFailureRollbackEvidence: rollbackSafePostureEvidence,
+      rollbackSafePostureEvidenceAttached,
+      smokeFailureRollbackEvidenceAttached: rollbackSafePostureEvidenceAttached,
+      rollbackToPriorSafePostureProven,
+      automationFailureDetected,
+      cutoverRollbackAutomationReady,
+      activationBlocked: existingPhase65.activationBlocked ?? (horizontalWriterIntent && cutoverRollbackAutomationReady !== true),
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      applicationManagedRegionalFailoverSupported: false,
+      applicationManagedPitrSupported: false,
+      phase66Pending: horizontalWriterIntent,
+      pendingPhases: horizontalWriterIntent ? ["66"] : [],
+      releaseAllowed: existingPhase65.releaseAllowed ?? !horizontalWriterIntent,
+      strictBlocker: existingPhase65.strictBlocker ?? (horizontalWriterIntent && cutoverRollbackAutomationReady !== true),
+      summary,
+    },
+  });
+}
+
+export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv): string {
+  let enrichedReport = withPhase53Status(report, env);
+  enrichedReport = withPhase54Status(enrichedReport, env);
+  enrichedReport = withPhase55Status(enrichedReport, env);
+  enrichedReport = withPhase56Status(enrichedReport, env);
+  enrichedReport = withPhase57Status(enrichedReport, env);
+  enrichedReport = withPhase58Status(enrichedReport, env);
+  enrichedReport = withPhase59Status(enrichedReport, env);
+  enrichedReport = withPhase60Status(enrichedReport, env);
+  enrichedReport = withPhase61Status(enrichedReport, env);
+  enrichedReport = withPhase62Status(enrichedReport, env);
+  enrichedReport = withPhase63Status(enrichedReport, env);
+  enrichedReport = withPhase64Status(enrichedReport, env);
+  enrichedReport = withPhase65Status(enrichedReport, env);
+
+  return JSON.stringify(redactValue(enrichedReport), null, 2);
 }

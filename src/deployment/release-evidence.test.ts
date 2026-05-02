@@ -127,6 +127,19 @@ function phase64CompleteHorizontalWriterEvidenceEnv() {
   };
 }
 
+function phase65CompleteHorizontalWriterEvidenceEnv() {
+  return {
+    ...phase64CompleteHorizontalWriterEvidenceEnv(),
+    TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE: "https://auditor:secret@evidence.internal/phase65-preflight",
+    TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE: "dry-run://phase65/activation",
+    TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE: "smoke://phase65/pass",
+    TASKLOOM_ROLLBACK_COMMAND_GUIDANCE: "rollback://phase65/command",
+    TASKLOOM_MONITORING_THRESHOLD_EVIDENCE: "thresholds://phase65/alerts",
+    TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE: "ops-health://phase65/cutover-status",
+    TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE: "safe-posture://phase65/prior",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -1410,6 +1423,78 @@ test("strict evidence records complete Phase 64 recovery validation without clai
   assert.equal(restoreAttachment?.redacted, false);
   assert.equal(restoreAttachment?.value, "restore://phase64/backup");
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 65 cutover/rollback automation")));
+});
+
+test("strict evidence records complete Phase 65 cutover automation while final approval stays blocked", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase65CompleteHorizontalWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T07:30:00.000Z",
+    strict: true,
+  });
+  const preflightAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-65-cutover-preflight-evidence"
+  );
+  const opsHealthAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-65-operations-health-cutover-status-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase65CutoverRollbackAutomationGateRequired, true);
+  assert.equal(bundle.evidence.config.phase65Phase64ManagedPostgresRecoveryValidationReady, true);
+  assert.equal(bundle.evidence.config.phase65CutoverPreflightEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase65ActivationDryRunEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase65PostActivationSmokeCheckEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase65RollbackCommandGuidanceAttached, true);
+  assert.equal(bundle.evidence.config.phase65MonitoringThresholdEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase65OperationsHealthCutoverStatusAttached, true);
+  assert.equal(bundle.evidence.config.phase65RollbackSafePostureEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase65CutoverRollbackAutomationReady, true);
+  assert.equal(bundle.evidence.config.phase65ActivationBlocked, false);
+  assert.equal(bundle.evidence.config.phase65FinalReleaseApprovalBlocked, true);
+  assert.deepEqual(bundle.evidence.config.phase65PendingPhases, ["66"]);
+  assert.equal(bundle.evidence.config.phase65TopologyReleaseAllowed, false);
+  assert.equal(preflightAttachment?.required, true);
+  assert.equal(preflightAttachment?.configured, true);
+  assert.equal(preflightAttachment?.redacted, true);
+  assert.equal(preflightAttachment?.value, "[redacted]");
+  assert.equal(opsHealthAttachment?.required, true);
+  assert.equal(opsHealthAttachment?.configured, true);
+  assert.ok(
+    bundle.asyncStoreBoundary.phase65CutoverRollbackAutomationGate?.summary.includes(
+      "Phase 65 cutover/rollback automation is complete",
+    ),
+  );
+  assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 66")));
+});
+
+test("strict evidence records failed Phase 65 smoke checks as rollback to prior safe posture", () => {
+  const bundle = assessReleaseEvidence({
+    env: {
+      ...phase65CompleteHorizontalWriterEvidenceEnv(),
+      TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED: "true",
+      TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE: "safe-posture://phase65/rollback-complete",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T07:45:00.000Z",
+    strict: true,
+  });
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase65PostActivationSmokeCheckFailed, true);
+  assert.equal(bundle.evidence.config.phase65RollbackToPriorSafePostureRequired, true);
+  assert.equal(bundle.evidence.config.phase65RollbackToPriorSafePostureProven, true);
+  assert.equal(bundle.evidence.config.phase65ActivationBlocked, true);
+  assert.equal(bundle.evidence.config.phase65CutoverRollbackAutomationReady, false);
+  assert.ok(
+    bundle.asyncStoreBoundary.phase65CutoverRollbackAutomationGate?.summary.includes(
+      "failed preflight or smoke check",
+    ),
+  );
 });
 
 test("release readiness managed reports are reused when present", () => {

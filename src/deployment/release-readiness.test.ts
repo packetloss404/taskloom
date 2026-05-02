@@ -131,6 +131,19 @@ function phase64CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
   };
 }
 
+function phase65CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
+  return {
+    ...phase64CompleteHorizontalWriterEnv(),
+    TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE: "preflight://phase65/pass",
+    TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE: "dry-run://phase65/activate",
+    TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE: "smoke://phase65/pass",
+    TASKLOOM_ROLLBACK_COMMAND_GUIDANCE: "rollback://phase65/command",
+    TASKLOOM_MONITORING_THRESHOLD_EVIDENCE: "thresholds://phase65/alerts",
+    TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE: "ops-health://phase65/cutover-status",
+    TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE: "safe-posture://phase65/prior",
+  };
+}
+
 interface Phase63ReadinessGateContract {
   phase: "63";
   required: boolean;
@@ -168,6 +181,31 @@ interface Phase64ReadinessGateContract {
   pendingPhases: string[];
   releaseAllowed: boolean;
   blockers: string[];
+  summary: string;
+}
+
+interface Phase65ReadinessGateContract {
+  phase: "65";
+  required: boolean;
+  phase64ManagedPostgresRecoveryValidationReady: boolean;
+  cutoverPreflightEvidenceAttached: boolean;
+  cutoverPreflightFailed: boolean;
+  activationDryRunEvidenceAttached: boolean;
+  postActivationSmokeCheckEvidenceAttached: boolean;
+  postActivationSmokeCheckFailed: boolean;
+  rollbackCommandGuidanceAttached: boolean;
+  monitoringThresholdEvidenceAttached: boolean;
+  operationsHealthCutoverStatusAttached: boolean;
+  rollbackSafePostureEvidenceAttached: boolean;
+  activationBlocked: boolean;
+  rollbackToPriorSafePostureRequired: boolean;
+  rollbackToPriorSafePostureProven: boolean;
+  cutoverRollbackAutomationReady: boolean;
+  finalReleaseApprovalBlocked: true;
+  pendingPhases: string[];
+  releaseAllowed: boolean;
+  blockers: string[];
+  summary: string;
 }
 
 function phase63Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase63ReadinessGateContract {
@@ -184,6 +222,14 @@ function phase64Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase64
   }).phase64ManagedPostgresRecoveryValidationGate;
   assert.ok(gate && typeof gate === "object", "expected Phase 64 managed Postgres recovery validation gate");
   return gate as Phase64ReadinessGateContract;
+}
+
+function phase65Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase65ReadinessGateContract {
+  const gate = (report.asyncStoreBoundary as unknown as {
+    phase65CutoverRollbackAutomationGate?: unknown;
+  }).phase65CutoverRollbackAutomationGate;
+  assert.ok(gate && typeof gate === "object", "expected Phase 65 cutover/rollback automation gate");
+  return gate as Phase65ReadinessGateContract;
 }
 
 test("local JSON development produces warnings instead of release blockers", () => {
@@ -1193,6 +1239,89 @@ test("Phase 64 recovery validation passes only when all recovery evidence is pre
   assert.equal(checkStatus(report, "phase64-managed-postgres-recovery-validation"), "pass");
   assert.equal(report.readyForRelease, false);
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 65 cutover/rollback automation")));
+});
+
+test("Phase 65 cutover automation blocks activation when preflight evidence is missing", () => {
+  const report = assessReleaseReadiness({
+    env: phase64CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase65Gate(report);
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(gate.phase, "65");
+  assert.equal(gate.required, true);
+  assert.equal(gate.phase64ManagedPostgresRecoveryValidationReady, true);
+  assert.equal(gate.cutoverPreflightEvidenceAttached, false);
+  assert.equal(gate.activationDryRunEvidenceAttached, false);
+  assert.equal(gate.postActivationSmokeCheckEvidenceAttached, false);
+  assert.equal(gate.rollbackCommandGuidanceAttached, false);
+  assert.equal(gate.monitoringThresholdEvidenceAttached, false);
+  assert.equal(gate.operationsHealthCutoverStatusAttached, false);
+  assert.equal(gate.rollbackSafePostureEvidenceAttached, false);
+  assert.equal(gate.activationBlocked, true);
+  assert.equal(gate.cutoverRollbackAutomationReady, false);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase65-cutover-rollback-automation"), "fail");
+  assert.ok(gate.blockers.some((blocker) => blocker.includes("Phase 65 cutover preflight")));
+});
+
+test("Phase 65 failed smoke checks require rollback proof and keep activation blocked", () => {
+  const report = assessReleaseReadiness({
+    env: {
+      ...phase65CompleteHorizontalWriterEnv(),
+      TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED: "true",
+      TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE: "safe-posture://phase65/rollback-complete",
+    },
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase65Gate(report);
+
+  assert.equal(gate.postActivationSmokeCheckEvidenceAttached, true);
+  assert.equal(gate.postActivationSmokeCheckFailed, true);
+  assert.equal(gate.rollbackToPriorSafePostureRequired, true);
+  assert.equal(gate.rollbackToPriorSafePostureProven, true);
+  assert.equal(gate.activationBlocked, true);
+  assert.equal(gate.cutoverRollbackAutomationReady, false);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase65-cutover-rollback-automation"), "fail");
+  assert.ok(gate.blockers.some((blocker) => blocker.includes("smoke checks failed")));
+});
+
+test("Phase 65 cutover automation passes with preflight, dry-run, smoke, rollback, monitoring, and health evidence", () => {
+  const report = assessReleaseReadiness({
+    env: phase65CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase65Gate(report);
+
+  assert.equal(gate.cutoverPreflightEvidenceAttached, true);
+  assert.equal(gate.cutoverPreflightFailed, false);
+  assert.equal(gate.activationDryRunEvidenceAttached, true);
+  assert.equal(gate.postActivationSmokeCheckEvidenceAttached, true);
+  assert.equal(gate.postActivationSmokeCheckFailed, false);
+  assert.equal(gate.rollbackCommandGuidanceAttached, true);
+  assert.equal(gate.monitoringThresholdEvidenceAttached, true);
+  assert.equal(gate.operationsHealthCutoverStatusAttached, true);
+  assert.equal(gate.rollbackSafePostureEvidenceAttached, true);
+  assert.equal(gate.activationBlocked, false);
+  assert.equal(gate.cutoverRollbackAutomationReady, true);
+  assert.equal(gate.finalReleaseApprovalBlocked, true);
+  assert.deepEqual(gate.pendingPhases, ["66"]);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase65-cutover-rollback-automation"), "pass");
+  assert.equal(report.readyForRelease, false);
+  assert.ok(gate.summary.includes("Phase 65 cutover/rollback automation is complete"));
+  assert.ok(report.nextSteps.some((step) => step.includes("Phase 66")));
 });
 
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {

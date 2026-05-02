@@ -1411,3 +1411,106 @@ test("formatDeploymentCliJson synthesizes Phase 64 managed Postgres recovery val
   assert.equal(report.phase64?.strictBlocker, false);
   assert.doesNotMatch(output, /auditor:secret/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 65 cutover rollback automation", () => {
+  const output = formatDeploymentCliJson({
+    phase64: {
+      horizontalWriterTopologyRequested: true,
+      managedPostgresRecoveryValidationReady: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_CUTOVER_PREFLIGHT_STATUS: "passed",
+    TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE: "https://auditor:secret@evidence.internal/phase65-preflight",
+    TASKLOOM_ACTIVATION_DRY_RUN_STATUS: "passed",
+    TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE: "dry-run://phase65",
+    TASKLOOM_POST_ACTIVATION_SMOKE_STATUS: "passed",
+    TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE: "smoke://phase65",
+    TASKLOOM_ROLLBACK_COMMAND_GUIDANCE: "rollback://phase65/command",
+    TASKLOOM_MONITORING_THRESHOLDS: "thresholds://phase65",
+    TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE: "ops://phase65",
+    TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE: "safe://phase65",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase65?: {
+      phase?: unknown;
+      required?: unknown;
+      phase64ManagedPostgresRecoveryValidationReady?: unknown;
+      cutoverPreflightEvidence?: unknown;
+      cutoverPreflightEvidenceAttached?: unknown;
+      activationDryRunEvidenceAttached?: unknown;
+      postActivationSmokeCheckEvidenceAttached?: unknown;
+      rollbackCommandGuidanceAttached?: unknown;
+      monitoringThresholdEvidenceAttached?: unknown;
+      operationsHealthCutoverStatusEvidenceAttached?: unknown;
+      rollbackToPriorSafePostureProven?: unknown;
+      automationFailureDetected?: unknown;
+      cutoverRollbackAutomationReady?: unknown;
+      activationBlocked?: unknown;
+      pendingPhases?: unknown;
+      releaseAllowed?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase65?.phase, "65");
+  assert.equal(report.phase65?.required, true);
+  assert.equal(report.phase65?.phase64ManagedPostgresRecoveryValidationReady, true);
+  assert.equal(report.phase65?.cutoverPreflightEvidence, "[redacted]");
+  assert.equal(report.phase65?.cutoverPreflightEvidenceAttached, true);
+  assert.equal(report.phase65?.activationDryRunEvidenceAttached, true);
+  assert.equal(report.phase65?.postActivationSmokeCheckEvidenceAttached, true);
+  assert.equal(report.phase65?.rollbackCommandGuidanceAttached, true);
+  assert.equal(report.phase65?.monitoringThresholdEvidenceAttached, true);
+  assert.equal(report.phase65?.operationsHealthCutoverStatusEvidenceAttached, true);
+  assert.equal(report.phase65?.rollbackToPriorSafePostureProven, true);
+  assert.equal(report.phase65?.automationFailureDetected, false);
+  assert.equal(report.phase65?.cutoverRollbackAutomationReady, true);
+  assert.equal(report.phase65?.activationBlocked, false);
+  assert.deepEqual(report.phase65?.pendingPhases, ["66"]);
+  assert.equal(report.phase65?.releaseAllowed, false);
+  assert.equal(report.phase65?.strictBlocker, false);
+  assert.match(String(report.phase65?.summary), /Phase 65 records repeatable/);
+  assert.doesNotMatch(output, /auditor:secret/);
+});
+
+test("formatDeploymentCliJson blocks Phase 65 when a smoke check fails", () => {
+  const output = formatDeploymentCliJson({
+    phase64: {
+      horizontalWriterTopologyRequested: true,
+      managedPostgresRecoveryValidationReady: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_CUTOVER_PREFLIGHT_STATUS: "passed",
+    TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE: "preflight://phase65",
+    TASKLOOM_ACTIVATION_DRY_RUN_STATUS: "passed",
+    TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE: "dry-run://phase65",
+    TASKLOOM_POST_ACTIVATION_SMOKE_STATUS: "failed",
+    TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE: "smoke://phase65",
+    TASKLOOM_ROLLBACK_COMMAND_GUIDANCE: "rollback://phase65/command",
+    TASKLOOM_MONITORING_THRESHOLDS: "thresholds://phase65",
+    TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE: "ops://phase65",
+    TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE: "safe://phase65",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase65?: {
+      postActivationSmokeCheckFailed?: unknown;
+      rollbackToPriorSafePostureProven?: unknown;
+      automationFailureDetected?: unknown;
+      cutoverRollbackAutomationReady?: unknown;
+      activationBlocked?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase65?.postActivationSmokeCheckFailed, true);
+  assert.equal(report.phase65?.rollbackToPriorSafePostureProven, true);
+  assert.equal(report.phase65?.automationFailureDetected, true);
+  assert.equal(report.phase65?.cutoverRollbackAutomationReady, false);
+  assert.equal(report.phase65?.activationBlocked, true);
+  assert.equal(report.phase65?.strictBlocker, true);
+  assert.match(String(report.phase65?.summary), /failed preflight, dry-run, or smoke check/);
+});

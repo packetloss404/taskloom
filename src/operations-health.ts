@@ -422,6 +422,61 @@ const MANAGED_POSTGRES_RECOVERY_VALIDATION_EVIDENCE = [
     reportKeys: ["recoveryTimeExpectations", "recoveryTimeEvidence", "rtoRpoExpectations", "rtoRpoEvidence"],
   },
 ] as const;
+const MANAGED_POSTGRES_CUTOVER_AUTOMATION_EVIDENCE = [
+  {
+    key: "cutoverPreflight",
+    label: "cutover preflight evidence",
+    envKey: "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE",
+    envKeys: ["TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE", "TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_EVIDENCE"],
+    statusEnvKeys: ["TASKLOOM_CUTOVER_PREFLIGHT_STATUS", "TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_STATUS"],
+    reportKeys: ["cutoverPreflight", "cutoverPreflightEvidence", "preflightEvidence"],
+    statusReportKeys: ["cutoverPreflightStatus", "preflightStatus"],
+  },
+  {
+    key: "activationDryRun",
+    label: "activation dry-run evidence",
+    envKey: "TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE",
+    envKeys: ["TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE", "TASKLOOM_MANAGED_POSTGRES_ACTIVATION_DRY_RUN_EVIDENCE"],
+    statusEnvKeys: ["TASKLOOM_ACTIVATION_DRY_RUN_STATUS", "TASKLOOM_MANAGED_POSTGRES_ACTIVATION_DRY_RUN_STATUS"],
+    reportKeys: ["activationDryRun", "activationDryRunEvidence", "dryRunEvidence"],
+    statusReportKeys: ["activationDryRunStatus", "dryRunStatus"],
+  },
+  {
+    key: "postActivationSmoke",
+    label: "post-activation smoke-check evidence",
+    envKey: "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE",
+    envKeys: [
+      "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE",
+      "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE",
+      "TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_EVIDENCE",
+    ],
+    statusEnvKeys: ["TASKLOOM_POST_ACTIVATION_SMOKE_STATUS", "TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_STATUS"],
+    reportKeys: ["postActivationSmoke", "postActivationSmokeEvidence", "smokeEvidence", "smokeChecks"],
+    statusReportKeys: ["postActivationSmokeStatus", "smokeStatus", "smokeCheckStatus"],
+  },
+  {
+    key: "rollbackCommandGuidance",
+    label: "rollback command guidance",
+    envKey: "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE",
+    envKeys: ["TASKLOOM_ROLLBACK_COMMAND_GUIDANCE", "TASKLOOM_MANAGED_POSTGRES_ROLLBACK_COMMAND_GUIDANCE"],
+    statusEnvKeys: [],
+    reportKeys: ["rollbackCommandGuidance", "rollbackGuidance", "rollbackCommands"],
+    statusReportKeys: [],
+  },
+  {
+    key: "monitoringThresholds",
+    label: "monitoring thresholds",
+    envKey: "TASKLOOM_MONITORING_THRESHOLDS",
+    envKeys: [
+      "TASKLOOM_MONITORING_THRESHOLDS",
+      "TASKLOOM_MONITORING_THRESHOLD_EVIDENCE",
+      "TASKLOOM_MANAGED_POSTGRES_MONITORING_THRESHOLDS",
+    ],
+    statusEnvKeys: [],
+    reportKeys: ["monitoringThresholds", "observabilityThresholds", "activationMonitoringThresholds"],
+    statusReportKeys: [],
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -551,6 +606,22 @@ function recoveryValidationRecord(report: unknown): Record<string, unknown> | nu
     findNestedRecord(report, ["releaseReadiness", "phase64"]) ??
     findNestedRecord(report, ["releaseReadiness", "managedPostgresRecoveryValidation"]) ??
     findNestedRecord(report, ["releaseReadiness", "recoveryValidation"]);
+}
+
+function cutoverAutomationRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase65"]) ??
+    findNestedRecord(report, ["managedPostgresCutoverAutomation"]) ??
+    findNestedRecord(report, ["managedPostgresCutoverAutomationGate"]) ??
+    findNestedRecord(report, ["cutoverAutomation"]) ??
+    findNestedRecord(report, ["cutoverRollbackObservabilityAutomation"]) ??
+    findNestedRecord(report, ["managedDatabase", "phase65"]) ??
+    findNestedRecord(report, ["managedPostgres", "phase65"]) ??
+    findNestedRecord(report, ["managedPostgres", "cutoverAutomation"]) ??
+    findNestedRecord(report, ["runtimeGuard", "phase65"]) ??
+    findNestedRecord(report, ["releaseReadiness", "phase65"]) ??
+    findNestedRecord(report, ["releaseReadiness", "managedPostgresCutoverAutomation"]) ??
+    findNestedRecord(report, ["releaseReadiness", "cutoverAutomation"]);
 }
 
 function distributedDependencyRecord(
@@ -1066,6 +1137,15 @@ function reportPhase64Required(record: Record<string, unknown> | null): boolean 
     null;
 }
 
+function reportPhase65Required(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  return booleanFromRecord(record, "required") ??
+    booleanFromRecord(record, "phase65Required") ??
+    booleanFromRecord(record, "cutoverAutomationRequired") ??
+    booleanFromRecord(record, "managedPostgresCutoverAutomationRequired") ??
+    null;
+}
+
 function phase64ReportValidationComplete(records: readonly Record<string, unknown>[]): boolean {
   return records.some((record) => {
     const required =
@@ -1079,6 +1159,62 @@ function phase64ReportValidationComplete(records: readonly Record<string, unknow
         record.phase64RecoveryValidationComplete === true ||
         record.failoverPitrRecoveryValidated === true);
   });
+}
+
+function phase65ReportAutomationReady(records: readonly Record<string, unknown>[]): boolean {
+  return records.some((record) => {
+    const required =
+      record.required === true ||
+      record.phase65Required === true ||
+      record.cutoverAutomationRequired === true ||
+      record.managedPostgresCutoverAutomationRequired === true;
+    return required &&
+      (record.cutoverAutomationReady === true ||
+        record.managedPostgresCutoverAutomationReady === true ||
+        record.activationAutomationReady === true ||
+        record.phase65CutoverAutomationReady === true);
+  });
+}
+
+function automationResultValue(value: string): "pass" | "fail" | "unknown" {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (
+    ["fail", "failed", "failure", "error", "errored", "red", "blocked", "rollback-required"].includes(normalized) ||
+    normalized.startsWith("fail:")
+  ) {
+    return "fail";
+  }
+  if (
+    [
+      "pass",
+      "passed",
+      "success",
+      "succeeded",
+      "ok",
+      "ready",
+      "green",
+      "complete",
+      "completed",
+    ].includes(normalized) ||
+    normalized.startsWith("pass:")
+  ) {
+    return "pass";
+  }
+  return "unknown";
+}
+
+function cutoverAutomationResultFromRecord(
+  record: Record<string, unknown>,
+  statusKeys: readonly string[],
+): "pass" | "fail" | "unknown" {
+  for (const key of statusKeys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value ? "pass" : "fail";
+    const result = automationResultValue(cleanEnvValue(value));
+    if (result !== "unknown") return result;
+  }
+  return "unknown";
 }
 
 function phase62HardeningComplete(env: NodeJS.ProcessEnv, deploymentReports: DeploymentReportSources): boolean {
@@ -1258,6 +1394,113 @@ function checkManagedPostgresRecoveryValidation(
     name: "managedPostgresRecoveryValidation",
     status: "ok",
     detail: "Phase 64 managed Postgres recovery validation is complete for backup restore, PITR rehearsal, failover rehearsal, data-integrity validation, and recovery-time expectations; provider-owned HA/PITR is validated while active-active, regional runtime, and SQLite-distributed support remain unsupported; activationAllowed=true; releaseAllowed=false",
+    checkedAt,
+  };
+}
+
+function phase64RecoveryValidationComplete(
+  env: NodeJS.ProcessEnv,
+  deploymentReports: DeploymentReportSources,
+): boolean {
+  const phase64Records = Object.values(deploymentReports)
+    .map((report) => recoveryValidationRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  if (phase64ReportValidationComplete(phase64Records)) return true;
+  if (missingDistributedDependencies(env, deploymentReports).length > 0) return false;
+  return MANAGED_POSTGRES_RECOVERY_VALIDATION_EVIDENCE.every(
+    (entry) => valueFromEnvKeys(env, entry.envKeys).length > 0 ||
+      phase64Records.some((record) => {
+        const direct = valueFromRecord(record, entry.reportKeys);
+        const nested = isRecord(record.evidence) ? valueFromRecord(record.evidence, entry.reportKeys) : "";
+        return Boolean(direct || nested);
+      }),
+  );
+}
+
+function checkManagedPostgresCutoverAutomation(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+  deploymentReports: DeploymentReportSources,
+): SubsystemHealth {
+  const phase65Records = Object.values(deploymentReports)
+    .map((report) => cutoverAutomationRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  const reportRequired = phase65Records.reduce<boolean | null>((result, record) => {
+    if (result !== null) return result;
+    return reportPhase65Required(record);
+  }, null);
+  const required = reportRequired === true || phase63Required(env, deploymentReports);
+  if (!required) {
+    return {
+      name: "managedPostgresCutoverAutomation",
+      status: "disabled",
+      detail: "Phase 65 managed Postgres cutover automation is not required without horizontal app-writer activation intent",
+      checkedAt,
+    };
+  }
+
+  if (!phase64RecoveryValidationComplete(env, deploymentReports)) {
+    return {
+      name: "managedPostgresCutoverAutomation",
+      status: "degraded",
+      detail: "Phase 65 managed Postgres cutover automation is blocked until Phase 64 recovery validation is complete; activationAllowed=false",
+      checkedAt,
+    };
+  }
+
+  const reportAutomationReady = phase65ReportAutomationReady(phase65Records);
+  const failedChecks = MANAGED_POSTGRES_CUTOVER_AUTOMATION_EVIDENCE
+    .filter((entry) => {
+      let result = automationResultValue(valueFromEnvKeys(env, entry.statusEnvKeys));
+      if (result === "unknown") {
+        for (const record of phase65Records) {
+          result = cutoverAutomationResultFromRecord(record, entry.statusReportKeys);
+          if (result !== "unknown") break;
+          if (isRecord(record.evidence)) {
+            result = cutoverAutomationResultFromRecord(record.evidence, entry.statusReportKeys);
+            if (result !== "unknown") break;
+          }
+        }
+      }
+      return result === "fail";
+    })
+    .map((entry) => entry.label);
+  if (failedChecks.length > 0) {
+    const smokeFailed = failedChecks.includes("post-activation smoke-check evidence");
+    return {
+      name: "managedPostgresCutoverAutomation",
+      status: "degraded",
+      detail: smokeFailed
+        ? "Phase 65 post-activation smoke checks failed; rollback command guidance is required to return to the prior safe posture; activationAllowed=false; rollbackRequired=true"
+        : `Phase 65 managed Postgres cutover automation blocks activation because ${failedChecks.join(", ")} failed; activationAllowed=false`,
+      checkedAt,
+    };
+  }
+
+  const missingEvidence = MANAGED_POSTGRES_CUTOVER_AUTOMATION_EVIDENCE
+    .filter((entry) => {
+      if (reportAutomationReady) return false;
+      if (valueFromEnvKeys(env, entry.envKeys).length > 0) return false;
+      return !phase65Records.some((record) => {
+        const direct = valueFromRecord(record, entry.reportKeys);
+        const nested = isRecord(record.evidence) ? valueFromRecord(record.evidence, entry.reportKeys) : "";
+        return Boolean(direct || nested);
+      });
+    })
+    .map((entry) => entry.label);
+  if (missingEvidence.length > 0) {
+    return {
+      name: "managedPostgresCutoverAutomation",
+      status: "degraded",
+      detail: `Phase 65 managed Postgres cutover automation blocks activation; missing ${missingEvidence.join(", ")}; activationAllowed=false`,
+      checkedAt,
+    };
+  }
+
+  return {
+    name: "managedPostgresCutoverAutomation",
+    status: "ok",
+    detail: "Phase 65 managed Postgres cutover automation is ready with cutover preflight, activation dry-run, post-activation smoke checks, rollback command guidance, and monitoring thresholds; activationAllowed=true; releaseAllowed=false",
     checkedAt,
   };
 }
@@ -1583,6 +1826,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkManagedPostgresHorizontalWriterConcurrency(env, checkedAt, deploymentReports),
     checkDistributedDependencyEnforcement(env, checkedAt, deploymentReports),
     checkManagedPostgresRecoveryValidation(env, checkedAt, deploymentReports),
+    checkManagedPostgresCutoverAutomation(env, checkedAt, deploymentReports),
   ];
 
   return {
@@ -1618,6 +1862,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkManagedPostgresHorizontalWriterConcurrency(env, checkedAt, deploymentReports),
     checkDistributedDependencyEnforcement(env, checkedAt, deploymentReports),
     checkManagedPostgresRecoveryValidation(env, checkedAt, deploymentReports),
+    checkManagedPostgresCutoverAutomation(env, checkedAt, deploymentReports),
   ];
 
   return {

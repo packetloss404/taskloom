@@ -22,6 +22,7 @@ import {
   type Phase62ManagedPostgresHorizontalWriterHardeningGateReport,
   type Phase63DistributedDependencyEnforcementGateReport,
   type Phase64ManagedPostgresRecoveryValidationGateReport,
+  type Phase65CutoverRollbackAutomationGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -334,6 +335,33 @@ export interface ReleaseEvidenceBundle {
       phase64Phases65To66Pending: boolean;
       phase64PendingPhases: string[];
       phase64TopologyReleaseAllowed: boolean;
+      phase65CutoverRollbackAutomationGateRequired: boolean;
+      phase65HorizontalWriterTopologyRequested: boolean;
+      phase65Phase64ManagedPostgresRecoveryValidationReady: boolean;
+      phase65CutoverPreflightEvidenceRequired: boolean;
+      phase65CutoverPreflightEvidenceAttached: boolean;
+      phase65CutoverPreflightFailed: boolean;
+      phase65ActivationDryRunEvidenceRequired: boolean;
+      phase65ActivationDryRunEvidenceAttached: boolean;
+      phase65PostActivationSmokeCheckEvidenceRequired: boolean;
+      phase65PostActivationSmokeCheckEvidenceAttached: boolean;
+      phase65PostActivationSmokeCheckFailed: boolean;
+      phase65RollbackCommandGuidanceRequired: boolean;
+      phase65RollbackCommandGuidanceAttached: boolean;
+      phase65MonitoringThresholdEvidenceRequired: boolean;
+      phase65MonitoringThresholdEvidenceAttached: boolean;
+      phase65OperationsHealthCutoverStatusRequired: boolean;
+      phase65OperationsHealthCutoverStatusAttached: boolean;
+      phase65RollbackSafePostureEvidenceRequired: boolean;
+      phase65RollbackSafePostureEvidenceAttached: boolean;
+      phase65ActivationBlocked: boolean;
+      phase65RollbackToPriorSafePostureRequired: boolean;
+      phase65RollbackToPriorSafePostureProven: boolean;
+      phase65CutoverRollbackAutomationReady: boolean;
+      phase65FinalReleaseApprovalBlocked: true;
+      phase65Phase66Pending: boolean;
+      phase65PendingPhases: string[];
+      phase65TopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -485,6 +513,21 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE",
   "TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE",
   "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION",
+  "TASKLOOM_CUTOVER_PREFLIGHT_STATUS",
+  "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE",
+  "TASKLOOM_CUTOVER_PREFLIGHT_FAILED",
+  "TASKLOOM_ACTIVATION_DRY_RUN_STATUS",
+  "TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE",
+  "TASKLOOM_POST_ACTIVATION_SMOKE_STATUS",
+  "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE",
+  "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE",
+  "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED",
+  "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE",
+  "TASKLOOM_MONITORING_THRESHOLDS",
+  "TASKLOOM_MONITORING_THRESHOLD_EVIDENCE",
+  "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE",
+  "TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE",
+  "TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -1183,6 +1226,50 @@ function phase64ManagedPostgresRecoveryValidationGate(
   };
 }
 
+function phase65CutoverRollbackAutomationGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase64Gate: Phase64ManagedPostgresRecoveryValidationGateReport,
+): Phase65CutoverRollbackAutomationGateReport {
+  return asyncStoreBoundary.phase65CutoverRollbackAutomationGate ?? {
+    phase: "65",
+    required: false,
+    horizontalWriterTopologyRequested: false,
+    phase64ManagedPostgresRecoveryValidationReady:
+      phase64Gate.managedPostgresRecoveryValidationReady,
+    cutoverPreflightEvidenceRequired: false,
+    cutoverPreflightEvidenceAttached: false,
+    cutoverPreflightFailed: false,
+    activationDryRunEvidenceRequired: false,
+    activationDryRunEvidenceAttached: false,
+    postActivationSmokeCheckEvidenceRequired: false,
+    postActivationSmokeCheckEvidenceAttached: false,
+    postActivationSmokeCheckFailed: false,
+    rollbackCommandGuidanceRequired: false,
+    rollbackCommandGuidanceAttached: false,
+    monitoringThresholdEvidenceRequired: false,
+    monitoringThresholdEvidenceAttached: false,
+    operationsHealthCutoverStatusRequired: false,
+    operationsHealthCutoverStatusAttached: false,
+    rollbackSafePostureEvidenceRequired: false,
+    rollbackSafePostureEvidenceAttached: false,
+    activationBlocked: false,
+    rollbackToPriorSafePostureRequired: false,
+    rollbackToPriorSafePostureProven: false,
+    cutoverRollbackAutomationReady: false,
+    finalReleaseApprovalBlocked: true,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    phase66Pending: false,
+    pendingPhases: [],
+    releaseAllowed: true,
+    summary: "Phase 65 cutover/rollback automation is not required for this release posture.",
+    blockers: [],
+    nextSteps: ["Keep Phase 65 cutover preflight, dry-run, smoke-check, rollback, and monitoring-threshold evidence ready before any future horizontal writer activation claim."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -1192,6 +1279,16 @@ function attachmentEvidence(
     configured: configured(env[envKey]),
     ...redactValue(envKey, env[envKey]),
   };
+}
+
+function firstAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+  envKeys: readonly (keyof ReleaseReadinessEnv)[],
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  for (const envKey of envKeys) {
+    if (configured(env[envKey])) return attachmentEvidence(env, envKey);
+  }
+  return attachmentEvidence(env, envKeys[0]);
 }
 
 function phase55ReviewAttachmentEvidence(
@@ -1521,6 +1618,57 @@ function phase64RecoveryTimeExpectationAttachmentEvidence(
   return attachmentEvidence(env, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION");
 }
 
+function phase65CutoverPreflightAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE");
+}
+
+function phase65ActivationDryRunAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE");
+}
+
+function phase65PostActivationSmokeCheckAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return firstAttachmentEvidence(env, [
+    "TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE",
+    "TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE",
+  ]);
+}
+
+function phase65RollbackCommandGuidanceAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE");
+}
+
+function phase65MonitoringThresholdAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return firstAttachmentEvidence(env, [
+    "TASKLOOM_MONITORING_THRESHOLDS",
+    "TASKLOOM_MONITORING_THRESHOLD_EVIDENCE",
+  ]);
+}
+
+function phase65OperationsHealthCutoverStatusAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE");
+}
+
+function phase65RollbackSafePostureAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return firstAttachmentEvidence(env, [
+    "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE",
+    "TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE",
+  ]);
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -1542,6 +1690,7 @@ function buildAttachments(
   const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
   const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
   const phase64Gate = phase64ManagedPostgresRecoveryValidationGate(asyncStoreBoundary, phase63Gate);
+  const phase65Gate = phase65CutoverRollbackAutomationGate(asyncStoreBoundary, phase64Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -2100,6 +2249,76 @@ function buildAttachments(
       ...phase64RecoveryTimeExpectationAttachmentEvidence(env),
     },
     {
+      id: "phase-65-cutover-preflight-evidence",
+      label: "Phase 65 cutover preflight evidence",
+      format: "json",
+      required: phase65Gate.cutoverPreflightEvidenceRequired,
+      summary: phase65Gate.cutoverPreflightEvidenceAttached
+        ? "Phase 65 cutover preflight evidence is attached."
+        : "Phase 65 cutover preflight evidence is required before activation.",
+      ...phase65CutoverPreflightAttachmentEvidence(env),
+    },
+    {
+      id: "phase-65-activation-dry-run-evidence",
+      label: "Phase 65 activation dry-run evidence",
+      format: "json",
+      required: phase65Gate.activationDryRunEvidenceRequired,
+      summary: phase65Gate.activationDryRunEvidenceAttached
+        ? "Phase 65 activation dry-run evidence is attached."
+        : "Phase 65 activation dry-run evidence is required before activation.",
+      ...phase65ActivationDryRunAttachmentEvidence(env),
+    },
+    {
+      id: "phase-65-post-activation-smoke-check-evidence",
+      label: "Phase 65 post-activation smoke-check evidence",
+      format: "json",
+      required: phase65Gate.postActivationSmokeCheckEvidenceRequired,
+      summary: phase65Gate.postActivationSmokeCheckEvidenceAttached
+        ? "Phase 65 post-activation smoke-check evidence is attached."
+        : "Phase 65 post-activation smoke-check evidence is required before activation.",
+      ...phase65PostActivationSmokeCheckAttachmentEvidence(env),
+    },
+    {
+      id: "phase-65-rollback-command-guidance",
+      label: "Phase 65 rollback command guidance",
+      format: "json",
+      required: phase65Gate.rollbackCommandGuidanceRequired,
+      summary: phase65Gate.rollbackCommandGuidanceAttached
+        ? "Phase 65 rollback command guidance is attached."
+        : "Phase 65 rollback command guidance is required before activation.",
+      ...phase65RollbackCommandGuidanceAttachmentEvidence(env),
+    },
+    {
+      id: "phase-65-monitoring-threshold-evidence",
+      label: "Phase 65 monitoring threshold evidence",
+      format: "json",
+      required: phase65Gate.monitoringThresholdEvidenceRequired,
+      summary: phase65Gate.monitoringThresholdEvidenceAttached
+        ? "Phase 65 monitoring threshold evidence is attached."
+        : "Phase 65 monitoring threshold evidence is required before activation.",
+      ...phase65MonitoringThresholdAttachmentEvidence(env),
+    },
+    {
+      id: "phase-65-operations-health-cutover-status-evidence",
+      label: "Phase 65 operations health cutover status evidence",
+      format: "json",
+      required: phase65Gate.operationsHealthCutoverStatusRequired,
+      summary: phase65Gate.operationsHealthCutoverStatusAttached
+        ? "Phase 65 operations health cutover status evidence is attached."
+        : "Phase 65 operations health cutover status evidence is required before activation.",
+      ...phase65OperationsHealthCutoverStatusAttachmentEvidence(env),
+    },
+    {
+      id: "phase-65-rollback-safe-posture-evidence",
+      label: "Phase 65 rollback safe posture evidence",
+      format: "json",
+      required: phase65Gate.rollbackSafePostureEvidenceRequired,
+      summary: phase65Gate.rollbackSafePostureEvidenceAttached
+        ? "Phase 65 rollback safe posture evidence is attached."
+        : "Phase 65 rollback safe posture evidence is required before activation.",
+      ...phase65RollbackSafePostureAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -2227,6 +2446,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase62Gate = phase62ManagedPostgresHorizontalWriterHardeningGate(asyncStoreBoundary);
   const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
   const phase64Gate = phase64ManagedPostgresRecoveryValidationGate(asyncStoreBoundary, phase63Gate);
+  const phase65Gate = phase65CutoverRollbackAutomationGate(asyncStoreBoundary, phase64Gate);
 
   return {
     phase: "44",
@@ -2505,6 +2725,33 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase64Phases65To66Pending: phase64Gate.phases65To66Pending,
         phase64PendingPhases: phase64Gate.pendingPhases,
         phase64TopologyReleaseAllowed: phase64Gate.releaseAllowed,
+        phase65CutoverRollbackAutomationGateRequired: phase65Gate.required,
+        phase65HorizontalWriterTopologyRequested: phase65Gate.horizontalWriterTopologyRequested,
+        phase65Phase64ManagedPostgresRecoveryValidationReady: phase65Gate.phase64ManagedPostgresRecoveryValidationReady,
+        phase65CutoverPreflightEvidenceRequired: phase65Gate.cutoverPreflightEvidenceRequired,
+        phase65CutoverPreflightEvidenceAttached: phase65Gate.cutoverPreflightEvidenceAttached,
+        phase65CutoverPreflightFailed: phase65Gate.cutoverPreflightFailed,
+        phase65ActivationDryRunEvidenceRequired: phase65Gate.activationDryRunEvidenceRequired,
+        phase65ActivationDryRunEvidenceAttached: phase65Gate.activationDryRunEvidenceAttached,
+        phase65PostActivationSmokeCheckEvidenceRequired: phase65Gate.postActivationSmokeCheckEvidenceRequired,
+        phase65PostActivationSmokeCheckEvidenceAttached: phase65Gate.postActivationSmokeCheckEvidenceAttached,
+        phase65PostActivationSmokeCheckFailed: phase65Gate.postActivationSmokeCheckFailed,
+        phase65RollbackCommandGuidanceRequired: phase65Gate.rollbackCommandGuidanceRequired,
+        phase65RollbackCommandGuidanceAttached: phase65Gate.rollbackCommandGuidanceAttached,
+        phase65MonitoringThresholdEvidenceRequired: phase65Gate.monitoringThresholdEvidenceRequired,
+        phase65MonitoringThresholdEvidenceAttached: phase65Gate.monitoringThresholdEvidenceAttached,
+        phase65OperationsHealthCutoverStatusRequired: phase65Gate.operationsHealthCutoverStatusRequired,
+        phase65OperationsHealthCutoverStatusAttached: phase65Gate.operationsHealthCutoverStatusAttached,
+        phase65RollbackSafePostureEvidenceRequired: phase65Gate.rollbackSafePostureEvidenceRequired,
+        phase65RollbackSafePostureEvidenceAttached: phase65Gate.rollbackSafePostureEvidenceAttached,
+        phase65ActivationBlocked: phase65Gate.activationBlocked,
+        phase65RollbackToPriorSafePostureRequired: phase65Gate.rollbackToPriorSafePostureRequired,
+        phase65RollbackToPriorSafePostureProven: phase65Gate.rollbackToPriorSafePostureProven,
+        phase65CutoverRollbackAutomationReady: phase65Gate.cutoverRollbackAutomationReady,
+        phase65FinalReleaseApprovalBlocked: phase65Gate.finalReleaseApprovalBlocked,
+        phase65Phase66Pending: phase65Gate.phase66Pending,
+        phase65PendingPhases: phase65Gate.pendingPhases,
+        phase65TopologyReleaseAllowed: phase65Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

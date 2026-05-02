@@ -37,6 +37,56 @@ function findSubsystem(report: ReturnType<typeof getOperationsHealth>, name: str
   return subsystem;
 }
 
+function completePhase64Env(): NodeJS.ProcessEnv {
+  return {
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
+      "artifacts/phase62/horizontal-writer-hardening.md",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
+      "artifacts/phase62/concurrency-tests.tap",
+    TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
+      "artifacts/phase62/transaction-retry.md",
+    TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.example.com/taskloom/check",
+    TASKLOOM_SCHEDULER_LEADER_MODE: "http",
+    TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://coord.example.com/taskloom/scheduler-leader",
+    TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
+    TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63/durable",
+    TASKLOOM_ACCESS_LOG_MODE: "stdout",
+    TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63/stdout-shipper",
+    TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
+    TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.example.com/taskloom",
+    TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63/webhook",
+    TASKLOOM_HEALTH_MONITORING_EVIDENCE: "monitoring://phase63/health",
+    TASKLOOM_RECOVERY_BACKUP_RESTORE_EVIDENCE: "artifacts/phase64/backup-restore.md",
+    TASKLOOM_RECOVERY_PITR_REHEARSAL_EVIDENCE: "artifacts/phase64/pitr.md",
+    TASKLOOM_RECOVERY_FAILOVER_REHEARSAL_EVIDENCE: "artifacts/phase64/failover.md",
+    TASKLOOM_RECOVERY_DATA_INTEGRITY_VALIDATION: "artifacts/phase64/integrity.md",
+    TASKLOOM_RECOVERY_TIME_EXPECTATIONS: "RTO<=15m RPO<=5m",
+  };
+}
+
+function completePhase65Env(): NodeJS.ProcessEnv {
+  return {
+    ...completePhase64Env(),
+    TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_EVIDENCE:
+      "artifacts/phase65/cutover-preflight.json",
+    TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_STATUS: "passed",
+    TASKLOOM_MANAGED_POSTGRES_ACTIVATION_DRY_RUN_EVIDENCE:
+      "artifacts/phase65/activation-dry-run.json",
+    TASKLOOM_MANAGED_POSTGRES_ACTIVATION_DRY_RUN_STATUS: "passed",
+    TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_EVIDENCE:
+      "artifacts/phase65/post-activation-smoke.json",
+    TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_STATUS: "passed",
+    TASKLOOM_MANAGED_POSTGRES_ROLLBACK_COMMAND_GUIDANCE:
+      "npm run deployment:managed-postgres:rollback -- --to-prior-safe-posture",
+    TASKLOOM_MANAGED_POSTGRES_MONITORING_THRESHOLDS:
+      "error_rate<1%; p95<750ms; queue_lag<60s; db_connections<80%",
+  };
+}
+
 test("default healthy deps yield overall ok with disabled accessLog", () => {
   const report = getOperationsHealth(baseDeps());
   assert.equal(report.overall, "ok");
@@ -44,6 +94,7 @@ test("default healthy deps yield overall ok with disabled accessLog", () => {
   assert.equal(findSubsystem(report, "scheduler").status, "ok");
   assert.equal(findSubsystem(report, "accessLog").status, "disabled");
   assert.equal(findSubsystem(report, "managedPostgresRecoveryValidation").status, "disabled");
+  assert.equal(findSubsystem(report, "managedPostgresCutoverAutomation").status, "disabled");
   assert.match(findSubsystem(report, "scheduler").detail, /ticksSinceStart=7/);
   assert.equal(report.generatedAt, "2026-04-26T10:00:01.000Z");
 });
@@ -316,4 +367,73 @@ test("managed Postgres recovery validation health is ok when Phase 64 evidence i
   assert.match(recovery.detail, /active-active, regional runtime, and SQLite-distributed support remain unsupported/i);
   assert.match(recovery.detail, /activationAllowed=true/);
   assert.match(recovery.detail, /releaseAllowed=false/);
+});
+
+test("managed Postgres cutover automation health blocks activation when Phase 65 evidence is missing", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: completePhase64Env(),
+    }),
+  );
+  const cutover = findSubsystem(report, "managedPostgresCutoverAutomation");
+
+  assert.equal(cutover.status, "degraded");
+  assert.match(cutover.detail, /Phase 65/);
+  assert.match(cutover.detail, /cutover preflight evidence/);
+  assert.match(cutover.detail, /activation dry-run evidence/);
+  assert.match(cutover.detail, /post-activation smoke-check evidence/);
+  assert.match(cutover.detail, /rollback command guidance/);
+  assert.match(cutover.detail, /monitoring thresholds/);
+  assert.match(cutover.detail, /activationAllowed=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("managed Postgres cutover automation health blocks activation when preflight fails", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: {
+        ...completePhase65Env(),
+        TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_STATUS: "failed",
+      },
+    }),
+  );
+  const cutover = findSubsystem(report, "managedPostgresCutoverAutomation");
+
+  assert.equal(cutover.status, "degraded");
+  assert.match(cutover.detail, /cutover preflight evidence failed/i);
+  assert.match(cutover.detail, /activationAllowed=false/);
+});
+
+test("managed Postgres cutover automation health requires rollback after smoke failure", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: {
+        ...completePhase65Env(),
+        TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_STATUS: "failed",
+      },
+    }),
+  );
+  const cutover = findSubsystem(report, "managedPostgresCutoverAutomation");
+
+  assert.equal(cutover.status, "degraded");
+  assert.match(cutover.detail, /post-activation smoke checks failed/i);
+  assert.match(cutover.detail, /prior safe posture/i);
+  assert.match(cutover.detail, /rollbackRequired=true/);
+  assert.match(cutover.detail, /activationAllowed=false/);
+});
+
+test("managed Postgres cutover automation health is ok when all Phase 65 inputs are present", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: completePhase65Env(),
+    }),
+  );
+  const cutover = findSubsystem(report, "managedPostgresCutoverAutomation");
+
+  assert.equal(cutover.status, "ok");
+  assert.match(cutover.detail, /cutover preflight, activation dry-run, post-activation smoke checks/i);
+  assert.match(cutover.detail, /rollback command guidance/);
+  assert.match(cutover.detail, /monitoring thresholds/);
+  assert.match(cutover.detail, /activationAllowed=true/);
+  assert.match(cutover.detail, /releaseAllowed=false/);
 });

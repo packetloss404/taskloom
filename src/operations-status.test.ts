@@ -163,6 +163,25 @@ function completeRecoveryValidationEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function completeCutoverAutomationEnv(): NodeJS.ProcessEnv {
+  return {
+    ...completeRecoveryValidationEnv(),
+    TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_EVIDENCE:
+      "artifacts/phase65/cutover-preflight.json",
+    TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_STATUS: "passed",
+    TASKLOOM_MANAGED_POSTGRES_ACTIVATION_DRY_RUN_EVIDENCE:
+      "artifacts/phase65/activation-dry-run.json",
+    TASKLOOM_MANAGED_POSTGRES_ACTIVATION_DRY_RUN_STATUS: "passed",
+    TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_EVIDENCE:
+      "artifacts/phase65/post-activation-smoke.json",
+    TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_STATUS: "passed",
+    TASKLOOM_MANAGED_POSTGRES_ROLLBACK_COMMAND_GUIDANCE:
+      "npm run deployment:managed-postgres:rollback -- --to-prior-safe-posture",
+    TASKLOOM_MANAGED_POSTGRES_MONITORING_THRESHOLDS:
+      "error_rate<1%; p95<750ms; queue_lag<60s; db_connections<80%",
+  };
+}
+
 type DistributedDependencyKey =
   | "distributedRateLimiting"
   | "schedulerCoordination"
@@ -253,6 +272,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.managedPostgresRecoveryValidation.activeActiveDatabaseSupported, false);
   assert.equal(status.managedPostgresRecoveryValidation.regionalRuntimeSupported, false);
   assert.equal(status.managedPostgresRecoveryValidation.pitrRuntimeSupported, false);
+  assert.equal(status.managedPostgresCutoverAutomation.phase, "65");
+  assert.equal(status.managedPostgresCutoverAutomation.status, "not-required");
+  assert.equal(status.managedPostgresCutoverAutomation.cutoverAutomationReady, false);
+  assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, false);
+  assert.equal(status.managedPostgresCutoverAutomation.rollbackRequired, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -1845,6 +1869,131 @@ test("managedPostgresRecoveryValidation can derive Phase 64 evidence from deploy
   );
   assert.equal(status.managedPostgresRecoveryValidation.activationAllowed, true);
   assert.equal(status.managedPostgresRecoveryValidation.releaseAllowed, false);
+});
+
+test("managedPostgresCutoverAutomation blocks activation when Phase 65 evidence is missing after recovery validation", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeRecoveryValidationEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresCutoverAutomation.phase, "65");
+  assert.equal(status.managedPostgresCutoverAutomation.required, true);
+  assert.equal(status.managedPostgresCutoverAutomation.phase64RecoveryValidated, true);
+  assert.equal(status.managedPostgresCutoverAutomation.status, "blocked");
+  assert.equal(status.managedPostgresCutoverAutomation.automationStatus, "blocked");
+  assert.deepEqual(status.managedPostgresCutoverAutomation.missingEvidence, [
+    "cutoverPreflight",
+    "activationDryRun",
+    "postActivationSmoke",
+    "rollbackCommandGuidance",
+    "monitoringThresholds",
+  ]);
+  assert.equal(status.managedPostgresCutoverAutomation.activationBlocked, true);
+  assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, false);
+  assert.match(status.managedPostgresCutoverAutomation.summary, /blocks activation/i);
+});
+
+test("managedPostgresCutoverAutomation blocks activation when preflight fails", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeCutoverAutomationEnv(),
+      TASKLOOM_MANAGED_POSTGRES_CUTOVER_PREFLIGHT_STATUS: "failed",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresCutoverAutomation.status, "blocked");
+  assert.equal(status.managedPostgresCutoverAutomation.automationStatus, "preflight-failed");
+  assert.equal(status.managedPostgresCutoverAutomation.cutoverPreflight.status, "failed");
+  assert.deepEqual(status.managedPostgresCutoverAutomation.failedChecks, ["cutoverPreflight"]);
+  assert.equal(status.managedPostgresCutoverAutomation.cutoverPreflightFailed, true);
+  assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, false);
+  assert.equal(status.managedPostgresCutoverAutomation.rollbackRequired, false);
+});
+
+test("managedPostgresCutoverAutomation marks rollback required when smoke checks fail", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeCutoverAutomationEnv(),
+      TASKLOOM_MANAGED_POSTGRES_POST_ACTIVATION_SMOKE_STATUS: "failed",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresCutoverAutomation.status, "rollback-required");
+  assert.equal(status.managedPostgresCutoverAutomation.automationStatus, "smoke-failed");
+  assert.equal(status.managedPostgresCutoverAutomation.postActivationSmoke.status, "failed");
+  assert.deepEqual(status.managedPostgresCutoverAutomation.failedChecks, ["postActivationSmoke"]);
+  assert.equal(status.managedPostgresCutoverAutomation.postActivationSmokeFailed, true);
+  assert.equal(status.managedPostgresCutoverAutomation.rollbackRequired, true);
+  assert.equal(status.managedPostgresCutoverAutomation.priorSafePostureRequired, true);
+  assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, false);
+  assert.match(status.managedPostgresCutoverAutomation.summary, /prior safe posture/i);
+});
+
+test("managedPostgresCutoverAutomation is ready when all Phase 65 inputs are present", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeCutoverAutomationEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.managedPostgresCutoverAutomation.status, "ready");
+  assert.equal(status.managedPostgresCutoverAutomation.automationStatus, "ready");
+  assert.equal(status.managedPostgresCutoverAutomation.cutoverAutomationReady, true);
+  assert.equal(status.managedPostgresCutoverAutomation.cutoverPreflightPassed, true);
+  assert.equal(status.managedPostgresCutoverAutomation.activationDryRunPassed, true);
+  assert.equal(status.managedPostgresCutoverAutomation.postActivationSmokePassed, true);
+  assert.deepEqual(status.managedPostgresCutoverAutomation.missingEvidence, []);
+  assert.deepEqual(status.managedPostgresCutoverAutomation.failedChecks, []);
+  assert.equal(status.managedPostgresCutoverAutomation.rollbackCommandGuidance.source, "env");
+  assert.equal(status.managedPostgresCutoverAutomation.activationBlocked, false);
+  assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, true);
+  assert.equal(status.managedPostgresCutoverAutomation.releaseAllowed, false);
+});
+
+test("managedPostgresCutoverAutomation can derive Phase 65 evidence from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeRecoveryValidationEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({
+      phase65: {
+        required: true,
+        cutoverPreflight: "artifacts/reports/phase65-preflight.json",
+        cutoverPreflightStatus: "passed",
+        activationDryRun: "artifacts/reports/phase65-dry-run.json",
+        activationDryRunStatus: "passed",
+        postActivationSmoke: "artifacts/reports/phase65-smoke.json",
+        postActivationSmokeStatus: "passed",
+        rollbackCommandGuidance: "npm run deployment:managed-postgres:rollback",
+        monitoringThresholds: "error_rate<1%; db_connections<80%",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.managedPostgresCutoverAutomation.status, "ready");
+  assert.equal(status.managedPostgresCutoverAutomation.cutoverPreflight.source, "releaseEvidence");
+  assert.equal(
+    status.managedPostgresCutoverAutomation.cutoverPreflight.value,
+    "artifacts/reports/phase65-preflight.json",
+  );
+  assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, true);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

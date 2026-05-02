@@ -200,6 +200,15 @@ test("operations status route returns the report shape for an admin-equivalent o
   assert.equal(managedPostgresRecoveryValidation.activeActiveDatabaseSupported, false);
   assert.equal(managedPostgresRecoveryValidation.regionalRuntimeSupported, false);
   assert.equal(managedPostgresRecoveryValidation.pitrRuntimeSupported, false);
+  assert.ok(
+    body.managedPostgresCutoverAutomation &&
+      typeof body.managedPostgresCutoverAutomation === "object",
+  );
+  const managedPostgresCutoverAutomation =
+    body.managedPostgresCutoverAutomation as Record<string, unknown>;
+  assert.equal(managedPostgresCutoverAutomation.phase, "65");
+  assert.equal(managedPostgresCutoverAutomation.activationAllowed, false);
+  assert.equal(managedPostgresCutoverAutomation.rollbackRequired, false);
   assert.ok(body.runtime && typeof body.runtime === "object");
   const runtime = body.runtime as { nodeVersion?: unknown };
   assert.equal(runtime.nodeVersion, process.versions.node);

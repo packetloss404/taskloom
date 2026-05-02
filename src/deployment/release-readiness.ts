@@ -88,6 +88,16 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE?: string;
   TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE?: string;
   TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION?: string;
+  TASKLOOM_ACTIVATION_DRY_RUN_FAILED?: string;
+  TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE?: string;
+  TASKLOOM_CUTOVER_PREFLIGHT_FAILED?: string;
+  TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE?: string;
+  TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE?: string;
+  TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED?: string;
+  TASKLOOM_ROLLBACK_COMMAND_GUIDANCE?: string;
+  TASKLOOM_MONITORING_THRESHOLD_EVIDENCE?: string;
+  TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE?: string;
+  TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -152,6 +162,7 @@ export interface AsyncStoreBoundaryReport {
   phase62ManagedPostgresHorizontalWriterHardeningGate?: Phase62ManagedPostgresHorizontalWriterHardeningGateReport;
   phase63DistributedDependencyEnforcementGate?: Phase63DistributedDependencyEnforcementGateReport;
   phase64ManagedPostgresRecoveryValidationGate?: Phase64ManagedPostgresRecoveryValidationGateReport;
+  phase65CutoverRollbackAutomationGate?: Phase65CutoverRollbackAutomationGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -453,6 +464,44 @@ export interface Phase64ManagedPostgresRecoveryValidationGateReport {
   nextSteps: string[];
 }
 
+export interface Phase65CutoverRollbackAutomationGateReport {
+  phase: "65";
+  required: boolean;
+  horizontalWriterTopologyRequested: boolean;
+  phase64ManagedPostgresRecoveryValidationReady: boolean;
+  cutoverPreflightEvidenceRequired: boolean;
+  cutoverPreflightEvidenceAttached: boolean;
+  cutoverPreflightFailed: boolean;
+  activationDryRunEvidenceRequired: boolean;
+  activationDryRunEvidenceAttached: boolean;
+  postActivationSmokeCheckEvidenceRequired: boolean;
+  postActivationSmokeCheckEvidenceAttached: boolean;
+  postActivationSmokeCheckFailed: boolean;
+  rollbackCommandGuidanceRequired: boolean;
+  rollbackCommandGuidanceAttached: boolean;
+  monitoringThresholdEvidenceRequired: boolean;
+  monitoringThresholdEvidenceAttached: boolean;
+  operationsHealthCutoverStatusRequired: boolean;
+  operationsHealthCutoverStatusAttached: boolean;
+  rollbackSafePostureEvidenceRequired: boolean;
+  rollbackSafePostureEvidenceAttached: boolean;
+  activationBlocked: boolean;
+  rollbackToPriorSafePostureRequired: boolean;
+  rollbackToPriorSafePostureProven: boolean;
+  cutoverRollbackAutomationReady: boolean;
+  finalReleaseApprovalBlocked: true;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  phase66Pending: boolean;
+  pendingPhases: string[];
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
 export interface Phase53MultiWriterTopologyEvidenceItem {
   id:
     | "topology-owner"
@@ -517,6 +566,20 @@ function normalize(value: string | undefined): string {
 
 function truthy(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes(normalize(value));
+}
+
+function firstCleanValue(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const cleaned = clean(value);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+function phase65StatusFailed(value: string | undefined): boolean {
+  const normalized = normalize(value);
+  return ["fail", "failed", "failure", "error", "errored", "red", "blocked", "rollback-required"].includes(normalized) ||
+    normalized.startsWith("fail:");
 }
 
 const PHASE_55_APPROVED_REVIEW_STATUSES = new Set([
@@ -2155,6 +2218,215 @@ function buildPhase64ManagedPostgresRecoveryValidationGate(
   };
 }
 
+function buildPhase65CutoverRollbackAutomationGate(
+  horizontalWriterIntent: boolean,
+  phase64Gate: Phase64ManagedPostgresRecoveryValidationGateReport,
+  env: ReleaseReadinessEnv,
+): Phase65CutoverRollbackAutomationGateReport {
+  const cutoverPreflightEvidenceAttached =
+    clean(env.TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE).length > 0;
+  const cutoverPreflightFailed =
+    truthy(env.TASKLOOM_CUTOVER_PREFLIGHT_FAILED) ||
+    phase65StatusFailed(env.TASKLOOM_CUTOVER_PREFLIGHT_STATUS);
+  const activationDryRunEvidenceAttached =
+    clean(env.TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE).length > 0;
+  const activationDryRunFailed =
+    truthy(env.TASKLOOM_ACTIVATION_DRY_RUN_FAILED) ||
+    phase65StatusFailed(env.TASKLOOM_ACTIVATION_DRY_RUN_STATUS);
+  const postActivationSmokeCheckEvidenceAttached =
+    firstCleanValue(
+      env.TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE,
+      env.TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_EVIDENCE,
+    ).length > 0;
+  const postActivationSmokeCheckFailed =
+    truthy(env.TASKLOOM_POST_ACTIVATION_SMOKE_CHECK_FAILED) ||
+    phase65StatusFailed(env.TASKLOOM_POST_ACTIVATION_SMOKE_STATUS);
+  const rollbackCommandGuidanceAttached =
+    clean(env.TASKLOOM_ROLLBACK_COMMAND_GUIDANCE).length > 0;
+  const monitoringThresholdEvidenceAttached =
+    firstCleanValue(
+      env.TASKLOOM_MONITORING_THRESHOLDS,
+      env.TASKLOOM_MONITORING_THRESHOLD_EVIDENCE,
+    ).length > 0;
+  const operationsHealthCutoverStatusAttached =
+    clean(env.TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE).length > 0;
+  const rollbackSafePostureEvidenceAttached =
+    firstCleanValue(
+      env.TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE,
+      env.TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE,
+    ).length > 0;
+  const phase64ManagedPostgresRecoveryValidationReady =
+    phase64Gate.managedPostgresRecoveryValidationReady;
+  const rollbackToPriorSafePostureRequired =
+    cutoverPreflightFailed || activationDryRunFailed || postActivationSmokeCheckFailed;
+  const rollbackToPriorSafePostureProven =
+    rollbackToPriorSafePostureRequired && rollbackSafePostureEvidenceAttached;
+  const cutoverRollbackAutomationReady =
+    horizontalWriterIntent &&
+    phase64ManagedPostgresRecoveryValidationReady &&
+    cutoverPreflightEvidenceAttached &&
+    !cutoverPreflightFailed &&
+    activationDryRunEvidenceAttached &&
+    postActivationSmokeCheckEvidenceAttached &&
+    !postActivationSmokeCheckFailed &&
+    rollbackCommandGuidanceAttached &&
+    monitoringThresholdEvidenceAttached &&
+    operationsHealthCutoverStatusAttached &&
+    rollbackSafePostureEvidenceAttached;
+  const activationBlocked =
+    horizontalWriterIntent && !cutoverRollbackAutomationReady;
+  const pendingPhases = horizontalWriterIntent ? ["66"] : [];
+
+  if (!horizontalWriterIntent) {
+    return {
+      phase: "65",
+      required: false,
+      horizontalWriterTopologyRequested: false,
+      phase64ManagedPostgresRecoveryValidationReady,
+      cutoverPreflightEvidenceRequired: false,
+      cutoverPreflightEvidenceAttached,
+      cutoverPreflightFailed,
+      activationDryRunEvidenceRequired: false,
+      activationDryRunEvidenceAttached,
+      postActivationSmokeCheckEvidenceRequired: false,
+      postActivationSmokeCheckEvidenceAttached,
+      postActivationSmokeCheckFailed,
+      rollbackCommandGuidanceRequired: false,
+      rollbackCommandGuidanceAttached,
+      monitoringThresholdEvidenceRequired: false,
+      monitoringThresholdEvidenceAttached,
+      operationsHealthCutoverStatusRequired: false,
+      operationsHealthCutoverStatusAttached,
+      rollbackSafePostureEvidenceRequired: false,
+      rollbackSafePostureEvidenceAttached,
+      activationBlocked: false,
+      rollbackToPriorSafePostureRequired,
+      rollbackToPriorSafePostureProven,
+      cutoverRollbackAutomationReady: false,
+      finalReleaseApprovalBlocked: true,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      phase66Pending: false,
+      pendingPhases,
+      releaseAllowed: true,
+      summary: "Phase 65 cutover/rollback automation is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 65 cutover preflight, dry-run, smoke-check, rollback, and monitoring-threshold evidence ready before any future horizontal writer activation claim."],
+    };
+  }
+
+  return {
+    phase: "65",
+    required: true,
+    horizontalWriterTopologyRequested: true,
+    phase64ManagedPostgresRecoveryValidationReady,
+    cutoverPreflightEvidenceRequired: true,
+    cutoverPreflightEvidenceAttached,
+    cutoverPreflightFailed,
+    activationDryRunEvidenceRequired: true,
+    activationDryRunEvidenceAttached,
+    postActivationSmokeCheckEvidenceRequired: true,
+    postActivationSmokeCheckEvidenceAttached,
+    postActivationSmokeCheckFailed,
+    rollbackCommandGuidanceRequired: true,
+    rollbackCommandGuidanceAttached,
+    monitoringThresholdEvidenceRequired: true,
+    monitoringThresholdEvidenceAttached,
+    operationsHealthCutoverStatusRequired: true,
+    operationsHealthCutoverStatusAttached,
+    rollbackSafePostureEvidenceRequired: true,
+    rollbackSafePostureEvidenceAttached,
+    activationBlocked,
+    rollbackToPriorSafePostureRequired,
+    rollbackToPriorSafePostureProven,
+    cutoverRollbackAutomationReady,
+    finalReleaseApprovalBlocked: true,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    phase66Pending: true,
+    pendingPhases,
+    releaseAllowed: false,
+    summary: cutoverRollbackAutomationReady
+      ? "Phase 65 cutover/rollback automation is complete with preflight, activation dry-run, smoke checks, rollback guidance, monitoring thresholds, operations health status evidence, and prior safe posture proof; final release approval remains blocked pending Phase 66."
+      : rollbackToPriorSafePostureRequired
+      ? "Phase 65 cutover/rollback automation detected a failed preflight or smoke check; activation remains blocked and rollback to the prior safe posture must be proven."
+      : "Phase 65 cutover/rollback automation requires cutover preflight, activation dry-run, post-activation smoke checks, rollback guidance, monitoring thresholds, operations health status evidence, and prior safe posture proof before activation.",
+    blockers: [
+      ...(!phase64ManagedPostgresRecoveryValidationReady
+        ? ["Phase 65 cutover/rollback automation requires complete Phase 64 recovery validation first."]
+        : []),
+      ...(!cutoverPreflightEvidenceAttached
+        ? ["Phase 65 cutover preflight evidence is required in TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE."]
+        : []),
+      ...(cutoverPreflightFailed
+        ? ["Phase 65 cutover preflight failed; activation must remain blocked until operators prove rollback or prior safe posture."]
+        : []),
+      ...(!activationDryRunEvidenceAttached
+        ? ["Phase 65 activation dry-run evidence is required in TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE."]
+        : []),
+      ...(!postActivationSmokeCheckEvidenceAttached
+        ? ["Phase 65 post-activation smoke-check evidence is required in TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE."]
+        : []),
+      ...(postActivationSmokeCheckFailed
+        ? ["Phase 65 post-activation smoke checks failed; rollback to the prior safe posture is required before any further activation attempt."]
+        : []),
+      ...(!rollbackCommandGuidanceAttached
+        ? ["Phase 65 rollback command guidance is required in TASKLOOM_ROLLBACK_COMMAND_GUIDANCE."]
+        : []),
+      ...(!monitoringThresholdEvidenceAttached
+        ? ["Phase 65 monitoring threshold evidence is required in TASKLOOM_MONITORING_THRESHOLDS."]
+        : []),
+      ...(!operationsHealthCutoverStatusAttached
+        ? ["Phase 65 operations health cutover/activation status evidence is required in TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE."]
+        : []),
+      ...(!rollbackSafePostureEvidenceAttached
+        ? ["Phase 65 rollback or prior safe posture evidence is required in TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE."]
+        : []),
+      ...(rollbackToPriorSafePostureRequired && !rollbackToPriorSafePostureProven
+        ? ["Phase 65 failed preflight, dry-run, or smoke checks require TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE proving rollback to the prior safe posture."]
+        : []),
+      "Phase 65 does not grant final release approval; Phase 66 final release closure remains required.",
+    ],
+    nextSteps: [
+      ...(!phase64ManagedPostgresRecoveryValidationReady
+        ? ["Complete Phase 64 managed Postgres recovery validation before claiming Phase 65 cutover/rollback automation."]
+        : []),
+      ...(!cutoverPreflightEvidenceAttached
+        ? ["Attach TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE with preflight output proving activation can proceed."]
+        : []),
+      ...(cutoverPreflightFailed
+        ? ["Keep activation blocked after failed preflight and attach rollback or prior safe posture proof before retrying."]
+        : []),
+      ...(!activationDryRunEvidenceAttached
+        ? ["Attach TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE with dry-run output for the activation command path."]
+        : []),
+      ...(!postActivationSmokeCheckEvidenceAttached
+        ? ["Attach TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE with post-activation smoke-check output."]
+        : []),
+      ...(postActivationSmokeCheckFailed
+        ? ["Run rollback guidance, verify the prior safe posture, and attach TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE before another activation attempt."]
+        : []),
+      ...(!rollbackCommandGuidanceAttached
+        ? ["Attach TASKLOOM_ROLLBACK_COMMAND_GUIDANCE with the operator rollback command and runbook guidance."]
+        : []),
+      ...(!monitoringThresholdEvidenceAttached
+        ? ["Attach TASKLOOM_MONITORING_THRESHOLDS with alert thresholds for activation and rollback decisions."]
+        : []),
+      ...(!operationsHealthCutoverStatusAttached
+        ? ["Attach TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE proving activation and cutover status are surfaced in operations health."]
+        : []),
+      ...(!rollbackSafePostureEvidenceAttached
+        ? ["Attach TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE proving the rollback command returns the deployment to the prior safe posture."]
+        : []),
+      "Keep final release approval blocked until Phase 66 closes the release.",
+    ],
+  };
+}
+
 export function buildManagedDatabaseRuntimeBoundaryReport(
   managedDatabaseTopology: ManagedDatabaseTopologyReport,
   managedDatabaseRuntimeGuard: ManagedDatabaseRuntimeGuardReport,
@@ -2357,6 +2629,12 @@ export function buildAsyncStoreBoundaryReport(
       phase63DistributedDependencyEnforcementGate,
       env,
     );
+  const phase65CutoverRollbackAutomationGate =
+    buildPhase65CutoverRollbackAutomationGate(
+      horizontalWriterIntent,
+      phase64ManagedPostgresRecoveryValidationGate,
+      env,
+    );
   const effectivePhase52ManagedStartupSupported =
     managedStartupSupported && !multiWriterIntent && !unsupportedStore;
   const bypassed =
@@ -2377,6 +2655,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase62ManagedPostgresHorizontalWriterHardeningGate.blockers,
     ...phase63DistributedDependencyEnforcementGate.blockers,
     ...phase64ManagedPostgresRecoveryValidationGate.blockers,
+    ...phase65CutoverRollbackAutomationGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -2398,6 +2677,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase62ManagedPostgresHorizontalWriterHardeningGate.nextSteps,
     ...phase63DistributedDependencyEnforcementGate.nextSteps,
     ...phase64ManagedPostgresRecoveryValidationGate.nextSteps,
+    ...phase65CutoverRollbackAutomationGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -2458,7 +2738,9 @@ export function buildAsyncStoreBoundaryReport(
     }
   }
   if (horizontalWriterIntent) {
-    if (phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady) {
+    if (phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady) {
+      nextSteps.add("Treat Phase 65 as repeatable cutover, verify, and rollback automation for managed Postgres horizontal app writers; keep final release approval blocked until Phase 66 finishes.");
+    } else if (phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady) {
       nextSteps.add("Treat Phase 64 as recovery validation for managed Postgres horizontal app writers with provider-owned HA/PITR only; keep activation/release blocked until Phases 65-66 finish.");
     } else if (phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed) {
       nextSteps.add("Treat Phase 63 as distributed dependency enforcement for managed Postgres horizontal app writers only; keep activation/release blocked until Phase 64 recovery validation and Phases 65-66 finish.");
@@ -2484,6 +2766,7 @@ export function buildAsyncStoreBoundaryReport(
     phase62ManagedPostgresHorizontalWriterHardeningGate.releaseAllowed &&
     phase63DistributedDependencyEnforcementGate.releaseAllowed &&
     phase64ManagedPostgresRecoveryValidationGate.releaseAllowed &&
+    phase65CutoverRollbackAutomationGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -2492,7 +2775,9 @@ export function buildAsyncStoreBoundaryReport(
     : "fail";
   let summary: string;
   if (horizontalWriterIntent) {
-    summary = phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady
+    summary = phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady
+      ? "Phase 49 async-store boundary exists as foundation and Phase 65 cutover/rollback automation is complete for managed Postgres horizontal app writers, but final release approval remains blocked pending Phase 66."
+      : phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady
       ? "Phase 49 async-store boundary exists as foundation and Phase 64 recovery validation is complete for managed Postgres horizontal app writers with provider-owned HA/PITR, but activation/release remains blocked pending Phases 65-66."
       : phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed
       ? "Phase 49 async-store boundary exists as foundation and Phase 63 distributed dependency enforcement is complete for managed Postgres horizontal app writers, but Phase 64 recovery validation is incomplete."
@@ -2560,6 +2845,7 @@ export function buildAsyncStoreBoundaryReport(
     phase62ManagedPostgresHorizontalWriterHardeningGate,
     phase63DistributedDependencyEnforcementGate,
     phase64ManagedPostgresRecoveryValidationGate,
+    phase65CutoverRollbackAutomationGate,
     classification,
     summary,
     blockers,
@@ -2595,7 +2881,8 @@ function buildNextSteps(
     if (
       check.id === "async-store-boundary" ||
       check.id === "phase63-distributed-dependency-enforcement" ||
-      check.id === "phase64-managed-postgres-recovery-validation"
+      check.id === "phase64-managed-postgres-recovery-validation" ||
+      check.id === "phase65-cutover-rollback-automation"
     ) {
       for (const step of asyncStoreBoundary.nextSteps) steps.add(step);
     }
@@ -2737,6 +3024,24 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
           ? `Phase 64 managed Postgres recovery validation is complete: ${phase64Gate.summary}`
           : `Phase 64 managed Postgres recovery validation blocks activation: ${phase64Gate.summary}`
         : phase64Gate.summary,
+    );
+  }
+
+  const phase65Gate = asyncStoreBoundary.phase65CutoverRollbackAutomationGate;
+  if (phase65Gate) {
+    pushCheck(
+      checks,
+      "phase65-cutover-rollback-automation",
+      phase65Gate.required
+        ? phase65Gate.cutoverRollbackAutomationReady
+          ? "pass"
+          : chooseBlockingStatus(isGated)
+        : "pass",
+      phase65Gate.required
+        ? phase65Gate.cutoverRollbackAutomationReady
+          ? `Phase 65 cutover/rollback automation is complete: ${phase65Gate.summary}`
+          : `Phase 65 cutover/rollback automation blocks activation: ${phase65Gate.summary}`
+        : phase65Gate.summary,
     );
   }
 

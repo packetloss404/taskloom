@@ -134,6 +134,18 @@ const managedPostgresHorizontalWriterPhase64Env = {
   TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION: "RTO<=15m; RPO<=5m",
 } as const;
 
+const managedPostgresHorizontalWriterPhase65Env = {
+  ...managedPostgresHorizontalWriterPhase64Env,
+  TASKLOOM_CUTOVER_PREFLIGHT_STATUS: "passed",
+  TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE: "docs/phase-65/cutover-preflight.md",
+  TASKLOOM_ACTIVATION_DRY_RUN_STATUS: "passed",
+  TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE: "docs/phase-65/activation-dry-run.md",
+  TASKLOOM_POST_ACTIVATION_SMOKE_STATUS: "passed",
+  TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE: "docs/phase-65/post-activation-smoke.md",
+  TASKLOOM_ROLLBACK_COMMAND_GUIDANCE: "npm run deployment:check-runtime-guard && rollback release REL-65",
+  TASKLOOM_MONITORING_THRESHOLDS: "5xx<1%; p95<750ms; job-lag<2m",
+} as const;
+
 type Phase63DependencyKey =
   | "distributedRateLimiting"
   | "schedulerCoordination"
@@ -1430,15 +1442,15 @@ test("managed Postgres horizontal app-writer runtime is blocked until Phase 64 r
   );
 });
 
-test("managed Postgres horizontal app-writer runtime is allowed after Phase 64 recovery validation", () => {
+test("managed Postgres horizontal app-writer runtime is blocked until Phase 65 cutover automation", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase64Env });
   const backupRestore = observedEnvValue(report, "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE");
   const recoveryTime = observedEnvValue(report, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION");
   const phase64 = phase64Report(report);
 
-  assert.equal(report.allowed, true);
-  assert.equal(report.managedDatabaseRuntimeBlocked, false);
-  assert.equal(report.status, "pass");
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-postgres");
   assert.equal(report.phase63?.distributedDependencyEnforcementReady, true);
   assert.equal(phase64.required, true);
@@ -1462,12 +1474,99 @@ test("managed Postgres horizontal app-writer runtime is allowed after Phase 64 r
   assert.equal(backupRestore.redacted, false);
   assert.equal(recoveryTime.value, "RTO<=15m; RPO<=5m");
   assert.equal(recoveryTime.redacted, false);
-  assert.ok(report.summary.includes("Phase 64"));
+  assert.equal(report.phase65?.phase64RecoveryValidationReady, true);
+  assert.equal(report.phase65?.cutoverAutomationGatePassed, false);
+  assert.equal(report.phase65?.activationAllowed, false);
+  assert.equal(report.phase65?.operationsHealthStatus, "blocked");
+  assert.equal(report.phase65?.releaseEvidenceStatus, "blocked");
+  assert.equal(report.phase65?.finalReleaseApprovalGranted, false);
+  assert.equal(report.phase65?.releaseAllowed, false);
+  assert.ok(report.summary.includes("blocked"));
   assert.ok(report.warnings.some((warning) => warning.includes("provider-owned HA/PITR")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 65")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_CUTOVER_PREFLIGHT_STATUS=passed")));
+  assert.throws(
+    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase64Env),
+    ManagedDatabaseRuntimeGuardError,
+  );
+});
+
+test("managed Postgres horizontal app-writer runtime is allowed after Phase 65 cutover automation", () => {
+  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase65Env });
+  const cutoverPreflight = observedEnvValue(report, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE");
+  const monitoringThresholds = observedEnvValue(report, "TASKLOOM_MONITORING_THRESHOLDS");
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.phase64?.recoveryValidationReady, true);
+  assert.equal(report.phase65?.required, true);
+  assert.equal(report.phase65?.phase64RecoveryValidationReady, true);
+  assert.equal(report.phase65?.cutoverPreflightPassed, true);
+  assert.equal(report.phase65?.activationDryRunPassed, true);
+  assert.equal(report.phase65?.postActivationSmokePassed, true);
+  assert.equal(report.phase65?.rollbackCommandGuidanceConfigured, true);
+  assert.equal(report.phase65?.monitoringThresholdsConfigured, true);
+  assert.equal(report.phase65?.rollbackRequired, false);
+  assert.equal(report.phase65?.cutoverAutomationGatePassed, true);
+  assert.equal(report.phase65?.activationAllowed, true);
+  assert.equal(report.phase65?.operationsHealthStatus, "ready");
+  assert.equal(report.phase65?.releaseEvidenceStatus, "ready");
+  assert.equal(report.phase65?.activeActiveSupported, false);
+  assert.equal(report.phase65?.appOwnedRegionalFailoverSupported, false);
+  assert.equal(report.phase65?.appOwnedPitrRuntimeSupported, false);
+  assert.equal(report.phase65?.distributedSqliteSupported, false);
+  assert.equal(report.phase65?.finalReleaseApprovalGranted, false);
+  assert.equal(report.phase65?.releaseAllowed, false);
+  assert.equal(cutoverPreflight.value, "docs/phase-65/cutover-preflight.md");
+  assert.equal(cutoverPreflight.redacted, false);
+  assert.equal(monitoringThresholds.value, "5xx<1%; p95<750ms; job-lag<2m");
+  assert.equal(monitoringThresholds.redacted, false);
+  assert.ok(report.summary.includes("Phase 65"));
   assert.equal(report.blockers.length, 0);
   assert.doesNotThrow(() =>
-    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase64Env),
+    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase65Env),
   );
+});
+
+test("Phase 65 failed preflight keeps horizontal activation blocked", () => {
+  const env = {
+    ...managedPostgresHorizontalWriterPhase65Env,
+    TASKLOOM_CUTOVER_PREFLIGHT_STATUS: "failed",
+  };
+  const report = assessManagedDatabaseRuntimeGuard({ env });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.phase65?.cutoverPreflightFailed, true);
+  assert.equal(report.phase65?.cutoverPreflightPassed, false);
+  assert.equal(report.phase65?.rollbackRequired, true);
+  assert.equal(report.phase65?.activationAllowed, false);
+  assert.equal(report.phase65?.operationsHealthStatus, "rollback-required");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("failed preflight")));
+  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
+});
+
+test("Phase 65 failed smoke check blocks activation and records prior safe posture rollback", () => {
+  const env = {
+    ...managedPostgresHorizontalWriterPhase65Env,
+    TASKLOOM_POST_ACTIVATION_SMOKE_STATUS: "failed",
+    TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE: "docs/phase-65/smoke-rollback.md",
+  };
+  const report = assessManagedDatabaseRuntimeGuard({ env });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.phase65?.postActivationSmokeFailed, true);
+  assert.equal(report.phase65?.postActivationSmokePassed, false);
+  assert.equal(report.phase65?.rollbackRequired, true);
+  assert.equal(report.phase65?.rollbackToPriorSafePostureReady, true);
+  assert.equal(report.phase65?.activationAllowed, false);
+  assert.equal(report.phase65?.operationsHealthStatus, "rollback-required");
+  assert.equal(observedEnvValue(report, "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE").value, "docs/phase-65/smoke-rollback.md");
+  assert.ok(report.nextSteps.some((step) => step.includes("Keep activation blocked")));
+  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
 });
 
 test("Phase 63 distributed dependency enforcement blocks horizontal activation when any dependency is missing or local-only", () => {
