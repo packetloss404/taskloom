@@ -99,6 +99,15 @@ export interface ManagedDatabaseRuntimeGuardEnv {
   TASKLOOM_ROLLBACK_COMMAND_GUIDANCE?: string;
   TASKLOOM_MONITORING_THRESHOLDS?: string;
   TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE?: string;
+  TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS?: string;
+  TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE?: string;
+  TASKLOOM_FINAL_RELEASE_CHECKLIST?: string;
+  TASKLOOM_RELEASE_APPROVAL?: string;
+  TASKLOOM_DOCUMENTATION_FREEZE_EVIDENCE?: string;
+  TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION?: string;
+  TASKLOOM_NO_HIDDEN_PHASE_ASSERTION?: string;
+  TASKLOOM_FINAL_RELEASE_VALIDATION_EVIDENCE?: string;
+  TASKLOOM_FINAL_VERIFICATION_EVIDENCE?: string;
   TASKLOOM_UNSUPPORTED_MANAGED_DB_RUNTIME_BYPASS?: string;
 }
 
@@ -413,6 +422,31 @@ export interface ManagedDatabaseRuntimeGuardReport {
     strictBlocker: boolean;
     summary: string;
   };
+  phase66?: {
+    required: boolean;
+    horizontalWriterTopologyRequested: boolean;
+    phase65CutoverAutomationGatePassed: boolean;
+    finalReleaseClosureStatus: string | null;
+    finalReleaseClosureStatusPassed: boolean;
+    finalReleaseClosureEvidenceConfigured: boolean;
+    finalReleaseChecklistConfigured: boolean;
+    releaseApprovalConfigured: boolean;
+    documentationFreezeEvidenceConfigured: boolean;
+    noHiddenPhaseAssertionConfigured: boolean;
+    finalReleaseValidationEvidenceConfigured: boolean;
+    finalReleaseClosureReady: boolean;
+    activationAllowed: boolean;
+    releaseAllowed: boolean;
+    finalReleaseApprovalGranted: boolean;
+    supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr";
+    providerOwnedHaPitrRequired: true;
+    appOwnedRegionalFailoverSupported: false;
+    appOwnedPitrRuntimeSupported: false;
+    activeActiveSupported: false;
+    distributedSqliteSupported: false;
+    strictBlocker: boolean;
+    summary: string;
+  };
 }
 
 export interface ManagedDatabaseRuntimeGuardDeps {
@@ -524,6 +558,15 @@ const OBSERVED_ENV_KEYS = [
   "TASKLOOM_ROLLBACK_COMMAND_GUIDANCE",
   "TASKLOOM_MONITORING_THRESHOLDS",
   "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE",
+  "TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS",
+  "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE",
+  "TASKLOOM_FINAL_RELEASE_CHECKLIST",
+  "TASKLOOM_RELEASE_APPROVAL",
+  "TASKLOOM_DOCUMENTATION_FREEZE_EVIDENCE",
+  "TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION",
+  "TASKLOOM_NO_HIDDEN_PHASE_ASSERTION",
+  "TASKLOOM_FINAL_RELEASE_VALIDATION_EVIDENCE",
+  "TASKLOOM_FINAL_VERIFICATION_EVIDENCE",
   BYPASS_ENV_KEY,
 ] as const;
 const LOCAL_TOPOLOGIES = new Set(["", "local", "json", "sqlite", "single-node", "single-node-sqlite"]);
@@ -1437,6 +1480,69 @@ function phase65CutoverActivationAutomationGate(
   };
 }
 
+function phase66FinalReleaseClosureGate(
+  env: ManagedDatabaseRuntimeGuardEnv,
+  horizontalWriterTopologyRequested: boolean,
+  phase65: ReturnType<typeof phase65CutoverActivationAutomationGate>,
+) {
+  const finalReleaseClosureStatus = normalize(env.TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS);
+  const finalReleaseClosureStatusPassed = configured(env.TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS)
+    ? phase65StatusPassed(env.TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS)
+    : true;
+  const finalReleaseClosureEvidenceConfigured = configured(env.TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE);
+  const finalReleaseChecklistConfigured = configured(env.TASKLOOM_FINAL_RELEASE_CHECKLIST);
+  const releaseApprovalConfigured = configured(env.TASKLOOM_RELEASE_APPROVAL);
+  const documentationFreezeEvidenceConfigured =
+    configured(env.TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION) ||
+    configured(env.TASKLOOM_DOCUMENTATION_FREEZE_EVIDENCE);
+  const noHiddenPhaseAssertionConfigured = configured(env.TASKLOOM_NO_HIDDEN_PHASE_ASSERTION);
+  const finalReleaseValidationEvidenceConfigured =
+    configured(env.TASKLOOM_FINAL_VERIFICATION_EVIDENCE) ||
+    configured(env.TASKLOOM_FINAL_RELEASE_VALIDATION_EVIDENCE);
+  const finalReleaseClosureReady =
+    !horizontalWriterTopologyRequested ||
+    (phase65.cutoverAutomationGatePassed &&
+      finalReleaseClosureStatusPassed &&
+      finalReleaseClosureEvidenceConfigured &&
+      finalReleaseChecklistConfigured &&
+      releaseApprovalConfigured &&
+      documentationFreezeEvidenceConfigured &&
+      noHiddenPhaseAssertionConfigured &&
+      finalReleaseValidationEvidenceConfigured);
+  const strictBlocker = horizontalWriterTopologyRequested && !finalReleaseClosureReady;
+  const summary = horizontalWriterTopologyRequested
+    ? finalReleaseClosureReady
+      ? "Phase 66 final release closure is complete; Phase 65 cutover automation, final release closure evidence, checklist, approval, documentation freeze/no-hidden-phase assertions, and final verification evidence are recorded."
+      : "Phase 66 requires completed Phase 65 cutover automation plus final release closure evidence, checklist, release approval, documentation freeze/no-hidden-phase assertions, and final verification evidence before horizontal activation or release is allowed."
+    : "No managed Postgres horizontal app-writer topology requested for Phase 66 final release closure.";
+
+  return {
+    required: horizontalWriterTopologyRequested,
+    horizontalWriterTopologyRequested,
+    phase65CutoverAutomationGatePassed: phase65.cutoverAutomationGatePassed,
+    finalReleaseClosureStatus: finalReleaseClosureStatus || null,
+    finalReleaseClosureStatusPassed,
+    finalReleaseClosureEvidenceConfigured,
+    finalReleaseChecklistConfigured,
+    releaseApprovalConfigured,
+    documentationFreezeEvidenceConfigured,
+    noHiddenPhaseAssertionConfigured,
+    finalReleaseValidationEvidenceConfigured,
+    finalReleaseClosureReady,
+    activationAllowed: horizontalWriterTopologyRequested && finalReleaseClosureReady,
+    releaseAllowed: horizontalWriterTopologyRequested && finalReleaseClosureReady,
+    finalReleaseApprovalGranted: horizontalWriterTopologyRequested && finalReleaseClosureReady,
+    supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr" as const,
+    providerOwnedHaPitrRequired: true as const,
+    appOwnedRegionalFailoverSupported: false as const,
+    appOwnedPitrRuntimeSupported: false as const,
+    activeActiveSupported: false as const,
+    distributedSqliteSupported: false as const,
+    strictBlocker,
+    summary,
+  };
+}
+
 function managedTopologyRequested(topology: string, store: string): boolean {
   return (
     MANAGED_TOPOLOGY_HINTS.has(topology) ||
@@ -1479,6 +1585,7 @@ function buildNextSteps(
   phase63: ReturnType<typeof phase63DistributedDependencyEnforcementGate>,
   phase64: ReturnType<typeof phase64ManagedPostgresRecoveryValidationGate>,
   phase65: ReturnType<typeof phase65CutoverActivationAutomationGate>,
+  phase66: ReturnType<typeof phase66FinalReleaseClosureGate>,
 ): string[] {
   const steps = new Set<string>();
 
@@ -1776,6 +1883,32 @@ function buildNextSteps(
         steps.add("Keep activation blocked and follow rollback command guidance before retrying Phase 65 activation automation.");
       }
     }
+    if (check.id === "phase66-final-release-closure") {
+      if (!phase66.phase65CutoverAutomationGatePassed) {
+        steps.add("Complete Phase 65 cutover activation automation before recording Phase 66 final release closure.");
+      }
+      if (!phase66.finalReleaseClosureStatusPassed) {
+        steps.add("Fix TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS or leave it unset; if provided, it must be passed for final release closure.");
+      }
+      if (!phase66.finalReleaseClosureEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE with the final release closure evidence.");
+      }
+      if (!phase66.finalReleaseChecklistConfigured) {
+        steps.add("Configure TASKLOOM_FINAL_RELEASE_CHECKLIST with the final supported-posture release checklist.");
+      }
+      if (!phase66.releaseApprovalConfigured) {
+        steps.add("Configure TASKLOOM_RELEASE_APPROVAL with the release approval record.");
+      }
+      if (!phase66.documentationFreezeEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION with documentation freeze evidence for the supported production posture.");
+      }
+      if (!phase66.noHiddenPhaseAssertionConfigured) {
+        steps.add("Configure TASKLOOM_NO_HIDDEN_PHASE_ASSERTION stating no hidden follow-up phase is required for the supported production posture.");
+      }
+      if (!phase66.finalReleaseValidationEvidenceConfigured) {
+        steps.add("Configure TASKLOOM_FINAL_VERIFICATION_EVIDENCE with typecheck, test, build, deployment CLI, and docs consistency evidence.");
+      }
+    }
   }
 
   if (bypassEnabled) {
@@ -1851,6 +1984,7 @@ export function assessManagedDatabaseRuntimeGuard(
   const phase63 = phase63DistributedDependencyEnforcementGate(env, hasHorizontalWriterIntent, phase62);
   const phase64 = phase64ManagedPostgresRecoveryValidationGate(env, hasHorizontalWriterIntent, phase63);
   const phase65 = phase65CutoverActivationAutomationGate(env, hasHorizontalWriterIntent, phase64);
+  const phase66 = phase66FinalReleaseClosureGate(env, hasHorizontalWriterIntent, phase65);
   const isLocalTopology = LOCAL_TOPOLOGIES.has(databaseTopology);
   const checks: ManagedDatabaseRuntimeGuardCheck[] = [];
   const warnings: string[] = [];
@@ -1988,6 +2122,13 @@ export function assessManagedDatabaseRuntimeGuard(
     phase65.summary,
   );
 
+  pushCheck(
+    checks,
+    "phase66-final-release-closure",
+    phase66.strictBlocker ? "fail" : "pass",
+    phase66.summary,
+  );
+
   if (databaseTopology && !isLocalTopology && !hasManagedIntent && !hasMultiWriterIntent && !hasHorizontalWriterIntent) {
     warnings.push(`Unknown TASKLOOM_DATABASE_TOPOLOGY value "${databaseTopology}" was observed.`);
   }
@@ -2032,6 +2173,7 @@ export function assessManagedDatabaseRuntimeGuard(
     warnings.push(phase63.summary);
     warnings.push(phase64.summary);
     warnings.push(phase65.summary);
+    warnings.push(phase66.summary);
   }
   if (bypassEnabled) {
     warnings.push(`${BYPASS_ENV_KEY}=true bypassed the managed database runtime guard for emergency or development-only use.`);
@@ -2044,7 +2186,8 @@ export function assessManagedDatabaseRuntimeGuard(
     phase62.strictBlocker ||
     phase63.strictBlocker ||
     phase64.strictBlocker ||
-    phase65.strictBlocker;
+    phase65.strictBlocker ||
+    phase66.strictBlocker;
   const allowed = blockers.length === 0 || bypassEnabled;
   const status = statusFromChecks(checks, bypassEnabled);
   let classification: ManagedDatabaseRuntimeGuardClassification;
@@ -2065,8 +2208,8 @@ export function assessManagedDatabaseRuntimeGuard(
   const summary = allowed
     ? bypassEnabled
       ? "Phase 46 managed database runtime guard was bypassed; unsupported runtime configuration remains present."
-      : hasHorizontalWriterIntent && phase65.cutoverAutomationGatePassed
-        ? "Phase 65 managed database runtime guard allows hardened managed Postgres horizontal app-writer activation with repeatable cutover, verify, monitor, and rollback automation evidence."
+      : hasHorizontalWriterIntent && phase66.finalReleaseClosureReady
+        ? "Phase 66 managed database runtime guard allows hardened managed Postgres horizontal app-writer activation and release with final closure evidence."
       : hasManagedIntent && hasManagedPostgresStartupSupport
         ? "Phase 52 managed database runtime guard allows single-writer managed Postgres startup."
         : store === "sqlite"
@@ -2103,6 +2246,7 @@ export function assessManagedDatabaseRuntimeGuard(
       phase63,
       phase64,
       phase65,
+      phase66,
     ),
     observed: {
       nodeEnv,
@@ -2132,6 +2276,7 @@ export function assessManagedDatabaseRuntimeGuard(
     phase63,
     phase64,
     phase65,
+    phase66,
   };
 }
 

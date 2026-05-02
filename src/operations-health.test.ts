@@ -87,6 +87,24 @@ function completePhase65Env(): NodeJS.ProcessEnv {
   };
 }
 
+function completePhase66Env(): NodeJS.ProcessEnv {
+  return {
+    ...completePhase65Env(),
+    TASKLOOM_PHASE66_SUPPORTED_PRODUCTION_TOPOLOGY:
+      "managed Postgres horizontal Taskloom app writers against one provider-owned primary/cluster",
+    TASKLOOM_PHASE66_UNSUPPORTED_TOPOLOGY_BOUNDARIES:
+      "active-active database writes, Taskloom-owned regional failover/PITR runtime, and distributed SQLite remain unsupported",
+    TASKLOOM_PHASE66_FINAL_RELEASE_CHECKLIST: "artifacts/phase66/final-release-checklist.md",
+    TASKLOOM_PHASE66_VALIDATION_RUN: "npm run typecheck && npm test && npm run build",
+    TASKLOOM_PHASE66_DEPLOYMENT_CLI_CHECKS:
+      "deployment:check-storage, deployment:check-managed-db, deployment:check-runtime-guard, deployment:check-release, deployment:export-evidence",
+    TASKLOOM_PHASE66_DOCS_CONSISTENCY_CHECKS: "artifacts/phase66/docs-consistency.md",
+    TASKLOOM_PHASE66_DOCUMENTATION_FREEZE: "artifacts/phase66/documentation-freeze.md",
+    TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "Phase 66 closes the supported posture with no hidden follow-up phase.",
+    TASKLOOM_PHASE66_RELEASE_APPROVAL: "TASKLOOM-66 approved by release owner",
+  };
+}
+
 test("default healthy deps yield overall ok with disabled accessLog", () => {
   const report = getOperationsHealth(baseDeps());
   assert.equal(report.overall, "ok");
@@ -95,6 +113,7 @@ test("default healthy deps yield overall ok with disabled accessLog", () => {
   assert.equal(findSubsystem(report, "accessLog").status, "disabled");
   assert.equal(findSubsystem(report, "managedPostgresRecoveryValidation").status, "disabled");
   assert.equal(findSubsystem(report, "managedPostgresCutoverAutomation").status, "disabled");
+  assert.equal(findSubsystem(report, "finalReleaseClosure").status, "disabled");
   assert.match(findSubsystem(report, "scheduler").detail, /ticksSinceStart=7/);
   assert.equal(report.generatedAt, "2026-04-26T10:00:01.000Z");
 });
@@ -436,4 +455,55 @@ test("managed Postgres cutover automation health is ok when all Phase 65 inputs 
   assert.match(cutover.detail, /monitoring thresholds/);
   assert.match(cutover.detail, /activationAllowed=true/);
   assert.match(cutover.detail, /releaseAllowed=false/);
+});
+
+test("final release closure health blocks release when Phase 66 evidence is missing", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: completePhase65Env(),
+    }),
+  );
+  const closure = findSubsystem(report, "finalReleaseClosure");
+
+  assert.equal(closure.status, "degraded");
+  assert.match(closure.detail, /Phase 66/);
+  assert.match(closure.detail, /supported production topology statement/);
+  assert.match(closure.detail, /documentation freeze/);
+  assert.match(closure.detail, /no-hidden-phase assertion/);
+  assert.match(closure.detail, /final release approval/);
+  assert.match(closure.detail, /releaseAllowed=false/);
+  assert.equal(report.overall, "degraded");
+});
+
+test("final release closure health is ok when Phase 66 inputs are complete", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: completePhase66Env(),
+    }),
+  );
+  const closure = findSubsystem(report, "finalReleaseClosure");
+
+  assert.equal(closure.status, "ok");
+  assert.match(closure.detail, /Phase 66 final release closure is ready/i);
+  assert.match(closure.detail, /documentation freeze/);
+  assert.match(closure.detail, /no-hidden-phase assertion/);
+  assert.match(closure.detail, /releaseAllowed=true/);
+});
+
+test("final release closure health fails closed when Phase 66 check reports failure", () => {
+  const report = getOperationsHealth(
+    baseDeps({
+      env: {
+        ...completePhase66Env(),
+        TASKLOOM_PHASE66_DOCS_CONSISTENCY_STATUS: "failed",
+      },
+    }),
+  );
+  const closure = findSubsystem(report, "finalReleaseClosure");
+
+  assert.equal(closure.status, "degraded");
+  assert.match(closure.detail, /docs consistency checks/);
+  assert.match(closure.detail, /failed/i);
+  assert.match(closure.detail, /releaseAllowed=false/);
+  assert.equal(report.overall, "degraded");
 });

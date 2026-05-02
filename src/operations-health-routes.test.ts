@@ -88,6 +88,7 @@ test("operations health route returns the report shape for an admin-equivalent o
   assert.ok(subsystems.some((subsystem) => subsystem.name === "distributedDependencyEnforcement"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "managedPostgresRecoveryValidation"));
   assert.ok(subsystems.some((subsystem) => subsystem.name === "managedPostgresCutoverAutomation"));
+  assert.ok(subsystems.some((subsystem) => subsystem.name === "finalReleaseClosure"));
 });
 
 test("operations health surfaces supported single-writer managed Postgres topology gate", () => {

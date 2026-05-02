@@ -144,6 +144,17 @@ const managedPostgresHorizontalWriterPhase65Env = {
   TASKLOOM_MONITORING_THRESHOLDS: "5xx<1%; p95<750ms; job-lag<2m",
 } as const;
 
+const managedPostgresHorizontalWriterPhase66Env = {
+  ...managedPostgresHorizontalWriterPhase65Env,
+  TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS: "passed",
+  TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE: "docs/phase-66/final-release-closure.md",
+  TASKLOOM_FINAL_RELEASE_CHECKLIST: "docs/phase-66/final-release-checklist.md",
+  TASKLOOM_RELEASE_APPROVAL: "REL-66",
+  TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION: "docs/phase-66/documentation-freeze.md",
+  TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "docs/phase-66/no-hidden-phase.md",
+  TASKLOOM_FINAL_VERIFICATION_EVIDENCE: "docs/phase-66/final-validation.md",
+} as const;
+
 test("local JSON reports current supported local mode", () => {
   const report = assessManagedDatabaseTopology({ env: {} });
 
@@ -1406,14 +1417,14 @@ test("managed Postgres horizontal app-writer topology requires Phase 65 cutover 
   assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_CUTOVER_PREFLIGHT_STATUS=passed")));
 });
 
-test("managed Postgres horizontal app-writer topology passes Phase 65 cutover automation", () => {
+test("managed Postgres horizontal app-writer topology requires Phase 66 closure after Phase 65 cutover automation", () => {
   const report = assessManagedDatabaseTopology({ env: managedPostgresHorizontalWriterPhase65Env });
   const cutoverPreflight = observedEnvValue(report, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE");
   const monitoringThresholds = observedEnvValue(report, "TASKLOOM_MONITORING_THRESHOLDS");
 
-  assert.equal(report.status, "pass");
+  assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.ready, true);
+  assert.equal(report.ready, false);
   assert.equal(report.managedDatabase.phase64?.recoveryValidationReady, true);
   assert.equal(report.managedDatabase.phase65?.required, true);
   assert.equal(report.managedDatabase.phase65?.phase64RecoveryValidationReady, true);
@@ -1433,15 +1444,78 @@ test("managed Postgres horizontal app-writer topology passes Phase 65 cutover au
   assert.equal(report.managedDatabase.phase65?.distributedSqliteSupported, false);
   assert.equal(report.managedDatabase.phase65?.finalReleaseApprovalGranted, false);
   assert.equal(report.managedDatabase.phase65?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase66?.required, true);
+  assert.equal(report.managedDatabase.phase66?.phase65CutoverAutomationGatePassed, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureStatusPassed, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseChecklistConfigured, false);
+  assert.equal(report.managedDatabase.phase66?.releaseApprovalConfigured, false);
+  assert.equal(report.managedDatabase.phase66?.documentationFreezeEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase66?.noHiddenPhaseAssertionConfigured, false);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseValidationEvidenceConfigured, false);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureReady, false);
+  assert.equal(report.managedDatabase.phase66?.activationAllowed, false);
+  assert.equal(report.managedDatabase.phase66?.releaseAllowed, false);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseApprovalGranted, false);
   assert.equal(cutoverPreflight.value, "docs/phase-65/cutover-preflight.md");
   assert.equal(cutoverPreflight.redacted, false);
   assert.equal(monitoringThresholds.value, "5xx<1%; p95<750ms; job-lag<2m");
   assert.equal(monitoringThresholds.redacted, false);
-  assert.ok(report.summary.includes("Phase 65"));
+  assert.ok(report.summary.includes("Phase 66"));
   assert.ok(
     report.checks.some(
       (check) =>
         check.id === "phase65-cutover-activation-automation" &&
+        check.status === "pass",
+    ),
+  );
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase66-final-release-closure" &&
+        check.status === "fail",
+    ),
+  );
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 66")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE")));
+});
+
+test("managed Postgres horizontal app-writer topology passes Phase 66 final release closure", () => {
+  const report = assessManagedDatabaseTopology({ env: managedPostgresHorizontalWriterPhase66Env });
+  const closureEvidence = observedEnvValue(report, "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE");
+  const validationEvidence = observedEnvValue(report, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE");
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.ready, true);
+  assert.equal(report.managedDatabase.phase65?.cutoverAutomationGatePassed, true);
+  assert.equal(report.managedDatabase.phase66?.required, true);
+  assert.equal(report.managedDatabase.phase66?.phase65CutoverAutomationGatePassed, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureStatus, "passed");
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureStatusPassed, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseChecklistConfigured, true);
+  assert.equal(report.managedDatabase.phase66?.releaseApprovalConfigured, true);
+  assert.equal(report.managedDatabase.phase66?.documentationFreezeEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase66?.noHiddenPhaseAssertionConfigured, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseValidationEvidenceConfigured, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseClosureReady, true);
+  assert.equal(report.managedDatabase.phase66?.activationAllowed, true);
+  assert.equal(report.managedDatabase.phase66?.releaseAllowed, true);
+  assert.equal(report.managedDatabase.phase66?.finalReleaseApprovalGranted, true);
+  assert.equal(report.managedDatabase.phase66?.activeActiveSupported, false);
+  assert.equal(report.managedDatabase.phase66?.appOwnedRegionalFailoverSupported, false);
+  assert.equal(report.managedDatabase.phase66?.appOwnedPitrRuntimeSupported, false);
+  assert.equal(report.managedDatabase.phase66?.distributedSqliteSupported, false);
+  assert.equal(closureEvidence.value, "docs/phase-66/final-release-closure.md");
+  assert.equal(closureEvidence.redacted, false);
+  assert.equal(validationEvidence.value, "docs/phase-66/final-validation.md");
+  assert.equal(validationEvidence.redacted, false);
+  assert.ok(report.summary.includes("Phase 66"));
+  assert.ok(
+    report.checks.some(
+      (check) =>
+        check.id === "phase66-final-release-closure" &&
         check.status === "pass",
     ),
   );

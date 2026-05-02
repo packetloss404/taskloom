@@ -182,6 +182,24 @@ function completeCutoverAutomationEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function completeFinalReleaseClosureEnv(): NodeJS.ProcessEnv {
+  return {
+    ...completeCutoverAutomationEnv(),
+    TASKLOOM_PHASE66_SUPPORTED_PRODUCTION_TOPOLOGY:
+      "managed Postgres horizontal Taskloom app writers against one provider-owned primary/cluster",
+    TASKLOOM_PHASE66_UNSUPPORTED_TOPOLOGY_BOUNDARIES:
+      "active-active database writes, Taskloom-owned regional failover/PITR runtime, and distributed SQLite remain unsupported",
+    TASKLOOM_PHASE66_FINAL_RELEASE_CHECKLIST: "artifacts/phase66/final-release-checklist.md",
+    TASKLOOM_PHASE66_VALIDATION_RUN: "npm run typecheck && npm test && npm run build",
+    TASKLOOM_PHASE66_DEPLOYMENT_CLI_CHECKS:
+      "deployment:check-storage, deployment:check-managed-db, deployment:check-runtime-guard, deployment:check-release, deployment:export-evidence",
+    TASKLOOM_PHASE66_DOCS_CONSISTENCY_CHECKS: "artifacts/phase66/docs-consistency.md",
+    TASKLOOM_PHASE66_DOCUMENTATION_FREEZE: "artifacts/phase66/documentation-freeze.md",
+    TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "Phase 66 closes the supported posture with no hidden follow-up phase.",
+    TASKLOOM_PHASE66_RELEASE_APPROVAL: "TASKLOOM-66 approved by release owner",
+  };
+}
+
 type DistributedDependencyKey =
   | "distributedRateLimiting"
   | "schedulerCoordination"
@@ -277,6 +295,11 @@ test("default env yields json store, off leader mode, off access log, default kn
   assert.equal(status.managedPostgresCutoverAutomation.cutoverAutomationReady, false);
   assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, false);
   assert.equal(status.managedPostgresCutoverAutomation.rollbackRequired, false);
+  assert.equal(status.finalReleaseClosure.phase, "66");
+  assert.equal(status.finalReleaseClosure.status, "not-required");
+  assert.equal(status.finalReleaseClosure.finalReleaseReady, false);
+  assert.equal(status.finalReleaseClosure.documentationFrozen, false);
+  assert.equal(status.finalReleaseClosure.releaseAllowed, false);
   assert.equal(status.runtime.nodeVersion, process.versions.node);
 });
 
@@ -1994,6 +2017,110 @@ test("managedPostgresCutoverAutomation can derive Phase 65 evidence from deploym
     "artifacts/reports/phase65-preflight.json",
   );
   assert.equal(status.managedPostgresCutoverAutomation.activationAllowed, true);
+});
+
+test("finalReleaseClosure blocks release when Phase 66 evidence is missing after cutover readiness", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeCutoverAutomationEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.finalReleaseClosure.phase, "66");
+  assert.equal(status.finalReleaseClosure.required, true);
+  assert.equal(status.finalReleaseClosure.phase65CutoverReady, true);
+  assert.equal(status.finalReleaseClosure.status, "blocked");
+  assert.equal(status.finalReleaseClosure.closureStatus, "blocked");
+  assert.equal(status.finalReleaseClosure.finalReleaseReady, false);
+  assert.equal(status.finalReleaseClosure.releaseAllowed, false);
+  assert.deepEqual(status.finalReleaseClosure.missingEvidence, [
+    "supportedProductionTopology",
+    "unsupportedTopologyBoundaries",
+    "finalReleaseChecklist",
+    "validationRun",
+    "deploymentCliChecks",
+    "docsConsistencyChecks",
+    "documentationFreeze",
+    "noHiddenPhaseAssertion",
+    "releaseApproval",
+  ]);
+});
+
+test("finalReleaseClosure is ready when Phase 66 inputs are complete", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeFinalReleaseClosureEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.finalReleaseClosure.status, "ready");
+  assert.equal(status.finalReleaseClosure.closureStatus, "ready");
+  assert.equal(status.finalReleaseClosure.finalReleaseReady, true);
+  assert.equal(status.finalReleaseClosure.documentationFrozen, true);
+  assert.equal(status.finalReleaseClosure.releaseAllowed, true);
+  assert.deepEqual(status.finalReleaseClosure.missingEvidence, []);
+  assert.deepEqual(status.finalReleaseClosure.failedChecks, []);
+  assert.equal(status.finalReleaseClosure.supportedProductionTopology.source, "env");
+  assert.match(status.finalReleaseClosure.summary, /releaseAllowed=true/i);
+});
+
+test("finalReleaseClosure fails closed when a Phase 66 check reports failure", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: {
+      ...completeFinalReleaseClosureEnv(),
+      TASKLOOM_PHASE66_DOCS_CONSISTENCY_STATUS: "failed",
+    },
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({ summary: "stubbed release evidence" }) as never,
+  });
+
+  assert.equal(status.finalReleaseClosure.status, "failed");
+  assert.equal(status.finalReleaseClosure.closureStatus, "failed");
+  assert.equal(status.finalReleaseClosure.docsConsistencyChecks.status, "failed");
+  assert.deepEqual(status.finalReleaseClosure.failedChecks, ["docsConsistencyChecks"]);
+  assert.equal(status.finalReleaseClosure.finalReleaseReady, false);
+  assert.equal(status.finalReleaseClosure.documentationFrozen, false);
+  assert.equal(status.finalReleaseClosure.releaseAllowed, false);
+});
+
+test("finalReleaseClosure can derive Phase 66 readiness from deployment reports", () => {
+  const status = getOperationsStatus({
+    loadStore: () => emptyStore(),
+    env: completeCutoverAutomationEnv(),
+    now: () => new Date("2026-04-26T12:00:00.000Z"),
+    buildReleaseReadinessReport: () => ({ summary: "stubbed release readiness" }) as never,
+    buildReleaseEvidenceBundle: () => ({
+      phase66: {
+        required: true,
+        finalReleaseClosureReady: true,
+        supportedProductionTopology: "reports/phase66/supported-topology.md",
+        unsupportedTopologyBoundaries: "reports/phase66/unsupported-boundaries.md",
+        finalReleaseChecklist: "reports/phase66/checklist.md",
+        validationRun: "reports/phase66/validation.json",
+        deploymentCliChecks: "reports/phase66/deployment-cli.json",
+        docsConsistencyChecks: "reports/phase66/docs-consistency.md",
+        documentationFreeze: "reports/phase66/docs-freeze.md",
+        noHiddenPhaseAssertion: "reports/phase66/no-hidden-phase.md",
+        releaseApproval: "TASKLOOM-66",
+      },
+      includedEvidence: [],
+      attachments: [],
+    }) as never,
+  });
+
+  assert.equal(status.finalReleaseClosure.status, "ready");
+  assert.equal(status.finalReleaseClosure.supportedProductionTopology.source, "releaseEvidence");
+  assert.equal(
+    status.finalReleaseClosure.supportedProductionTopology.value,
+    "reports/phase66/supported-topology.md",
+  );
+  assert.equal(status.finalReleaseClosure.releaseAllowed, true);
 });
 
 test("releaseReadiness is built from the injected environment", () => {

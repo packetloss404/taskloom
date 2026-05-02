@@ -23,6 +23,7 @@ import {
   type Phase63DistributedDependencyEnforcementGateReport,
   type Phase64ManagedPostgresRecoveryValidationGateReport,
   type Phase65CutoverRollbackAutomationGateReport,
+  type Phase66FinalReleaseClosureGateReport,
   type ReleaseReadinessDeps,
   type ReleaseReadinessEnv,
   type ReleaseReadinessReport,
@@ -362,6 +363,30 @@ export interface ReleaseEvidenceBundle {
       phase65Phase66Pending: boolean;
       phase65PendingPhases: string[];
       phase65TopologyReleaseAllowed: boolean;
+      phase66FinalReleaseClosureGateRequired: boolean;
+      phase66HorizontalWriterTopologyRequested: boolean;
+      phase66Phase65CutoverRollbackAutomationReady: boolean;
+      phase66FinalReleaseClosureEvidenceRequired: boolean;
+      phase66FinalReleaseClosureEvidenceAttached: boolean;
+      phase66FinalReleaseChecklistRequired: boolean;
+      phase66FinalReleaseChecklistAttached: boolean;
+      phase66ReleaseApprovalRequired: boolean;
+      phase66ReleaseApprovalAttached: boolean;
+      phase66DocsFreezeAssertionRequired: boolean;
+      phase66DocsFreezeAssertionAttached: boolean;
+      phase66NoHiddenPhaseAssertionRequired: boolean;
+      phase66NoHiddenPhaseAssertionAttached: boolean;
+      phase66FinalVerificationEvidenceRequired: boolean;
+      phase66FinalVerificationEvidenceAttached: boolean;
+      phase66FinalReleaseClosureComplete: boolean;
+      phase66SupportedProductionPostureComplete: boolean;
+      phase66ActiveActiveSupported: false;
+      phase66RegionalFailoverSupported: false;
+      phase66PitrRuntimeSupported: false;
+      phase66DistributedSqliteSupported: false;
+      phase66ApplicationManagedRegionalFailoverSupported: false;
+      phase66ApplicationManagedPitrSupported: false;
+      phase66TopologyReleaseAllowed: boolean;
       strictRelease: boolean;
       backupConfigured: boolean;
       restoreDrillRecorded: boolean;
@@ -528,6 +553,12 @@ const DEPLOYMENT_ENV_KEYS = [
   "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE",
   "TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE",
   "TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE",
+  "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE",
+  "TASKLOOM_FINAL_RELEASE_CHECKLIST",
+  "TASKLOOM_RELEASE_APPROVAL",
+  "TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION",
+  "TASKLOOM_NO_HIDDEN_PHASE_ASSERTION",
+  "TASKLOOM_FINAL_VERIFICATION_EVIDENCE",
 ] as const;
 
 const SENSITIVE_NAME_PATTERN = /(secret|token|password|passwd|pwd|credential|private|apikey|api_key|auth|session|cookie)/i;
@@ -1270,6 +1301,42 @@ function phase65CutoverRollbackAutomationGate(
   };
 }
 
+function phase66FinalReleaseClosureGate(
+  asyncStoreBoundary: AsyncStoreBoundaryReport,
+  phase65Gate: Phase65CutoverRollbackAutomationGateReport,
+): Phase66FinalReleaseClosureGateReport {
+  return asyncStoreBoundary.phase66FinalReleaseClosureGate ?? {
+    phase: "66",
+    required: false,
+    horizontalWriterTopologyRequested: false,
+    phase65CutoverRollbackAutomationReady: phase65Gate.cutoverRollbackAutomationReady,
+    finalReleaseClosureEvidenceRequired: false,
+    finalReleaseClosureEvidenceAttached: false,
+    finalReleaseChecklistRequired: false,
+    finalReleaseChecklistAttached: false,
+    releaseApprovalRequired: false,
+    releaseApprovalAttached: false,
+    docsFreezeAssertionRequired: false,
+    docsFreezeAssertionAttached: false,
+    noHiddenPhaseAssertionRequired: false,
+    noHiddenPhaseAssertionAttached: false,
+    finalVerificationEvidenceRequired: false,
+    finalVerificationEvidenceAttached: false,
+    finalReleaseClosureComplete: false,
+    supportedProductionPostureComplete: false,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    applicationManagedRegionalFailoverSupported: false,
+    applicationManagedPitrSupported: false,
+    releaseAllowed: true,
+    summary: "Phase 66 final release closure is not required for this release posture.",
+    blockers: [],
+    nextSteps: ["Keep Phase 66 final closure evidence ready before any future managed Postgres horizontal app-writer release approval claim."],
+  };
+}
+
 function attachmentEvidence(
   env: ReleaseEvidenceEnv,
   envKey: keyof ReleaseReadinessEnv,
@@ -1669,6 +1736,42 @@ function phase65RollbackSafePostureAttachmentEvidence(
   ]);
 }
 
+function phase66FinalReleaseClosureAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE");
+}
+
+function phase66FinalReleaseChecklistAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_FINAL_RELEASE_CHECKLIST");
+}
+
+function phase66ReleaseApprovalAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_RELEASE_APPROVAL");
+}
+
+function phase66DocumentationFreezeAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION");
+}
+
+function phase66NoHiddenPhaseAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_NO_HIDDEN_PHASE_ASSERTION");
+}
+
+function phase66FinalVerificationAttachmentEvidence(
+  env: ReleaseEvidenceEnv,
+): Pick<ReleaseEvidenceAttachment, "envKey" | "configured" | "value" | "redacted"> {
+  return attachmentEvidence(env, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE");
+}
+
 function buildAttachments(
   env: ReleaseEvidenceEnv,
   storageTopology: StorageTopologyReport,
@@ -1691,6 +1794,7 @@ function buildAttachments(
   const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
   const phase64Gate = phase64ManagedPostgresRecoveryValidationGate(asyncStoreBoundary, phase63Gate);
   const phase65Gate = phase65CutoverRollbackAutomationGate(asyncStoreBoundary, phase64Gate);
+  const phase66Gate = phase66FinalReleaseClosureGate(asyncStoreBoundary, phase65Gate);
   return [
     {
       id: "phase-42-storage-topology",
@@ -2319,6 +2423,66 @@ function buildAttachments(
       ...phase65RollbackSafePostureAttachmentEvidence(env),
     },
     {
+      id: "phase-66-final-release-closure-evidence",
+      label: "Phase 66 final release closure evidence",
+      format: "json",
+      required: phase66Gate.finalReleaseClosureEvidenceRequired,
+      summary: phase66Gate.finalReleaseClosureEvidenceAttached
+        ? "Phase 66 final release closure evidence is attached."
+        : "Phase 66 final release closure evidence is required before release approval.",
+      ...phase66FinalReleaseClosureAttachmentEvidence(env),
+    },
+    {
+      id: "phase-66-final-release-checklist",
+      label: "Phase 66 final release checklist",
+      format: "json",
+      required: phase66Gate.finalReleaseChecklistRequired,
+      summary: phase66Gate.finalReleaseChecklistAttached
+        ? "Phase 66 final release checklist is attached."
+        : "Phase 66 final release checklist is required before release approval.",
+      ...phase66FinalReleaseChecklistAttachmentEvidence(env),
+    },
+    {
+      id: "phase-66-release-approval",
+      label: "Phase 66 release approval",
+      format: "json",
+      required: phase66Gate.releaseApprovalRequired,
+      summary: phase66Gate.releaseApprovalAttached
+        ? "Phase 66 release approval is attached."
+        : "Phase 66 release approval is required before release approval.",
+      ...phase66ReleaseApprovalAttachmentEvidence(env),
+    },
+    {
+      id: "phase-66-documentation-freeze-assertion",
+      label: "Phase 66 documentation freeze assertion",
+      format: "json",
+      required: phase66Gate.docsFreezeAssertionRequired,
+      summary: phase66Gate.docsFreezeAssertionAttached
+        ? "Phase 66 documentation freeze assertion is attached."
+        : "Phase 66 documentation freeze assertion is required before release approval.",
+      ...phase66DocumentationFreezeAttachmentEvidence(env),
+    },
+    {
+      id: "phase-66-no-hidden-phase-assertion",
+      label: "Phase 66 no-hidden-phase assertion",
+      format: "json",
+      required: phase66Gate.noHiddenPhaseAssertionRequired,
+      summary: phase66Gate.noHiddenPhaseAssertionAttached
+        ? "Phase 66 no-hidden-phase assertion is attached."
+        : "Phase 66 no-hidden-phase assertion is required before release approval.",
+      ...phase66NoHiddenPhaseAttachmentEvidence(env),
+    },
+    {
+      id: "phase-66-final-verification-evidence",
+      label: "Phase 66 final verification evidence",
+      format: "json",
+      required: phase66Gate.finalVerificationEvidenceRequired,
+      summary: phase66Gate.finalVerificationEvidenceAttached
+        ? "Phase 66 final verification evidence is attached."
+        : "Phase 66 final verification evidence is required before release approval.",
+      ...phase66FinalVerificationAttachmentEvidence(env),
+    },
+    {
       id: "phase-44-release-evidence",
       label: "Phase 44 release evidence bundle",
       format: "json",
@@ -2447,6 +2611,7 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
   const phase63Gate = phase63DistributedDependencyEnforcementGate(asyncStoreBoundary, phase62Gate);
   const phase64Gate = phase64ManagedPostgresRecoveryValidationGate(asyncStoreBoundary, phase63Gate);
   const phase65Gate = phase65CutoverRollbackAutomationGate(asyncStoreBoundary, phase64Gate);
+  const phase66Gate = phase66FinalReleaseClosureGate(asyncStoreBoundary, phase65Gate);
 
   return {
     phase: "44",
@@ -2752,6 +2917,30 @@ export function assessReleaseEvidence(input: ReleaseEvidenceInput = {}): Release
         phase65Phase66Pending: phase65Gate.phase66Pending,
         phase65PendingPhases: phase65Gate.pendingPhases,
         phase65TopologyReleaseAllowed: phase65Gate.releaseAllowed,
+        phase66FinalReleaseClosureGateRequired: phase66Gate.required,
+        phase66HorizontalWriterTopologyRequested: phase66Gate.horizontalWriterTopologyRequested,
+        phase66Phase65CutoverRollbackAutomationReady: phase66Gate.phase65CutoverRollbackAutomationReady,
+        phase66FinalReleaseClosureEvidenceRequired: phase66Gate.finalReleaseClosureEvidenceRequired,
+        phase66FinalReleaseClosureEvidenceAttached: phase66Gate.finalReleaseClosureEvidenceAttached,
+        phase66FinalReleaseChecklistRequired: phase66Gate.finalReleaseChecklistRequired,
+        phase66FinalReleaseChecklistAttached: phase66Gate.finalReleaseChecklistAttached,
+        phase66ReleaseApprovalRequired: phase66Gate.releaseApprovalRequired,
+        phase66ReleaseApprovalAttached: phase66Gate.releaseApprovalAttached,
+        phase66DocsFreezeAssertionRequired: phase66Gate.docsFreezeAssertionRequired,
+        phase66DocsFreezeAssertionAttached: phase66Gate.docsFreezeAssertionAttached,
+        phase66NoHiddenPhaseAssertionRequired: phase66Gate.noHiddenPhaseAssertionRequired,
+        phase66NoHiddenPhaseAssertionAttached: phase66Gate.noHiddenPhaseAssertionAttached,
+        phase66FinalVerificationEvidenceRequired: phase66Gate.finalVerificationEvidenceRequired,
+        phase66FinalVerificationEvidenceAttached: phase66Gate.finalVerificationEvidenceAttached,
+        phase66FinalReleaseClosureComplete: phase66Gate.finalReleaseClosureComplete,
+        phase66SupportedProductionPostureComplete: phase66Gate.supportedProductionPostureComplete,
+        phase66ActiveActiveSupported: phase66Gate.activeActiveSupported,
+        phase66RegionalFailoverSupported: phase66Gate.regionalFailoverSupported,
+        phase66PitrRuntimeSupported: phase66Gate.pitrRuntimeSupported,
+        phase66DistributedSqliteSupported: phase66Gate.distributedSqliteSupported,
+        phase66ApplicationManagedRegionalFailoverSupported: phase66Gate.applicationManagedRegionalFailoverSupported,
+        phase66ApplicationManagedPitrSupported: phase66Gate.applicationManagedPitrSupported,
+        phase66TopologyReleaseAllowed: phase66Gate.releaseAllowed,
         strictRelease: input.strict === true || truthy(env.TASKLOOM_RELEASE_STRICT) || truthy(env.TASKLOOM_STRICT_RELEASE),
         backupConfigured: configured(env.TASKLOOM_BACKUP_DIR),
         restoreDrillRecorded: restoreDrillRecorded(env),

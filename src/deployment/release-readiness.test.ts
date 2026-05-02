@@ -144,6 +144,18 @@ function phase65CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
   };
 }
 
+function phase66CompleteHorizontalWriterEnv(): ReleaseReadinessEnv {
+  return {
+    ...phase65CompleteHorizontalWriterEnv(),
+    TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE: "closure://phase66/final",
+    TASKLOOM_FINAL_RELEASE_CHECKLIST: "checklist://phase66/supported-posture",
+    TASKLOOM_RELEASE_APPROVAL: "approval://phase66/release-owner",
+    TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION: "docs-freeze://phase66/frozen",
+    TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "no-hidden-phase://phase66/supported-posture-complete",
+    TASKLOOM_FINAL_VERIFICATION_EVIDENCE: "verification://phase66/typecheck-test-build-cli-docs",
+  };
+}
+
 interface Phase63ReadinessGateContract {
   phase: "63";
   required: boolean;
@@ -208,6 +220,29 @@ interface Phase65ReadinessGateContract {
   summary: string;
 }
 
+interface Phase66ReadinessGateContract {
+  phase: "66";
+  required: boolean;
+  phase65CutoverRollbackAutomationReady: boolean;
+  finalReleaseClosureEvidenceAttached: boolean;
+  finalReleaseChecklistAttached: boolean;
+  releaseApprovalAttached: boolean;
+  docsFreezeAssertionAttached: boolean;
+  noHiddenPhaseAssertionAttached: boolean;
+  finalVerificationEvidenceAttached: boolean;
+  finalReleaseClosureComplete: boolean;
+  supportedProductionPostureComplete: boolean;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  applicationManagedRegionalFailoverSupported: false;
+  applicationManagedPitrSupported: false;
+  releaseAllowed: boolean;
+  blockers: string[];
+  summary: string;
+}
+
 function phase63Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase63ReadinessGateContract {
   const gate = (report.asyncStoreBoundary as unknown as {
     phase63DistributedDependencyEnforcementGate?: unknown;
@@ -230,6 +265,14 @@ function phase65Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase65
   }).phase65CutoverRollbackAutomationGate;
   assert.ok(gate && typeof gate === "object", "expected Phase 65 cutover/rollback automation gate");
   return gate as Phase65ReadinessGateContract;
+}
+
+function phase66Gate(report: ReturnType<typeof assessReleaseReadiness>): Phase66ReadinessGateContract {
+  const gate = (report.asyncStoreBoundary as unknown as {
+    phase66FinalReleaseClosureGate?: unknown;
+  }).phase66FinalReleaseClosureGate;
+  assert.ok(gate && typeof gate === "object", "expected Phase 66 final release closure gate");
+  return gate as Phase66ReadinessGateContract;
 }
 
 test("local JSON development produces warnings instead of release blockers", () => {
@@ -1322,6 +1365,66 @@ test("Phase 65 cutover automation passes with preflight, dry-run, smoke, rollbac
   assert.equal(report.readyForRelease, false);
   assert.ok(gate.summary.includes("Phase 65 cutover/rollback automation is complete"));
   assert.ok(report.nextSteps.some((step) => step.includes("Phase 66")));
+});
+
+test("Phase 66 final release closure blocks release approval until closure, approval, docs freeze, and verification evidence are attached", () => {
+  const report = assessReleaseReadiness({
+    env: phase65CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase66Gate(report);
+
+  assert.equal(report.readyForRelease, false);
+  assert.equal(gate.phase, "66");
+  assert.equal(gate.required, true);
+  assert.equal(gate.phase65CutoverRollbackAutomationReady, true);
+  assert.equal(gate.finalReleaseClosureEvidenceAttached, false);
+  assert.equal(gate.finalReleaseChecklistAttached, false);
+  assert.equal(gate.releaseApprovalAttached, false);
+  assert.equal(gate.docsFreezeAssertionAttached, false);
+  assert.equal(gate.noHiddenPhaseAssertionAttached, false);
+  assert.equal(gate.finalVerificationEvidenceAttached, false);
+  assert.equal(gate.finalReleaseClosureComplete, false);
+  assert.equal(gate.releaseAllowed, false);
+  assert.equal(checkStatus(report, "phase66-final-release-closure"), "fail");
+  assert.ok(gate.blockers.some((blocker) => blocker.includes("TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_NO_HIDDEN_PHASE_ASSERTION")));
+});
+
+test("Phase 66 final release closure passes the supported managed Postgres posture without widening unsupported topology boundaries", () => {
+  const report = assessReleaseReadiness({
+    env: phase66CompleteHorizontalWriterEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    strict: true,
+  });
+  const gate = phase66Gate(report);
+
+  assert.equal(report.readyForRelease, true);
+  assert.equal(report.asyncStoreBoundary.releaseAllowed, true);
+  assert.equal(gate.finalReleaseClosureEvidenceAttached, true);
+  assert.equal(gate.finalReleaseChecklistAttached, true);
+  assert.equal(gate.releaseApprovalAttached, true);
+  assert.equal(gate.docsFreezeAssertionAttached, true);
+  assert.equal(gate.noHiddenPhaseAssertionAttached, true);
+  assert.equal(gate.finalVerificationEvidenceAttached, true);
+  assert.equal(gate.finalReleaseClosureComplete, true);
+  assert.equal(gate.supportedProductionPostureComplete, true);
+  assert.equal(gate.activeActiveSupported, false);
+  assert.equal(gate.regionalFailoverSupported, false);
+  assert.equal(gate.pitrRuntimeSupported, false);
+  assert.equal(gate.distributedSqliteSupported, false);
+  assert.equal(gate.applicationManagedRegionalFailoverSupported, false);
+  assert.equal(gate.applicationManagedPitrSupported, false);
+  assert.equal(gate.releaseAllowed, true);
+  assert.equal(checkStatus(report, "storage-topology"), "pass");
+  assert.equal(checkStatus(report, "database-path"), "pass");
+  assert.equal(checkStatus(report, "phase66-final-release-closure"), "pass");
+  assert.ok(report.asyncStoreBoundary.summary.includes("Phase 66 final release closure is complete"));
 });
 
 test("Phase 55 detailed reviewer and authorization evidence attaches without coarse evidence refs", () => {

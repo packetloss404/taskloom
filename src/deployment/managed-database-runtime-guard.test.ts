@@ -146,6 +146,17 @@ const managedPostgresHorizontalWriterPhase65Env = {
   TASKLOOM_MONITORING_THRESHOLDS: "5xx<1%; p95<750ms; job-lag<2m",
 } as const;
 
+const managedPostgresHorizontalWriterPhase66Env = {
+  ...managedPostgresHorizontalWriterPhase65Env,
+  TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS: "passed",
+  TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE: "docs/phase-66/final-release-closure.md",
+  TASKLOOM_FINAL_RELEASE_CHECKLIST: "docs/phase-66/final-release-checklist.md",
+  TASKLOOM_RELEASE_APPROVAL: "REL-66",
+  TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION: "docs/phase-66/documentation-freeze.md",
+  TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "docs/phase-66/no-hidden-phase.md",
+  TASKLOOM_FINAL_VERIFICATION_EVIDENCE: "docs/phase-66/final-validation.md",
+} as const;
+
 type Phase63DependencyKey =
   | "distributedRateLimiting"
   | "schedulerCoordination"
@@ -1491,14 +1502,14 @@ test("managed Postgres horizontal app-writer runtime is blocked until Phase 65 c
   );
 });
 
-test("managed Postgres horizontal app-writer runtime is allowed after Phase 65 cutover automation", () => {
+test("managed Postgres horizontal app-writer runtime requires Phase 66 closure after Phase 65 cutover automation", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase65Env });
   const cutoverPreflight = observedEnvValue(report, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE");
   const monitoringThresholds = observedEnvValue(report, "TASKLOOM_MONITORING_THRESHOLDS");
 
-  assert.equal(report.allowed, true);
-  assert.equal(report.managedDatabaseRuntimeBlocked, false);
-  assert.equal(report.status, "pass");
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-postgres");
   assert.equal(report.phase64?.recoveryValidationReady, true);
   assert.equal(report.phase65?.required, true);
@@ -1519,14 +1530,68 @@ test("managed Postgres horizontal app-writer runtime is allowed after Phase 65 c
   assert.equal(report.phase65?.distributedSqliteSupported, false);
   assert.equal(report.phase65?.finalReleaseApprovalGranted, false);
   assert.equal(report.phase65?.releaseAllowed, false);
+  assert.equal(report.phase66?.required, true);
+  assert.equal(report.phase66?.phase65CutoverAutomationGatePassed, true);
+  assert.equal(report.phase66?.finalReleaseClosureStatusPassed, true);
+  assert.equal(report.phase66?.finalReleaseClosureEvidenceConfigured, false);
+  assert.equal(report.phase66?.finalReleaseChecklistConfigured, false);
+  assert.equal(report.phase66?.releaseApprovalConfigured, false);
+  assert.equal(report.phase66?.documentationFreezeEvidenceConfigured, false);
+  assert.equal(report.phase66?.noHiddenPhaseAssertionConfigured, false);
+  assert.equal(report.phase66?.finalReleaseValidationEvidenceConfigured, false);
+  assert.equal(report.phase66?.finalReleaseClosureReady, false);
+  assert.equal(report.phase66?.activationAllowed, false);
+  assert.equal(report.phase66?.releaseAllowed, false);
+  assert.equal(report.phase66?.finalReleaseApprovalGranted, false);
   assert.equal(cutoverPreflight.value, "docs/phase-65/cutover-preflight.md");
   assert.equal(cutoverPreflight.redacted, false);
   assert.equal(monitoringThresholds.value, "5xx<1%; p95<750ms; job-lag<2m");
   assert.equal(monitoringThresholds.redacted, false);
-  assert.ok(report.summary.includes("Phase 65"));
+  assert.ok(report.summary.includes("blocked"));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 66")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE")));
+  assert.throws(
+    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase65Env),
+    ManagedDatabaseRuntimeGuardError,
+  );
+});
+
+test("managed Postgres horizontal app-writer runtime is allowed after Phase 66 final release closure", () => {
+  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase66Env });
+  const closureEvidence = observedEnvValue(report, "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE");
+  const validationEvidence = observedEnvValue(report, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE");
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
+  assert.equal(report.status, "pass");
+  assert.equal(report.classification, "managed-postgres");
+  assert.equal(report.phase65?.cutoverAutomationGatePassed, true);
+  assert.equal(report.phase66?.required, true);
+  assert.equal(report.phase66?.phase65CutoverAutomationGatePassed, true);
+  assert.equal(report.phase66?.finalReleaseClosureStatus, "passed");
+  assert.equal(report.phase66?.finalReleaseClosureStatusPassed, true);
+  assert.equal(report.phase66?.finalReleaseClosureEvidenceConfigured, true);
+  assert.equal(report.phase66?.finalReleaseChecklistConfigured, true);
+  assert.equal(report.phase66?.releaseApprovalConfigured, true);
+  assert.equal(report.phase66?.documentationFreezeEvidenceConfigured, true);
+  assert.equal(report.phase66?.noHiddenPhaseAssertionConfigured, true);
+  assert.equal(report.phase66?.finalReleaseValidationEvidenceConfigured, true);
+  assert.equal(report.phase66?.finalReleaseClosureReady, true);
+  assert.equal(report.phase66?.activationAllowed, true);
+  assert.equal(report.phase66?.releaseAllowed, true);
+  assert.equal(report.phase66?.finalReleaseApprovalGranted, true);
+  assert.equal(report.phase66?.activeActiveSupported, false);
+  assert.equal(report.phase66?.appOwnedRegionalFailoverSupported, false);
+  assert.equal(report.phase66?.appOwnedPitrRuntimeSupported, false);
+  assert.equal(report.phase66?.distributedSqliteSupported, false);
+  assert.equal(closureEvidence.value, "docs/phase-66/final-release-closure.md");
+  assert.equal(closureEvidence.redacted, false);
+  assert.equal(validationEvidence.value, "docs/phase-66/final-validation.md");
+  assert.equal(validationEvidence.redacted, false);
+  assert.ok(report.summary.includes("Phase 66"));
   assert.equal(report.blockers.length, 0);
   assert.doesNotThrow(() =>
-    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase65Env),
+    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase66Env),
   );
 });
 

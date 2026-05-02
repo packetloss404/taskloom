@@ -140,6 +140,18 @@ function phase65CompleteHorizontalWriterEvidenceEnv() {
   };
 }
 
+function phase66CompleteHorizontalWriterEvidenceEnv() {
+  return {
+    ...phase65CompleteHorizontalWriterEvidenceEnv(),
+    TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE: "closure://phase66/final",
+    TASKLOOM_FINAL_RELEASE_CHECKLIST: "checklist://phase66/supported-posture",
+    TASKLOOM_RELEASE_APPROVAL: "approval://phase66/release-owner",
+    TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION: "docs-freeze://phase66/frozen",
+    TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "no-hidden-phase://phase66/supported-posture-complete",
+    TASKLOOM_FINAL_VERIFICATION_EVIDENCE: "https://verifier:secret@evidence.internal/phase66-final",
+  };
+}
+
 function injectedStorageTopology(): StorageTopologyReport {
   return {
     mode: "sqlite",
@@ -1468,6 +1480,72 @@ test("strict evidence records complete Phase 65 cutover automation while final a
     ),
   );
   assert.ok(bundle.nextSteps.some((step) => step.includes("Phase 66")));
+});
+
+test("strict evidence records missing Phase 66 final release closure after Phase 65", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase65CompleteHorizontalWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T08:00:00.000Z",
+    strict: true,
+  });
+  const closureAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-66-final-release-closure-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, false);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseClosureGateRequired, true);
+  assert.equal(bundle.evidence.config.phase66Phase65CutoverRollbackAutomationReady, true);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseClosureEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseChecklistAttached, false);
+  assert.equal(bundle.evidence.config.phase66ReleaseApprovalAttached, false);
+  assert.equal(bundle.evidence.config.phase66DocsFreezeAssertionAttached, false);
+  assert.equal(bundle.evidence.config.phase66NoHiddenPhaseAssertionAttached, false);
+  assert.equal(bundle.evidence.config.phase66FinalVerificationEvidenceAttached, false);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseClosureComplete, false);
+  assert.equal(bundle.evidence.config.phase66TopologyReleaseAllowed, false);
+  assert.equal(closureAttachment?.required, true);
+  assert.equal(closureAttachment?.configured, false);
+  assert.ok(bundle.nextSteps.some((step) => step.includes("TASKLOOM_FINAL_VERIFICATION_EVIDENCE")));
+});
+
+test("strict evidence records complete Phase 66 final release closure and preserves unsupported boundaries", () => {
+  const bundle = assessReleaseEvidence({
+    env: phase66CompleteHorizontalWriterEvidenceEnv(),
+    probes: {
+      directoryExists: (path) => path === "/srv/taskloom/backups",
+    },
+    generatedAt: "2026-04-29T08:30:00.000Z",
+    strict: true,
+  });
+  const verificationAttachment = bundle.attachments.find((attachment) =>
+    attachment.id === "phase-66-final-verification-evidence"
+  );
+
+  assert.equal(bundle.readyForRelease, true);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseClosureEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseChecklistAttached, true);
+  assert.equal(bundle.evidence.config.phase66ReleaseApprovalAttached, true);
+  assert.equal(bundle.evidence.config.phase66DocsFreezeAssertionAttached, true);
+  assert.equal(bundle.evidence.config.phase66NoHiddenPhaseAssertionAttached, true);
+  assert.equal(bundle.evidence.config.phase66FinalVerificationEvidenceAttached, true);
+  assert.equal(bundle.evidence.config.phase66FinalReleaseClosureComplete, true);
+  assert.equal(bundle.evidence.config.phase66SupportedProductionPostureComplete, true);
+  assert.equal(bundle.evidence.config.phase66ActiveActiveSupported, false);
+  assert.equal(bundle.evidence.config.phase66RegionalFailoverSupported, false);
+  assert.equal(bundle.evidence.config.phase66PitrRuntimeSupported, false);
+  assert.equal(bundle.evidence.config.phase66DistributedSqliteSupported, false);
+  assert.equal(bundle.evidence.config.phase66ApplicationManagedRegionalFailoverSupported, false);
+  assert.equal(bundle.evidence.config.phase66ApplicationManagedPitrSupported, false);
+  assert.equal(bundle.evidence.config.phase66TopologyReleaseAllowed, true);
+  assert.equal(verificationAttachment?.required, true);
+  assert.equal(verificationAttachment?.configured, true);
+  assert.equal(verificationAttachment?.redacted, true);
+  assert.equal(verificationAttachment?.value, "[redacted]");
+  assert.equal(evidenceEntry(bundle.evidence.environment, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE").value, "[redacted]");
+  assert.ok(bundle.summary.includes("ready for handoff"));
 });
 
 test("strict evidence records failed Phase 65 smoke checks as rollback to prior safe posture", () => {

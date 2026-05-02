@@ -22,6 +22,7 @@ const PHASE62_REPORT_KEY_PATTERN = /^phase62/i;
 const PHASE63_REPORT_KEY_PATTERN = /^phase63/i;
 const PHASE64_REPORT_KEY_PATTERN = /^phase64/i;
 const PHASE65_REPORT_KEY_PATTERN = /^phase65/i;
+const PHASE66_REPORT_KEY_PATTERN = /^phase66/i;
 const EVIDENCE_KEY_PATTERN = /evidence/i;
 const PHASE59_URL_REDACTION_KEY_PATTERN = /(evidence|ticket|abort|signoff|runbook|approval)/i;
 const PHASE60_URL_REDACTION_KEY_PATTERN =
@@ -36,6 +37,8 @@ const PHASE64_URL_REDACTION_KEY_PATTERN =
   /(backup|restore|pitr|failover|rehearsal|integrity|recovery|time|expectation|evidence|url)/i;
 const PHASE65_URL_REDACTION_KEY_PATTERN =
   /(cutover|preflight|activation|dry|run|smoke|rollback|command|guidance|monitoring|threshold|operations|health|status|safe|posture|evidence|url)/i;
+const PHASE66_URL_REDACTION_KEY_PATTERN =
+  /(final|release|closure|checklist|approval|documentation|freeze|hidden|assertion|validation|verification|typecheck|test|build|cli|docs|evidence|url)/i;
 const UNSUPPORTED_RUNTIME_RELEASE_CLAIM_KEY_PATTERNS = [
   /(activeactive|active_active|active-active).*(support|supported|releaseallowed|releasesupported|runtimesupport)/i,
   /(support|supported|releaseallowed|releasesupported|runtimesupport).*(activeactive|active_active|active-active)/i,
@@ -122,6 +125,7 @@ function redactValue(
   inPhase59Report = false,
   inPhase60Report = false,
   inPhase61Report = false,
+  inPhase66Report = false,
 ): unknown {
   if (typeof value === "string") {
     if (!value) return value;
@@ -139,6 +143,7 @@ function redactValue(
         inPhase59Report,
         inPhase60Report,
         inPhase61Report,
+        inPhase66Report,
       )
     );
   }
@@ -155,7 +160,8 @@ function redactValue(
         PHASE62_REPORT_KEY_PATTERN.test(key) ||
         PHASE63_REPORT_KEY_PATTERN.test(key) ||
         PHASE64_REPORT_KEY_PATTERN.test(key) ||
-        PHASE65_REPORT_KEY_PATTERN.test(key);
+        PHASE65_REPORT_KEY_PATTERN.test(key) ||
+        PHASE66_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase59Report = inPhase59Report || PHASE59_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase60Report = inPhase60Report || PHASE60_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase61Report = inPhase61Report || PHASE61_REPORT_KEY_PATTERN.test(key);
@@ -163,6 +169,7 @@ function redactValue(
       const nestedInPhase63Report = PHASE63_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase64Report = PHASE64_REPORT_KEY_PATTERN.test(key);
       const nestedInPhase65Report = PHASE65_REPORT_KEY_PATTERN.test(key);
+      const nestedInPhase66Report = inPhase66Report || PHASE66_REPORT_KEY_PATTERN.test(key);
       const nestedRedactPhaseUrl =
         redactPhaseUrl ||
         (nestedInPhase59Report && PHASE59_URL_REDACTION_KEY_PATTERN.test(key)) ||
@@ -172,6 +179,7 @@ function redactValue(
         (nestedInPhase63Report && PHASE63_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase64Report && PHASE64_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhase65Report && PHASE65_URL_REDACTION_KEY_PATTERN.test(key)) ||
+        (nestedInPhase66Report && PHASE66_URL_REDACTION_KEY_PATTERN.test(key)) ||
         (nestedInPhaseUrlRedactionReport && EVIDENCE_KEY_PATTERN.test(key));
       redacted[key] = force && (key === "configured" || key === "redacted")
         ? entry
@@ -183,6 +191,7 @@ function redactValue(
           nestedInPhase59Report,
           nestedInPhase60Report,
           nestedInPhase61Report,
+          nestedInPhase66Report,
         );
     }
     return redacted;
@@ -1601,7 +1610,7 @@ function withPhase65Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
     );
   const summary = existingPhase65.summary ?? (
     cutoverRollbackAutomationReady
-      ? "Phase 65 records repeatable managed Postgres cutover, smoke-check, rollback, and observability automation; final release closure and release approval remain blocked pending Phase 66."
+      ? "Phase 65 records repeatable managed Postgres cutover, smoke-check, rollback, and observability automation; Phase 66 final release closure determines release approval."
       : automationFailureDetected
         ? "Phase 65 cutover automation detected a failed preflight, dry-run, or smoke check; activation remains blocked until rollback to the prior safe posture is proven."
         : "Phase 65 requires cutover preflight, activation dry-run, post-activation smoke, rollback command guidance, monitoring threshold, operations health status, and prior safe posture evidence before activation can proceed."
@@ -1661,8 +1670,195 @@ function withPhase65Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
       applicationManagedPitrSupported: false,
       phase66Pending: horizontalWriterIntent,
       pendingPhases: horizontalWriterIntent ? ["66"] : [],
-      releaseAllowed: existingPhase65.releaseAllowed ?? !horizontalWriterIntent,
+      releaseAllowed: horizontalWriterIntent ? false : existingPhase65.releaseAllowed ?? true,
       strictBlocker: existingPhase65.strictBlocker ?? (horizontalWriterIntent && cutoverRollbackAutomationReady !== true),
+      summary,
+    },
+  });
+}
+
+function withPhase66Status(report: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (!isReport(report)) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const nestedPhase66 = firstReportAt(report, [
+    ["phase66FinalReleaseClosureGate"],
+    ["phase66FinalReleaseClosureReport"],
+    ["managedDatabase", "phase66"],
+    ["managedDatabase", "phase66FinalReleaseClosureGate"],
+    ["managedDatabaseTopology", "phase66"],
+    ["managedDatabaseTopology", "phase66FinalReleaseClosureGate"],
+    ["managedDatabaseRuntimeGuard", "phase66"],
+    ["managedDatabaseRuntimeGuard", "phase66FinalReleaseClosureGate"],
+    ["releaseReadiness", "phase66"],
+    ["releaseReadiness", "phase66FinalReleaseClosureGate"],
+    ["releaseEvidence", "phase66"],
+    ["releaseEvidence", "phase66FinalReleaseClosureGate"],
+    ["evidence", "phase66"],
+    ["evidence", "phase66FinalReleaseClosureGate"],
+    ["asyncStoreBoundary", "phase66"],
+    ["asyncStoreBoundary", "phase66FinalReleaseClosureGate"],
+  ]) ?? firstReportByKey(report, (key) => PHASE66_REPORT_KEY_PATTERN.test(key));
+  const existingPhase66 = reportAt(report, ["phase66"]) ?? nestedPhase66 ?? {};
+  const phase65 = reportAt(report, ["phase65"]) ?? {};
+  const horizontalWriterIntent =
+    existingPhase66.horizontalWriterTopologyRequested === true ||
+    existingPhase66.required === true ||
+    phase65.horizontalWriterTopologyRequested === true ||
+    hasHorizontalWriterTopologyIntent(env);
+  const hasPhase66EnvEvidence =
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_CHECKLIST") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_RELEASE_APPROVAL") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_DOCUMENTATION_FREEZE_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_NO_HIDDEN_PHASE_ASSERTION") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_VALIDATION_EVIDENCE") !== undefined ||
+    phase62EnvValue(env, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE") !== undefined;
+
+  if (!horizontalWriterIntent && !nestedPhase66 && !reportAt(report, ["phase66"]) && !hasPhase66EnvEvidence) {
+    return blockUnsupportedRuntimeReleaseClaims(report);
+  }
+
+  const passedStatus = (value: string | undefined): boolean =>
+    ["pass", "passed", "ok", "ready", "success", "succeeded"].includes(normalize(value));
+  const finalReleaseClosureStatus =
+    existingPhase66.finalReleaseClosureStatus ?? normalize(env.TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS);
+  const finalReleaseClosureEvidence =
+    existingPhase66.finalReleaseClosureEvidence ??
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE");
+  const finalReleaseChecklist =
+    existingPhase66.finalReleaseChecklist ??
+    existingPhase66.releaseChecklist ??
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_CHECKLIST");
+  const releaseApproval =
+    existingPhase66.releaseApproval ??
+    existingPhase66.finalReleaseApproval ??
+    phase62EnvValue(env, "TASKLOOM_RELEASE_APPROVAL") ??
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_APPROVAL");
+  const documentationFreezeEvidence =
+    existingPhase66.documentationFreezeEvidence ??
+    existingPhase66.documentationFreezeAssertion ??
+    phase62EnvValue(env, "TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION") ??
+    phase62EnvValue(env, "TASKLOOM_DOCUMENTATION_FREEZE_EVIDENCE");
+  const noHiddenPhaseAssertion =
+    existingPhase66.noHiddenPhaseAssertion ??
+    phase62EnvValue(env, "TASKLOOM_NO_HIDDEN_PHASE_ASSERTION");
+  const finalReleaseValidationEvidence =
+    existingPhase66.finalReleaseValidationEvidence ??
+    existingPhase66.finalVerificationEvidence ??
+    existingPhase66.validationEvidence ??
+    phase62EnvValue(env, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE") ??
+    phase62EnvValue(env, "TASKLOOM_FINAL_RELEASE_VALIDATION_EVIDENCE");
+  const phase65CutoverRollbackAutomationReady =
+    existingPhase66.phase65CutoverRollbackAutomationReady ??
+    existingPhase66.phase65CutoverAutomationGatePassed ??
+    phase65.cutoverRollbackAutomationReady ??
+    phase65.cutoverAutomationGatePassed ??
+    false;
+  const finalReleaseClosureStatusPassed =
+    existingPhase66.finalReleaseClosureStatusPassed ??
+    (finalReleaseClosureStatus ? passedStatus(String(finalReleaseClosureStatus ?? "")) : true);
+  const finalReleaseClosureEvidenceAttached =
+    existingPhase66.finalReleaseClosureEvidenceAttached ??
+    existingPhase66.finalReleaseClosureEvidenceConfigured ??
+    (finalReleaseClosureEvidence !== undefined);
+  const finalReleaseChecklistAttached =
+    existingPhase66.finalReleaseChecklistAttached ??
+    existingPhase66.releaseChecklistAttached ??
+    (finalReleaseChecklist !== undefined);
+  const releaseApprovalAttached =
+    existingPhase66.releaseApprovalAttached ??
+    existingPhase66.finalReleaseApprovalAttached ??
+    (releaseApproval !== undefined);
+  const documentationFreezeEvidenceAttached =
+    existingPhase66.documentationFreezeEvidenceAttached ??
+    existingPhase66.documentationFreezeEvidenceConfigured ??
+    (documentationFreezeEvidence !== undefined);
+  const noHiddenPhaseAssertionAttached =
+    existingPhase66.noHiddenPhaseAssertionAttached ??
+    (noHiddenPhaseAssertion !== undefined);
+  const finalReleaseValidationEvidenceAttached =
+    existingPhase66.finalReleaseValidationEvidenceAttached ??
+    existingPhase66.finalReleaseValidationEvidenceConfigured ??
+    (finalReleaseValidationEvidence !== undefined);
+  const finalReleaseClosureReady =
+    existingPhase66.finalReleaseClosureReady ??
+    (
+      horizontalWriterIntent &&
+      phase65CutoverRollbackAutomationReady === true &&
+      finalReleaseClosureStatusPassed === true &&
+      finalReleaseClosureEvidenceAttached === true &&
+      finalReleaseChecklistAttached === true &&
+      releaseApprovalAttached === true &&
+      documentationFreezeEvidenceAttached === true &&
+      noHiddenPhaseAssertionAttached === true &&
+      finalReleaseValidationEvidenceAttached === true
+    );
+  const summary = existingPhase66.summary ?? (
+    finalReleaseClosureReady
+      ? "Phase 66 records final release closure for the supported managed Postgres horizontal app-writer posture; activation and release are allowed."
+      : "Phase 66 requires Phase 65 cutover automation, final release closure evidence, final checklist, release approval, documentation freeze and no-hidden-phase assertions, and final verification evidence before activation or release is allowed."
+  );
+
+  return blockUnsupportedRuntimeReleaseClaims({
+    ...report,
+    phase66: {
+      ...existingPhase66,
+      phase: existingPhase66.phase ?? "66",
+      required: existingPhase66.required ?? horizontalWriterIntent,
+      horizontalWriterTopologyRequested: horizontalWriterIntent,
+      phase65CutoverRollbackAutomationReady,
+      phase65CutoverAutomationGatePassed: phase65CutoverRollbackAutomationReady,
+      finalReleaseClosureStatus: finalReleaseClosureStatus || null,
+      finalReleaseClosureStatusPassed,
+      finalReleaseClosureEvidenceRequired: existingPhase66.finalReleaseClosureEvidenceRequired ?? horizontalWriterIntent,
+      finalReleaseClosureEvidence,
+      finalReleaseClosureEvidenceAttached,
+      finalReleaseClosureEvidenceConfigured: finalReleaseClosureEvidenceAttached,
+      finalReleaseChecklistRequired: existingPhase66.finalReleaseChecklistRequired ?? horizontalWriterIntent,
+      finalReleaseChecklist,
+      releaseChecklist: finalReleaseChecklist,
+      finalReleaseChecklistAttached,
+      releaseChecklistAttached: finalReleaseChecklistAttached,
+      releaseApprovalRequired: existingPhase66.releaseApprovalRequired ?? horizontalWriterIntent,
+      releaseApproval,
+      finalReleaseApproval: releaseApproval,
+      releaseApprovalAttached,
+      finalReleaseApprovalAttached: releaseApprovalAttached,
+      documentationFreezeEvidenceRequired:
+        existingPhase66.documentationFreezeEvidenceRequired ?? horizontalWriterIntent,
+      documentationFreezeEvidence,
+      documentationFreezeAssertion: documentationFreezeEvidence,
+      documentationFreezeEvidenceAttached,
+      documentationFreezeEvidenceConfigured: documentationFreezeEvidenceAttached,
+      docsFreezeAssertionAttached: documentationFreezeEvidenceAttached,
+      noHiddenPhaseAssertionRequired: existingPhase66.noHiddenPhaseAssertionRequired ?? horizontalWriterIntent,
+      noHiddenPhaseAssertion,
+      noHiddenPhaseAssertionAttached,
+      finalReleaseValidationEvidenceRequired:
+        existingPhase66.finalReleaseValidationEvidenceRequired ?? horizontalWriterIntent,
+      finalReleaseValidationEvidence,
+      finalVerificationEvidence: finalReleaseValidationEvidence,
+      finalReleaseValidationEvidenceAttached,
+      finalReleaseValidationEvidenceConfigured: finalReleaseValidationEvidenceAttached,
+      finalVerificationEvidenceAttached: finalReleaseValidationEvidenceAttached,
+      finalReleaseClosureReady,
+      activationAllowed: finalReleaseClosureReady,
+      releaseAllowed: finalReleaseClosureReady,
+      finalReleaseApprovalGranted: finalReleaseClosureReady,
+      supportedProductionPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr",
+      supportedPosture: "managed-postgres-horizontal-app-writers-provider-ha-pitr",
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      applicationManagedRegionalFailoverSupported: false,
+      applicationManagedPitrSupported: false,
+      pendingPhases: [],
+      strictBlocker: existingPhase66.strictBlocker ?? (horizontalWriterIntent && finalReleaseClosureReady !== true),
       summary,
     },
   });
@@ -1682,6 +1878,7 @@ export function formatDeploymentCliJson(report: unknown, env: NodeJS.ProcessEnv)
   enrichedReport = withPhase63Status(enrichedReport, env);
   enrichedReport = withPhase64Status(enrichedReport, env);
   enrichedReport = withPhase65Status(enrichedReport, env);
+  enrichedReport = withPhase66Status(enrichedReport, env);
 
   return JSON.stringify(redactValue(enrichedReport), null, 2);
 }

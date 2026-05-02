@@ -1514,3 +1514,128 @@ test("formatDeploymentCliJson blocks Phase 65 when a smoke check fails", () => {
   assert.equal(report.phase65?.strictBlocker, true);
   assert.match(String(report.phase65?.summary), /failed preflight, dry-run, or smoke check/);
 });
+
+test("formatDeploymentCliJson synthesizes Phase 66 final closure while blocking release until evidence is present", () => {
+  const output = formatDeploymentCliJson({
+    phase65: {
+      horizontalWriterTopologyRequested: true,
+      cutoverRollbackAutomationReady: true,
+      releaseAllowed: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    phase65?: { releaseAllowed?: unknown };
+    phase66?: {
+      phase?: unknown;
+      required?: unknown;
+      phase65CutoverAutomationGatePassed?: unknown;
+      finalReleaseClosureStatusPassed?: unknown;
+      finalReleaseClosureEvidenceAttached?: unknown;
+      finalReleaseChecklistAttached?: unknown;
+      releaseApprovalAttached?: unknown;
+      documentationFreezeEvidenceAttached?: unknown;
+      noHiddenPhaseAssertionAttached?: unknown;
+      finalReleaseValidationEvidenceAttached?: unknown;
+      finalReleaseClosureReady?: unknown;
+      activationAllowed?: unknown;
+      releaseAllowed?: unknown;
+      finalReleaseApprovalGranted?: unknown;
+      strictBlocker?: unknown;
+      summary?: unknown;
+    };
+  };
+
+  assert.equal(report.phase65?.releaseAllowed, false);
+  assert.equal(report.phase66?.phase, "66");
+  assert.equal(report.phase66?.required, true);
+  assert.equal(report.phase66?.phase65CutoverAutomationGatePassed, true);
+  assert.equal(report.phase66?.finalReleaseClosureStatusPassed, true);
+  assert.equal(report.phase66?.finalReleaseClosureEvidenceAttached, false);
+  assert.equal(report.phase66?.finalReleaseChecklistAttached, false);
+  assert.equal(report.phase66?.releaseApprovalAttached, false);
+  assert.equal(report.phase66?.documentationFreezeEvidenceAttached, false);
+  assert.equal(report.phase66?.noHiddenPhaseAssertionAttached, false);
+  assert.equal(report.phase66?.finalReleaseValidationEvidenceAttached, false);
+  assert.equal(report.phase66?.finalReleaseClosureReady, false);
+  assert.equal(report.phase66?.activationAllowed, false);
+  assert.equal(report.phase66?.releaseAllowed, false);
+  assert.equal(report.phase66?.finalReleaseApprovalGranted, false);
+  assert.equal(report.phase66?.strictBlocker, true);
+  assert.match(String(report.phase66?.summary), /Phase 66 requires/);
+});
+
+test("formatDeploymentCliJson allows Phase 66 release and redacts final closure evidence URLs", () => {
+  const output = formatDeploymentCliJson({
+    phase65: {
+      horizontalWriterTopologyRequested: true,
+      cutoverRollbackAutomationReady: true,
+    },
+    releaseClaims: {
+      activeActiveSupported: true,
+      regionalFailoverSupported: true,
+      pitrRuntimeSupported: true,
+      distributedSqliteSupported: true,
+    },
+  }, {
+    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
+    TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS: "passed",
+    TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE: "https://approver:secret@evidence.internal/phase66-closure",
+    TASKLOOM_FINAL_RELEASE_CHECKLIST: "checklist://phase66",
+    TASKLOOM_RELEASE_APPROVAL: "approval://phase66",
+    TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION: "docs-freeze://phase66",
+    TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "no-hidden://phase66",
+    TASKLOOM_FINAL_VERIFICATION_EVIDENCE: "validation://phase66",
+  } as NodeJS.ProcessEnv);
+  const report = JSON.parse(output) as {
+    releaseClaims?: {
+      activeActiveSupported?: unknown;
+      regionalFailoverSupported?: unknown;
+      pitrRuntimeSupported?: unknown;
+      distributedSqliteSupported?: unknown;
+    };
+    phase66?: {
+      finalReleaseClosureStatus?: unknown;
+      finalReleaseClosureEvidence?: unknown;
+      finalReleaseChecklist?: unknown;
+      releaseApproval?: unknown;
+      documentationFreezeEvidence?: unknown;
+      noHiddenPhaseAssertion?: unknown;
+      finalReleaseValidationEvidence?: unknown;
+      finalReleaseClosureReady?: unknown;
+      activationAllowed?: unknown;
+      releaseAllowed?: unknown;
+      finalReleaseApprovalGranted?: unknown;
+      activeActiveSupported?: unknown;
+      regionalFailoverSupported?: unknown;
+      pitrRuntimeSupported?: unknown;
+      distributedSqliteSupported?: unknown;
+      pendingPhases?: unknown;
+      strictBlocker?: unknown;
+    };
+  };
+
+  assert.equal(report.releaseClaims?.activeActiveSupported, false);
+  assert.equal(report.releaseClaims?.regionalFailoverSupported, false);
+  assert.equal(report.releaseClaims?.pitrRuntimeSupported, false);
+  assert.equal(report.releaseClaims?.distributedSqliteSupported, false);
+  assert.equal(report.phase66?.finalReleaseClosureStatus, "passed");
+  assert.equal(report.phase66?.finalReleaseClosureEvidence, "[redacted]");
+  assert.equal(report.phase66?.finalReleaseChecklist, "[redacted]");
+  assert.equal(report.phase66?.releaseApproval, "[redacted]");
+  assert.equal(report.phase66?.documentationFreezeEvidence, "[redacted]");
+  assert.equal(report.phase66?.noHiddenPhaseAssertion, "[redacted]");
+  assert.equal(report.phase66?.finalReleaseValidationEvidence, "[redacted]");
+  assert.equal(report.phase66?.finalReleaseClosureReady, true);
+  assert.equal(report.phase66?.activationAllowed, true);
+  assert.equal(report.phase66?.releaseAllowed, true);
+  assert.equal(report.phase66?.finalReleaseApprovalGranted, true);
+  assert.equal(report.phase66?.activeActiveSupported, false);
+  assert.equal(report.phase66?.regionalFailoverSupported, false);
+  assert.equal(report.phase66?.pitrRuntimeSupported, false);
+  assert.equal(report.phase66?.distributedSqliteSupported, false);
+  assert.deepEqual(report.phase66?.pendingPhases, []);
+  assert.equal(report.phase66?.strictBlocker, false);
+  assert.doesNotMatch(output, /approver:secret/);
+});

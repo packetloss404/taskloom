@@ -98,6 +98,12 @@ export interface ReleaseReadinessEnv
   TASKLOOM_MONITORING_THRESHOLD_EVIDENCE?: string;
   TASKLOOM_OPERATIONS_HEALTH_CUTOVER_STATUS_EVIDENCE?: string;
   TASKLOOM_ROLLBACK_SAFE_POSTURE_EVIDENCE?: string;
+  TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE?: string;
+  TASKLOOM_FINAL_RELEASE_CHECKLIST?: string;
+  TASKLOOM_RELEASE_APPROVAL?: string;
+  TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION?: string;
+  TASKLOOM_NO_HIDDEN_PHASE_ASSERTION?: string;
+  TASKLOOM_FINAL_VERIFICATION_EVIDENCE?: string;
 }
 
 export interface ReleaseReadinessCheck {
@@ -163,6 +169,7 @@ export interface AsyncStoreBoundaryReport {
   phase63DistributedDependencyEnforcementGate?: Phase63DistributedDependencyEnforcementGateReport;
   phase64ManagedPostgresRecoveryValidationGate?: Phase64ManagedPostgresRecoveryValidationGateReport;
   phase65CutoverRollbackAutomationGate?: Phase65CutoverRollbackAutomationGateReport;
+  phase66FinalReleaseClosureGate?: Phase66FinalReleaseClosureGateReport;
   classification: AsyncStoreBoundaryClassification;
   summary: string;
   blockers: string[];
@@ -496,6 +503,37 @@ export interface Phase65CutoverRollbackAutomationGateReport {
   distributedSqliteSupported: false;
   phase66Pending: boolean;
   pendingPhases: string[];
+  releaseAllowed: boolean;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+}
+
+export interface Phase66FinalReleaseClosureGateReport {
+  phase: "66";
+  required: boolean;
+  horizontalWriterTopologyRequested: boolean;
+  phase65CutoverRollbackAutomationReady: boolean;
+  finalReleaseClosureEvidenceRequired: boolean;
+  finalReleaseClosureEvidenceAttached: boolean;
+  finalReleaseChecklistRequired: boolean;
+  finalReleaseChecklistAttached: boolean;
+  releaseApprovalRequired: boolean;
+  releaseApprovalAttached: boolean;
+  docsFreezeAssertionRequired: boolean;
+  docsFreezeAssertionAttached: boolean;
+  noHiddenPhaseAssertionRequired: boolean;
+  noHiddenPhaseAssertionAttached: boolean;
+  finalVerificationEvidenceRequired: boolean;
+  finalVerificationEvidenceAttached: boolean;
+  finalReleaseClosureComplete: boolean;
+  supportedProductionPostureComplete: boolean;
+  activeActiveSupported: false;
+  regionalFailoverSupported: false;
+  pitrRuntimeSupported: false;
+  distributedSqliteSupported: false;
+  applicationManagedRegionalFailoverSupported: false;
+  applicationManagedPitrSupported: false;
   releaseAllowed: boolean;
   summary: string;
   blockers: string[];
@@ -2351,7 +2389,7 @@ function buildPhase65CutoverRollbackAutomationGate(
     pendingPhases,
     releaseAllowed: false,
     summary: cutoverRollbackAutomationReady
-      ? "Phase 65 cutover/rollback automation is complete with preflight, activation dry-run, smoke checks, rollback guidance, monitoring thresholds, operations health status evidence, and prior safe posture proof; final release approval remains blocked pending Phase 66."
+      ? "Phase 65 cutover/rollback automation is complete with preflight, activation dry-run, smoke checks, rollback guidance, monitoring thresholds, operations health status evidence, and prior safe posture proof; Phase 66 final release closure remains required for release approval."
       : rollbackToPriorSafePostureRequired
       ? "Phase 65 cutover/rollback automation detected a failed preflight or smoke check; activation remains blocked and rollback to the prior safe posture must be proven."
       : "Phase 65 cutover/rollback automation requires cutover preflight, activation dry-run, post-activation smoke checks, rollback guidance, monitoring thresholds, operations health status evidence, and prior safe posture proof before activation.",
@@ -2422,7 +2460,148 @@ function buildPhase65CutoverRollbackAutomationGate(
       ...(!rollbackSafePostureEvidenceAttached
         ? ["Attach TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE proving the rollback command returns the deployment to the prior safe posture."]
         : []),
-      "Keep final release approval blocked until Phase 66 closes the release.",
+      "Complete Phase 66 final release closure before granting release approval.",
+    ],
+  };
+}
+
+function buildPhase66FinalReleaseClosureGate(
+  horizontalWriterIntent: boolean,
+  phase65Gate: Phase65CutoverRollbackAutomationGateReport,
+  env: ReleaseReadinessEnv,
+): Phase66FinalReleaseClosureGateReport {
+  const finalReleaseClosureEvidenceAttached =
+    clean(env.TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE).length > 0;
+  const finalReleaseChecklistAttached =
+    clean(env.TASKLOOM_FINAL_RELEASE_CHECKLIST).length > 0;
+  const releaseApprovalAttached =
+    clean(env.TASKLOOM_RELEASE_APPROVAL).length > 0;
+  const docsFreezeAssertionAttached =
+    clean(env.TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION).length > 0;
+  const noHiddenPhaseAssertionAttached =
+    clean(env.TASKLOOM_NO_HIDDEN_PHASE_ASSERTION).length > 0;
+  const finalVerificationEvidenceAttached =
+    clean(env.TASKLOOM_FINAL_VERIFICATION_EVIDENCE).length > 0;
+  const phase65CutoverRollbackAutomationReady =
+    phase65Gate.cutoverRollbackAutomationReady;
+  const finalReleaseClosureComplete =
+    horizontalWriterIntent &&
+    phase65CutoverRollbackAutomationReady &&
+    finalReleaseClosureEvidenceAttached &&
+    finalReleaseChecklistAttached &&
+    releaseApprovalAttached &&
+    docsFreezeAssertionAttached &&
+    noHiddenPhaseAssertionAttached &&
+    finalVerificationEvidenceAttached;
+
+  if (!horizontalWriterIntent) {
+    return {
+      phase: "66",
+      required: false,
+      horizontalWriterTopologyRequested: false,
+      phase65CutoverRollbackAutomationReady,
+      finalReleaseClosureEvidenceRequired: false,
+      finalReleaseClosureEvidenceAttached,
+      finalReleaseChecklistRequired: false,
+      finalReleaseChecklistAttached,
+      releaseApprovalRequired: false,
+      releaseApprovalAttached,
+      docsFreezeAssertionRequired: false,
+      docsFreezeAssertionAttached,
+      noHiddenPhaseAssertionRequired: false,
+      noHiddenPhaseAssertionAttached,
+      finalVerificationEvidenceRequired: false,
+      finalVerificationEvidenceAttached,
+      finalReleaseClosureComplete: false,
+      supportedProductionPostureComplete: false,
+      activeActiveSupported: false,
+      regionalFailoverSupported: false,
+      pitrRuntimeSupported: false,
+      distributedSqliteSupported: false,
+      applicationManagedRegionalFailoverSupported: false,
+      applicationManagedPitrSupported: false,
+      releaseAllowed: true,
+      summary: "Phase 66 final release closure is not required for this release posture.",
+      blockers: [],
+      nextSteps: ["Keep Phase 66 final closure evidence ready before any future managed Postgres horizontal app-writer release approval claim."],
+    };
+  }
+
+  return {
+    phase: "66",
+    required: true,
+    horizontalWriterTopologyRequested: true,
+    phase65CutoverRollbackAutomationReady,
+    finalReleaseClosureEvidenceRequired: true,
+    finalReleaseClosureEvidenceAttached,
+    finalReleaseChecklistRequired: true,
+    finalReleaseChecklistAttached,
+    releaseApprovalRequired: true,
+    releaseApprovalAttached,
+    docsFreezeAssertionRequired: true,
+    docsFreezeAssertionAttached,
+    noHiddenPhaseAssertionRequired: true,
+    noHiddenPhaseAssertionAttached,
+    finalVerificationEvidenceRequired: true,
+    finalVerificationEvidenceAttached,
+    finalReleaseClosureComplete,
+    supportedProductionPostureComplete: finalReleaseClosureComplete,
+    activeActiveSupported: false,
+    regionalFailoverSupported: false,
+    pitrRuntimeSupported: false,
+    distributedSqliteSupported: false,
+    applicationManagedRegionalFailoverSupported: false,
+    applicationManagedPitrSupported: false,
+    releaseAllowed: finalReleaseClosureComplete,
+    summary: finalReleaseClosureComplete
+      ? "Phase 66 final release closure is complete: Phase 65 is complete, final release closure evidence and checklist are attached, release approval is recorded, docs are frozen with a no-hidden-phase assertion, and final verification evidence is attached for the supported managed Postgres horizontal app-writer posture."
+      : "Phase 66 final release closure requires Phase 65 completion, final closure evidence and checklist, release approval, docs freeze and no-hidden-phase assertions, and final verification evidence before release approval.",
+    blockers: [
+      ...(!phase65CutoverRollbackAutomationReady
+        ? ["Phase 66 final release closure requires complete Phase 65 cutover/rollback automation first."]
+        : []),
+      ...(!finalReleaseClosureEvidenceAttached
+        ? ["Phase 66 final release closure evidence is required in TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE."]
+        : []),
+      ...(!finalReleaseChecklistAttached
+        ? ["Phase 66 final release checklist is required in TASKLOOM_FINAL_RELEASE_CHECKLIST."]
+        : []),
+      ...(!releaseApprovalAttached
+        ? ["Phase 66 release approval is required in TASKLOOM_RELEASE_APPROVAL."]
+        : []),
+      ...(!docsFreezeAssertionAttached
+        ? ["Phase 66 documentation freeze assertion is required in TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION."]
+        : []),
+      ...(!noHiddenPhaseAssertionAttached
+        ? ["Phase 66 no-hidden-phase assertion is required in TASKLOOM_NO_HIDDEN_PHASE_ASSERTION."]
+        : []),
+      ...(!finalVerificationEvidenceAttached
+        ? ["Phase 66 final verification evidence is required in TASKLOOM_FINAL_VERIFICATION_EVIDENCE."]
+        : []),
+    ],
+    nextSteps: [
+      ...(!phase65CutoverRollbackAutomationReady
+        ? ["Complete Phase 65 cutover/rollback automation before closing Phase 66."]
+        : []),
+      ...(!finalReleaseClosureEvidenceAttached
+        ? ["Attach TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE with final release closure evidence."]
+        : []),
+      ...(!finalReleaseChecklistAttached
+        ? ["Attach TASKLOOM_FINAL_RELEASE_CHECKLIST with the final supported-posture release checklist."]
+        : []),
+      ...(!releaseApprovalAttached
+        ? ["Attach TASKLOOM_RELEASE_APPROVAL with the release approval record."]
+        : []),
+      ...(!docsFreezeAssertionAttached
+        ? ["Attach TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION proving deployment docs are frozen for the supported production posture."]
+        : []),
+      ...(!noHiddenPhaseAssertionAttached
+        ? ["Attach TASKLOOM_NO_HIDDEN_PHASE_ASSERTION stating no hidden follow-up phase is required for the supported production posture."]
+        : []),
+      ...(!finalVerificationEvidenceAttached
+        ? ["Attach TASKLOOM_FINAL_VERIFICATION_EVIDENCE with typecheck, tests, build, deployment CLI, and docs consistency verification evidence."]
+        : []),
+      "Keep active-active writes, application-managed regional failover/PITR runtime behavior, and distributed SQLite outside this release closure.",
     ],
   };
 }
@@ -2635,6 +2814,12 @@ export function buildAsyncStoreBoundaryReport(
       phase64ManagedPostgresRecoveryValidationGate,
       env,
     );
+  const phase66FinalReleaseClosureGate =
+    buildPhase66FinalReleaseClosureGate(
+      horizontalWriterIntent,
+      phase65CutoverRollbackAutomationGate,
+      env,
+    );
   const effectivePhase52ManagedStartupSupported =
     managedStartupSupported && !multiWriterIntent && !unsupportedStore;
   const bypassed =
@@ -2656,6 +2841,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase63DistributedDependencyEnforcementGate.blockers,
     ...phase64ManagedPostgresRecoveryValidationGate.blockers,
     ...phase65CutoverRollbackAutomationGate.blockers,
+    ...phase66FinalReleaseClosureGate.blockers,
   ]));
   const warnings = Array.from(new Set([
     ...managedDatabaseTopology.warnings,
@@ -2678,6 +2864,7 @@ export function buildAsyncStoreBoundaryReport(
     ...phase63DistributedDependencyEnforcementGate.nextSteps,
     ...phase64ManagedPostgresRecoveryValidationGate.nextSteps,
     ...phase65CutoverRollbackAutomationGate.nextSteps,
+    ...phase66FinalReleaseClosureGate.nextSteps,
   ]);
 
   let classification: AsyncStoreBoundaryClassification;
@@ -2738,8 +2925,10 @@ export function buildAsyncStoreBoundaryReport(
     }
   }
   if (horizontalWriterIntent) {
-    if (phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady) {
-      nextSteps.add("Treat Phase 65 as repeatable cutover, verify, and rollback automation for managed Postgres horizontal app writers; keep final release approval blocked until Phase 66 finishes.");
+    if (phase66FinalReleaseClosureGate.finalReleaseClosureComplete) {
+      nextSteps.add("Treat Phase 66 as final release closure for the supported managed Postgres horizontal app-writer posture; keep active-active, application-managed regional failover/PITR runtime behavior, and distributed SQLite as unsupported future enhancements.");
+    } else if (phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady) {
+      nextSteps.add("Treat Phase 65 as repeatable cutover, verify, and rollback automation for managed Postgres horizontal app writers; complete Phase 66 final release closure before granting release approval.");
     } else if (phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady) {
       nextSteps.add("Treat Phase 64 as recovery validation for managed Postgres horizontal app writers with provider-owned HA/PITR only; keep activation/release blocked until Phases 65-66 finish.");
     } else if (phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed) {
@@ -2751,6 +2940,18 @@ export function buildAsyncStoreBoundaryReport(
     }
   }
 
+  const phase62ReleaseSatisfied =
+    phase62ManagedPostgresHorizontalWriterHardeningGate.releaseAllowed ||
+    (horizontalWriterIntent && phase62ManagedPostgresHorizontalWriterHardeningGate.horizontalWriterHardeningReady);
+  const phase63ReleaseSatisfied =
+    phase63DistributedDependencyEnforcementGate.releaseAllowed ||
+    (horizontalWriterIntent && phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed);
+  const phase64ReleaseSatisfied =
+    phase64ManagedPostgresRecoveryValidationGate.releaseAllowed ||
+    (horizontalWriterIntent && phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady);
+  const phase65ReleaseSatisfied =
+    phase65CutoverRollbackAutomationGate.releaseAllowed ||
+    (horizontalWriterIntent && phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady);
   const releaseAllowed =
     managedDatabaseRuntimeBoundary.allowed &&
     !unsupportedStore &&
@@ -2763,10 +2964,11 @@ export function buildAsyncStoreBoundaryReport(
     phase59MultiWriterRuntimeEnablementApprovalGate.releaseAllowed &&
     phase60MultiWriterRuntimeSupportPresenceAssertionGate.releaseAllowed &&
     phase61MultiWriterRuntimeActivationControlsGate.releaseAllowed &&
-    phase62ManagedPostgresHorizontalWriterHardeningGate.releaseAllowed &&
-    phase63DistributedDependencyEnforcementGate.releaseAllowed &&
-    phase64ManagedPostgresRecoveryValidationGate.releaseAllowed &&
-    phase65CutoverRollbackAutomationGate.releaseAllowed &&
+    phase62ReleaseSatisfied &&
+    phase63ReleaseSatisfied &&
+    phase64ReleaseSatisfied &&
+    phase65ReleaseSatisfied &&
+    phase66FinalReleaseClosureGate.releaseAllowed &&
     (!managedIntent || effectivePhase52ManagedStartupSupported);
   const status: ReleaseReadinessStatus = releaseAllowed
     ? warnings.length > 0 || bypassed
@@ -2775,8 +2977,10 @@ export function buildAsyncStoreBoundaryReport(
     : "fail";
   let summary: string;
   if (horizontalWriterIntent) {
-    summary = phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady
-      ? "Phase 49 async-store boundary exists as foundation and Phase 65 cutover/rollback automation is complete for managed Postgres horizontal app writers, but final release approval remains blocked pending Phase 66."
+    summary = phase66FinalReleaseClosureGate.finalReleaseClosureComplete
+      ? "Phase 49 async-store boundary exists as foundation and Phase 66 final release closure is complete for the supported managed Postgres horizontal app-writer posture."
+      : phase65CutoverRollbackAutomationGate.cutoverRollbackAutomationReady
+      ? "Phase 49 async-store boundary exists as foundation and Phase 65 cutover/rollback automation is complete for managed Postgres horizontal app writers; Phase 66 final release closure is required for release approval."
       : phase64ManagedPostgresRecoveryValidationGate.managedPostgresRecoveryValidationReady
       ? "Phase 49 async-store boundary exists as foundation and Phase 64 recovery validation is complete for managed Postgres horizontal app writers with provider-owned HA/PITR, but activation/release remains blocked pending Phases 65-66."
       : phase63DistributedDependencyEnforcementGate.activationDependencyGatePassed
@@ -2846,6 +3050,7 @@ export function buildAsyncStoreBoundaryReport(
     phase63DistributedDependencyEnforcementGate,
     phase64ManagedPostgresRecoveryValidationGate,
     phase65CutoverRollbackAutomationGate,
+    phase66FinalReleaseClosureGate,
     classification,
     summary,
     blockers,
@@ -2882,7 +3087,8 @@ function buildNextSteps(
       check.id === "async-store-boundary" ||
       check.id === "phase63-distributed-dependency-enforcement" ||
       check.id === "phase64-managed-postgres-recovery-validation" ||
-      check.id === "phase65-cutover-rollback-automation"
+      check.id === "phase65-cutover-rollback-automation" ||
+      check.id === "phase66-final-release-closure"
     ) {
       for (const step of asyncStoreBoundary.nextSteps) steps.add(step);
     }
@@ -2937,12 +3143,19 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
       env,
     );
   const checks: ReleaseReadinessCheck[] = [];
+  const phase66ManagedPostgresClosureAllowed =
+    asyncStoreBoundary.phase66FinalReleaseClosureGate?.required === true &&
+    asyncStoreBoundary.phase66FinalReleaseClosureGate.releaseAllowed === true;
 
   pushCheck(
     checks,
     "storage-topology",
-    storageCheckStatus(storageTopology, isGated),
-    storageTopology.readyForProduction
+    phase66ManagedPostgresClosureAllowed
+      ? "pass"
+      : storageCheckStatus(storageTopology, isGated),
+    phase66ManagedPostgresClosureAllowed
+      ? `Storage topology is release-ready through Phase 66 managed Postgres closure: ${asyncStoreBoundary.summary}`
+      : storageTopology.readyForProduction
       ? `Storage topology is release-ready: ${storageTopology.summary}`
       : `Storage topology is not production-ready: ${storageTopology.summary}`,
   );
@@ -3045,8 +3258,33 @@ export function assessReleaseReadiness(input: ReleaseReadinessInput = {}): Relea
     );
   }
 
+  const phase66Gate = asyncStoreBoundary.phase66FinalReleaseClosureGate;
+  if (phase66Gate) {
+    pushCheck(
+      checks,
+      "phase66-final-release-closure",
+      phase66Gate.required
+        ? phase66Gate.finalReleaseClosureComplete
+          ? "pass"
+          : chooseBlockingStatus(isGated)
+        : "pass",
+      phase66Gate.required
+        ? phase66Gate.finalReleaseClosureComplete
+          ? `Phase 66 final release closure is complete: ${phase66Gate.summary}`
+          : `Phase 66 final release closure blocks release approval: ${phase66Gate.summary}`
+        : phase66Gate.summary,
+    );
+  }
+
   const dbPath = clean(env.TASKLOOM_DB_PATH);
-  if (storageTopology.mode === "sqlite") {
+  if (phase66ManagedPostgresClosureAllowed) {
+    pushCheck(
+      checks,
+      "database-path",
+      "pass",
+      "Managed Postgres release closure is approved through Phase 66; TASKLOOM_DB_PATH is not required for this supported production posture.",
+    );
+  } else if (storageTopology.mode === "sqlite") {
     pushCheck(
       checks,
       "database-path",

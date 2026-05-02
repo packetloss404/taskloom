@@ -477,6 +477,96 @@ const MANAGED_POSTGRES_CUTOVER_AUTOMATION_EVIDENCE = [
     statusReportKeys: [],
   },
 ] as const;
+const FINAL_RELEASE_CLOSURE_EVIDENCE = [
+  {
+    key: "supportedProductionTopology",
+    label: "supported production topology statement",
+    envKeys: ["TASKLOOM_PHASE66_SUPPORTED_PRODUCTION_TOPOLOGY", "TASKLOOM_SUPPORTED_PRODUCTION_TOPOLOGY"],
+    statusEnvKeys: [
+      "TASKLOOM_PHASE66_SUPPORTED_PRODUCTION_TOPOLOGY_STATUS",
+      "TASKLOOM_SUPPORTED_PRODUCTION_TOPOLOGY_STATUS",
+    ],
+    reportKeys: ["supportedProductionTopology", "supportedTopology", "productionTopology"],
+    statusReportKeys: ["supportedProductionTopologyStatus", "supportedTopologyStatus", "productionTopologyStatus"],
+  },
+  {
+    key: "unsupportedTopologyBoundaries",
+    label: "unsupported topology boundaries",
+    envKeys: ["TASKLOOM_PHASE66_UNSUPPORTED_TOPOLOGY_BOUNDARIES", "TASKLOOM_UNSUPPORTED_TOPOLOGY_BOUNDARIES"],
+    statusEnvKeys: [
+      "TASKLOOM_PHASE66_UNSUPPORTED_TOPOLOGY_BOUNDARIES_STATUS",
+      "TASKLOOM_UNSUPPORTED_TOPOLOGY_BOUNDARIES_STATUS",
+    ],
+    reportKeys: ["unsupportedTopologyBoundaries", "unsupportedTopologies", "topologyBoundaries"],
+    statusReportKeys: ["unsupportedTopologyBoundariesStatus", "unsupportedTopologiesStatus", "topologyBoundariesStatus"],
+  },
+  {
+    key: "finalReleaseChecklist",
+    label: "final release checklist",
+    envKeys: ["TASKLOOM_PHASE66_FINAL_RELEASE_CHECKLIST", "TASKLOOM_FINAL_RELEASE_CHECKLIST"],
+    statusEnvKeys: ["TASKLOOM_PHASE66_FINAL_RELEASE_CHECKLIST_STATUS", "TASKLOOM_FINAL_RELEASE_CHECKLIST_STATUS"],
+    reportKeys: ["finalReleaseChecklist", "releaseChecklist", "checklist"],
+    statusReportKeys: ["finalReleaseChecklistStatus", "releaseChecklistStatus", "checklistStatus"],
+  },
+  {
+    key: "validationRun",
+    label: "full validation run",
+    envKeys: [
+      "TASKLOOM_PHASE66_VALIDATION_RUN",
+      "TASKLOOM_FINAL_VERIFICATION_EVIDENCE",
+      "TASKLOOM_FINAL_RELEASE_VALIDATION_RUN",
+      "TASKLOOM_FINAL_RELEASE_VALIDATION_EVIDENCE",
+    ],
+    statusEnvKeys: ["TASKLOOM_PHASE66_VALIDATION_STATUS", "TASKLOOM_FINAL_RELEASE_VALIDATION_STATUS"],
+    reportKeys: ["validationRun", "validationEvidence", "fullValidationRun", "typecheckTestsBuild"],
+    statusReportKeys: ["validationStatus", "validationRunStatus", "fullValidationStatus"],
+  },
+  {
+    key: "deploymentCliChecks",
+    label: "deployment CLI checks",
+    envKeys: ["TASKLOOM_PHASE66_DEPLOYMENT_CLI_CHECKS", "TASKLOOM_DEPLOYMENT_CLI_CHECKS"],
+    statusEnvKeys: ["TASKLOOM_PHASE66_DEPLOYMENT_CLI_STATUS", "TASKLOOM_DEPLOYMENT_CLI_CHECKS_STATUS"],
+    reportKeys: ["deploymentCliChecks", "deploymentCliEvidence", "deploymentChecks"],
+    statusReportKeys: ["deploymentCliStatus", "deploymentCliChecksStatus", "deploymentChecksStatus"],
+  },
+  {
+    key: "docsConsistencyChecks",
+    label: "docs consistency checks",
+    envKeys: ["TASKLOOM_PHASE66_DOCS_CONSISTENCY_CHECKS", "TASKLOOM_DOCS_CONSISTENCY_CHECKS"],
+    statusEnvKeys: ["TASKLOOM_PHASE66_DOCS_CONSISTENCY_STATUS", "TASKLOOM_DOCS_CONSISTENCY_CHECKS_STATUS"],
+    reportKeys: ["docsConsistencyChecks", "docsConsistencyEvidence", "documentationConsistencyChecks"],
+    statusReportKeys: ["docsConsistencyStatus", "docsConsistencyChecksStatus", "documentationConsistencyStatus"],
+  },
+  {
+    key: "documentationFreeze",
+    label: "documentation freeze",
+    envKeys: [
+      "TASKLOOM_PHASE66_DOCUMENTATION_FREEZE",
+      "TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION",
+      "TASKLOOM_DOCUMENTATION_FREEZE_EVIDENCE",
+      "TASKLOOM_DOCUMENTATION_FREEZE",
+    ],
+    statusEnvKeys: ["TASKLOOM_PHASE66_DOCUMENTATION_FREEZE_STATUS", "TASKLOOM_DOCUMENTATION_FREEZE_STATUS"],
+    reportKeys: ["documentationFreeze", "documentationFreezeEvidence", "docsFreeze"],
+    statusReportKeys: ["documentationFreezeStatus", "docsFreezeStatus"],
+  },
+  {
+    key: "noHiddenPhaseAssertion",
+    label: "no-hidden-phase assertion",
+    envKeys: ["TASKLOOM_NO_HIDDEN_PHASE_ASSERTION", "TASKLOOM_PHASE66_NO_HIDDEN_PHASE_ASSERTION"],
+    statusEnvKeys: ["TASKLOOM_NO_HIDDEN_PHASE_ASSERTION_STATUS", "TASKLOOM_PHASE66_NO_HIDDEN_PHASE_ASSERTION_STATUS"],
+    reportKeys: ["noHiddenPhaseAssertion", "noHiddenPhaseAssertionEvidence", "noHiddenFollowUpPhase"],
+    statusReportKeys: ["noHiddenPhaseAssertionStatus", "noHiddenFollowUpPhaseStatus"],
+  },
+  {
+    key: "releaseApproval",
+    label: "final release approval",
+    envKeys: ["TASKLOOM_PHASE66_RELEASE_APPROVAL", "TASKLOOM_RELEASE_APPROVAL", "TASKLOOM_FINAL_RELEASE_APPROVAL"],
+    statusEnvKeys: ["TASKLOOM_PHASE66_RELEASE_APPROVAL_STATUS", "TASKLOOM_FINAL_RELEASE_APPROVAL_STATUS"],
+    reportKeys: ["releaseApproval", "finalReleaseApproval", "approval"],
+    statusReportKeys: ["releaseApprovalStatus", "finalReleaseApprovalStatus", "approvalStatus"],
+  },
+] as const;
 
 function cleanEnvValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -622,6 +712,21 @@ function cutoverAutomationRecord(report: unknown): Record<string, unknown> | nul
     findNestedRecord(report, ["releaseReadiness", "phase65"]) ??
     findNestedRecord(report, ["releaseReadiness", "managedPostgresCutoverAutomation"]) ??
     findNestedRecord(report, ["releaseReadiness", "cutoverAutomation"]);
+}
+
+function finalReleaseClosureRecord(report: unknown): Record<string, unknown> | null {
+  if (!isRecord(report)) return null;
+  return findNestedRecord(report, ["phase66"]) ??
+    findNestedRecord(report, ["finalReleaseClosure"]) ??
+    findNestedRecord(report, ["finalReleaseClosureGate"]) ??
+    findNestedRecord(report, ["releaseClosure"]) ??
+    findNestedRecord(report, ["documentationFreeze"]) ??
+    findNestedRecord(report, ["managedDatabase", "phase66"]) ??
+    findNestedRecord(report, ["managedPostgres", "phase66"]) ??
+    findNestedRecord(report, ["runtimeGuard", "phase66"]) ??
+    findNestedRecord(report, ["releaseReadiness", "phase66"]) ??
+    findNestedRecord(report, ["releaseReadiness", "finalReleaseClosure"]) ??
+    findNestedRecord(report, ["releaseReadiness", "documentationFreeze"]);
 }
 
 function distributedDependencyRecord(
@@ -1146,6 +1251,15 @@ function reportPhase65Required(record: Record<string, unknown> | null): boolean 
     null;
 }
 
+function reportPhase66Required(record: Record<string, unknown> | null): boolean | null {
+  if (!record) return null;
+  return booleanFromRecord(record, "required") ??
+    booleanFromRecord(record, "phase66Required") ??
+    booleanFromRecord(record, "finalReleaseClosureRequired") ??
+    booleanFromRecord(record, "documentationFreezeRequired") ??
+    null;
+}
+
 function phase64ReportValidationComplete(records: readonly Record<string, unknown>[]): boolean {
   return records.some((record) => {
     const required =
@@ -1173,6 +1287,22 @@ function phase65ReportAutomationReady(records: readonly Record<string, unknown>[
         record.managedPostgresCutoverAutomationReady === true ||
         record.activationAutomationReady === true ||
         record.phase65CutoverAutomationReady === true);
+  });
+}
+
+function phase66ReportClosureReady(records: readonly Record<string, unknown>[]): boolean {
+  return records.some((record) => {
+    const required =
+      record.required === true ||
+      record.phase66Required === true ||
+      record.finalReleaseClosureRequired === true ||
+      record.documentationFreezeRequired === true;
+    return required &&
+      (record.finalReleaseReady === true ||
+        record.finalReleaseClosureReady === true ||
+        record.phase66FinalReleaseReady === true ||
+        record.documentationFrozen === true ||
+        record.releaseAllowed === true);
   });
 }
 
@@ -1212,6 +1342,37 @@ function cutoverAutomationResultFromRecord(
     const value = record[key];
     if (typeof value === "boolean") return value ? "pass" : "fail";
     const result = automationResultValue(cleanEnvValue(value));
+    if (result !== "unknown") return result;
+  }
+  return "unknown";
+}
+
+function finalReleaseResultValue(value: string): "pass" | "fail" | "unknown" {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (
+    ["fail", "failed", "failure", "error", "errored", "red"].includes(normalized) ||
+    normalized.startsWith("fail:")
+  ) {
+    return "fail";
+  }
+  if (
+    ["pass", "passed", "success", "succeeded", "ok", "ready", "green", "complete", "completed"].includes(normalized) ||
+    normalized.startsWith("pass:")
+  ) {
+    return "pass";
+  }
+  return "unknown";
+}
+
+function finalReleaseResultFromRecord(
+  record: Record<string, unknown>,
+  statusKeys: readonly string[],
+): "pass" | "fail" | "unknown" {
+  for (const key of statusKeys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value ? "pass" : "fail";
+    const result = finalReleaseResultValue(cleanEnvValue(value));
     if (result !== "unknown") return result;
   }
   return "unknown";
@@ -1417,6 +1578,42 @@ function phase64RecoveryValidationComplete(
   );
 }
 
+function phase65CutoverAutomationReady(
+  env: NodeJS.ProcessEnv,
+  deploymentReports: DeploymentReportSources,
+): boolean {
+  const phase65Records = Object.values(deploymentReports)
+    .map((report) => cutoverAutomationRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  if (!phase64RecoveryValidationComplete(env, deploymentReports)) return false;
+  if (phase65ReportAutomationReady(phase65Records)) return true;
+
+  const failed = MANAGED_POSTGRES_CUTOVER_AUTOMATION_EVIDENCE.some((entry) => {
+    let result = automationResultValue(valueFromEnvKeys(env, entry.statusEnvKeys));
+    if (result === "unknown") {
+      for (const record of phase65Records) {
+        result = cutoverAutomationResultFromRecord(record, entry.statusReportKeys);
+        if (result !== "unknown") break;
+        if (isRecord(record.evidence)) {
+          result = cutoverAutomationResultFromRecord(record.evidence, entry.statusReportKeys);
+          if (result !== "unknown") break;
+        }
+      }
+    }
+    return result === "fail";
+  });
+  if (failed) return false;
+
+  return MANAGED_POSTGRES_CUTOVER_AUTOMATION_EVIDENCE.every((entry) => {
+    if (valueFromEnvKeys(env, entry.envKeys).length > 0) return true;
+    return phase65Records.some((record) => {
+      const direct = valueFromRecord(record, entry.reportKeys);
+      const nested = isRecord(record.evidence) ? valueFromRecord(record.evidence, entry.reportKeys) : "";
+      return Boolean(direct || nested);
+    });
+  });
+}
+
 function checkManagedPostgresCutoverAutomation(
   env: NodeJS.ProcessEnv,
   checkedAt: string,
@@ -1501,6 +1698,115 @@ function checkManagedPostgresCutoverAutomation(
     name: "managedPostgresCutoverAutomation",
     status: "ok",
     detail: "Phase 65 managed Postgres cutover automation is ready with cutover preflight, activation dry-run, post-activation smoke checks, rollback command guidance, and monitoring thresholds; activationAllowed=true; releaseAllowed=false",
+    checkedAt,
+  };
+}
+
+function checkFinalReleaseClosure(
+  env: NodeJS.ProcessEnv,
+  checkedAt: string,
+  deploymentReports: DeploymentReportSources,
+): SubsystemHealth {
+  const phase66Records = Object.values(deploymentReports)
+    .map((report) => finalReleaseClosureRecord(report))
+    .filter((record): record is Record<string, unknown> => Boolean(record));
+  const reportRequired = phase66Records.reduce<boolean | null>((result, record) => {
+    if (result !== null) return result;
+    return reportPhase66Required(record);
+  }, null);
+  const required = reportRequired === true || phase63Required(env, deploymentReports);
+  if (!required) {
+    return {
+      name: "finalReleaseClosure",
+      status: "disabled",
+      detail: "Phase 66 final release closure and documentation freeze are not required without supported production posture activation intent",
+      checkedAt,
+    };
+  }
+
+  if (!phase65CutoverAutomationReady(env, deploymentReports)) {
+    return {
+      name: "finalReleaseClosure",
+      status: "degraded",
+      detail: "Phase 66 final release closure is blocked until Phase 65 cutover automation is ready; releaseAllowed=false",
+      checkedAt,
+    };
+  }
+
+  let globalResult = finalReleaseResultValue(valueFromEnvKeys(env, [
+    "TASKLOOM_PHASE66_FINAL_RELEASE_STATUS",
+    "TASKLOOM_FINAL_RELEASE_STATUS",
+  ]));
+  if (globalResult === "unknown") {
+    for (const record of phase66Records) {
+      globalResult = finalReleaseResultFromRecord(record, [
+        "status",
+        "closureStatus",
+        "phase66Status",
+        "finalReleaseStatus",
+      ]);
+      if (globalResult !== "unknown") break;
+    }
+  }
+  if (globalResult === "fail") {
+    return {
+      name: "finalReleaseClosure",
+      status: "degraded",
+      detail: "Phase 66 final release closure reported failure; documentation freeze and final release remain blocked; releaseAllowed=false",
+      checkedAt,
+    };
+  }
+
+  const reportClosureReady = phase66ReportClosureReady(phase66Records);
+  const failedChecks = FINAL_RELEASE_CLOSURE_EVIDENCE
+    .filter((entry) => {
+      let result = finalReleaseResultValue(valueFromEnvKeys(env, entry.statusEnvKeys));
+      if (result === "unknown") {
+        for (const record of phase66Records) {
+          result = finalReleaseResultFromRecord(record, entry.statusReportKeys);
+          if (result !== "unknown") break;
+          if (isRecord(record.evidence)) {
+            result = finalReleaseResultFromRecord(record.evidence, entry.statusReportKeys);
+            if (result !== "unknown") break;
+          }
+        }
+      }
+      return result === "fail";
+    })
+    .map((entry) => entry.label);
+  if (failedChecks.length > 0) {
+    return {
+      name: "finalReleaseClosure",
+      status: "degraded",
+      detail: `Phase 66 final release closure reported failed checks: ${failedChecks.join(", ")}; documentation freeze and release remain blocked; releaseAllowed=false`,
+      checkedAt,
+    };
+  }
+
+  const missingEvidence = FINAL_RELEASE_CLOSURE_EVIDENCE
+    .filter((entry) => {
+      if (reportClosureReady) return false;
+      if (valueFromEnvKeys(env, entry.envKeys).length > 0) return false;
+      return !phase66Records.some((record) => {
+        const direct = valueFromRecord(record, entry.reportKeys);
+        const nested = isRecord(record.evidence) ? valueFromRecord(record.evidence, entry.reportKeys) : "";
+        return Boolean(direct || nested);
+      });
+    })
+    .map((entry) => entry.label);
+  if (missingEvidence.length > 0) {
+    return {
+      name: "finalReleaseClosure",
+      status: "degraded",
+      detail: `Phase 66 final release closure blocks release; missing ${missingEvidence.join(", ")}; releaseAllowed=false`,
+      checkedAt,
+    };
+  }
+
+  return {
+    name: "finalReleaseClosure",
+    status: "ok",
+    detail: "Phase 66 final release closure is ready with supported topology, unsupported boundaries, final checklist, validation run, deployment CLI checks, docs consistency checks, documentation freeze, no-hidden-phase assertion, and release approval; releaseAllowed=true",
     checkedAt,
   };
 }
@@ -1827,6 +2133,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkDistributedDependencyEnforcement(env, checkedAt, deploymentReports),
     checkManagedPostgresRecoveryValidation(env, checkedAt, deploymentReports),
     checkManagedPostgresCutoverAutomation(env, checkedAt, deploymentReports),
+    checkFinalReleaseClosure(env, checkedAt, deploymentReports),
   ];
 
   return {
@@ -1863,6 +2170,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkDistributedDependencyEnforcement(env, checkedAt, deploymentReports),
     checkManagedPostgresRecoveryValidation(env, checkedAt, deploymentReports),
     checkManagedPostgresCutoverAutomation(env, checkedAt, deploymentReports),
+    checkFinalReleaseClosure(env, checkedAt, deploymentReports),
   ];
 
   return {
