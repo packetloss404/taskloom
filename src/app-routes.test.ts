@@ -519,6 +519,41 @@ test("builder app draft can be generated and applied with smoke metadata", async
   assert.ok(loadStore().generatedApps?.some((entry) => entry.id === applyBody.app?.id && entry.checkpointId === applyBody.checkpoint?.id));
 });
 
+test("builder app-draft/apply runs smoke through the sandbox when TASKLOOM_SANDBOX_SMOKE_ENABLED=1", async () => {
+  resetStoreForTests();
+  const original = process.env.TASKLOOM_SANDBOX_SMOKE_ENABLED;
+  process.env.TASKLOOM_SANDBOX_SMOKE_ENABLED = "1";
+  try {
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const draftResponse = await app.request("/api/app/builder/app-draft", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a public booking app." }),
+    });
+    const draftBody = await draftResponse.json() as { draft?: unknown };
+
+    const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ draft: draftBody.draft, runSmoke: true }),
+    });
+    const applyBody = await applyResponse.json() as {
+      smokeBuild?: { status?: string; message?: string; checks?: Array<{ name?: string; detail?: string }> };
+    };
+
+    assert.equal(applyResponse.status, 201);
+    assert.match(applyBody.smokeBuild?.message ?? "", /verified via sandbox/);
+    const firstCheckDetail = applyBody.smokeBuild?.checks?.[0]?.detail ?? "";
+    assert.match(firstCheckDetail, /sandbox: exit/);
+  } finally {
+    if (original === undefined) delete process.env.TASKLOOM_SANDBOX_SMOKE_ENABLED;
+    else process.env.TASKLOOM_SANDBOX_SMOKE_ENABLED = original;
+  }
+});
+
 test("builder app iteration can generate a diff, apply it, and rollback checkpoints", async () => {
   resetStoreForTests();
   const app = createTestApp();

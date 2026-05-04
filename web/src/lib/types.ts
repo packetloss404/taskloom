@@ -1312,3 +1312,60 @@ export interface RunDiagnostic {
   modelUsed: string;
   costUsd: number;
 }
+
+// ---------------------------------------------------------------------------
+// Sandboxed code-exec subsystem
+// ---------------------------------------------------------------------------
+
+export type SandboxDriver = "docker" | "native";
+export type SandboxExecStatus = "queued" | "running" | "success" | "failed" | "timeout" | "canceled";
+
+export interface SandboxRuntimeInfo {
+  id: string;
+  ready: boolean;
+  image?: string;
+  description?: string;
+}
+
+export interface SandboxStatus {
+  driver: SandboxDriver;
+  available: boolean;
+  runtimes: SandboxRuntimeInfo[];
+  note?: string;
+}
+
+export interface SandboxExecRecord {
+  id: string;
+  workspaceId: string;
+  appId?: string;
+  checkpointId?: string;
+  sandboxId: string;
+  driver: SandboxDriver;
+  runtime: string;
+  command: string;
+  workingDir: string;
+  env?: Record<string, string>;
+  status: SandboxExecStatus;
+  exitCode?: number;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  errorMessage?: string;
+  cpuLimitMs?: number;
+  memoryLimitMb?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SandboxExecRequest {
+  appId?: string;
+  checkpointId?: string;
+  command: string;
+  runtime?: string;
+  workingDir?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  stdin?: string;
+}

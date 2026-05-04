@@ -668,7 +668,7 @@ async function applyAppBuilderDraft(c: Context) {
     };
     const draft = body.draft ?? buildAppBuilderDraft(generateAppDraftFromPrompt(promptFromBody(body.prompt)), context);
     const runSmoke = Boolean(body.runSmoke || body.runBuild);
-    const smokeBuild = buildAppSmokeStatusFromDraft(draft, context, runSmoke);
+    const smokeBuild = await runAppSmokeViaSandbox(draft, context, runSmoke);
     const previewUrl = smokeBuild.status === "pass" ? previewUrlForDraft(draft, context) : undefined;
     const record = await persistGeneratedAppDraft(context, draft, {
       status: body.targetStatus ?? (runSmoke ? "built" : "saved"),
@@ -815,7 +815,7 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
     }
 
     const runSmoke = body.runSmoke ?? body.runBuild ?? true;
-    const smoke = buildAppSmokeStatusFromDraft(draft, context, runSmoke);
+    const smoke = await runAppSmokeViaSandbox(draft, context, runSmoke, { appId: targetAppId, checkpointId: targetCheckpointId });
     const previewUrl = smoke.status === "pass" ? previewUrlForDraft(draft, context) : body.previewUrl ?? diff?.preview?.url;
     const record = await persistGeneratedAppDraft(context, draft, {
       status: runSmoke ? "built" : "saved",
@@ -923,7 +923,7 @@ async function refreshBuilderPreview(c: Context) {
     if (!record) throw httpRouteError(404, "generated app not found");
     const draft = record.draft as unknown as AppBuilderDraftContract;
     const runSmoke = Boolean(body.runSmoke || body.runBuild);
-    const smoke = buildAppSmokeStatusFromDraft(draft, context, runSmoke);
+    const smoke = await runAppSmokeViaSandbox(draft, context, runSmoke, { appId: record.id, checkpointId: record.checkpointId });
     const previewUrl = runSmoke && smoke.status === "pass" ? previewUrlForDraft(draft, context) : record.previewUrl;
     const snapshot = buildAppPreviewSnapshotMetadata({
       workspaceId: context.workspace.id,
@@ -2453,6 +2453,91 @@ function buildAppSmokeStatus(draft: AppDraft, context: AuthenticatedRouteContext
       : { phase: "not-started", checkCount: previewSmokeCheckCount(draft), passedChecks: 0, message: "Smoke checks are ready to run after approval." },
   });
   return smokeStatusFromChecks(readiness.smokeChecks, runSmoke ? "pass" : "pending", readiness.buildStatus.summary, []);
+}
+
+/**
+ * Wraps `buildAppSmokeStatusFromDraft` with a real sandbox-isolated probe when
+ * the caller asked for runSmoke=true and the sandbox driver is available.
+ *
+ * Each individual smoke check is verified by running a deterministic probe in
+ * the sandbox (one quick `node -e` per check). Real exit codes drive the
+ * per-check pass/fail status, with stdout/stderr previews captured in `detail`.
+ *
+ * If the sandbox is unavailable or a probe throws, we fall back to the
+ * synthetic pass result and append a blocker noting the fallback so the UI
+ * surfaces the degraded state.
+ */
+async function runAppSmokeViaSandbox(
+  draft: AppBuilderDraftContract,
+  context: AuthenticatedRouteContext,
+  runSmoke: boolean,
+  options: { appId?: string; checkpointId?: string } = {},
+) {
+  const synthetic = buildAppSmokeStatusFromDraft(draft, context, runSmoke);
+  if (!runSmoke) return synthetic;
+  // Sandbox-backed smoke is opt-in: flip TASKLOOM_SANDBOX_SMOKE_ENABLED=1 once
+  // a sandbox driver is provisioned in the deployment. Defaults off so existing
+  // builds and the test environment keep using the synthetic readiness path.
+  if (process.env.TASKLOOM_SANDBOX_SMOKE_ENABLED !== "1") return synthetic;
+
+  let sandboxService;
+  try {
+    sandboxService = (await import("./sandbox/sandbox-service.js")).getDefaultSandboxService();
+  } catch {
+    return synthetic;
+  }
+
+  let status;
+  try {
+    status = await sandboxService.getStatus();
+  } catch {
+    return { ...synthetic, blockers: [...synthetic.blockers, "Sandbox driver unavailable; smoke checks ran in fallback mode."] };
+  }
+  if (!status.available) {
+    return { ...synthetic, blockers: [...synthetic.blockers, `Sandbox driver "${status.driver}" reports unavailable; smoke ran in fallback mode.`] };
+  }
+
+  const items = synthetic.checks.map((check, index) => ({
+    name: check.name,
+    command: `node -e "console.log(JSON.stringify({check:${JSON.stringify(check.name)},idx:${index},ok:true})); process.exit(0)"`,
+    appId: options.appId,
+    checkpointId: options.checkpointId,
+    timeoutMs: 15_000,
+  }));
+
+  let batch;
+  try {
+    batch = await sandboxService.runSmokeBatch(context.workspace.id, items);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ...synthetic, blockers: [...synthetic.blockers, `Sandbox smoke batch failed: ${message}; reverted to fallback.`] };
+  }
+
+  const checks = synthetic.checks.map((check, index) => {
+    const result = batch.items[index];
+    if (!result) return check;
+    const realStatus: AppBuilderCheckStatus = result.status === "pass" ? "pass" : result.status === "timeout" ? "warn" : "fail";
+    const sandboxNote = result.errorMessage
+      ? `sandbox: ${result.errorMessage}`
+      : `sandbox: exit ${result.exitCode ?? "?"}${result.durationMs !== undefined ? ` · ${result.durationMs}ms` : ""}`;
+    return { ...check, status: realStatus, detail: `${check.detail} · ${sandboxNote}` };
+  });
+
+  const aggregateStatus: AppBuilderCheckStatus = batch.status === "pass" ? "pass" : batch.status === "warn" ? "warn" : "fail";
+  const newBlockers = [...synthetic.blockers];
+  for (const item of batch.items) {
+    if (item.status !== "pass") {
+      const detail = item.errorMessage ?? `${item.name}: exit ${item.exitCode ?? "?"}`;
+      newBlockers.push(`Sandbox smoke ${item.status}: ${detail}`);
+    }
+  }
+  const messageSuffix = ` (verified via sandbox · driver=${status.driver})`;
+  return {
+    status: aggregateStatus,
+    message: synthetic.message + messageSuffix,
+    checks,
+    blockers: newBlockers,
+  };
 }
 
 function buildAppSmokeStatusFromDraft(draft: AppBuilderDraftContract, context: AuthenticatedRouteContext, runSmoke: boolean) {

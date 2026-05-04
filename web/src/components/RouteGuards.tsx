@@ -4,10 +4,17 @@ import { useAuth } from "@/context/AuthContext";
 
 function FullScreenLoader() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-6 text-ink-200">
-      <div className="card w-full max-w-md p-8 text-center">
-        <div className="text-xs uppercase tracking-[0.22em] text-ink-500">Loading</div>
-        <h1 className="mt-3 text-lg font-semibold text-ink-100">Restoring your workspace</h1>
+    <div className="wb-root wb-root wb-root" style={{
+      height: "100vh",
+      display: "grid",
+      placeItems: "center",
+      padding: "0 24px",
+    }}>
+      <div className="card" style={{ padding: 32, textAlign: "center", width: "100%", maxWidth: 420 }}>
+        <div className="kicker" style={{ marginBottom: 10 }}>LOADING</div>
+        <h1 className="h2" style={{ fontSize: 18, color: "var(--silver-50)" }}>
+          Restoring your workspace
+        </h1>
       </div>
     </div>
   );

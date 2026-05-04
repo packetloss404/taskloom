@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Loader2 } from "lucide-react";
-import { brand } from "@/config/brand";
 import { api } from "@/lib/api";
 import type { PublicSharePayload } from "@/lib/types";
+import { I } from "@/workbench/icons";
 
 export default function PublicSharePage() {
   const { token } = useParams();
@@ -26,29 +25,38 @@ export default function PublicSharePage() {
   }, [token]);
 
   return (
-    <main className="min-h-screen bg-ink-950 text-ink-200">
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-8 py-7 max-md:px-5">
-        <Link to="/" className="flex items-center gap-3">
-          <img src={brand.logoPath} alt={brand.name} className="h-7 w-auto" />
-          <span className="kicker">PUBLIC SHARE</span>
-        </Link>
-        <Link to="/sign-in" className="btn-ghost">Sign in</Link>
-      </header>
+    <div className="wb-root wb-root wb-root" style={{ height: "100vh", overflow: "auto" }}>
+      <div style={{
+        minHeight: "100vh",
+        background: "radial-gradient(900px 500px at 50% -10%, rgba(184,242,92,0.06), transparent 60%), var(--bg)",
+      }}>
+        <header style={{ height: 64, display: "flex", alignItems: "center", padding: "0 32px", borderBottom: "1px solid var(--line)" }}>
+          <Link to="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+            <div className="brand-mark" style={{ width: 30, height: 30 }}/>
+            <div>
+              <div className="brand-name" style={{ fontSize: 16 }}>task<span>loom</span></div>
+              <div className="brand-tag" style={{ fontSize: 9.5 }}>PUBLIC SHARE</div>
+            </div>
+          </Link>
+          <Link to="/sign-in" className="btn btn-sm" style={{ marginLeft: "auto", textDecoration: "none" }}>Sign in</Link>
+        </header>
 
-      <section className="mx-auto max-w-6xl px-8 pb-16 max-md:px-5">
-        {loading ? (
-          <div className="page-frame flex items-center gap-3 text-sm text-ink-400">
-            <Loader2 className="h-4 w-4 animate-spin" /> <span className="kicker">LOADING SHARE</span>
-          </div>
-        ) : error ? (
-          <div className="border border-signal-red/50 bg-ink-900 px-5 py-4 font-mono text-sm text-signal-red">
-            ERR · {error}
-          </div>
-        ) : shared ? (
-          <SharedContent shared={shared} />
-        ) : null}
-      </section>
-    </main>
+        <section style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 32px 60px" }}>
+          {loading && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--silver-400)" }}>
+              <span className="spin"><I.refresh size={14}/></span>
+              <span className="kicker">LOADING SHARE</span>
+            </div>
+          )}
+          {error && (
+            <div className="card" style={{ padding: "12px 16px", borderColor: "rgba(242,107,92,0.3)", background: "rgba(242,107,92,0.06)", color: "var(--danger)" }}>
+              <span className="mono" style={{ fontSize: 12 }}>ERR · {error}</span>
+            </div>
+          )}
+          {!loading && !error && shared && <SharedContent shared={shared}/>}
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -57,66 +65,76 @@ function SharedContent({ shared }: { shared: PublicSharePayload }) {
   const showPlan = shared.scope === "plan" || shared.scope === "overview";
 
   return (
-    <div className="page-frame">
-      <div className="kicker mb-4">{shared.scope.toUpperCase()} · SHARED WORKSPACE</div>
-      <h1 className="display-xl">{shared.workspace.name}</h1>
+    <div>
+      <div className="kicker" style={{ marginBottom: 14 }}>
+        {shared.scope.toUpperCase()} · SHARED WORKSPACE
+      </div>
+      <h1 className="h1" style={{ fontSize: 44, fontWeight: 400, letterSpacing: "-0.02em", marginBottom: 14 }}>
+        {shared.workspace.name}
+      </h1>
       {shared.workspace.automationGoal && (
-        <p className="mt-5 max-w-3xl font-sans text-lg leading-7 text-ink-300">{shared.workspace.automationGoal}</p>
+        <p className="muted" style={{ maxWidth: 720, fontSize: 16, lineHeight: 1.6 }}>{shared.workspace.automationGoal}</p>
       )}
 
       {showBrief && shared.brief && (
-        <section className="section-band">
-          <div className="kicker mb-2">BRIEF</div>
-          <h2 className="display text-2xl">{shared.brief.summary}</h2>
-          <dl className="mt-6 grid gap-4 md:grid-cols-2">
-            <ShareField label="Audience" value={shared.brief.audience} />
-            <ShareField label="Desired outcome" value={shared.brief.desiredOutcome} />
-            <ShareField label="Problem" value={shared.brief.problemStatement} />
-            <ShareField label="Constraints" value={shared.brief.constraints} />
-          </dl>
-          {shared.brief.goals.length > 0 && <ShareList title="Goals" items={shared.brief.goals} />}
-          {shared.brief.successMetrics?.length ? <ShareList title="Success metrics" items={shared.brief.successMetrics} /> : null}
+        <section style={{ marginTop: 36 }}>
+          <div className="kicker" style={{ marginBottom: 6 }}>BRIEF</div>
+          <h2 className="h2" style={{ fontSize: 24, marginBottom: 14 }}>{shared.brief.summary}</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <ShareField label="Audience" value={shared.brief.audience}/>
+            <ShareField label="Desired outcome" value={shared.brief.desiredOutcome}/>
+            <ShareField label="Problem" value={shared.brief.problemStatement}/>
+            <ShareField label="Constraints" value={shared.brief.constraints}/>
+          </div>
+          {shared.brief.goals.length > 0 && <ShareList title="Goals" items={shared.brief.goals}/>}
+          {shared.brief.successMetrics?.length ? <ShareList title="Success metrics" items={shared.brief.successMetrics}/> : null}
         </section>
       )}
 
       {showPlan && (
-        <section className="section-band">
-          <div className="mb-5 flex items-end justify-between gap-4">
+        <section style={{ marginTop: 36 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 14 }}>
             <div>
-              <div className="kicker mb-2">PLAN</div>
-              <h2 className="display text-2xl">Requirements and implementation plan</h2>
+              <div className="kicker" style={{ marginBottom: 6 }}>PLAN</div>
+              <h2 className="h2" style={{ fontSize: 24 }}>Requirements and implementation plan</h2>
             </div>
-            <span className="section-marker">{shared.planItems?.length ?? 0} ITEMS</span>
+            <span className="mono muted" style={{ fontSize: 11 }}>{shared.planItems?.length ?? 0} ITEMS</span>
           </div>
 
-          <div className="grid gap-8 lg:grid-cols-2">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
             <div>
-              <h3 className="kicker mb-3">REQUIREMENTS</h3>
-              <div className="space-y-3">
+              <div className="kicker" style={{ marginBottom: 8 }}>REQUIREMENTS</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {(shared.requirements ?? []).map((requirement) => (
-                  <article key={requirement.id} className="border border-ink-700 bg-ink-900/60 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="font-serif text-lg text-ink-100">{requirement.title}</h4>
-                      <span className="pill pill--muted">{requirement.priority}</span>
+                  <article key={requirement.id} className="card" style={{ padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <h4 className="serif" style={{ fontFamily: "var(--font-serif)", fontSize: 17, color: "var(--silver-50)", margin: 0 }}>{requirement.title}</h4>
+                      <span className="pill muted">{requirement.priority}</span>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-ink-400">{requirement.detail}</p>
+                    <p className="muted" style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>{requirement.detail}</p>
                   </article>
                 ))}
+                {(shared.requirements ?? []).length === 0 && (
+                  <div className="card muted" style={{ padding: 14, textAlign: "center", fontSize: 12.5 }}>No requirements shared.</div>
+                )}
               </div>
             </div>
 
             <div>
-              <h3 className="kicker mb-3">PLAN ITEMS</h3>
-              <div className="space-y-3">
+              <div className="kicker" style={{ marginBottom: 8 }}>PLAN ITEMS</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {(shared.planItems ?? []).map((item) => (
-                  <article key={item.id} className="border border-ink-700 bg-ink-900/60 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="font-serif text-lg text-ink-100">{item.title}</h4>
-                      <span className="pill pill--muted">{item.status}</span>
+                  <article key={item.id} className="card" style={{ padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <h4 className="serif" style={{ fontFamily: "var(--font-serif)", fontSize: 17, color: "var(--silver-50)", margin: 0 }}>{item.title}</h4>
+                      <span className={`pill ${item.status === "done" ? "good" : item.status === "in_progress" ? "info" : "muted"}`}><span className="dot"></span>{item.status}</span>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-ink-400">{item.description}</p>
+                    <p className="muted" style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>{item.description}</p>
                   </article>
                 ))}
+                {(shared.planItems ?? []).length === 0 && (
+                  <div className="card muted" style={{ padding: 14, textAlign: "center", fontSize: 12.5 }}>No plan items shared.</div>
+                )}
               </div>
             </div>
           </div>
@@ -129,22 +147,22 @@ function SharedContent({ shared }: { shared: PublicSharePayload }) {
 function ShareField({ label, value }: { label: string; value?: string }) {
   if (!value) return null;
   return (
-    <div className="border border-ink-700 bg-ink-900/60 p-4">
-      <dt className="kicker mb-2">{label}</dt>
-      <dd className="text-sm leading-6 text-ink-300">{value}</dd>
+    <div className="card" style={{ padding: 14 }}>
+      <div className="kicker" style={{ marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 12.5, lineHeight: 1.6, color: "var(--silver-200)" }}>{value}</div>
     </div>
   );
 }
 
 function ShareList({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="mt-6">
-      <h3 className="kicker mb-3">{title}</h3>
-      <ul className="grid gap-2 md:grid-cols-2">
+    <div style={{ marginTop: 18 }}>
+      <div className="kicker" style={{ marginBottom: 8 }}>{title}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {items.map((item) => (
-          <li key={item} className="border border-ink-700 bg-ink-900/60 px-3 py-2 text-sm text-ink-300">{item}</li>
+          <div key={item} className="card" style={{ padding: "8px 12px", fontSize: 12.5, color: "var(--silver-300)" }}>{item}</div>
         ))}
-      </ul>
+      </div>
     </div>
   );
 }

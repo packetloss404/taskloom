@@ -1,6 +1,35 @@
 # Taskloom
 
-Taskloom is an open source workspace portal for activation tracking, onboarding progress, and operational follow-through. The current repository includes:
+Taskloom is an open-source, self-hosted workspace and app builder for non-developers — prompt your way to internal CRUD apps, persistent agents (manual / scheduled / webhook / email triggers), and a complete activation/operations console, with a pluggable sandbox runtime for safe code execution. Single-binary friendly, BYO model keys (Anthropic, OpenAI, MiniMax, Ollama).
+
+## Quick links
+
+- **Run locally:** [Run locally](#run-locally)
+- **MVP testing walkthrough:** [`docs/MVP_TESTING.md`](docs/MVP_TESTING.md) — end-to-end manual test plan covering auth, builder, agents, workflows, sandbox, and operations.
+- **Roadmap:** [`docs/roadmap.md`](docs/roadmap.md)
+- **Builder sprint plan:** [`docs/product-builder-sprint-plan.md`](docs/product-builder-sprint-plan.md)
+
+## Workbench
+
+The web UI is a unified workbench mounted at `/`. It auto-redirects to `/dashboard` for signed-in users and shows the marketing/sign-in surface for everyone else. Surfaces:
+
+- **Build:** New build (prompt composer), Dashboard, Builder (full draft → diff → apply → checkpoint → publish loop), Agents (catalog + template gallery + dedicated editor at `/agents/:id`)
+- **Run:** Workflows (brief / requirements / plan / blockers / questions / validation / release), Runs · Activity (with run drilldown at `/runs/:id` — transcript, tool-call timeline, logs, diagnose), Providers (model + tool registry, env vars)
+- **Workspace:** Operations (subsystem health, alerts, job metrics), **Sandbox** (see below), Activation, Settings (members, invitations, share tokens, API keys, workspace, audit)
+- **Admin:** Billing & plan, Roles & permissions, SSO & auth, Secrets vault, Webhooks, Rate limits, Releases, Notifications, Storage & DB, Backups & data
+- **⌘K command palette** for fast navigation + agent-run shortcuts. Sidebar search opens it on click.
+
+## Sandboxed code-exec
+
+A first-class sandbox runtime ships under `/api/app/sandbox/*` and `/sandbox` in the workbench. It powers ad-hoc command execution and (opt-in) the app-builder smoke pipeline.
+
+- **Drivers:** `docker` (default — `docker run --rm -i --network=none --cpus --memory --read-only --tmpfs /tmp` with runtimes `node-20`, `python-3.11`, `ubuntu-22`) and `native` (host-process fallback, marked insecure in the UI).
+- **Endpoints:** `GET /status`, `GET /runtimes`, `POST /exec`, `GET /exec`, `GET /exec/:id`, `POST /exec/:id/cancel`, `GET /exec/:id/stream` (SSE).
+- **Workbench UI:** status panel, runtime readiness, command composer, exec history, live log viewer with stdout/stderr tabs and follow-tail. The Builder also gains a Sandbox tab scoped to the current app.
+- **App-builder smoke integration:** when `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`, `app-draft/apply`, `changes/apply`, and `preview/refresh` route every smoke check through the sandbox; per-check details get `sandbox: exit N · Mms` appended and the message is suffixed with `(verified via sandbox · driver=…)`. Off by default — flip the flag once your deployment has a Docker driver.
+- **Env vars:** `TASKLOOM_SANDBOX_DRIVER` (`docker|native|auto`), `TASKLOOM_SANDBOX_DEFAULT_RUNTIME`, `TASKLOOM_SANDBOX_DEFAULT_TIMEOUT_MS`, `TASKLOOM_SANDBOX_MEMORY_MB`, `TASKLOOM_SANDBOX_CPUS`, `TASKLOOM_SANDBOX_SMOKE_ENABLED`.
+
+## What this repository includes
 
 - activation domain
 - pure milestone engine

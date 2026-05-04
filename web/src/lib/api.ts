@@ -73,6 +73,11 @@ import type {
   WorkspaceMemberRecord,
   WorkspaceMembersPayload,
   WorkspaceRole,
+  SandboxStatus,
+  SandboxRuntimeInfo,
+  SandboxExecRecord,
+  SandboxExecRequest,
+  SandboxExecStatus,
 } from "@/lib/types";
 import { pushExternalToast } from "@/context/ToastContext";
 
@@ -354,4 +359,68 @@ export const api = {
     j<{ token: ShareTokenRecord }>("/api/app/share", { method: "POST", body: JSON.stringify(body) }).then((p) => p.token),
   deleteShareToken: (id: string) => j<{ ok: boolean }>(`/api/app/share/${id}`, { method: "DELETE" }),
   getPublicShare: (token: string) => j<{ shared: PublicSharePayload }>(`/api/public/share/${encodeURIComponent(token)}`).then((p) => p.shared),
+  getOperationsHealth: () => j<unknown>("/api/app/operations/health"),
+  listOperationsAlerts: (query: { severity?: string; since?: string; until?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (query.severity) params.set("severity", query.severity);
+    if (query.since) params.set("since", query.since);
+    if (query.until) params.set("until", query.until);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    const qs = params.toString();
+    return j<unknown>(`/api/app/operations/alerts${qs ? `?${qs}` : ""}`);
+  },
+  getOperationsJobMetrics: (query: { type?: string; since?: string; until?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (query.type) params.set("type", query.type);
+    if (query.since) params.set("since", query.since);
+    if (query.until) params.set("until", query.until);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    const qs = params.toString();
+    return j<unknown>(`/api/app/operations/job-metrics/history${qs ? `?${qs}` : ""}`);
+  },
+  getOperationsStatus: () => j<unknown>("/api/app/operations/status"),
+  getSandboxStatus: () => j<SandboxStatus>("/api/app/sandbox/status"),
+  listSandboxRuntimes: () =>
+    j<{ runtimes: SandboxRuntimeInfo[] }>("/api/app/sandbox/runtimes").then((p) => p.runtimes),
+  startSandboxExec: (body: SandboxExecRequest) =>
+    j<{ exec: SandboxExecRecord }>("/api/app/sandbox/exec", { method: "POST", body: JSON.stringify(body) }).then((p) => p.exec),
+  listSandboxExecs: (query: { limit?: number; appId?: string; status?: SandboxExecStatus } = {}) => {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.appId) params.set("appId", query.appId);
+    if (query.status) params.set("status", query.status);
+    const qs = params.toString();
+    return j<{ execs: SandboxExecRecord[] }>(`/api/app/sandbox/exec${qs ? `?${qs}` : ""}`).then((p) => p.execs);
+  },
+  getSandboxExec: (id: string) =>
+    j<{ exec: SandboxExecRecord }>(`/api/app/sandbox/exec/${id}`).then((p) => p.exec),
+  cancelSandboxExec: (id: string) =>
+    j<{ exec: SandboxExecRecord }>(`/api/app/sandbox/exec/${id}/cancel`, { method: "POST" }).then((p) => p.exec),
 };
+
+export function streamSandboxExec(
+  id: string,
+  handlers: {
+    onChunk?: (msg: { stream: "stdout" | "stderr"; data: string }) => void;
+    onStatus?: (exec: SandboxExecRecord) => void;
+    onDone?: (exec: SandboxExecRecord) => void;
+    onError?: (e: Error) => void;
+  },
+): () => void {
+  const es = new EventSource(`/api/app/sandbox/exec/${id}/stream`, { withCredentials: true });
+  es.addEventListener("chunk", (e) => {
+    try { handlers.onChunk?.(JSON.parse((e as MessageEvent).data)); } catch { /* ignore parse */ }
+  });
+  es.addEventListener("status", (e) => {
+    try { handlers.onStatus?.(JSON.parse((e as MessageEvent).data)); } catch { /* ignore parse */ }
+  });
+  es.addEventListener("done", (e) => {
+    try { handlers.onDone?.(JSON.parse((e as MessageEvent).data)); } catch { /* ignore parse */ }
+    es.close();
+  });
+  es.onerror = () => {
+    handlers.onError?.(new Error("stream error"));
+    es.close();
+  };
+  return () => es.close();
+}

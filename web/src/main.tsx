@@ -4,17 +4,15 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { AuthProvider } from "./context/AuthContext";
 import { ToastProvider } from "./context/ToastContext";
-import { CommandPaletteProvider } from "./context/CommandPaletteContext";
 import "./index.css";
+import "./workbench/workbench.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <ToastProvider>
         <AuthProvider>
-          <CommandPaletteProvider>
-            <App />
-          </CommandPaletteProvider>
+          <App />
         </AuthProvider>
       </ToastProvider>
     </BrowserRouter>

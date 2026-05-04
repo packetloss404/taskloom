@@ -8,6 +8,10 @@ import { buildManagedDatabaseTopologyReport as defaultBuildManagedDatabaseTopolo
 import { buildManagedDatabaseRuntimeGuardReport as defaultBuildManagedDatabaseRuntimeGuardReport } from "./deployment/managed-database-runtime-guard.js";
 import { buildReleaseReadinessReport as defaultBuildReleaseReadinessReport } from "./deployment/release-readiness.js";
 import { buildReleaseEvidenceBundle as defaultBuildReleaseEvidenceBundle } from "./deployment/release-evidence.js";
+import {
+  getDefaultSandboxService as defaultGetSandboxService,
+  type SandboxServiceHealthSnapshot,
+} from "./sandbox/sandbox-service.js";
 
 export type SubsystemStatus = "ok" | "degraded" | "down" | "disabled";
 
@@ -37,6 +41,7 @@ export interface OperationsHealthDeps {
   buildManagedDatabaseRuntimeGuardReport?: (env: NodeJS.ProcessEnv) => unknown;
   buildReleaseReadinessReport?: (env: NodeJS.ProcessEnv, deps?: OperationsHealthReleaseDeps) => unknown;
   buildReleaseEvidenceBundle?: (env: NodeJS.ProcessEnv, deps?: OperationsHealthEvidenceDeps) => unknown;
+  sandboxHealth?: () => SandboxServiceHealthSnapshot | Promise<SandboxServiceHealthSnapshot>;
 }
 
 export interface OperationsHealthAsyncDeps extends Omit<OperationsHealthDeps, "loadStore"> {
@@ -2065,6 +2070,54 @@ function checkManagedPostgresHorizontalWriterConcurrency(
   };
 }
 
+function checkSandboxSync(env: NodeJS.ProcessEnv, checkedAt: string): SubsystemHealth {
+  const requested = (env.TASKLOOM_SANDBOX_DRIVER ?? "auto").toLowerCase();
+  const driver = requested === "native" ? "native" : requested === "docker" ? "docker" : "auto";
+  return {
+    name: "sandbox",
+    status: "ok",
+    detail: `sandbox subsystem configured (driver=${driver})`,
+    checkedAt,
+  };
+}
+
+async function checkSandboxAsync(
+  snapshotFn: () => SandboxServiceHealthSnapshot | Promise<SandboxServiceHealthSnapshot>,
+  checkedAt: string,
+): Promise<SubsystemHealth> {
+  try {
+    const snapshot = await snapshotFn();
+    const readyRuntimes = snapshot.runtimes.filter((entry) => entry.ready).length;
+    const failureCount = snapshot.recentFailures.length;
+    const status: SubsystemStatus = snapshot.available
+      ? failureCount > 0
+        ? "degraded"
+        : "ok"
+      : "degraded";
+    const detailParts = [
+      `driver=${snapshot.driver}`,
+      `available=${snapshot.available}`,
+      `runtimesReady=${readyRuntimes}/${snapshot.runtimes.length}`,
+      `activeExecs=${snapshot.activeExecs}`,
+      `recentFailures=${failureCount}`,
+    ];
+    if (snapshot.note) detailParts.push(snapshot.note);
+    return {
+      name: "sandbox",
+      status,
+      detail: detailParts.join("; "),
+      checkedAt,
+    };
+  } catch (error) {
+    return {
+      name: "sandbox",
+      status: "down",
+      detail: `sandbox health probe failed: ${redactedErrorMessage(error)}`,
+      checkedAt,
+    };
+  }
+}
+
 function reduceOverall(subsystems: SubsystemHealth[]): SubsystemStatus {
   let result: SubsystemStatus = "ok";
   for (const subsystem of subsystems) {
@@ -2134,6 +2187,7 @@ export function getOperationsHealth(deps: OperationsHealthDeps = {}): Operations
     checkManagedPostgresRecoveryValidation(env, checkedAt, deploymentReports),
     checkManagedPostgresCutoverAutomation(env, checkedAt, deploymentReports),
     checkFinalReleaseClosure(env, checkedAt, deploymentReports),
+    checkSandboxSync(env, checkedAt),
   ];
 
   return {
@@ -2153,6 +2207,8 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
   const checkedAt = now.toISOString();
   const deploymentReports = buildDeploymentReportSources(env, deps);
 
+  const sandboxSnapshotFn =
+    deps.sandboxHealth ?? (() => defaultGetSandboxService().getHealthSnapshot());
   const subsystems: SubsystemHealth[] = [
     await checkStoreAsync(loadStore, checkedAt),
     checkScheduler(schedulerHeartbeat(), now, staleAfterMs, checkedAt),
@@ -2171,6 +2227,7 @@ export async function getOperationsHealthAsync(deps: OperationsHealthAsyncDeps =
     checkManagedPostgresRecoveryValidation(env, checkedAt, deploymentReports),
     checkManagedPostgresCutoverAutomation(env, checkedAt, deploymentReports),
     checkFinalReleaseClosure(env, checkedAt, deploymentReports),
+    await checkSandboxAsync(sandboxSnapshotFn, checkedAt),
   ];
 
   return {
