@@ -1,9 +1,31 @@
 import type {
   ActivityDetailPayload,
   ActivityRecord,
+  AgentBuilderApproveResult,
+  AgentBuilderDraft,
+  AgentBuilderDraftResult,
+  AgentPromptDraftResult,
   AgentRecord,
   AgentRunRecord,
   AgentTemplate,
+  BuilderModelPreset,
+  BuilderModelPresetId,
+  AppBuilderApproveResult,
+  AppBuilderApplyStatus,
+  AppBuilderChangeSetResult,
+  AppBuilderCheckpointListResult,
+  AppBuilderDraft,
+  AppBuilderDraftResult,
+  AppBuilderFixPromptResult,
+  AppBuilderIterationApplyRequest,
+  AppBuilderIterationApplyResult,
+  AppBuilderIterationRequest,
+  AppBuilderIterationResult,
+  AppBuilderPublishRequest,
+  AppBuilderPublishResult,
+  AppBuilderPublishRollbackResult,
+  AppBuilderPublishState,
+  AppBuilderRollbackResult,
   ActivationDetailPayload,
   BootstrapPayload,
   ConfirmWorkflowReleaseInput,
@@ -38,6 +60,8 @@ import type {
   UsageSummary,
   ProviderCallRecord,
   JobRecord,
+  IntegrationReadinessSummary,
+  IntegrationMarketplaceTestResult,
   PlanModeResult,
   PlanModePlanItem,
   AvailableTool,
@@ -55,6 +79,24 @@ import { pushExternalToast } from "@/context/ToastContext";
 let lastAuthToastAt = 0;
 const CSRF_COOKIE_NAME = "taskloom_csrf";
 const CSRF_HEADER_NAME = "X-CSRF-Token";
+
+type BuilderModelRoutingPresetPayload = {
+  id: BuilderModelPresetId;
+  label: string;
+  goal: string;
+  primary: BuilderModelPreset["primary"];
+  fallbacks: BuilderModelPreset["fallbacks"];
+};
+
+type BuilderModelRoutingPresetSurfacePayload = {
+  version: string;
+  presets: Record<BuilderModelPresetId, BuilderModelRoutingPresetPayload>;
+  totals: {
+    presets: number;
+    ready: number;
+    needsSetup: number;
+  };
+};
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const csrfToken = csrfTokenForRequest(init);
@@ -104,6 +146,30 @@ function csrfTokenForRequest(init?: RequestInit) {
     ?.slice(CSRF_COOKIE_NAME.length + 1) ?? "";
 }
 
+function integrationMarketplaceTestPath(cardId: string) {
+  switch (cardId) {
+    case "openai":
+    case "anthropic":
+    case "ollama-local":
+    case "custom-api":
+      return "/api/app/llm/test";
+    case "browser":
+      return "/api/app/tools/browser/test";
+    case "custom-api-provider":
+      return "/api/app/integrations/custom-api-provider/test";
+    case "browser-scraping":
+      return "/api/app/tools/browser/test";
+    case "slack-webhook":
+    case "email":
+    case "github-webhook":
+    case "stripe-payments":
+    case "database":
+      return `/api/app/integrations/${cardId}/test`;
+    default:
+      return `/api/app/integrations/${cardId}/test`;
+  }
+}
+
 export const api = {
   getSession: async (): Promise<Session | null> => {
     const payload = await j<Session | { authenticated: false; user: null; workspace: null; onboarding: null }>("/api/auth/session");
@@ -134,6 +200,52 @@ export const api = {
   listAgents: () => j<{ agents: AgentRecord[] }>("/api/app/agents").then((payload) => payload.agents),
   getAgent: (id: string) => j<{ agent: AgentRecord; runs: AgentRunRecord[] }>(`/api/app/agents/${id}`),
   createAgent: (body: SaveAgentInput) => j<{ agent: AgentRecord }>("/api/app/agents", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
+  generateAgentFromPrompt: (body: { prompt: string; create?: boolean; approve?: boolean; providerId?: string; model?: string; status?: AgentRecord["status"]; runPreview?: boolean; sampleInputs?: Record<string, unknown> }) =>
+    j<AgentPromptDraftResult>("/api/app/agents/generate-from-prompt", { method: "POST", body: JSON.stringify(body) }),
+  generateAgentBuilderDraft: (body: { prompt: string }) =>
+    j<AgentBuilderDraftResult>("/api/app/builder/agent-draft", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.draft),
+  approveAgentBuilderDraft: (body: { prompt?: string; draft?: AgentBuilderDraft; status?: AgentRecord["status"]; runPreview?: boolean; sampleInputs?: Record<string, unknown> }) =>
+    j<AgentBuilderApproveResult>("/api/app/builder/agent-draft/approve", { method: "POST", body: JSON.stringify(body) }),
+  generateAppBuilderDraft: (body: { prompt: string }) =>
+    j<AppBuilderDraftResult>("/api/app/builder/app-draft", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.draft),
+  approveAppBuilderDraft: (body: { prompt?: string; draft?: AppBuilderDraft; runBuild?: boolean; runSmoke?: boolean; targetStatus?: AppBuilderApplyStatus }) =>
+    j<AppBuilderApproveResult>("/api/app/builder/app-draft/apply", { method: "POST", body: JSON.stringify(body) }),
+  generateAppBuilderIteration: (body: AppBuilderIterationRequest) =>
+    j<AppBuilderIterationResult>("/api/app/builder/app-iteration", { method: "POST", body: JSON.stringify(body) }),
+  applyAppBuilderIterationDiff: (body: AppBuilderIterationApplyRequest) =>
+    j<AppBuilderIterationApplyResult>("/api/app/builder/app-iteration/apply", { method: "POST", body: JSON.stringify(body) }),
+  draftBuilderChangeSet: (body: AppBuilderIterationRequest) =>
+    j<AppBuilderChangeSetResult>("/api/app/builder/changes/draft", { method: "POST", body: JSON.stringify(body) }),
+  applyBuilderChangeSet: (body: AppBuilderIterationApplyRequest) =>
+    j<AppBuilderIterationApplyResult>("/api/app/builder/changes/apply", { method: "POST", body: JSON.stringify(body) }),
+  refreshBuilderPreview: (body: { appId?: string; checkpointId?: string; runBuild?: boolean; runSmoke?: boolean }) =>
+    j<{ preview: AppBuilderIterationApplyResult["preview"]; build?: { status: string }; smoke?: AppBuilderIterationApplyResult["smoke"]; checkpoint?: AppBuilderIterationApplyResult["checkpoint"] }>("/api/app/builder/preview/refresh", { method: "POST", body: JSON.stringify(body) }),
+  buildBuilderFixPrompt: (body: Partial<AppBuilderIterationRequest> & { errorContext?: { source?: "build" | "runtime" | "smoke"; message?: string; prompt?: string } }) =>
+    j<AppBuilderFixPromptResult>("/api/app/builder/fix-prompt", { method: "POST", body: JSON.stringify(body) }),
+  listBuilderCheckpoints: (query: { appId?: string; agentId?: string }) => {
+    const params = new URLSearchParams();
+    if (query.appId) params.set("appId", query.appId);
+    if (query.agentId) params.set("agentId", query.agentId);
+    return j<AppBuilderCheckpointListResult>(`/api/app/builder/checkpoints?${params.toString()}`);
+  },
+  rollbackBuilderCheckpoint: (checkpointId: string, body: { appId?: string; agentId?: string; reason?: string } = {}) =>
+    j<AppBuilderRollbackResult>(`/api/app/builder/checkpoints/${checkpointId}/rollback`, { method: "POST", body: JSON.stringify(body) }),
+  getBuilderPublishState: (query: { appId?: string; checkpointId?: string }) => {
+    const params = new URLSearchParams();
+    if (query.appId) params.set("appId", query.appId);
+    if (query.checkpointId) params.set("checkpointId", query.checkpointId);
+    return j<AppBuilderPublishState>(`/api/app/builder/publish/state?${params.toString()}`);
+  },
+  publishBuilderApp: (body: AppBuilderPublishRequest) =>
+    j<AppBuilderPublishResult>("/api/app/builder/publish", { method: "POST", body: JSON.stringify(body) }),
+  rollbackBuilderPublish: (publishId: string, body: { appId?: string; checkpointId?: string; reason?: string } = {}) =>
+    j<AppBuilderPublishRollbackResult>(`/api/app/builder/publish/${publishId}/rollback`, { method: "POST", body: JSON.stringify(body) }),
+  exportBuilderDockerCompose: (query: { appId?: string; checkpointId?: string }) => {
+    const params = new URLSearchParams();
+    if (query.appId) params.set("appId", query.appId);
+    if (query.checkpointId) params.set("checkpointId", query.checkpointId);
+    return j<{ fileName: string; contents: string }>(`/api/app/builder/publish/docker-compose?${params.toString()}`);
+  },
   updateAgent: (id: string, body: Partial<SaveAgentInput>) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.agent),
   archiveAgent: (id: string) => j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "DELETE" }).then((payload) => payload.agent),
@@ -142,6 +254,17 @@ export const api = {
   listAgentTemplates: () => j<{ templates: AgentTemplate[] }>("/api/app/agent-templates").then((payload) => payload.templates),
   createAgentFromTemplate: (templateId: string, body: { name?: string; providerId?: string; model?: string } = {}) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/from-template/${templateId}`, { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
+  listBuilderModelPresets: () =>
+    j<{ routingPresets: BuilderModelRoutingPresetSurfacePayload }>("/api/app/model-routing-presets").then((payload) =>
+      Object.values(payload.routingPresets.presets).map((preset) => ({
+        ...preset,
+        model: preset.primary?.model ?? "stub-small",
+        summary: preset.goal,
+        bestFor: preset.primary?.ready
+          ? preset.primary.reason
+          : preset.primary?.blockers[0] ?? "Needs provider setup before this preset can use a live model.",
+      })),
+    ),
   listProviders: () => j<{ providers: ProviderRecord[] }>("/api/app/providers").then((payload) => payload.providers),
   createProvider: (body: SaveProviderInput) =>
     j<{ provider: ProviderRecord }>("/api/app/providers", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.provider),
@@ -210,6 +333,14 @@ export const api = {
   applyPlanMode: (planItems: PlanModePlanItem[]) =>
     j<{ planItems: WorkflowPlanItem[] }>("/api/app/workflow/plan-mode/apply", { method: "POST", body: JSON.stringify({ planItems }) }).then((p) => p.planItems),
   listTools: () => j<{ tools: AvailableTool[] }>("/api/app/tools").then((p) => p.tools),
+  getIntegrationReadiness: () => j<{ readiness: IntegrationReadinessSummary }>("/api/app/integration-readiness").then((p) => p.readiness),
+  testIntegrationMarketplaceCard: (cardId: string) => {
+    const path = integrationMarketplaceTestPath(cardId);
+    return j<IntegrationMarketplaceTestResult>(path, {
+      method: "POST",
+      body: JSON.stringify({ dryRun: true, cardId }),
+    });
+  },
   diagnoseAgentRun: (runId: string) =>
     j<{ diagnostic: RunDiagnostic | null }>(`/api/app/agent-runs/${runId}/diagnose`, { method: "POST" }).then((p) => p.diagnostic),
   recordRunAsPlaybook: (runId: string) =>

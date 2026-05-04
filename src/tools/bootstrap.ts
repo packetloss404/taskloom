@@ -6,6 +6,19 @@ import { BROWSER_TOOLS } from "./builtins-browser.js";
 
 let registered = false;
 
+export function listDefaultToolSummaries(): Array<{ name: string; description: string; side: "read" | "write" | "exec" }> {
+  return [
+    ...READ_TOOLS,
+    ...WRITE_TOOLS,
+    createSandboxedShellTool(),
+    ...BROWSER_TOOLS,
+  ].map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    side: tool.side,
+  }));
+}
+
 export function registerDefaultTools(): void {
   if (registered) return;
   registered = true;

@@ -8,6 +8,8 @@ import type { ApiKeyResolver, ProviderName } from "./types.js";
 
 let registered = false;
 
+export const DEFAULT_PROVIDER_NAMES = ["anthropic", "openai", "minimax", "ollama"] as const satisfies readonly ProviderName[];
+
 const adaptedResolver: ApiKeyResolver = (workspaceId: string, provider: ProviderName) => {
   if (provider === "stub") return Promise.resolve(null);
   return vaultApiKeyResolver(workspaceId, provider);

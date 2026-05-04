@@ -996,3 +996,98 @@ The production hardening track through Phase 60 is complete for the supported lo
 The final completion track is complete: Phases 64 through 66 have landed after completed Phases 61, 62, and 63. The supported production posture has safe managed Postgres horizontal-writer behavior, enforced distributed dependencies, validated backup/restore/PITR/failover recovery behavior, repeatable cutover and rollback automation, operations visibility, full validation expectations, and documentation that clearly says the project is complete for that supported posture.
 
 Local JSON/default and supported single-node SQLite remain allowed. SQLite remains a local single-node posture, not a distributed production topology. Any topology beyond the supported managed Postgres horizontal-writer posture, such as true active-active multi-region writes, remains a future product enhancement unless a later roadmap explicitly chooses and implements it.
+
+## Product Builder Track
+
+The main roadmap now pivots from deployment-hardening phases to product-builder feature parity with prompt-first builders such as Replit, Anything, Base44, Twin, and Netlify. The detailed sprint plan lives in `docs/product-builder-sprint-plan.md`.
+
+### Product Builder Goal
+
+Taskloom should become a self-hosted AI app and agent builder with this primary loop:
+
+Prompt -> plan -> generate -> preview -> fix -> publish.
+
+The product-builder track keeps lightweight safety rails such as autosave checkpoints, rollback, preview before publish, destructive-action confirmation, secret redaction, and clear dev/prod/local labels. Heavier enterprise release evidence and topology gates remain available for advanced deployment mode, but they are not the default product path.
+
+### Six Sprint Lanes
+
+Every builder sprint should advance six lanes:
+
+- Prompt Builder: natural-language intake, clarifying questions, plan preview, starter prompts, and regenerate/refine controls.
+- App And Agent Generation: generated agent configs, app pages, backend routes, data schemas, templates, and editable diffs.
+- Runtime And Preview: live preview, first-run transcript, build/test status, smoke checks, and runtime-error fix handoff.
+- Integrations And Tools: provider setup, browser scraping, email/webhook triggers, Slack/GitHub-style webhooks, payments, database primitives, and model routing.
+- Publish And Hosting: local/self-hosted publish, Docker Compose export, URL handoff, health checks, publish history, and rollback.
+- UX, Templates, And Onboarding: builder dashboard, template gallery, empty-state prompts, first-run checklist, and nontechnical summaries.
+
+### Phase 67: Prompt-To-Agent Builder
+
+Complete. The builder page lets a user enter a prompt and receive a generated agent draft with name, description, instructions, input schema, enabled tools, trigger, schedule or webhook recommendation, starter playbook, and first test input. The user can approve, save, and record a first preview run from the same flow.
+
+Prompt Builder lane acceptance criteria: the page is reachable from primary app navigation, shows starter prompts, submits prompts as dry-run plans before mutation, asks clarifying questions when goal/trigger/inputs/provider/tools are underspecified, previews assumptions plus the generated agent draft, surfaces provider/tool/webhook readiness, supports regenerate and refine without discarding the last successful candidate, and preserves prompt/answer state across model or validation errors.
+
+Builder page contracts: reuse existing agent/provider/tool/run/webhook APIs for catalog, save, execution, and webhook readiness. Phase 67 implements `POST /api/app/builder/agent-draft` for dry-run planning, `POST /api/app/builder/agent-draft/approve` for save and optional first preview run, and `POST /api/app/agents/generate-from-prompt` as a compatibility route for prompt-generated agent drafts. Frontend state covers empty, generating, ready, approving, approved, running, and error states while reusing existing `AgentRecord`, `AgentRunRecord`, `ProviderRecord`, and `AvailableTool` shapes.
+
+Exit when a prompt can create a saved agent draft, missing provider/tool setup is visible, and the first test run result appears in the builder.
+
+### Phase 68: Prompt-To-App Builder
+
+Lane 1 contract complete. Phase 68 makes the prompt-to-app builder implementable through a dry-run/apply split that turns a prompt into a reviewable full-stack app draft before any generated artifact is written or exposed.
+
+Prompt Builder lane acceptance criteria: the builder stays on the primary `/builder` surface, supports app drafting from a natural-language prompt, asks up to three clarifying questions when target users/data/auth/workflows are underspecified, and previews the app summary, assumptions, page map, route privacy decisions, data model, workflows, generated artifacts, seed data summary, acceptance checks, build status, smoke-check status, warnings, and open questions before apply.
+
+Builder page contracts: Phase 68 uses `POST /api/app/builder/app-draft` as the canonical dry-run planning route and `POST /api/app/builder/app-draft/apply` as the canonical approval route. The dry-run request shape is `{ prompt, answers?, templateId?, mode? }` and returns `{ draft }`. The apply request shape is `{ prompt?, draft, runBuild?, runSmoke?, targetStatus? }` and returns `{ draft, applied, app, checkpoint?, build?, smoke?, previewUrl? }`. Apply persists a recoverable generated-app record and checkpoint metadata before returning a routable `/builder/preview/:workspaceId/:appId/...` preview shell. A later compatibility route such as `POST /api/app/generated-apps/generate-from-prompt` can exist, but it should not collapse dry-run planning and mutation into one implicit action.
+
+Generated app draft shape: `draft.app` includes `slug`, `name`, `description`, `pageMap`, `dataModel`, `apiRoutes`, `frontendRoutes`, `workflows`, `seedData`, `authPolicy`, `files`, `acceptanceChecks`, `build`, `smoke`, `warnings`, and `openQuestions`. Page-map entries include path, privacy, purpose, components, data dependencies, actions, empty state, and acceptance checks. Data-model entries identify entity fields, types, required flags, relationships, unique keys, generated ID policy, timestamps, validation, and which pages/routes read or mutate them. Workflow entries cover happy path, empty state, validation failure, permission failure, and destructive-action confirmation where needed.
+
+Route privacy decisions: private generated API routes live under `/api/app/generated/:appSlug/...` and require authenticated workspace membership plus generated route permissions. Public generated routes live under `/api/public/generated/:appSlug/...`, must be listed with rationale, and must not expose workspace-private data unless the plan explicitly uses a share-token or webhook-token design. Private generated frontend routes live under authenticated app navigation such as `/generated/:appSlug/...`; public pages must state whether they are anonymous, share-token gated, or webhook-token backed.
+
+Auth and smoke status: auth defaults are conservative. Generated CRUD pages and private API routes require signed-in workspace members; mutating routes require member/admin/owner according to risk; public access is opt-in per route. Build and smoke checks expose `not_run`, `queued`, `running`, `passed`, `failed`, or `blocked` with timestamps, command/check names, redacted logs, and retry/apply guidance. At least one smoke case covers the primary CRUD loop: create, read, update, and delete or archive when removal is generated.
+
+Exit when a prompt creates a navigable app draft plan with at least one data-backed CRUD flow, explicit auth/private/public route decisions, acceptance checks, and builder-visible build/test status. Later implementation lanes may wire actual generated files, preview runtime, and publish mechanics behind the documented contracts.
+
+### Phase 69: Live Preview And Iteration Chat
+
+Lane 1 contract complete. Phase 69 makes iteration implementable through a scoped change, diff-review, preview-refresh, fix-prompt, and checkpoint rollback loop after the first generated app or agent exists.
+
+Prompt Builder lane acceptance criteria: the builder stays on `/builder` in a split-screen workspace with chat, current app/agent context, preview, logs, checkpoints, and diff review. A change prompt can target a generated app, page, file, API route, agent, tool/config block, or captured error, and carries target type, stable id/path, selected context, current checkpoint id, prompt text, and redacted logs/error details when present. Submitting creates a dry-run change set before mutation; no files, agent/config records, integrations, build/smoke checks, preview refreshes, or working-checkpoint markers change until the user applies the reviewed diff.
+
+Builder iteration contracts: Phase 69 expects `POST /api/app/builder/changes/draft` for dry-run change planning, `POST /api/app/builder/changes/apply` for selected diff apply, `POST /api/app/builder/preview/refresh` for checkpoint-tied preview refresh, `POST /api/app/builder/fix-prompt` for runtime/build error handoff, `GET /api/app/builder/checkpoints?appId=...` or `?agentId=...` for checkpoint history, and `POST /api/app/builder/checkpoints/:checkpointId/rollback` for rollback. Expected shared types include `BuilderChangeTarget`, `BuilderChangeSet`, `BuilderDiffFile`, `BuilderPreviewState`, `BuilderErrorContext`, `BuilderCheckpoint`, and `BuilderRollbackResult`.
+
+Change-set shape: the preview includes summary, assumptions, affected artifacts, unified diff hunks or structured config updates, route/privacy deltas, requested tool/connectors, acceptance checks, preview/build/smoke plan, warnings, and rollback target. Apply creates an autosave checkpoint before mutation, applies only the selected change set, records builder activity, and returns updated build/smoke status plus preview guidance. The previous preview remains the last working preview until the new build/smoke result passes or the user accepts a failed-but-reviewable preview state.
+
+Fix and rollback behavior: runtime/build errors can be promoted into fix prompts with redacted error message, route/path, command/check name, safe stack/component location, current checkpoint id, and recent logs. Rollback restores the selected checkpoint for generated app artifacts, agent/config updates, preview snapshot, and build/smoke metadata, then refreshes the builder surface and records what was restored. Phase 69 does not persist secrets, raw API keys, generated bearer tokens, full webhook/share tokens, cookie/header values, unredacted stack traces, or production-looking sample data.
+
+Exit when a user can request a change, review the diff, apply it, see preview refresh, and rollback to the previous checkpoint.
+
+### Phase 70: One-Click Self-Hosted Publish
+
+Lane 1 contract complete. Phase 70 makes one-click self-hosted publish implementable through a generated publish checklist, explicit deployment assumptions, local/private URL validation, Docker Compose handoff, publish history, and rollback semantics.
+
+Prompt Builder lane acceptance criteria: before a generated app or agent leaves preview, the builder shows a publish checklist covering env readiness, production build, health checks, smoke checks, Docker Compose export, publish history, rollback target, URL handoff, and logs. The checklist is derived from the generated plan, route privacy, selected integrations, and hosting target. Missing provider keys, webhook secrets, email credentials, payment secrets, database settings, and base URLs are shown by env key and affected feature without exposing secret values.
+
+Deployment assumptions and URL handoff: publish metadata states whether the generated bundle uses the existing Hono/Vite runtime, local filesystem publish path, private self-hosted URL, public URL, reverse proxy/load balancer, selected store posture, scheduler needs, and generated webhook or scheduled-job assumptions. The private/operator URL is validated first; the public URL is shared only after required checks pass and workspace approval changes visibility to public.
+
+Health and smoke expectations: health must at least validate `/api/health/ready`; smoke must at least validate `/api/health/live`, `/api/health/ready`, and the generated app or agent entrypoint. Failures show check name, URL, method, response status, redacted response body/logs, likely missing env/config/integration, and retry or rollback guidance. A failed required check keeps publish private and preserves the previous known-good publish.
+
+Publish readiness contract: `buildAppPublishReadiness()` now returns Phase 70 metadata with `publishId`, `runtimeAssumptions`, `publishChecklist`, `envChecklist`, `dockerComposeExport`, `healthCheck`, `smokeCheck`, `publishHistory`, `rollback`, and `urlHandoff`. Future builder routes should preserve the dry-run/apply discipline with `POST /api/app/builder/publish/readiness` for readiness generation, `POST /api/app/builder/publish` for explicit publish, `GET /api/app/builder/publishes?appId=...` or `?agentId=...` for history, and `POST /api/app/builder/publishes/:publishId/rollback` for explicit rollback.
+
+Docker Compose and history semantics: the publish package records `docker-compose.publish.yml`, redacted env placeholder guidance, app service build context, health check wiring, publish volume/path, optional database service, private URL, public URL, smoke command, and rollback command. Publish history records every attempt with source checkpoint, bundle path, URL, status, health/smoke results, redacted logs, compose export path, current/previous marker, and rollback target. Rollback repoints hosting and URL handoff to the previous known-good publish, restores health/smoke metadata, records the rollback event, and reruns readiness checks.
+
+Exit when a generated app/agent bundle can publish to a URL, required health and smoke checks pass or show actionable failure, rollback to the previous publish is available, and Docker Compose export exists for self-hosted handoff.
+
+### Phase 71: Integrations Marketplace Lite
+
+Add marketplace cards and setup flows for OpenAI, Anthropic, Ollama/local, custom API providers, Slack/webhook, email, GitHub webhook, browser scraping, Stripe/payments, and database. Generated apps and agents can request integrations and surface missing secrets without blocking unrelated features.
+
+Exit when connector readiness is visible, configured integrations can be tested, and generated work can use them.
+
+Lane 6 setup surface complete: the Integrations page now exposes marketplace-lite cards for the Phase 71 connector set, compact readiness/test status, setup actions for keys, webhooks, URLs, provider records, and generated-work usage hints backed by existing typed frontend APIs.
+
+### Phase 72: Builder Beta Polish
+
+Polish the builder into a beta-ready product path with saved prompt sessions, project memory, template expansion, generated tests, consolidated transcript/log/test timeline, model-routing presets, publish dashboard, and a first-run checklist.
+
+Lane 6 UX polish complete: `/builder` now keeps the existing prompt/review/save/publish structure while adding a first-run checklist, a template gallery with clearer outcomes, model preset selection, publish dashboard counters, and a builder timeline. Builder copy favors nontechnical user language for the primary path while keeping the underlying app draft details visible for review, smoke tests, and existing route/API contracts.
+
+Exit when a beta user can create, iterate, preview, and publish at least three template categories without reading documentation.

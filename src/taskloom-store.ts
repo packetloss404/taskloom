@@ -339,12 +339,142 @@ export interface AgentRecord {
   createdByUserId: string;
   templateId?: string;
   inputSchema: AgentInputField[];
+  publishHistory?: Record<string, unknown>[];
+  currentPublishId?: string;
+  publishStatus?: string;
+  publishedUrl?: string;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
 }
 
-export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | "custom";
+export type GeneratedAppStatus = "draft" | "saved" | "built";
+
+export type GeneratedAppPublishVisibility = "private" | "public";
+export type GeneratedAppPublishStatus = "pending" | "published" | "failed" | "rolled_back";
+export type GeneratedAppPublishLogLevel = "info" | "warn" | "error";
+export type GeneratedAppPublishRollbackStatus = "pending" | "succeeded" | "failed" | "noop";
+
+export interface GeneratedAppPublishLogEntry {
+  at: string;
+  level: GeneratedAppPublishLogLevel;
+  message: string;
+}
+
+export interface GeneratedAppDockerComposeExportPayload {
+  fileName: "docker-compose.publish.yml";
+  format: "docker-compose";
+  version: "3.9";
+  services: string[];
+  environment: Record<string, string>;
+  volumes: string[];
+  yaml: string;
+}
+
+export interface GeneratedAppPublishRollbackCommand {
+  kind: "generated-app-publish-rollback";
+  commandId: string;
+  command: string;
+  workspaceId: string;
+  appId: string;
+  fromPublishId: string;
+  toPublishId: string;
+  fromLocalPublishPath: string;
+  toLocalPublishPath: string;
+  requestedByUserId?: string;
+  reason?: string;
+  requiresConfirmation: true;
+  expectedResult: {
+    status: "pending";
+    restoredPublishId: string;
+    supersededPublishId: string;
+    localPublishPath: string;
+    publicUrl?: string;
+    privateUrl?: string;
+  };
+}
+
+export interface GeneratedAppPublishRollbackResult {
+  kind: "generated-app-publish-rollback-result";
+  commandId: string;
+  status: GeneratedAppPublishRollbackStatus;
+  rolledBack: boolean;
+  restoredPublishId: string;
+  supersededPublishId: string;
+  completedAt: string;
+  localPublishPath: string;
+  publicUrl?: string;
+  privateUrl?: string;
+  message: string;
+  error?: string;
+}
+
+export interface GeneratedAppPublishRecord {
+  id: string;
+  appId: string;
+  workspaceId: string;
+  checkpointId: string;
+  status: GeneratedAppPublishStatus;
+  visibility: GeneratedAppPublishVisibility;
+  versionLabel: string;
+  localPublishPath: string;
+  publicUrl: string;
+  privateUrl: string;
+  previewUrl?: string;
+  buildStatus?: string;
+  smokeStatus?: string;
+  dockerComposeExport: GeneratedAppDockerComposeExportPayload;
+  artifactPaths: string[];
+  logs: GeneratedAppPublishLogEntry[];
+  previousPublishId?: string;
+  rollbackCommand?: GeneratedAppPublishRollbackCommand;
+  rollbackResult?: GeneratedAppPublishRollbackResult;
+  createdByUserId: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface GeneratedAppCheckpointRecord {
+  id: string;
+  appId: string;
+  workspaceId: string;
+  label: string;
+  draft: Record<string, unknown>;
+  previewUrl?: string;
+  buildStatus?: string;
+  smokeStatus?: string;
+  source: "initial" | "iteration" | "rollback";
+  previousCheckpointId?: string;
+  createdByUserId: string;
+  createdAt: string;
+}
+
+export interface GeneratedAppRecord {
+  id: string;
+  workspaceId: string;
+  slug: string;
+  name: string;
+  description: string;
+  prompt: string;
+  templateId: string;
+  status: GeneratedAppStatus;
+  draft: Record<string, unknown>;
+  checkpointId: string;
+  previewUrl?: string;
+  buildStatus?: string;
+  smokeStatus?: string;
+  checkpoints?: GeneratedAppCheckpointRecord[];
+  previewSnapshots?: Record<string, unknown>[];
+  publishHistory?: GeneratedAppPublishRecord[];
+  currentPublishId?: string;
+  publishStatus?: GeneratedAppPublishStatus;
+  publishedUrl?: string;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProviderKind = "openai" | "anthropic" | "minimax" | "azure_openai" | "ollama" | "custom";
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 
 export interface ProviderRecord {
@@ -523,6 +653,7 @@ export interface TaskloomData {
   activities: ActivityRecord[];
   activationSignals: ActivationSignalRecord[];
   agents: AgentRecord[];
+  generatedApps?: GeneratedAppRecord[];
   providers: ProviderRecord[];
   agentRuns: AgentRunRecord[];
   workspaceEnvVars: WorkspaceEnvVarRecord[];
@@ -1396,6 +1527,7 @@ const RECORD_COLLECTIONS = [
   "releaseConfirmations",
   "onboardingStates",
   "agents",
+  "generatedApps",
   "providers",
   "workspaceEnvVars",
   "apiKeys",
@@ -2815,6 +2947,7 @@ export function normalizeStore(data: Partial<TaskloomData>): TaskloomData {
       ...entry,
       inputSchema: Array.isArray(entry.inputSchema) ? entry.inputSchema : [],
     })),
+    generatedApps: data.generatedApps ?? [],
     providers: data.providers ?? [],
     agentRuns: (data.agentRuns ?? []).map((entry) => ({
       ...entry,
@@ -3527,6 +3660,7 @@ function seedStore(): TaskloomData {
     ],
     activationSignals,
     agents,
+    generatedApps: [],
     providers,
     agentRuns,
     workspaceEnvVars,

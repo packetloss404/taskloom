@@ -90,7 +90,7 @@ export type CreateWorkspaceInvitationInput = {
 
 export type AgentStatus = "active" | "paused" | "archived";
 export type AgentTriggerKind = "manual" | "schedule" | "webhook" | "email";
-export type ProviderKind = "openai" | "anthropic" | "azure_openai" | "ollama" | "custom";
+export type ProviderKind = "openai" | "anthropic" | "minimax" | "azure_openai" | "ollama" | "custom";
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 export type AgentRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
 export type AgentRunStepStatus = "success" | "failed" | "skipped";
@@ -140,6 +140,31 @@ export interface AgentTemplate {
   inputSchema: AgentInputField[];
 }
 
+export type BuilderModelPresetId = "fast" | "smart" | "cheap" | "local";
+
+export interface BuilderModelRoutingChoice {
+  provider: ProviderKind | "stub";
+  model: string;
+  source: "workspace_provider" | "env_hint" | "fallback";
+  ready: boolean;
+  blockers: string[];
+  reason: string;
+  providerId?: string;
+  providerName?: string;
+  envHints: string[];
+}
+
+export interface BuilderModelPreset {
+  id: BuilderModelPresetId;
+  label: string;
+  model: string;
+  summary: string;
+  bestFor: string;
+  goal?: string;
+  primary?: BuilderModelRoutingChoice;
+  fallbacks?: BuilderModelRoutingChoice[];
+}
+
 export interface ProviderRecord {
   id: string;
   workspaceId: string;
@@ -151,6 +176,75 @@ export interface ProviderRecord {
   status: ProviderStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface IntegrationReadinessSummary {
+  status: "ready" | "needs_setup";
+  tools: {
+    availableCount: number;
+    readCount: number;
+    writeCount: number;
+    execCount: number;
+    names: string[];
+    missingForGeneratedPlans: string[];
+  };
+  providers: {
+    configuredCount: number;
+    readyCount: number;
+    missingProviderKinds: ApiKeyProviderName[];
+    missingApiKeys: Array<{ provider: ApiKeyProviderName; providerName: string }>;
+  };
+  recommendedSetup: string[];
+}
+
+export type IntegrationMarketplaceKind =
+  | "llm"
+  | "local_model"
+  | "webhook"
+  | "email"
+  | "source_control"
+  | "browser"
+  | "payments"
+  | "database"
+  | "custom_api";
+
+export type IntegrationSetupActionKind = "api_key" | "provider" | "env_url" | "env_secret" | "webhook";
+
+export interface IntegrationSetupAction {
+  kind: IntegrationSetupActionKind;
+  label: string;
+  envKey?: string;
+  provider?: ApiKeyProviderName;
+  providerKind?: ProviderKind;
+  placeholder?: string;
+  secret?: boolean;
+  scope?: WorkspaceEnvVarScope;
+}
+
+export interface IntegrationMarketplaceCard {
+  id: string;
+  name: string;
+  kind: IntegrationMarketplaceKind;
+  summary: string;
+  generatedWorkHint: string;
+  providerKind?: ProviderKind;
+  keyProvider?: ApiKeyProviderName;
+  requiredEnvKeys?: string[];
+  optionalEnvKeys?: string[];
+  actions: IntegrationSetupAction[];
+}
+
+export type IntegrationSetupStatus = "configured" | "missing" | "test_passed" | "test_failed";
+
+export interface IntegrationMarketplaceTestResult {
+  test: {
+    status: "pass" | "fail" | "pending";
+    connectorId: string;
+    message: string;
+    setupGuide: string[];
+    deterministic: boolean;
+    liveNetworkCalls: boolean;
+  };
 }
 
 export interface AgentRecord {
@@ -285,6 +379,475 @@ export type SaveAgentInput = {
   templateId?: string;
   inputSchema?: AgentInputField[];
 };
+
+export interface AgentBuilderPlanStep {
+  title: string;
+  detail: string;
+}
+
+export interface AgentBuilderDraft {
+  prompt: string;
+  intent: string;
+  summary: string;
+  agent: SaveAgentInput & {
+    description?: string;
+  };
+  sampleInputs: Record<string, string | number | boolean>;
+  plan: {
+    title: string;
+    steps: AgentBuilderPlanStep[];
+    acceptanceChecks: string[];
+    openQuestions: string[];
+  };
+  readiness: {
+    provider: {
+      configured: boolean;
+      selectedProviderId?: string;
+      selectedProviderName?: string;
+      selectedModel?: string;
+      message: string;
+    };
+    tools: {
+      recommended: string[];
+      available: string[];
+      missing: string[];
+      message: string;
+    };
+    webhook: {
+      recommended: boolean;
+      readyAfterSave: boolean;
+      message: string;
+      planDetail: string;
+      publishSteps: string[];
+    };
+    firstRun: {
+      canRun: boolean;
+      blockers: string[];
+      message: string;
+    };
+  };
+}
+
+export interface AgentBuilderDraftResult {
+  draft: AgentBuilderDraft;
+}
+
+export interface AgentBuilderApproveResult {
+  draft: AgentBuilderDraft;
+  created: true;
+  agent?: AgentRecord;
+  firstRun?: AgentRunRecord;
+  sampleInputs?: Record<string, string | number | boolean>;
+}
+
+export type AppBuilderRouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type AppBuilderCheckStatus = "pending" | "pass" | "warn" | "fail";
+export type AppBuilderRouteAccess = "public" | "private" | "admin";
+export type AppBuilderApplyStatus = "draft" | "saved" | "built";
+
+export interface AppBuilderPageDraft {
+  name: string;
+  route: string;
+  access: AppBuilderRouteAccess;
+  purpose: string;
+  actions: string[];
+  components: string[];
+}
+
+export interface AppBuilderDataField {
+  name: string;
+  type: "string" | "number" | "boolean" | "date" | "enum" | "json" | "relation";
+  required: boolean;
+  notes?: string;
+}
+
+export interface AppBuilderDataEntity {
+  name: string;
+  fields: AppBuilderDataField[];
+  relationships: string[];
+}
+
+export interface AppBuilderApiRoute {
+  method: AppBuilderRouteMethod;
+  path: string;
+  access: AppBuilderRouteAccess;
+  purpose: string;
+  handler: string;
+  authRequired: boolean;
+}
+
+export interface AppBuilderCrudFlow {
+  entity: string;
+  create: string;
+  read: string;
+  update: string;
+  delete: string;
+  validation: string[];
+}
+
+export interface AppBuilderAuthDecision {
+  area: string;
+  decision: string;
+  rationale: string;
+}
+
+export interface AppBuilderBuildCheck {
+  name: string;
+  status: AppBuilderCheckStatus;
+  detail: string;
+}
+
+export interface AppBuilderSmokeBuildStatus {
+  status: AppBuilderCheckStatus;
+  message: string;
+  checks: AppBuilderBuildCheck[];
+  blockers: string[];
+}
+
+export interface AppBuilderDraft {
+  prompt: string;
+  intent: string;
+  summary: string;
+  app: {
+    slug: string;
+    name: string;
+    description: string;
+    pages: AppBuilderPageDraft[];
+    dataSchema: AppBuilderDataEntity[];
+    apiRoutes: AppBuilderApiRoute[];
+    crudFlows: AppBuilderCrudFlow[];
+    authDecisions: AppBuilderAuthDecision[];
+  };
+  plan: {
+    title: string;
+    steps: AgentBuilderPlanStep[];
+    acceptanceChecks: string[];
+    openQuestions: string[];
+  };
+  smokeBuildStatus: AppBuilderSmokeBuildStatus;
+}
+
+export interface AppBuilderDraftResult {
+  draft: AppBuilderDraft;
+}
+
+export interface AppBuilderApproveResult {
+  draft: AppBuilderDraft;
+  created: true;
+  applied: true;
+  app?: {
+    id: string;
+    slug: string;
+    name: string;
+    status: AppBuilderApplyStatus;
+    previewUrl?: string;
+    createdAt: string;
+  };
+  checkpoint?: {
+    id: string;
+    appId: string;
+    savedAt: string;
+  };
+  build?: {
+    status: string;
+    checks: AppBuilderBuildCheck[];
+  };
+  smoke?: AppBuilderSmokeBuildStatus;
+  previewUrl?: string;
+  smokeBuild?: AppBuilderSmokeBuildStatus;
+}
+
+export type AppBuilderIterationTargetKind = "app" | "page" | "data_entity" | "api_route" | "auth" | "smoke" | "config" | "file" | "agent" | "tool";
+export type AppBuilderIterationDiffStatus = "generated" | "pending" | "applied" | "blocked";
+export type AppBuilderIterationFileChangeType = "added" | "modified" | "deleted" | "renamed";
+export type AppBuilderIterationToolReadinessStatus = "not_requested" | "ready" | "needs_setup" | "blocked";
+
+export interface AppBuilderIterationTarget {
+  id: string;
+  kind: AppBuilderIterationTargetKind;
+  label: string;
+  path?: string;
+}
+
+export interface AppBuilderIterationDiffFile {
+  path: string;
+  changeType: AppBuilderIterationFileChangeType;
+  summary: string;
+  diff: string;
+}
+
+export interface AppBuilderIterationResult {
+  id: string;
+  appId?: string;
+  checkpointId?: string;
+  target: AppBuilderIterationTarget;
+  prompt: string;
+  summary: string;
+  status: AppBuilderIterationDiffStatus;
+  files: AppBuilderIterationDiffFile[];
+  draft?: AppBuilderDraft;
+  preview?: {
+    url?: string;
+    refreshedAt?: string;
+    status: AppBuilderCheckStatus;
+    message: string;
+  };
+  logs: AgentRunLogEntry[];
+  smoke?: AppBuilderSmokeBuildStatus;
+  errorFix?: {
+    source: "build" | "runtime" | "smoke";
+    message: string;
+    prompt: string;
+  };
+  tools?: {
+    readinessStatus: AppBuilderIterationToolReadinessStatus;
+    canProceed: boolean;
+    requestedCategories: string[];
+    missingSetup: string[];
+    nextSteps: string[];
+    requests: Array<{
+      category: string;
+      label: string;
+      requestedTool: string;
+      readinessStatus: AppBuilderIterationToolReadinessStatus;
+      ready: boolean;
+      missingSetup: string[];
+      canProceedWithout: boolean;
+      requiresLiveSetup: boolean;
+      rationale: string;
+    }>;
+  };
+}
+
+export interface AppBuilderIterationRequest {
+  appId?: string;
+  checkpointId?: string;
+  draft: AppBuilderDraft;
+  target: AppBuilderIterationTarget;
+  prompt: string;
+  sourceError?: AppBuilderIterationResult["errorFix"];
+}
+
+export interface AppBuilderIterationApplyRequest {
+  appId?: string;
+  checkpointId?: string;
+  diffId: string;
+  target: AppBuilderIterationTarget;
+  files: AppBuilderIterationDiffFile[];
+  diff?: AppBuilderIterationResult;
+  changeSet?: AppBuilderIterationResult;
+  changeSetId?: string;
+  draft?: AppBuilderDraft;
+  runBuild?: boolean;
+  runSmoke?: boolean;
+  refreshPreview?: boolean;
+}
+
+export interface AppBuilderIterationApplyResult {
+  applied: true;
+  checkpoint?: {
+    id: string;
+    appId: string;
+    savedAt: string;
+  };
+  previewUrl?: string;
+  smoke?: AppBuilderSmokeBuildStatus;
+  diff?: AppBuilderIterationResult;
+  app?: {
+    id: string;
+    slug: string;
+    name: string;
+    status: AppBuilderApplyStatus;
+    previewUrl?: string;
+  };
+  changeSet?: AppBuilderIterationResult;
+  preview?: {
+    status: string;
+    label: string;
+    reason: string;
+    previewUrl?: string;
+  };
+}
+
+export interface AppBuilderChangeSetResult {
+  changeSet: AppBuilderIterationResult;
+}
+
+export interface AppBuilderCheckpointSummary {
+  id: string;
+  appId?: string;
+  agentId?: string;
+  label: string;
+  source: string;
+  previewUrl?: string;
+  buildStatus?: string;
+  smokeStatus?: string;
+  previousCheckpointId?: string;
+  createdAt: string;
+}
+
+export interface AppBuilderCheckpointListResult {
+  checkpoints: AppBuilderCheckpointSummary[];
+  currentCheckpointId: string;
+}
+
+export interface AppBuilderRollbackResult {
+  rolledBack: boolean;
+  checkpoint?: {
+    id: string;
+    appId?: string;
+    savedAt: string;
+  };
+  app?: AppBuilderIterationApplyResult["app"];
+  preview?: {
+    url?: string;
+    status: AppBuilderCheckStatus | string;
+    message: string;
+  };
+  build?: { status: string };
+  smoke?: AppBuilderSmokeBuildStatus;
+  draft?: AppBuilderDraft;
+}
+
+export interface AppBuilderFixPromptResult {
+  prompt: string;
+  changeSet?: AppBuilderIterationResult;
+}
+
+export type AppPublishVisibility = "private" | "public";
+export type AppBuilderPublishStatus = "not_started" | "ready" | "publishing" | "published" | "failed" | "rolled_back";
+
+export interface AppPublishEnvChecklistItem {
+  name: string;
+  required: boolean;
+  purpose: string;
+  ready?: boolean;
+}
+
+export interface AppPublishReadiness {
+  version: string;
+  draftSlug: string;
+  workspaceSlug: string;
+  localPublishPath: string;
+  packaging: {
+    runtime: "hono-vite" | string;
+    notes: string[];
+    buildCommands: string[];
+    artifactPaths: string[];
+  };
+  envChecklist: AppPublishEnvChecklistItem[];
+  dockerComposeExport: {
+    fileName: "docker-compose.publish.yml" | string;
+    services: string[];
+    outline: string[];
+    contents?: string;
+  };
+  healthCheck: {
+    livePath: string;
+    readyPath: string;
+    command: string;
+  };
+  smokeCheck: {
+    command: string;
+    expected: string[];
+  };
+  rollbackNote: string;
+  urlHandoff: {
+    visibility: AppPublishVisibility;
+    publicUrl: string;
+    privateUrl: string;
+    notes: string[];
+  };
+}
+
+export interface AppBuilderPublishHistoryEntry {
+  id: string;
+  status: AppBuilderPublishStatus;
+  url?: string;
+  checkpointId?: string;
+  publishedAt: string;
+  actor?: string;
+  summary: string;
+}
+
+export interface AppBuilderPublishState {
+  appId?: string;
+  checkpointId?: string;
+  status: AppBuilderPublishStatus;
+  publishedUrl?: string;
+  readiness: AppPublishReadiness;
+  logs: AgentRunLogEntry[];
+  history: AppBuilderPublishHistoryEntry[];
+  nextActions: string[];
+  canPublish: boolean;
+  rollbackActions: Array<{
+    id: string;
+    label: string;
+    checkpointId?: string;
+    publishId?: string;
+    disabled?: boolean;
+  }>;
+}
+
+export interface AppBuilderPublishRequest {
+  appId: string;
+  checkpointId?: string;
+  draft?: AppBuilderDraft;
+  visibility?: AppPublishVisibility;
+  runBuild?: boolean;
+  runSmoke?: boolean;
+}
+
+export interface AppBuilderPublishResult {
+  published: boolean;
+  publishId?: string;
+  state: AppBuilderPublishState;
+}
+
+export interface AppBuilderPublishRollbackResult {
+  rolledBack: boolean;
+  state: AppBuilderPublishState;
+}
+
+export interface AgentPromptPlanItem {
+  title: string;
+  detail: string;
+  status: "todo" | "done";
+}
+
+export interface AgentPromptDraft {
+  prompt: string;
+  agent: SaveAgentInput & {
+    description: string;
+    enabledTools: string[];
+    routeKey: string;
+    triggerKind: AgentTriggerKind;
+    playbook: AgentPlaybookStep[];
+    status: AgentStatus;
+    inputSchema: AgentInputField[];
+  };
+  plan: AgentPromptPlanItem[];
+  assumptions: string[];
+  readiness: {
+    webhook: {
+      recommended: boolean;
+      readyAfterSave: boolean;
+      tokenRequired: boolean;
+      tokenManagementRoute: string;
+      publicTriggerRoute: string;
+      message: string;
+      planDetail: string;
+    };
+  };
+}
+
+export interface AgentPromptDraftResult {
+  draft: AgentPromptDraft;
+  created: boolean;
+  agent?: AgentRecord;
+  firstRun?: AgentRunRecord;
+  sampleInputs?: Record<string, string | number | boolean>;
+}
 
 export type SaveProviderInput = {
   name: string;
@@ -575,6 +1138,8 @@ export interface WorkflowDraft {
 export interface WorkflowDraftResult {
   draft: WorkflowDraft;
   applied: boolean;
+  modelUsed?: string;
+  costUsd?: number;
   brief?: WorkflowBrief;
   requirements?: WorkflowRequirement[];
   planItems?: WorkflowPlanItem[];

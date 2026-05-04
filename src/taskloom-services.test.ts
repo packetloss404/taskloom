@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   cancelAgentRun,
+  buildAgentSampleInputs,
   completeOnboardingStep,
   createAgent,
   createWorkspaceEnvVar,
   deleteWorkspaceEnvVarById,
   getAgent,
+  getIntegrationReadiness,
   getPrivateBootstrap,
   getWorkspaceActivityDetail,
+  approveAgentBuilderDraftAsync,
+  generateAgentDraftFromPrompt,
+  generateAgentBuilderDraftAsync,
   listAgentRuns,
   listAgents,
   listReleaseHistory,
@@ -117,6 +122,186 @@ test("agent tool runtime settings persist on create and update", () => {
 
   assert.deepEqual(updated.agent.enabledTools, ["list_agents"]);
   assert.equal(updated.agent.routeKey, "agent.fast");
+});
+
+test("integration readiness summarizes generated plan tool and provider setup gaps", () => {
+  resetStoreForTests();
+  const auth = login({ email: "beta@taskloom.local", password: "demo12345" });
+
+  const readiness = getIntegrationReadiness(auth.context);
+
+  assert.equal(readiness.status, "needs_setup");
+  assert.ok(readiness.tools.availableCount > 0);
+  assert.ok(readiness.tools.names.includes("read_workflow_brief"));
+  assert.ok(readiness.tools.missingForGeneratedPlans.includes("gmail"));
+  assert.deepEqual(readiness.providers.missingApiKeys, [{ provider: "anthropic", providerName: "Anthropic" }]);
+  assert.ok(readiness.providers.missingProviderKinds.includes("openai"));
+  assert.ok(readiness.recommendedSetup.some((entry) => entry.includes("Store vault keys")));
+});
+
+test("integration readiness treats external key configuration as provider ready", () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const readiness = getIntegrationReadiness(auth.context);
+
+  assert.equal(readiness.providers.configuredCount, 1);
+  assert.equal(readiness.providers.readyCount, 1);
+  assert.deepEqual(readiness.providers.missingApiKeys, []);
+});
+
+test("agent prompt generation returns a structured builder draft", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const draft = await generateAgentBuilderDraftAsync(auth.context, {
+    prompt: "Build an agent that monitors support tickets daily, summarizes urgent escalations, opens blockers for unresolved incidents, and reports outcomes to operators.",
+  });
+
+  assert.equal(draft.agent.status, "active");
+  assert.equal(draft.agent.triggerKind, "schedule");
+  assert.equal(draft.agent.schedule, "0 8 * * 1-5");
+  assert.match(draft.agent.name ?? "", /Support|agent/i);
+  assert.ok(draft.agent.instructions?.includes("User request"));
+  assert.ok(draft.agent.enabledTools?.includes("list_blockers"));
+  assert.ok(draft.agent.playbook && draft.agent.playbook.length >= 3);
+  assert.ok(draft.agent.inputSchema?.some((field) => field.key === "mailbox"));
+  assert.ok(draft.plan.steps.length >= 3);
+  assert.equal(draft.readiness.provider.configured, true);
+  assert.ok(draft.readiness.firstRun.blockers.length >= 0);
+});
+
+test("agent builder drafts carry phase 71 integration flows and env setup references", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const draft = await generateAgentBuilderDraftAsync(auth.context, {
+    prompt: "Create a daily agent that reads GitHub issues, sends Slack alerts, emails owners, and updates Stripe billing notes for escalations.",
+  });
+
+  assert.equal(draft.agent.triggerKind, "schedule");
+  assert.deepEqual(
+    draft.integrationMetadata.requested.map((integration) => integration.id),
+    ["slack_webhook", "email", "github", "stripe"],
+  );
+  assert.match(draft.agent.instructions, /GITHUB_TOKEN/);
+  assert.match(draft.agent.instructions, /SLACK_WEBHOOK_URL/);
+  assert.ok(draft.agent.playbook.some((step) => step.title === "Prepare GitHub connector" && step.instruction.includes("GH_TOKEN")));
+  assert.ok(draft.plan.steps.some((step) => step.title === "Prepare Stripe payments" && step.detail.includes("STRIPE_SECRET_KEY")));
+  assert.ok(draft.plan.acceptanceChecks.some((check) => check.includes("remains draft-safe until setup is complete")));
+  assert.ok(!draft.readiness.firstRun.blockers.some((blocker) => blocker.includes("STRIPE_SECRET_KEY")));
+});
+
+test("prompt agent drafts include requested integration setup without blocking unrelated features", () => {
+  const draft = generateAgentDraftFromPrompt(
+    "Build an agent to watch GitHub pull requests, send Slack webhook notifications, and summarize the result.",
+  );
+
+  assert.deepEqual(
+    draft.integrationMetadata.requested.map((integration) => integration.id),
+    ["slack_webhook", "github"],
+  );
+  assert.match(draft.agent.instructions, /GITHUB_TOKEN/);
+  assert.match(draft.agent.instructions, /SLACK_WEBHOOK_URL/);
+  assert.ok(draft.plan.some((item) => item.title === "Configure GitHub connector" && item.detail.includes("GH_TOKEN")));
+  assert.ok(draft.assumptions.some((assumption) => assumption.includes("can be drafted before setup")));
+});
+
+test("prompt agent drafts include custom API integration setup", () => {
+  const draft = generateAgentDraftFromPrompt(
+    "Build an agent that calls a custom external API with a bearer token, normalizes the response, and writes a concise summary.",
+  );
+
+  assert.ok(draft.integrationMetadata.requested.some((integration) => integration.id === "custom_api"));
+  assert.match(draft.agent.instructions, /CUSTOM_API_BASE_URL/);
+  assert.ok(draft.plan.some((item) => item.title === "Configure Custom API provider"));
+});
+
+test("agent prompt generation can create an approved agent", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const result = await approveAgentBuilderDraftAsync(auth.context, {
+    prompt: "Create a webhook agent to triage customer incidents, open blockers for critical risks, and log a concise summary.",
+  });
+
+  assert.equal(result.created, true);
+  assert.ok(result.agent);
+  assert.equal(result.agent.status, "active");
+  assert.equal(result.agent.triggerKind, "webhook");
+  assert.equal(result.draft.readiness.webhook.recommended, true);
+
+  const detail = getAgent(auth.context, result.agent.id);
+  assert.equal(detail.agent.id, result.agent.id);
+  assert.equal(detail.agent.playbook?.[0].title, "Understand request");
+});
+
+test("agent prompt generation can attach a first preview run with sample inputs", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const result = await approveAgentBuilderDraftAsync(auth.context, {
+    prompt: "Create a release audit agent that reviews evidence URLs, checks the release label, and reports blockers before launch.",
+    runPreview: true,
+  });
+
+  assert.equal(result.created, true);
+  assert.ok(result.agent);
+  assert.ok(result.firstRun);
+  assert.equal(result.firstRun.agentId, result.agent.id);
+  assert.equal(result.firstRun.status, "success");
+  assert.equal(result.firstRun.inputs?.release_label, "next release");
+  assert.equal(result.firstRun.inputs?.evidence_url, "https://example.com");
+  assert.match(result.firstRun.output ?? "", /preview run|simulated run completed/i);
+  assert.ok(result.firstRun.transcript?.some((step) => step.title === "Understand request"));
+  assert.ok(result.firstRun.logs?.some((entry) => entry.message.includes("without invoking tools or a model")));
+
+  const detail = getAgent(auth.context, result.agent.id);
+  assert.equal(detail.runs[0].id, result.firstRun.id);
+});
+
+test("agent builder preview respects first-run readiness blockers", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const draft = await generateAgentBuilderDraftAsync(auth.context, {
+    prompt: "Create a research assistant agent that reviews a source URL and reports the next action.",
+  });
+
+  const result = await approveAgentBuilderDraftAsync(auth.context, {
+    draft: {
+      ...draft,
+      readiness: {
+        ...draft.readiness,
+        firstRun: {
+          canRun: false,
+          blockers: ["Connect a provider API key before running with LLM tools."],
+          message: "The draft can be saved now, but resolve setup blockers before expecting real execution.",
+        },
+      },
+    },
+    runPreview: true,
+  });
+
+  assert.equal(result.created, true);
+  assert.equal(result.firstRun, undefined);
+});
+
+test("buildAgentSampleInputs returns valid typed defaults for run previews", () => {
+  const sampleInputs = buildAgentSampleInputs([
+    { key: "target_url", label: "Target URL", type: "url", required: true },
+    { key: "lookback_hours", label: "Lookback", type: "number", required: true, defaultValue: "48" },
+    { key: "include_runs", label: "Include runs", type: "boolean", required: false, defaultValue: "false" },
+    { key: "audience", label: "Audience", type: "enum", required: false, options: ["internal", "customer"], defaultValue: "customer" },
+    { key: "topic", label: "Topic", type: "string", required: true },
+  ]);
+
+  assert.deepEqual(sampleInputs, {
+    target_url: "https://example.com",
+    lookback_hours: 48,
+    include_runs: false,
+    audience: "customer",
+    topic: "topic",
+  });
 });
 
 test("agent lists do not expose webhook tokens", () => {

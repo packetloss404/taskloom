@@ -3,6 +3,8 @@ import { PublicOnly, RequireAuth, RequireOnboarding } from "./components/RouteGu
 import Layout from "./components/Layout";
 import AuthPage from "./pages/AuthPage";
 import DashboardPage from "./pages/Dashboard";
+import BuilderPage from "./pages/Builder";
+import GeneratedAppPreviewPage from "./pages/GeneratedAppPreview";
 import AgentsPage from "./pages/Agents";
 import AgentEditorPage from "./pages/AgentEditor";
 import HomePage from "./pages/Home";
@@ -63,6 +65,8 @@ export default function App() {
         }
       >
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/builder" element={<BuilderPage />} />
+        <Route path="/builder/preview/:workspaceId/:appId/*" element={<GeneratedAppPreviewPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/agents/new" element={<AgentEditorPage />} />
         <Route path="/agents/:id" element={<AgentEditorPage />} />

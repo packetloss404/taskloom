@@ -50,6 +50,7 @@ import {
   type AgentRunToolCall,
   type AgentStatus,
   type AgentTriggerKind,
+  type ApiKeyProvider,
   type ImplementationPlanItemRecord,
   type ProviderKind,
   type ProviderRecord,
@@ -76,9 +77,14 @@ import {
   upsertWorkspaceEnvVar,
 } from "./taskloom-store";
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
+import { DEFAULT_PROVIDER_NAMES } from "./providers/bootstrap.js";
+import { listDefaultToolSummaries } from "./tools/bootstrap.js";
+import { buildWebhookTriggerReadiness, type WebhookTriggerReadiness } from "./webhook-readiness.js";
+import { getDefaultToolRegistry } from "./tools/registry.js";
 import { LOCAL_INVITATION_EMAIL_PROVIDER, invitationEmailSubject, resolveInvitationEmailMode, resolveInvitationEmailRetryMaxAttempts, resolveInvitationEmailWebhookConfig } from "./invitation-email.js";
 import { deliverInvitationEmail, type InvitationEmailDeliveryAction } from "./invitation-email-delivery.js";
 import { maintainScheduledAgentJobs } from "./jobs/store.js";
+import { detectPhase71Integrations, type Phase71IntegrationMetadata } from "./app-builder-service.js";
 import { isSensitiveKey, maskSecret as maskBearerSecret, redactSensitiveString, redactSensitiveValue } from "./security/redaction.js";
 import {
   buildSessionCookieValue,
@@ -100,6 +106,135 @@ type AuthenticatedContext = {
   workspace: import("./taskloom-store").WorkspaceRecord;
   role: import("./taskloom-store").WorkspaceRole;
 };
+
+export interface AgentDraftOptions {
+  providerId?: string | null;
+  model?: string | null;
+  status?: AgentStatus;
+}
+
+export interface AgentDraftInput extends AgentDraftOptions {
+  prompt?: string;
+  create?: boolean;
+  approve?: boolean;
+  runPreview?: boolean;
+  sampleInputs?: Record<string, unknown>;
+}
+
+export interface AgentDraftPlanItem {
+  title: string;
+  detail: string;
+  status: "todo" | "done";
+}
+
+export interface AgentDraft {
+  prompt: string;
+  integrationMetadata: Phase71IntegrationMetadata;
+  agent: {
+    name: string;
+    description: string;
+    instructions: string;
+    providerId?: string;
+    model?: string;
+    tools: string[];
+    enabledTools: string[];
+    routeKey: string;
+    schedule?: string;
+    triggerKind: AgentTriggerKind;
+    playbook: AgentPlaybookStep[];
+    status: AgentStatus;
+    inputSchema: AgentInputField[];
+  };
+  plan: AgentDraftPlanItem[];
+  assumptions: string[];
+  readiness: {
+    webhook: WebhookTriggerReadiness;
+  };
+}
+
+export interface AgentDraftResult {
+  draft: AgentDraft;
+  created: boolean;
+  agent?: ReturnType<typeof decorateAgentWithProvider>;
+  firstRun?: ReturnType<typeof decorateRun>;
+  sampleInputs?: Record<string, string | number | boolean>;
+}
+
+export interface AgentBuilderPromptInput {
+  prompt?: string;
+}
+
+interface AgentBuilderWebhookTriggerReadiness extends WebhookTriggerReadiness {
+  publishSteps: string[];
+}
+
+interface AgentBuilderDraftPlan {
+  title: string;
+  steps: Array<{ title: string; detail: string }>;
+  acceptanceChecks: string[];
+  openQuestions: string[];
+}
+
+export interface AgentBuilderDraft {
+  prompt: string;
+  intent: string;
+  summary: string;
+  integrationMetadata: Phase71IntegrationMetadata;
+  agent: {
+    name: string;
+    description: string;
+    instructions: string;
+    providerId?: string;
+    model?: string;
+    tools: string[];
+    enabledTools: string[];
+    routeKey: string;
+    triggerKind: AgentTriggerKind;
+    schedule?: string;
+    playbook: AgentPlaybookStep[];
+    status: AgentStatus;
+    inputSchema: AgentInputField[];
+  };
+  sampleInputs: Record<string, string | number | boolean>;
+  plan: AgentBuilderDraftPlan;
+  readiness: {
+    provider: {
+      configured: boolean;
+      selectedProviderId?: string;
+      selectedProviderName?: string;
+      selectedModel?: string;
+      message: string;
+    };
+    tools: {
+      recommended: string[];
+      available: string[];
+      missing: string[];
+      message: string;
+    };
+    webhook: AgentBuilderWebhookTriggerReadiness;
+    firstRun: {
+      canRun: boolean;
+      blockers: string[];
+      message: string;
+    };
+  };
+}
+
+export interface AgentBuilderApproveInput {
+  prompt?: string;
+  draft?: AgentBuilderDraft;
+  runPreview?: boolean;
+  sampleInputs?: Record<string, unknown>;
+  status?: AgentStatus;
+}
+
+export interface AgentBuilderApproveResult {
+  draft: AgentBuilderDraft;
+  created: true;
+  agent: ReturnType<typeof decorateAgentWithProvider>;
+  firstRun?: ReturnType<typeof decorateRun>;
+  sampleInputs?: Record<string, string | number | boolean>;
+}
 
 export const INVITATION_EMAIL_JOB_TYPE = "invitation.email";
 
@@ -991,6 +1126,73 @@ export function getAgent(context: AuthenticatedContext, agentId: string) {
   };
 }
 
+export function generateAgentDraftFromPrompt(prompt: string, options: AgentDraftOptions = {}): AgentDraft {
+  const trimmed = String(prompt ?? "").trim();
+  if (trimmed.length < 8) throw httpError(400, "prompt must be at least 8 characters");
+
+  const sentences = splitPromptSentences(trimmed);
+  const actionPhrases = extractAgentActions(sentences);
+  const primaryAction = actionPhrases[0] ?? "automate workspace follow-up";
+  const name = buildAgentName(primaryAction, trimmed);
+  const triggerKind = inferPromptAgentTriggerKind(trimmed);
+  const schedule = triggerKind === "schedule" ? inferPromptAgentSchedule(trimmed) : undefined;
+  const inputSchema = buildAgentInputSchema(trimmed);
+  const enabledTools = inferAgentTools(trimmed);
+  const integrationMetadata = buildAgentPhase71IntegrationMetadata(trimmed);
+  const playbook = applyAgentIntegrationPlaybookSteps(buildAgentPlaybook(sentences, actionPhrases, enabledTools), integrationMetadata);
+  const webhookReadiness = buildWebhookTriggerReadiness(triggerKind);
+
+  return {
+    prompt: trimmed,
+    integrationMetadata,
+    agent: {
+      name,
+      description: summarizePromptAgentDraft(sentences, name),
+      instructions: applyAgentIntegrationInstructions(buildAgentInstructions(trimmed, actionPhrases, enabledTools), integrationMetadata),
+      providerId: stringOrUndefined(options.providerId),
+      model: stringOrUndefined(options.model),
+      tools: enabledTools,
+      enabledTools,
+      routeKey: "agent.reasoning",
+      schedule,
+      triggerKind,
+      playbook,
+      status: options.status && ["active", "paused", "archived"].includes(options.status) ? options.status : "paused",
+      inputSchema,
+    },
+    plan: applyAgentIntegrationDraftPlan(buildAgentDraftPlan(triggerKind, enabledTools, inputSchema), integrationMetadata),
+    assumptions: applyAgentIntegrationAssumptions(buildAgentDraftAssumptions(triggerKind, enabledTools, inputSchema), integrationMetadata),
+    readiness: {
+      webhook: webhookReadiness,
+    },
+  };
+}
+
+export async function generateAgentFromPromptAsync(context: AuthenticatedContext, input: AgentDraftInput): Promise<AgentDraftResult> {
+  const draft = generateAgentDraftFromPrompt(input.prompt ?? "", {
+    providerId: input.providerId,
+    model: input.model,
+    status: input.status,
+  });
+  const shouldCreate = Boolean(input.create ?? input.approve);
+  if (!shouldCreate) return { draft, created: false };
+
+  const created = await createAgentAsync(context, {
+    ...draft.agent,
+    status: input.status ?? "active",
+  });
+  if (!input.runPreview) {
+    return { draft, created: true, agent: created.agent };
+  }
+
+  const sampleInputs = validateAgentInputs(
+    created.agent.inputSchema ?? [],
+    input.sampleInputs ?? buildAgentSampleInputs(created.agent.inputSchema ?? []),
+  );
+  const firstRun = await recordAgentPreviewRun(context, created.agent, sampleInputs);
+  return { draft, created: true, agent: created.agent, firstRun, sampleInputs };
+}
+
 export async function getAgentAsync(context: AuthenticatedContext, agentId: string) {
   const data = await loadStoreAsync();
   const agent = data.agents.find((entry) =>
@@ -1453,8 +1655,614 @@ function buildRunTranscript(playbook: AgentPlaybookStep[], providerReady: boolea
   }));
 }
 
+export async function generateAgentBuilderDraftAsync(context: AuthenticatedContext, input: AgentBuilderPromptInput): Promise<AgentBuilderDraft> {
+  const prompt = String(input.prompt ?? "").trim();
+  if (prompt.length < 12) throw httpError(400, "prompt must be at least 12 characters");
+  if (prompt.length > 2_000) throw httpError(400, "prompt must be 2000 characters or fewer");
+
+  const data = await loadStoreAsync();
+  const providers = data.providers
+    .filter((provider) => provider.workspaceId === context.workspace.id && provider.status !== "disabled")
+    .sort((left, right) => Number(right.status === "connected") - Number(left.status === "connected") || left.name.localeCompare(right.name));
+  const selectedProvider = providers.find((provider) => provider.status === "connected" && provider.apiKeyConfigured) ?? providers[0] ?? null;
+  const registeredTools = getDefaultToolRegistry().list().map((tool) => tool.name);
+  const availableTools = (registeredTools.length > 0 ? registeredTools : listDefaultToolSummaries().map((tool) => tool.name)).sort();
+  const intent = inferAgentBuilderIntent(prompt);
+  const recommendedTools = recommendAgentTools(intent, prompt, availableTools);
+  const inputSchema = buildAgentBuilderInputSchema(intent, prompt);
+  const integrationMetadata = buildAgentPhase71IntegrationMetadata(prompt);
+  const sampleInputs = buildAgentSampleInputs(inputSchema);
+  const triggerKind = inferAgentTriggerKind(intent, prompt);
+  const schedule = triggerKind === "schedule" ? inferAgentSchedule(prompt) : undefined;
+  const webhookReadiness = buildAgentBuilderWebhookReadiness(triggerKind);
+  const name = buildAgentBuilderName(prompt, intent);
+  const playbook = applyAgentIntegrationPlaybookSteps(buildAgentBuilderPlaybook(intent, prompt), integrationMetadata);
+  const missingTools = recommendedTools.filter((tool) => !availableTools.includes(tool));
+  const providerConfigured = selectedProvider ? isProviderReadyForAgentRuns(data, context.workspace.id, selectedProvider) : false;
+  const blockers = [
+    ...(!providerConfigured ? ["Connect a provider API key before running with LLM tools."] : []),
+    ...(missingTools.length > 0 ? [`Remove or implement missing tools: ${missingTools.join(", ")}.`] : []),
+  ];
+
+  return {
+    prompt,
+    intent,
+    summary: `${name} will ${summarizeAgentPrompt(prompt)}`,
+    integrationMetadata,
+    agent: {
+      name,
+      description: summarizeAgentPrompt(prompt),
+      instructions: applyAgentIntegrationInstructions(buildAgentBuilderInstructions(prompt, intent), integrationMetadata),
+      providerId: selectedProvider?.id,
+      model: selectedProvider?.defaultModel,
+      tools: recommendedTools,
+      enabledTools: recommendedTools.filter((tool) => availableTools.includes(tool)),
+      routeKey: "agent.reasoning",
+      triggerKind,
+      schedule,
+      playbook,
+      status: "active",
+      inputSchema,
+    },
+    sampleInputs,
+    plan: {
+      title: `Build ${name}`,
+      steps: [
+        { title: "Capture the job", detail: "Turn the prompt into clear agent instructions, typed inputs, and a first-run sample." },
+        { title: "Wire useful tools", detail: recommendedTools.length > 0 ? `Enable ${recommendedTools.join(", ")} for the first run.` : "Keep the first draft tool-light until an integration is selected." },
+        ...buildAgentBuilderIntegrationPlanSteps(integrationMetadata),
+        { title: "Choose the trigger", detail: triggerKind === "schedule" ? `Run on ${schedule}.` : triggerKind === "webhook" ? webhookReadiness.planDetail : "Start with manual runs while the draft is validated." },
+        ...(triggerKind === "webhook" ? [{ title: "Prepare webhook publish readiness", detail: webhookReadiness.message }] : []),
+        { title: "Run once", detail: "Save the draft, run it with sample inputs, then inspect transcript, tool calls, and output." },
+      ],
+      acceptanceChecks: [
+        "Agent draft is saved with generated instructions, input schema, tools, and trigger.",
+        "Missing provider or tool setup is visible before first run.",
+        ...integrationMetadata.requested.map((integration) => `${integration.label} flow references ${integration.envVars.join(", ")} and remains draft-safe until setup is complete.`),
+        "First test run records output, logs, transcript, and any tool calls.",
+      ],
+      openQuestions: buildAgentBuilderOpenQuestions(intent, prompt),
+    },
+    readiness: {
+      provider: {
+        configured: providerConfigured,
+        ...(selectedProvider ? {
+          selectedProviderId: selectedProvider.id,
+          selectedProviderName: selectedProvider.name,
+          selectedModel: selectedProvider.defaultModel,
+        } : {}),
+        message: providerConfigured
+          ? `${selectedProvider?.name} is ready for first run.`
+          : selectedProvider
+          ? `${selectedProvider.name} exists but still needs an API key or connected status.`
+          : "Add an OpenAI, Anthropic, Ollama, or custom provider before real LLM execution.",
+      },
+      tools: {
+        recommended: recommendedTools,
+        available: recommendedTools.filter((tool) => availableTools.includes(tool)),
+        missing: missingTools,
+        message: missingTools.length === 0
+          ? "Recommended tools are available in this workspace runtime."
+          : `Some requested tools are not registered yet: ${missingTools.join(", ")}.`,
+      },
+      webhook: webhookReadiness,
+      firstRun: {
+        canRun: blockers.length === 0,
+        blockers,
+        message: blockers.length === 0
+          ? "Ready to save and run with the generated sample inputs."
+          : "The draft can be saved now, but resolve setup blockers before expecting real execution.",
+      },
+    },
+  };
+}
+
+export async function approveAgentBuilderDraftAsync(context: AuthenticatedContext, input: AgentBuilderApproveInput): Promise<AgentBuilderApproveResult> {
+  const draft = input.draft ?? await generateAgentBuilderDraftAsync(context, { prompt: input.prompt });
+  const created = await createAgentAsync(context, {
+    ...draft.agent,
+    status: input.status ?? draft.agent.status ?? "active",
+  });
+
+  if (!input.runPreview) return { draft, created: true, agent: created.agent };
+  if (!draft.readiness.firstRun.canRun) return { draft, created: true, agent: created.agent };
+
+  const sampleInputs = validateAgentInputs(
+    created.agent.inputSchema ?? [],
+    input.sampleInputs ?? draft.sampleInputs ?? {},
+  );
+  const firstRun = await recordAgentPreviewRun(context, created.agent, sampleInputs);
+  return { draft, created: true, agent: created.agent, firstRun, sampleInputs };
+}
+
+async function recordAgentPreviewRun(
+  context: AuthenticatedContext,
+  agent: Pick<AgentRecord, "id" | "name" | "playbook">,
+  inputs: Record<string, string | number | boolean>,
+) {
+  const timestamp = now();
+  return mutateStoreAsync((store) => {
+    const liveAgent = findAgent(store, agent.id);
+    if (!liveAgent || liveAgent.workspaceId !== context.workspace.id || liveAgent.status === "archived") {
+      throw httpError(404, "agent not found");
+    }
+
+    const run = upsertAgentRun(store, {
+      workspaceId: context.workspace.id,
+      agentId: liveAgent.id,
+      title: `${liveAgent.name} preview run completed`,
+      status: "success",
+      triggerKind: "manual",
+      transcript: buildRunTranscript(liveAgent.playbook ?? [], true, timestamp),
+      startedAt: timestamp,
+      completedAt: timestamp,
+      inputs: Object.keys(inputs).length ? inputs : undefined,
+      output: buildRunOutput(liveAgent.name, inputs),
+      logs: [
+        { at: timestamp, level: "info", message: `Preview run started for ${liveAgent.name}.` },
+        { at: timestamp, level: "info", message: "Sample inputs generated for first-run visibility." },
+        { at: timestamp, level: "info", message: "Preview run recorded locally without invoking tools or a model." },
+      ],
+    }, timestamp);
+
+    recordActivity(store, makeActivity(context.workspace.id, "workspace", "agent.run.preview", {
+      type: "user",
+      id: context.user.id,
+      displayName: context.user.displayName,
+    }, { title: run.title, agentId: liveAgent.id, runId: run.id, status: run.status, triggerKind: run.triggerKind }, timestamp));
+
+    return decorateRun(run);
+  });
+}
+
+function buildAgentPhase71IntegrationMetadata(prompt: string): Phase71IntegrationMetadata {
+  const requested = detectPhase71Integrations(prompt);
+  return {
+    requested,
+    setupGuidance: requested.flatMap((integration) => integration.setupGuidance),
+  };
+}
+
+function applyAgentIntegrationInstructions(instructions: string, metadata: Phase71IntegrationMetadata): string {
+  if (metadata.requested.length === 0) return instructions;
+  return [
+    instructions,
+    "",
+    "Phase 71 integration setup:",
+    ...metadata.requested.map((integration) => `- ${integration.label}: reference ${integration.envVars.join(", ")} and keep unrelated features draft-safe if setup is missing.`),
+  ].join("\n");
+}
+
+function applyAgentIntegrationPlaybookSteps(
+  playbook: AgentPlaybookStep[],
+  metadata: Phase71IntegrationMetadata,
+): AgentPlaybookStep[] {
+  if (metadata.requested.length === 0) return playbook;
+  const integrationSteps = metadata.requested.map((integration): AgentPlaybookStep => ({
+    id: `integration-${integration.id}`,
+    title: `Prepare ${integration.label}`,
+    instruction: `${integration.flows.join(" ")} Required setup references: ${integration.envVars.join(", ")}.`,
+  }));
+  return [
+    playbook[0],
+    ...integrationSteps,
+    ...playbook.slice(1),
+  ].filter(Boolean);
+}
+
+function applyAgentIntegrationDraftPlan(
+  plan: AgentDraftPlanItem[],
+  metadata: Phase71IntegrationMetadata,
+): AgentDraftPlanItem[] {
+  if (metadata.requested.length === 0) return plan;
+  return [
+    ...plan,
+    ...metadata.requested.map((integration): AgentDraftPlanItem => ({
+      title: `Configure ${integration.label}`,
+      detail: `${integration.setupGuidance.join(" ")} Generated flow: ${integration.flows[0]}`,
+      status: "todo",
+    })),
+  ];
+}
+
+function applyAgentIntegrationAssumptions(
+  assumptions: string[],
+  metadata: Phase71IntegrationMetadata,
+): string[] {
+  if (metadata.requested.length === 0) return assumptions;
+  return [
+    ...assumptions,
+    ...metadata.requested.map((integration) => `${integration.label} can be drafted before setup; live calls require ${integration.envVars.join(", ")}.`),
+  ];
+}
+
+function buildAgentBuilderIntegrationPlanSteps(
+  metadata: Phase71IntegrationMetadata,
+): Array<{ title: string; detail: string }> {
+  return metadata.requested.map((integration) => ({
+    title: `Prepare ${integration.label}`,
+    detail: `${integration.flows[0]} Setup references: ${integration.envVars.join(", ")}.`,
+  }));
+}
+
+function inferAgentBuilderIntent(prompt: string): string {
+  const lower = prompt.toLowerCase();
+  if (/\b(support|ticket|inbox|customer|reply)\b/.test(lower)) return "support";
+  if (/\b(lead|sales|crm|enrich|prospect)\b/.test(lower)) return "lead_enrichment";
+  if (/\b(release|audit|validation|evidence)\b/.test(lower)) return "release";
+  if (/\b(research|summarize|web|url|scrape|competitor)\b/.test(lower)) return "research";
+  if (/\b(report|brief|digest|daily|weekly|summary)\b/.test(lower)) return "reporting";
+  if (/\b(slack|discord|webhook|notify|message)\b/.test(lower)) return "notification";
+  return "custom";
+}
+
+function inferAgentTriggerKind(intent: string, prompt: string): AgentTriggerKind {
+  const lower = prompt.toLowerCase();
+  if (/\b(webhook|incoming|when.*received|on event|external trigger)\b/.test(lower)) return "webhook";
+  if (/\b(daily|weekly|hourly|every|schedule|morning|nightly|cron)\b/.test(lower)) return "schedule";
+  if (/\b(email|inbox|mailbox)\b/.test(lower) && intent === "support") return "email";
+  return "manual";
+}
+
+function inferAgentSchedule(prompt: string): string {
+  const lower = prompt.toLowerCase();
+  if (/\bweekly|friday\b/.test(lower)) return "0 16 * * 5";
+  if (/\bhourly\b/.test(lower)) return "0 * * * *";
+  if (/\bevery 15|quarter-hour|inbox\b/.test(lower)) return "*/15 * * * *";
+  if (/\bnightly|overnight\b/.test(lower)) return "0 2 * * *";
+  return "0 8 * * 1-5";
+}
+
+function recommendAgentTools(intent: string, prompt: string, availableTools: string[]): string[] {
+  const lower = prompt.toLowerCase();
+  const desired = new Set<string>();
+  if (["research", "lead_enrichment"].includes(intent) || /\b(url|website|web|scrape|research)\b/.test(lower)) desired.add("http_get");
+  if (["reporting", "release"].includes(intent) || /\b(workflow|requirement|plan|blocker|release)\b/.test(lower)) {
+    desired.add("read_workflow_brief");
+    desired.add("list_requirements");
+    desired.add("list_plan_items");
+    desired.add("list_blockers");
+  }
+  if (/\b(blocker|risk|incident|escalat|urgent)\b/.test(lower)) desired.add("list_blockers");
+  if (/\b(agent|run|runs)\b/.test(lower)) {
+    desired.add("list_agents");
+    desired.add("list_recent_runs");
+  }
+  if (/\b(create task|open blocker|log note|write|update)\b/.test(lower)) desired.add("log_note");
+  if (/\b(browser|click|page|form)\b/.test(lower)) {
+    for (const tool of availableTools.filter((name) => name.startsWith("browser_"))) desired.add(tool);
+  }
+  return [...desired].slice(0, 8);
+}
+
+function buildAgentBuilderInputSchema(intent: string, prompt: string): AgentInputField[] {
+  const lower = prompt.toLowerCase();
+  if (intent === "support") {
+    return [
+      { key: "mailbox", label: "Mailbox", type: "string", required: true, description: "Inbox, label, or queue to review.", defaultValue: "support" },
+      { key: "urgency_threshold", label: "Urgency threshold", type: "enum", required: true, options: ["low", "medium", "high"], defaultValue: "medium" },
+    ];
+  }
+  if (intent === "lead_enrichment") {
+    return [
+      { key: "lead_source", label: "Lead source", type: "string", required: true, description: "CRM view, CSV name, or inbound source.", defaultValue: "new leads" },
+      { key: "company_website", label: "Company website", type: "url", required: false },
+    ];
+  }
+  if (intent === "release") {
+    return [
+      { key: "release_label", label: "Release label", type: "string", required: true, defaultValue: "next release" },
+      { key: "evidence_url", label: "Evidence URL", type: "url", required: false },
+    ];
+  }
+  if (intent === "research" || /\burl|website\b/.test(lower)) {
+    return [
+      { key: "source_url", label: "Source URL", type: "url", required: true },
+      { key: "depth", label: "Depth", type: "enum", required: false, options: ["quick", "deep"], defaultValue: "quick" },
+    ];
+  }
+  if (intent === "reporting") {
+    return [
+      { key: "lookback_hours", label: "Lookback hours", type: "number", required: true, defaultValue: "24" },
+      { key: "audience", label: "Audience", type: "enum", required: false, options: ["internal", "customer"], defaultValue: "internal" },
+    ];
+  }
+  return [
+    { key: "task", label: "Task", type: "string", required: true, description: "The work item this agent should complete.", defaultValue: truncateSentence(prompt, 80) },
+  ];
+}
+
+function buildAgentBuilderWebhookReadiness(triggerKind: AgentTriggerKind): AgentBuilderWebhookTriggerReadiness {
+  const readiness = buildWebhookTriggerReadiness(triggerKind);
+  return {
+    ...readiness,
+    publishSteps: readiness.recommended
+      ? ["Save the agent", "Create or rotate the webhook token", "Send a test payload", "Rotate the token before sharing broadly"]
+      : [],
+  };
+}
+
+function buildAgentBuilderName(prompt: string, intent: string): string {
+  const quoted = prompt.match(/"([^"]{3,50})"/)?.[1];
+  if (quoted) return truncateSentence(`${quoted} agent`, 80);
+  if (intent === "lead_enrichment") return "Lead enrichment agent";
+  if (intent === "support") return "Support triage agent";
+  if (intent === "research") return "Research agent";
+  if (intent === "reporting") return "Report writer agent";
+  if (intent === "release") return "Release audit agent";
+  if (intent === "notification") return "Notification agent";
+  return "Workspace agent";
+}
+
+function buildAgentBuilderInstructions(prompt: string, intent: string): string {
+  return [
+    `User request: ${prompt}`,
+    "",
+    `You are a ${intent.replace(/_/g, " ")} workspace agent. Complete the request with clear, auditable steps.`,
+    "Before taking action, identify the input, expected output, and any missing setup.",
+    "Use enabled tools when they help. If a provider, credential, or integration is missing, explain the blocker.",
+    "Return a concise final answer with completed work, follow-up items, and risks.",
+  ].join("\n");
+}
+
+function buildAgentBuilderPlaybook(intent: string, prompt: string): AgentPlaybookStep[] {
+  return [
+    { id: "understand", title: "Understand request", instruction: `Restate the goal from this prompt: ${truncateSentence(prompt, 180)}` },
+    { id: "collect", title: "Collect context", instruction: "Use inputs and enabled tools to gather the minimum context needed." },
+    { id: "produce", title: "Produce output", instruction: intent === "notification" ? "Draft and prepare the message or notification." : "Create the requested summary, action, or recommendation." },
+    { id: "report", title: "Report result", instruction: "Return what changed, what was found, and what still needs setup or approval." },
+  ];
+}
+
+function buildAgentBuilderOpenQuestions(intent: string, prompt: string): string[] {
+  const questions: string[] = [];
+  if (!/\b(slack|email|webhook|browser|url|database|crm|github)\b/i.test(prompt)) {
+    questions.push("Which external system should this agent connect to first?");
+  }
+  if (inferAgentTriggerKind(intent, prompt) === "manual") {
+    questions.push("Should this run manually, on a schedule, or from a webhook?");
+  }
+  if (!/\b(success|done|metric|alert|notify)\b/i.test(prompt)) {
+    questions.push("What should count as a successful run?");
+  }
+  return questions.slice(0, 3);
+}
+
+function summarizeAgentPrompt(prompt: string): string {
+  const summary = truncateSentence(prompt.replace(/\s+/g, " "), 140);
+  return summary.endsWith(".") ? summary : `${summary}.`;
+}
+
+function truncateSentence(value: string, max: number): string {
+  const clean = value.trim().replace(/\s+/g, " ");
+  return clean.length <= max ? clean : `${clean.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function splitPromptSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+|\r?\n+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function summarizePromptAgentDraft(sentences: string[], fallbackName: string): string {
+  const summary = sentences[0] ?? `${fallbackName} generated from prompt.`;
+  return summary.length > 180 ? `${summary.slice(0, 177).trim()}...` : summary;
+}
+
+function extractAgentActions(sentences: string[]): string[] {
+  const verbs = [
+    "monitor", "summarize", "draft", "review", "route", "triage", "notify", "send",
+    "track", "collect", "capture", "validate", "research", "report", "analyze",
+    "sync", "escalate", "respond", "create", "open", "update", "publish", "schedule",
+  ];
+  const actions: string[] = [];
+  const seen = new Set<string>();
+  for (const sentence of sentences) {
+    for (const verb of verbs) {
+      const match = sentence.match(new RegExp(`\\b${verb}\\b\\s+([^.;\\n]{2,80})`, "i"));
+      if (!match) continue;
+      const phrase = `${verb} ${match[1]}`.replace(/\s+/g, " ").trim();
+      const key = phrase.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        actions.push(phrase);
+      }
+    }
+  }
+  if (actions.length === 0) actions.push(sentences[0]?.slice(0, 80) ?? "automate workspace follow-up");
+  return actions.slice(0, 5);
+}
+
+function buildAgentName(primaryAction: string, prompt: string): string {
+  const topic = primaryAction
+    .replace(/^(monitor|summarize|draft|review|route|triage|notify|send|track|collect|capture|validate|research|report|analyze|sync|escalate|respond|create|open|update|publish|schedule)\s+/i, "")
+    .replace(/\b(every|daily|weekly|hourly|when|with|for|to|and|then)\b.*$/i, "")
+    .replace(/[^a-z0-9\s-]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const fallback = /\bsupport|ticket|inbox|customer/i.test(prompt) ? "Support Triage" : "Workflow";
+  const base = titleCase(topic || fallback);
+  const name = `${base} Agent`;
+  return name.length <= 80 ? name : `${name.slice(0, 74).trim()} Agent`;
+}
+
+function inferPromptAgentTriggerKind(prompt: string): AgentTriggerKind {
+  if (/\b(webhook|incoming request|payload|event)\b/i.test(prompt)) return "webhook";
+  if (/\b(email|inbox|mailbox)\b/i.test(prompt)) return "email";
+  if (/\b(schedule|scheduled|daily|weekly|hourly|every\s+\d+|each morning|each day)\b/i.test(prompt)) return "schedule";
+  return "manual";
+}
+
+function inferPromptAgentSchedule(prompt: string): string {
+  if (/\bhourly|every hour\b/i.test(prompt)) return "0 * * * *";
+  if (/\bweekly|each week\b/i.test(prompt)) return "0 9 * * 1";
+  if (/\bnightly|overnight\b/i.test(prompt)) return "0 2 * * *";
+  return "0 9 * * *";
+}
+
+function buildAgentInputSchema(prompt: string): AgentInputField[] {
+  const fields: AgentInputField[] = [];
+  if (/\b(url|website|page|site|http)\b/i.test(prompt)) {
+    fields.push({ key: "target_url", label: "Target URL", type: "url", required: true, description: "Page or endpoint the agent should inspect." });
+  }
+  if (/\b(email|inbox|mailbox)\b/i.test(prompt)) {
+    fields.push({ key: "mailbox", label: "Mailbox", type: "string", required: false, description: "Mailbox, queue, or label to inspect." });
+  }
+  if (/\b(ticket|issue|case|incident)\b/i.test(prompt)) {
+    fields.push({ key: "ticket_id", label: "Ticket ID", type: "string", required: false, description: "Optional ticket, issue, or case identifier." });
+  }
+  if (/\b(customer|account|client)\b/i.test(prompt)) {
+    fields.push({ key: "account_name", label: "Account", type: "string", required: false, description: "Customer, client, or account name." });
+  }
+  if (/\brelease|evidence\b/i.test(prompt)) {
+    fields.push({ key: "release_label", label: "Release label", type: "string", required: true, defaultValue: "next release" });
+  }
+  if (/\bevidence url|evidence urls|url\b/i.test(prompt)) {
+    fields.push({ key: "evidence_url", label: "Evidence URL", type: "url", required: false });
+  }
+  return fields.slice(0, 6);
+}
+
+function inferAgentTools(prompt: string): string[] {
+  const tools = new Set<string>(["read_workflow_brief", "list_requirements", "list_plan_items"]);
+  if (/\b(run|runs|failure|failed|status|monitor|recent)\b/i.test(prompt)) tools.add("list_recent_runs");
+  if (/\b(blocker|question|risk|escalat|urgent|incident)\b/i.test(prompt)) tools.add("list_blockers");
+  if (/\b(create|open|update|write|log|blocker|question|plan item|follow-up|follow up)\b/i.test(prompt)) tools.add("create_blocker");
+  if (/\b(note|log|summary|summarize|report)\b/i.test(prompt)) tools.add("log_note");
+  if (/\b(url|website|page|site|http|research|fetch)\b/i.test(prompt)) tools.add("http_get");
+  if (/\b(browser|click|form|screenshot|page|website)\b/i.test(prompt)) {
+    tools.add("browser_goto");
+    tools.add("browser_extract");
+    tools.add("browser_screenshot");
+  }
+  return Array.from(tools).slice(0, 12);
+}
+
+function buildAgentPlaybook(sentences: string[], actions: string[], enabledTools: string[]): AgentPlaybookStep[] {
+  const steps = [
+    {
+      title: "Read workspace context",
+      instruction: "Review the workspace brief, accepted requirements, current plan items, and recent activity before taking action.",
+    },
+    ...actions.slice(0, 3).map((action) => ({
+      title: titleCase(action).slice(0, 120),
+      instruction: matchingSentence(sentences, action) || `Complete this requested action: ${action}.`,
+    })),
+    {
+      title: "Record outcome",
+      instruction: enabledTools.includes("log_note")
+        ? "Write a concise note with the result, any unresolved risks, and recommended next action."
+        : "Return a concise result with unresolved risks and recommended next action.",
+    },
+  ];
+  return steps.slice(0, 6).map((step, index) => ({ id: `draft_step_${index + 1}`, ...step }));
+}
+
+function buildAgentInstructions(prompt: string, actions: string[], enabledTools: string[]): string {
+  const actionList = actions.map((action, index) => `${index + 1}. ${titleCase(action)}`).join("\n");
+  const toolList = enabledTools.length ? enabledTools.join(", ") : "no tools";
+  return [
+    "You are a Taskloom workspace agent generated from an operator prompt.",
+    "Turn the prompt into reliable, auditable work and keep outputs concise.",
+    "",
+    `Original prompt: ${prompt}`,
+    "",
+    "Primary actions:",
+    actionList,
+    "",
+    `Use these enabled tools when useful: ${toolList}.`,
+    "Before making changes, inspect relevant workspace context. After each run, summarize what changed, what remains uncertain, and the next recommended step.",
+  ].join("\n");
+}
+
+function buildAgentDraftPlan(triggerKind: AgentTriggerKind, enabledTools: string[], inputSchema: AgentInputField[]): AgentDraftPlanItem[] {
+  const webhookReadiness = buildWebhookTriggerReadiness(triggerKind);
+  return [
+    { title: "Review generated agent instructions", detail: "Confirm the generated name, instructions, and playbook match the operational intent.", status: "todo" },
+    ...(inputSchema.length > 0
+      ? [{ title: "Confirm run inputs", detail: `Check generated inputs: ${inputSchema.map((field) => field.key).join(", ")}.`, status: "todo" as const }]
+      : []),
+    { title: "Configure runtime access", detail: enabledTools.length > 0 ? `Verify enabled tools are appropriate: ${enabledTools.join(", ")}.` : "No tools were inferred.", status: "todo" },
+    ...(triggerKind === "webhook"
+      ? [{ title: "Prepare webhook trigger readiness", detail: webhookReadiness.planDetail, status: "todo" as const }]
+      : []),
+    { title: triggerKind === "schedule" ? "Verify schedule" : "Run a manual smoke test", detail: triggerKind === "schedule" ? "Confirm the cron schedule before activating the agent." : "Run once manually and inspect the transcript.", status: "todo" },
+  ];
+}
+
+function buildAgentDraftAssumptions(triggerKind: AgentTriggerKind, enabledTools: string[], inputSchema: AgentInputField[]): string[] {
+  const assumptions = [
+    `Trigger inferred as ${triggerKind}.`,
+    "Generated agents start paused unless they are explicitly created from the approval flow.",
+  ];
+  if (enabledTools.length > 0) assumptions.push("Tool selection is heuristic and should be reviewed before enabling production runs.");
+  if (inputSchema.length === 0) assumptions.push("No required runtime inputs were inferred from the prompt.");
+  if (triggerKind === "webhook") assumptions.push("Webhook-triggered drafts need a saved agent and generated token before external events can reach the public trigger route.");
+  return assumptions;
+}
+
+function matchingSentence(sentences: string[], action: string): string {
+  const verb = action.split(/\s+/)[0] ?? "";
+  return sentences.find((sentence) => new RegExp(`\\b${escapeRegex(verb)}\\b`, "i").test(sentence)) ?? "";
+}
+
+function titleCase(value: string): string {
+  return value
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sampleInputValue(field: AgentInputField): string | number | boolean {
+  if (field.type === "number") return Number(field.defaultValue ?? 24);
+  if (field.type === "boolean") return field.defaultValue === "false" ? false : true;
+  if (field.type === "url") return field.defaultValue || "https://example.com";
+  if (field.type === "enum") return field.defaultValue || field.options?.[0] || "";
+  return field.defaultValue || field.label.toLowerCase();
+}
+
+export function buildAgentSampleInputs(schema: AgentInputField[]): Record<string, string | number | boolean> {
+  return Object.fromEntries(schema.map((field) => [field.key, sampleInputValue(field)]));
+}
+
 export function listAgentTemplates() {
   return { templates: AGENT_TEMPLATES };
+}
+
+export type IntegrationReadinessSummary = {
+  status: "ready" | "needs_setup";
+  tools: {
+    availableCount: number;
+    readCount: number;
+    writeCount: number;
+    execCount: number;
+    names: string[];
+    missingForGeneratedPlans: string[];
+  };
+  providers: {
+    configuredCount: number;
+    readyCount: number;
+    missingProviderKinds: ApiKeyProvider[];
+    missingApiKeys: Array<{ provider: ApiKeyProvider; providerName: string }>;
+  };
+  recommendedSetup: string[];
+};
+
+const DEFAULT_WORKSPACE_PROVIDER_KINDS = [...DEFAULT_PROVIDER_NAMES] as ApiKeyProvider[];
+
+export function getIntegrationReadiness(context: AuthenticatedContext): IntegrationReadinessSummary {
+  return buildIntegrationReadinessSummary(loadStore(), context.workspace.id);
+}
+
+export async function getIntegrationReadinessAsync(context: AuthenticatedContext): Promise<IntegrationReadinessSummary> {
+  return buildIntegrationReadinessSummary(await loadStoreAsync(), context.workspace.id);
 }
 
 export function createAgentFromTemplate(context: AuthenticatedContext, templateId: string, overrides: { name?: string; providerId?: string; model?: string } = {}) {
@@ -2285,12 +3093,101 @@ function validateProvider(data: ReturnType<typeof loadStore>, workspaceId: strin
   }
 }
 
+function isProviderReadyForAgentRuns(data: TaskloomData, workspaceId: string, provider: ProviderRecord): boolean {
+  if (provider.status === "disabled") return false;
+  const apiKeyProvider = apiKeyProviderForKind(provider.kind);
+  if (!apiKeyProvider || provider.kind === "ollama") return true;
+  return provider.apiKeyConfigured || data.apiKeys.some((key) => key.workspaceId === workspaceId && key.provider === apiKeyProvider);
+}
+
+function buildIntegrationReadinessSummary(data: TaskloomData, workspaceId: string): IntegrationReadinessSummary {
+  const tools = listDefaultToolSummaries();
+  const toolNames = [...new Set(tools.map((tool) => tool.name))].sort();
+  const generatedPlanTools = [...new Set(AGENT_TEMPLATES.flatMap((template) => template.tools))].sort();
+  const missingForGeneratedPlans = generatedPlanTools.filter((tool) => !toolNames.includes(tool));
+
+  const providers = data.providers.filter((provider) => provider.workspaceId === workspaceId);
+  const apiKeys = new Set(
+    data.apiKeys
+      .filter((key) => key.workspaceId === workspaceId)
+      .map((key) => key.provider),
+  );
+  const providerKinds = new Set(providers.map((provider) => provider.kind));
+
+  const providerReadiness = providers.map((provider) => {
+    const apiKeyProvider = apiKeyProviderForKind(provider.kind);
+    const requiresApiKey = Boolean(apiKeyProvider && provider.kind !== "ollama");
+    const hasVaultKey = apiKeyProvider ? apiKeys.has(apiKeyProvider) : false;
+    const apiKeyReady = !requiresApiKey || provider.apiKeyConfigured || hasVaultKey;
+    return {
+      provider,
+      apiKeyProvider,
+      ready: provider.status !== "disabled" && apiKeyReady,
+      apiKeyReady,
+      requiresApiKey,
+    };
+  });
+
+  const missingProviderKinds = DEFAULT_WORKSPACE_PROVIDER_KINDS.filter((kind) => !providerKinds.has(kind));
+  const missingApiKeys = providerReadiness
+    .filter((entry) => entry.apiKeyProvider && entry.requiresApiKey && !entry.apiKeyReady && entry.provider.status !== "disabled")
+    .map((entry) => ({
+      provider: entry.apiKeyProvider as ApiKeyProvider,
+      providerName: entry.provider.name,
+    }));
+
+  const recommendedSetup: string[] = [];
+  if (providers.length === 0) {
+    recommendedSetup.push("Add a workspace provider so generated agents have a model target.");
+  }
+  if (missingProviderKinds.length > 0) {
+    recommendedSetup.push(`Add provider records for ${missingProviderKinds.join(", ")} if generated plans should target them.`);
+  }
+  if (missingApiKeys.length > 0) {
+    recommendedSetup.push(`Store vault keys or mark external key readiness for ${missingApiKeys.map((entry) => entry.providerName).join(", ")}.`);
+  }
+  if (missingForGeneratedPlans.length > 0) {
+    recommendedSetup.push(`Back generated plan tools with runtime adapters or replace labels: ${missingForGeneratedPlans.slice(0, 8).join(", ")}.`);
+  }
+  if (recommendedSetup.length === 0) {
+    recommendedSetup.push("Generated agent plans have provider, API key, and runtime tool coverage.");
+  }
+
+  const readyCount = providerReadiness.filter((entry) => entry.ready).length;
+  const status = readyCount > 0 && missingApiKeys.length === 0 && missingForGeneratedPlans.length === 0
+    ? "ready"
+    : "needs_setup";
+
+  return {
+    status,
+    tools: {
+      availableCount: toolNames.length,
+      readCount: tools.filter((tool) => tool.side === "read").length,
+      writeCount: tools.filter((tool) => tool.side === "write").length,
+      execCount: tools.filter((tool) => tool.side === "exec").length,
+      names: toolNames,
+      missingForGeneratedPlans,
+    },
+    providers: {
+      configuredCount: providers.length,
+      readyCount,
+      missingProviderKinds,
+      missingApiKeys,
+    },
+    recommendedSetup,
+  };
+}
+
+function apiKeyProviderForKind(kind: ProviderKind): ApiKeyProvider | null {
+  return (DEFAULT_WORKSPACE_PROVIDER_KINDS as ProviderKind[]).includes(kind) ? (kind as ApiKeyProvider) : null;
+}
+
 function normalizeProviderInput(input: ProviderInput) {
   const name = String(input.name ?? "").trim();
   if (name.length < 2) throw httpError(400, "provider name must be at least 2 characters");
   const defaultModel = String(input.defaultModel ?? "").trim();
   if (defaultModel.length < 2) throw httpError(400, "default model is required");
-  const kind = input.kind && ["openai", "anthropic", "azure_openai", "ollama", "custom"].includes(input.kind)
+  const kind = input.kind && ["openai", "anthropic", "minimax", "azure_openai", "ollama", "custom"].includes(input.kind)
     ? input.kind
     : "custom";
   const apiKeyConfigured = Boolean(input.apiKeyConfigured);

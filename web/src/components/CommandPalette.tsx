@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Workflow,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -83,6 +84,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const commands = useMemo<PaletteCommand[]>(() => {
     const base: PaletteCommand[] = [
       { id: "nav-dashboard", label: "Go to Dashboard", group: "Navigation", keywords: "home overview", icon: Home, perform: () => go("/dashboard") },
+      { id: "nav-builder", label: "Go to Builder", group: "Navigation", keywords: "build starter prompt templates onboarding draft", icon: Sparkles, perform: () => go("/builder") },
       { id: "nav-agents", label: "Go to Agents", group: "Navigation", keywords: "bots automation", icon: Bot, perform: () => go("/agents") },
       { id: "nav-workflows", label: "Go to Workflows", group: "Navigation", keywords: "workflow plan", icon: Workflow, perform: () => go("/workflows") },
       { id: "nav-runs", label: "Go to Runs / Activity", group: "Navigation", keywords: "runs activity history logs", icon: Activity, perform: () => go("/runs") },

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { Activity, Bot, ChevronDown, Home, KeyRound, LogOut, Plus, Search, Settings, Workflow } from "lucide-react";
+import { Activity, Bot, ChevronDown, Home, KeyRound, LogOut, Plus, Search, Settings, Sparkles, Workflow } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useCommandPalette } from "@/context/CommandPaletteContext";
 import { brand } from "@/config/brand";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 const nav = [
   { to: "/dashboard", label: "Dashboard", icon: Home },
+  { to: "/builder", label: "Builder", icon: Sparkles },
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/workflows", label: "Workflows", icon: Workflow },
   { to: "/runs", label: "Runs / Activity", icon: Activity },

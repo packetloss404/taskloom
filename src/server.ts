@@ -12,7 +12,9 @@ import {
   createProviderAsync,
   createWorkspaceEnvVarAsync,
   deleteWorkspaceEnvVarByIdAsync,
+  generateAgentFromPromptAsync,
   getAgentAsync,
+  getIntegrationReadinessAsync,
   getPublicActivationSummary,
   handleInvitationEmailJob,
   INVITATION_EMAIL_JOB_TYPE,
@@ -110,6 +112,35 @@ app.get("/api/app/agents", async (c) => {
 app.post("/api/app/agents", async (c) => {
   try {
     return c.json(await createAgentAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), await readJsonBody(c)), 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.post("/api/app/agents/generate-from-prompt", async (c) => {
+  try {
+    const body = await readJsonBody(c) as {
+      prompt?: string;
+      create?: boolean;
+      approve?: boolean;
+      providerId?: string;
+      model?: string;
+      status?: "active" | "paused" | "archived";
+      runPreview?: boolean;
+      sampleInputs?: Record<string, unknown>;
+    };
+    const context = await requirePrivateWorkspaceRoleAsync(c, "admin");
+    const result = await generateAgentFromPromptAsync(context, {
+      prompt: body.prompt,
+      create: body.create,
+      approve: body.approve,
+      providerId: body.providerId,
+      model: body.model,
+      status: body.status,
+      runPreview: Boolean(body.runPreview),
+      sampleInputs: body.sampleInputs && typeof body.sampleInputs === "object" ? body.sampleInputs : undefined,
+    });
+    return c.json(result, result.created ? 201 : 200);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -256,6 +287,14 @@ app.get("/api/app/tools", async (c) => {
         side: t.side,
       })),
     });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.get("/api/app/integration-readiness", async (c) => {
+  try {
+    return c.json({ readiness: await getIntegrationReadinessAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer")) });
   } catch (error) {
     return errorResponse(c, error);
   }
