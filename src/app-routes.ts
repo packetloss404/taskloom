@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { streamSSE } from "hono/streaming";
 import { createHash } from "node:crypto";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import { applyCsrfCookie, clearCsrfCookie, rejectCrossOriginPrivateMutation } from "./route-security.js";
@@ -402,11 +403,64 @@ appRoutes.post("/app/builder/app-draft", async (c) => {
   }
 });
 
+appRoutes.post("/app/builder/app-draft/stream", async (c) => {
+  let context: Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>;
+  let body: { prompt?: string };
+  try {
+    context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "manageWorkspace");
+    body = (await c.req.json()) as { prompt?: string };
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+  return streamSSE(c, async (sse) => {
+    try {
+      await emitStep(sse, "Reading the prompt");
+      await chatStreamDelay();
+      const prompt = promptFromBody(body.prompt);
+      const draft = generateAppDraftFromPrompt(prompt);
+      await emitStep(sse, `Selected the ${draft.templateId} template`);
+      await chatStreamDelay();
+      await emitStep(sse, "Building data schema and API routes");
+      await chatStreamDelay();
+      const built = buildAppBuilderDraft(draft, context);
+      await sse.writeSSE({ event: "draft", data: JSON.stringify({ type: "draft", draft: built }) });
+      await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
+    } catch (error) {
+      await sse.writeSSE({ event: "error", data: JSON.stringify({ type: "error", error: redactedErrorMessage(error) }) });
+    }
+  });
+});
+
 appRoutes.get("/app/generated-apps", async (c) => listGeneratedApps(c));
 appRoutes.post("/app/builder/app-draft/apply", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-draft/approve", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-iteration", async (c) => generateAppIteration(c));
 appRoutes.post("/app/builder/app-iteration/apply", async (c) => applyAppIteration(c));
+
+appRoutes.post("/app/builder/app-iteration/stream", async (c) => {
+  let context: Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>;
+  let body: AppIterationRouteRequest;
+  try {
+    context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "manageWorkspace");
+    body = (await c.req.json()) as AppIterationRouteRequest;
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+  return streamSSE(c, async (sse) => {
+    try {
+      const result = await runAppIterationCore(context, body, async (text) => {
+        await emitStep(sse, text);
+        await chatStreamDelay();
+      });
+      await sse.writeSSE({ event: "diff", data: JSON.stringify({ type: "diff", iteration: result }) });
+      await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
+    } catch (error) {
+      await sse.writeSSE({ event: "error", data: JSON.stringify({ type: "error", error: redactedErrorMessage(error) }) });
+    }
+  });
+});
 appRoutes.post("/app/builder/changes/draft", async (c) => generateAppIteration(c, "changeSet"));
 appRoutes.post("/app/builder/changes/apply", async (c) => applyAppIteration(c, "changeSet"));
 appRoutes.post("/app/builder/preview/refresh", async (c) => refreshBuilderPreview(c));
@@ -716,77 +770,7 @@ async function generateAppIteration(c: Context, responseShape: "iteration" | "ch
     const context = await requireAuthenticatedContextAsync(c);
     await requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json()) as AppIterationRouteRequest;
-    const prompt = promptFromBody(body.prompt);
-    const { draft, record } = await draftForIteration(context, body);
-    const iterationDraft = toGeneratedAppDraftLike(draft);
-    const request: AppIterationChangeRequest = {
-      draftId: body.checkpointId ?? record?.checkpointId ?? body.appId,
-      workspaceId: context.workspace.id,
-      target: appIterationTargetForService(body.target),
-      change: body.sourceError?.prompt ? `${prompt}\n\nSource error: ${body.sourceError.message}` : prompt,
-    };
-    const plan = buildAppIterationPlan(iterationDraft, request);
-    const dryRun = applyAppIterationToDraft(iterationDraft, plan);
-    const candidateDraft = fromGeneratedAppDraftLike(draft, dryRun.draft);
-    const smoke = buildAppSmokeStatusFromDraft(candidateDraft, context, false);
-    const previousSnapshot = latestPreviewSnapshot(record);
-    const snapshot = buildAppPreviewSnapshotMetadata({
-      workspaceId: context.workspace.id,
-      appId: record?.id ?? body.appId ?? stableGeneratedAppId(draft, context),
-      appSlug: draft.app.slug,
-      appName: draft.app.name,
-      checkpointId: plan.rollbackCheckpoint.checkpointId,
-      checkpointSavedAt: new Date().toISOString(),
-      buildStatus: "queued",
-      smokeStatus: smoke.status,
-      previewUrl: record?.previewUrl ?? body.previewUrl,
-      generatedFiles: plan.diffHunks.map((hunk) => diffFilePath(hunk)),
-      source: "builder",
-      createdByUserId: context.user.id,
-    });
-    const comparison = compareAppPreviewSnapshots(snapshot, previousSnapshot);
-    const integrationReadiness = await getIntegrationReadinessAsync(context);
-    const tools = inspectAppIterationTools({
-      draft: {
-        appName: draft.app.name,
-        summary: draft.summary,
-        pages: draft.app.pages,
-        apiRoutes: draft.app.apiRoutes,
-        dataModels: draft.app.dataSchema,
-        notes: draft.plan.acceptanceChecks,
-      },
-      changePrompt: prompt,
-      availableTools: integrationReadiness.tools.names,
-      connectedConnectors: integrationReadiness.tools.names,
-      providers: {
-        configured: integrationReadiness.providers.readyCount > 0,
-        openai: integrationReadiness.providers.missingApiKeys.every((entry) => entry.provider !== "openai"),
-        anthropic: integrationReadiness.providers.missingApiKeys.every((entry) => entry.provider !== "anthropic"),
-      },
-      database: {
-        configured: true,
-        migrationsReady: true,
-        writable: true,
-      },
-    });
-    const result = appIterationResponse({
-      context,
-      body,
-      draft: candidateDraft,
-      plan,
-      status: plan.canApply && tools.canProceed ? "generated" : "blocked",
-      previewUrl: record?.previewUrl ?? body.previewUrl,
-      smoke,
-      logs: [
-        ...plan.warnings.map((warning) => routeLog("warn", warning)),
-        ...plan.risks.map((risk) => routeLog(risk.severity === "high" ? "warn" : "info", risk.message)),
-        ...tools.requests.map((request) => routeLog(request.ready ? "info" : "warn", request.rationale)),
-        routeLog("info", comparison.summary),
-      ],
-      snapshot,
-      tools,
-    });
-
+    const result = await runAppIterationCore(context, body);
     if (responseShape === "changeSet") {
       return c.json({ changeSet: result });
     }
@@ -794,6 +778,89 @@ async function generateAppIteration(c: Context, responseShape: "iteration" | "ch
   } catch (error) {
     return errorResponse(c, error);
   }
+}
+
+async function runAppIterationCore(
+  context: Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>,
+  body: AppIterationRouteRequest,
+  onStep?: (text: string) => Promise<void> | void,
+): Promise<AppIterationRouteResult> {
+  await onStep?.("Loading current draft");
+  const prompt = promptFromBody(body.prompt);
+  const { draft, record } = await draftForIteration(context, body);
+  const iterationDraft = toGeneratedAppDraftLike(draft);
+  const targetKind = body.target?.kind ?? "app";
+  await onStep?.(`Scoping change to ${targetKind}`);
+  const request: AppIterationChangeRequest = {
+    draftId: body.checkpointId ?? record?.checkpointId ?? body.appId,
+    workspaceId: context.workspace.id,
+    target: appIterationTargetForService(body.target),
+    change: body.sourceError?.prompt ? `${prompt}\n\nSource error: ${body.sourceError.message}` : prompt,
+  };
+  await onStep?.("Building plan");
+  const plan = buildAppIterationPlan(iterationDraft, request);
+  await onStep?.("Generating diff");
+  const dryRun = applyAppIterationToDraft(iterationDraft, plan);
+  const candidateDraft = fromGeneratedAppDraftLike(draft, dryRun.draft);
+  const smoke = buildAppSmokeStatusFromDraft(candidateDraft, context, false);
+  const previousSnapshot = latestPreviewSnapshot(record);
+  const snapshot = buildAppPreviewSnapshotMetadata({
+    workspaceId: context.workspace.id,
+    appId: record?.id ?? body.appId ?? stableGeneratedAppId(draft, context),
+    appSlug: draft.app.slug,
+    appName: draft.app.name,
+    checkpointId: plan.rollbackCheckpoint.checkpointId,
+    checkpointSavedAt: new Date().toISOString(),
+    buildStatus: "queued",
+    smokeStatus: smoke.status,
+    previewUrl: record?.previewUrl ?? body.previewUrl,
+    generatedFiles: plan.diffHunks.map((hunk) => diffFilePath(hunk)),
+    source: "builder",
+    createdByUserId: context.user.id,
+  });
+  const comparison = compareAppPreviewSnapshots(snapshot, previousSnapshot);
+  await onStep?.("Checking integrations");
+  const integrationReadiness = await getIntegrationReadinessAsync(context);
+  const tools = inspectAppIterationTools({
+    draft: {
+      appName: draft.app.name,
+      summary: draft.summary,
+      pages: draft.app.pages,
+      apiRoutes: draft.app.apiRoutes,
+      dataModels: draft.app.dataSchema,
+      notes: draft.plan.acceptanceChecks,
+    },
+    changePrompt: prompt,
+    availableTools: integrationReadiness.tools.names,
+    connectedConnectors: integrationReadiness.tools.names,
+    providers: {
+      configured: integrationReadiness.providers.readyCount > 0,
+      openai: integrationReadiness.providers.missingApiKeys.every((entry) => entry.provider !== "openai"),
+      anthropic: integrationReadiness.providers.missingApiKeys.every((entry) => entry.provider !== "anthropic"),
+    },
+    database: {
+      configured: true,
+      migrationsReady: true,
+      writable: true,
+    },
+  });
+  return appIterationResponse({
+    context,
+    body,
+    draft: candidateDraft,
+    plan,
+    status: plan.canApply && tools.canProceed ? "generated" : "blocked",
+    previewUrl: record?.previewUrl ?? body.previewUrl,
+    smoke,
+    logs: [
+      ...plan.warnings.map((warning) => routeLog("warn", warning)),
+      ...plan.risks.map((risk) => routeLog(risk.severity === "high" ? "warn" : "info", risk.message)),
+      ...tools.requests.map((request) => routeLog(request.ready ? "info" : "warn", request.rationale)),
+      routeLog("info", comparison.summary),
+    ],
+    snapshot,
+    tools,
+  });
 }
 
 async function applyAppIteration(c: Context, responseShape: "iteration" | "changeSet" = "iteration") {
@@ -2831,4 +2898,15 @@ function httpRouteError(status: number, message: string) {
 function errorResponse(c: Context, error: unknown) {
   c.status(((error as Error & { status?: number }).status ?? 500) as any);
   return c.json({ error: redactedErrorMessage(error) });
+}
+
+const CHAT_STEP_DELAY_MS = Number(process.env.TASKLOOM_BUILDER_CHAT_STEP_MS ?? 120);
+
+async function emitStep(sse: { writeSSE: (event: { event: string; data: string }) => Promise<void> }, text: string) {
+  await sse.writeSSE({ event: "step", data: JSON.stringify({ type: "step", text }) });
+}
+
+function chatStreamDelay(): Promise<void> {
+  if (CHAT_STEP_DELAY_MS <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, CHAT_STEP_DELAY_MS));
 }

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { I, type IconKey } from "../icons";
 import { Topbar } from "../Shell";
-import { api } from "@/lib/api";
+import { api, type BuilderStreamEvent } from "@/lib/api";
 import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
 import { AgentBuilderPanel } from "./builder-agent";
@@ -20,6 +20,24 @@ import type {
   AppBuilderPublishState,
   AppBuilderSmokeBuildStatus,
 } from "@/lib/types";
+
+type ChatBody =
+  | { kind: "text"; text: string }
+  | { kind: "steps"; steps: string[] }
+  | { kind: "plan"; draft: AppBuilderDraft }
+  | { kind: "diff"; iteration: AppBuilderIterationResult }
+  | { kind: "status"; text: string; tone: "info" | "warn" | "error" | "ok" };
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  body: ChatBody;
+  streaming?: boolean;
+}
+
+function newId(): string {
+  return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
 
 type Mode = "empty" | "drafting" | "drafted" | "applying" | "applied" | "iterating";
 type BuilderKind = "app" | "agent";
@@ -90,7 +108,21 @@ export function BuilderView() {
   const [state, setState] = useState<BuilderState>({
     draft: null, appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null,
   });
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const threadRef = useRef<HTMLDivElement | null>(null);
   const previewTarget = getPreviewNavigationTarget(state.previewUrl, state.appId);
+
+  useEffect(() => {
+    if (threadRef.current) {
+      threadRef.current.scrollTop = threadRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const appendMessage = (msg: ChatMessage) => setMessages((prev) => [...prev, msg]);
+  const updateMessage = (id: string, updater: (msg: ChatMessage) => ChatMessage) =>
+    setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
+  const pushSystemStatus = (text: string, tone: "info" | "warn" | "error" | "ok" = "info") =>
+    appendMessage({ id: newId(), role: "system", body: { kind: "status", text, tone } });
 
   // Refresh checkpoints + publish state when an app is created
   useEffect(() => {
@@ -112,23 +144,41 @@ export function BuilderView() {
     setWorking(true);
     setError(null);
     setMode("drafting");
+    appendMessage({ id: newId(), role: "user", body: { kind: "text", text: nextPrompt } });
+    const assistantId = newId();
+    appendMessage({ id: assistantId, role: "assistant", body: { kind: "steps", steps: [] }, streaming: true });
     try {
-      const draft = await api.generateAppBuilderDraft({ prompt: nextPrompt });
-      setPrompt(draft.prompt || nextPrompt);
-      setState({
-        draft,
-        appId: null,
-        checkpointId: null,
-        previewUrl: null,
-        smoke: null,
-        iteration: null,
+      await api.streamAppBuilderDraft({ prompt: nextPrompt }, (event) => {
+        if (event.type === "step") {
+          updateMessage(assistantId, (m) => {
+            if (m.body.kind !== "steps") return m;
+            return { ...m, body: { kind: "steps", steps: [...m.body.steps, event.text] } };
+          });
+        } else if (event.type === "draft") {
+          setPrompt(event.draft.prompt || nextPrompt);
+          setState({
+            draft: event.draft,
+            appId: null,
+            checkpointId: null,
+            previewUrl: null,
+            smoke: null,
+            iteration: null,
+          });
+          setCheckpoints([]);
+          setPublishState(null);
+          setTab("preview");
+          updateMessage(assistantId, (m) => ({ ...m, body: { kind: "plan", draft: event.draft }, streaming: false }));
+          setMode("drafted");
+        } else if (event.type === "error") {
+          setError(event.error);
+          updateMessage(assistantId, (m) => ({ ...m, body: { kind: "status", text: event.error, tone: "error" }, streaming: false }));
+          setMode(previousMode);
+        }
       });
-      setCheckpoints([]);
-      setPublishState(null);
-      setTab("preview");
-      setMode("drafted");
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      updateMessage(assistantId, (m) => ({ ...m, body: { kind: "status", text: message, tone: "error" }, streaming: false }));
       setMode(previousMode);
     } finally {
       setWorking(false);
@@ -152,8 +202,15 @@ export function BuilderView() {
       });
       setMode("applied");
       setTab("preview");
+      const smokeStatus = result.smoke?.status ?? result.smokeBuild?.status;
+      pushSystemStatus(
+        smokeStatus === "pass" ? "Draft applied. Smoke checks passed." : `Draft applied${smokeStatus ? `. Smoke: ${smokeStatus}.` : "."}`,
+        smokeStatus === "fail" ? "warn" : "ok",
+      );
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      pushSystemStatus(message, "error");
       setMode("drafted");
     } finally {
       setWorking(false);
@@ -167,21 +224,41 @@ export function BuilderView() {
       kind: iterTargetKind,
       label: iterTargetLabel,
     };
+    const submittedPrompt = iterPrompt;
     setWorking(true);
     setError(null);
     setMode("iterating");
+    appendMessage({ id: newId(), role: "user", body: { kind: "text", text: submittedPrompt } });
+    const assistantId = newId();
+    appendMessage({ id: assistantId, role: "assistant", body: { kind: "steps", steps: [] }, streaming: true });
+    setIterPrompt("");
     try {
-      const result = await api.generateAppBuilderIteration({
+      await api.streamAppBuilderIteration({
         appId: state.appId ?? undefined,
         checkpointId: state.checkpointId ?? undefined,
         draft: state.draft,
         target,
-        prompt: iterPrompt,
+        prompt: submittedPrompt,
+      }, (event) => {
+        if (event.type === "step") {
+          updateMessage(assistantId, (m) => {
+            if (m.body.kind !== "steps") return m;
+            return { ...m, body: { kind: "steps", steps: [...m.body.steps, event.text] } };
+          });
+        } else if (event.type === "diff") {
+          setState((prev) => ({ ...prev, iteration: event.iteration }));
+          updateMessage(assistantId, (m) => ({ ...m, body: { kind: "diff", iteration: event.iteration }, streaming: false }));
+          setMode("applied");
+        } else if (event.type === "error") {
+          setError(event.error);
+          updateMessage(assistantId, (m) => ({ ...m, body: { kind: "status", text: event.error, tone: "error" }, streaming: false }));
+          setMode("applied");
+        }
       });
-      setState((prev) => ({ ...prev, iteration: result }));
-      setMode("applied");
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      updateMessage(assistantId, (m) => ({ ...m, body: { kind: "status", text: message, tone: "error" }, streaming: false }));
       setMode("applied");
     } finally {
       setWorking(false);
@@ -215,8 +292,11 @@ export function BuilderView() {
         iteration: null,
       }));
       setIterPrompt("");
+      pushSystemStatus("Diff applied. Preview refreshed.", "ok");
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      pushSystemStatus(message, "error");
     } finally {
       setWorking(false);
     }
@@ -373,30 +453,32 @@ export function BuilderView() {
       )}
 
       {(mode === "drafted" || mode === "applying" || mode === "applied" || mode === "iterating") && draft && (
-        <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", height: "calc(100vh - 52px)" }}>
-          <aside style={{ borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", background: "var(--bg-elev)" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)" }}>
-              <div className="kicker">PROJECT</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                <I.layout size={15} style={{ color: "var(--green)" }}/>
-                <div className="h3" style={{ fontSize: 14 }}>{draft.app.name}</div>
-                {state.appId
-                  ? <span className="pill good" style={{ marginLeft: "auto" }}><span className="dot"></span>built</span>
-                  : <span className="pill warn" style={{ marginLeft: "auto" }}><span className="dot"></span>draft</span>}
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(440px, 520px) 1fr", height: "calc(100vh - 52px)" }}>
+          <aside style={{ borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", background: "var(--bg-elev)", minWidth: 0 }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 10 }}>
+              <I.layout size={15} style={{ color: "var(--green)", flexShrink: 0 }}/>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="h3" style={{ fontSize: 14, color: "var(--silver-50)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{draft.app.name}</div>
+                <div className="mono muted" style={{ fontSize: 10.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  /{draft.app.slug} · {draft.app.pages.length}p · {draft.app.dataSchema.length}e · {draft.app.apiRoutes.length}r
+                </div>
               </div>
-              <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>
-                {state.checkpointId ? `${state.checkpointId.slice(0, 12)} · ` : ""}/{draft.app.slug} · {draft.app.pages.length} pages · {draft.app.dataSchema.length} entities · {draft.app.apiRoutes.length} routes
-              </div>
+              {state.appId
+                ? <span className="pill good" style={{ flexShrink: 0 }}><span className="dot"></span>built</span>
+                : <span className="pill warn" style={{ flexShrink: 0 }}><span className="dot"></span>draft</span>}
             </div>
 
-            <div style={{ flex: 1, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-              <ChatBubble role="user" text={draft.prompt}/>
-              <ChatBubble role="assistant" text={draft.summary}/>
+            <div ref={threadRef} style={{ flex: 1, overflow: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+              {messages.map((msg) => (
+                <ThreadMessage
+                  key={msg.id}
+                  message={msg}
+                  onApplyIteration={() => { void applyIteration(); }}
+                  working={working}
+                />
+              ))}
 
-              <PlanCard draft={draft}/>
-              {state.iteration && <IterationCard iteration={state.iteration} onApply={() => { void applyIteration(); }} working={working}/>}
-
-              {!state.appId && mode === "drafted" && (
+              {!state.appId && mode === "drafted" && state.draft && (
                 <div className="card" style={{ padding: 14, marginLeft: 30, background: "var(--bg-elev)", borderColor: "var(--green-deep)" }}>
                   <div className="kicker" style={{ marginBottom: 6, color: "var(--green)" }}>READY TO APPROVE</div>
                   <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Approving applies the draft, runs build + smoke, and creates a checkpoint.</p>
@@ -408,43 +490,48 @@ export function BuilderView() {
               )}
             </div>
 
-            {state.appId && (
-              <div style={{ padding: 12, borderTop: "1px solid var(--line)" }}>
-                <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                  {TARGET_KINDS.map((t) => {
-                    const active = iterTargetKind === t.kind;
-                    return (
-                      <button key={t.kind} className="btn btn-sm" onClick={() => { setIterTargetKind(t.kind); setIterTargetLabel(t.label); }} style={{
-                        background: active ? "var(--bg-elev)" : "var(--panel)",
-                        borderColor: active ? "var(--green-deep)" : "var(--line-2)",
-                        color: active ? "var(--green)" : "var(--silver-300)",
-                        fontSize: 11,
-                      }}>
-                        {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div style={{ position: "relative" }}>
-                  <textarea
-                    className="field"
-                    placeholder="Refine — e.g. 'add inline notes' or 'fix smoke check'"
-                    value={iterPrompt}
-                    onChange={(e) => setIterPrompt(e.target.value)}
-                    style={{ paddingRight: 80, minHeight: 64 }}
-                  />
-                  <div style={{ position: "absolute", right: 8, bottom: 8, display: "flex", gap: 4 }}>
-                    <button className="btn-primary btn btn-sm" disabled={!iterPrompt.trim() || working} onClick={() => { void iterate(); }}>
-                      {working ? <span className="spin"><I.refresh size={11}/></span> : <I.arrowUp size={12}/>}
+            <div style={{ padding: 12, borderTop: "1px solid var(--line)", background: "var(--bg)" }}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                {TARGET_KINDS.map((t) => {
+                  const active = iterTargetKind === t.kind;
+                  return (
+                    <button key={t.kind} className="btn btn-sm" onClick={() => { setIterTargetKind(t.kind); setIterTargetLabel(t.label); }} style={{
+                      background: active ? "var(--bg-elev)" : "var(--panel)",
+                      borderColor: active ? "var(--green-deep)" : "var(--line-2)",
+                      color: active ? "var(--green)" : "var(--silver-300)",
+                      fontSize: 11,
+                    }}>
+                      {t.label}
                     </button>
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                  <span className="pill muted">target: {iterTargetKind}</span>
-                  {state.smoke && <span className={`pill ${state.smoke.status === "pass" ? "good" : state.smoke.status === "fail" ? "danger" : "warn"}`}><span className="dot"></span>build {state.smoke.status}</span>}
+                  );
+                })}
+              </div>
+              <div style={{ position: "relative" }}>
+                <textarea
+                  className="field"
+                  placeholder={state.appId ? "Refine — e.g. 'add inline notes' or 'fix smoke check'" : "Refine — what should change next?"}
+                  value={iterPrompt}
+                  onChange={(e) => setIterPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && iterPrompt.trim() && !working) {
+                      e.preventDefault();
+                      void iterate();
+                    }
+                  }}
+                  style={{ paddingRight: 80, minHeight: 64 }}
+                />
+                <div style={{ position: "absolute", right: 8, bottom: 8, display: "flex", gap: 4 }}>
+                  <button className="btn-primary btn btn-sm" disabled={!iterPrompt.trim() || working} onClick={() => { void iterate(); }}>
+                    {working ? <span className="spin"><I.refresh size={11}/></span> : <I.arrowUp size={12}/>}
+                  </button>
                 </div>
               </div>
-            )}
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <span className="pill muted">target: {iterTargetKind}</span>
+                {state.smoke && <span className={`pill ${state.smoke.status === "pass" ? "good" : state.smoke.status === "fail" ? "danger" : "warn"}`}><span className="dot"></span>build {state.smoke.status}</span>}
+                <span className="mono muted" style={{ marginLeft: "auto", fontSize: 10.5 }}>⌘↵ to send</span>
+              </div>
+            </div>
           </aside>
 
           <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -495,6 +582,94 @@ export function BuilderView() {
       )}
     </>
   );
+}
+
+function ThreadMessage({
+  message,
+  onApplyIteration,
+  working,
+}: {
+  message: ChatMessage;
+  onApplyIteration: () => void;
+  working: boolean;
+}) {
+  const { role, body, streaming } = message;
+  if (role === "system") {
+    if (body.kind !== "status") return null;
+    const tone = body.tone;
+    const color = tone === "error" ? "var(--danger)" : tone === "warn" ? "var(--warn)" : tone === "ok" ? "var(--green)" : "var(--silver-400)";
+    const Glyph = tone === "error" ? I.alert : tone === "warn" ? I.alert : tone === "ok" ? I.check : I.activity;
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px", color, fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+        <Glyph size={12}/>
+        <span style={{ flex: 1 }}>{body.text}</span>
+      </div>
+    );
+  }
+
+  const isUser = role === "user";
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      <div style={{
+        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+        background: isUser ? "linear-gradient(135deg, #3F4549, #1E2225)" : "linear-gradient(135deg, var(--green) 0%, var(--green-deep) 100%)",
+        display: "grid", placeItems: "center",
+        color: isUser ? "var(--silver-100)" : "#0E1A02", fontSize: 10, fontWeight: 700,
+      }}>{isUser ? "U" : "TL"}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="kicker" style={{ fontSize: 9.5, marginBottom: 4 }}>
+          {isUser ? "You" : "Taskloom"}
+          {streaming && <span className="mono" style={{ marginLeft: 8, color: "var(--green)" }}>· thinking</span>}
+        </div>
+        <ThreadMessageBody body={body} onApplyIteration={onApplyIteration} working={working}/>
+      </div>
+    </div>
+  );
+}
+
+function ThreadMessageBody({
+  body,
+  onApplyIteration,
+  working,
+}: {
+  body: ChatBody;
+  onApplyIteration: () => void;
+  working: boolean;
+}) {
+  if (body.kind === "text") {
+    return <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--silver-100)" }}>{body.text}</div>;
+  }
+  if (body.kind === "steps") {
+    if (body.steps.length === 0) {
+      return <div className="mono muted" style={{ fontSize: 11.5, fontStyle: "italic" }}>working…</div>;
+    }
+    return (
+      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+        {body.steps.map((step, i) => (
+          <li key={i} className="mono" style={{ fontSize: 12, color: "var(--silver-300)", display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ color: "var(--green)" }}>›</span>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (body.kind === "plan") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--silver-100)" }}>{body.draft.summary}</div>
+        <PlanCard draft={body.draft}/>
+      </div>
+    );
+  }
+  if (body.kind === "diff") {
+    return <IterationCard iteration={body.iteration} onApply={onApplyIteration} working={working}/>;
+  }
+  if (body.kind === "status") {
+    const color = body.tone === "error" ? "var(--danger)" : body.tone === "warn" ? "var(--warn)" : body.tone === "ok" ? "var(--green)" : "var(--silver-300)";
+    return <div className="mono" style={{ fontSize: 12, color }}>{body.text}</div>;
+  }
+  return null;
 }
 
 function ChatBubble({ role, text }: { role: "user" | "assistant"; text: string }) {

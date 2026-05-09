@@ -152,6 +152,78 @@ function csrfTokenForRequest(init?: RequestInit) {
     ?.slice(CSRF_COOKIE_NAME.length + 1) ?? "";
 }
 
+export type BuilderStreamEvent =
+  | { type: "step"; text: string }
+  | { type: "draft"; draft: AppBuilderDraft }
+  | { type: "diff"; iteration: AppBuilderIterationResult }
+  | { type: "done" }
+  | { type: "error"; error: string };
+
+async function streamSse(
+  url: string,
+  body: unknown,
+  onEvent: (event: BuilderStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const csrfToken = csrfTokenForRequest({ method: "POST" });
+  const response = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...(csrfToken ? { [CSRF_HEADER_NAME]: csrfToken } : {}),
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => ({}));
+    const message = typeof payload?.error === "string" ? payload.error : `${response.status} ${response.statusText}`;
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let separator: number;
+      while ((separator = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        const parsed = parseSseChunk(raw);
+        if (parsed) {
+          onEvent(parsed);
+          if (parsed.type === "done" || parsed.type === "error") return;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseSseChunk(raw: string): BuilderStreamEvent | null {
+  const lines = raw.split("\n");
+  let dataLine = "";
+  for (const line of lines) {
+    if (line.startsWith("data:")) {
+      dataLine += line.slice(5).trimStart();
+    }
+  }
+  if (!dataLine) return null;
+  try {
+    return JSON.parse(dataLine) as BuilderStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
 function integrationMarketplaceTestPath(cardId: string) {
   switch (cardId) {
     case "openai":
@@ -215,10 +287,14 @@ export const api = {
     j<AgentBuilderApproveResult>("/api/app/builder/agent-draft/approve", { method: "POST", body: JSON.stringify(body) }),
   generateAppBuilderDraft: (body: { prompt: string }) =>
     j<AppBuilderDraftResult>("/api/app/builder/app-draft", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.draft),
+  streamAppBuilderDraft: (body: { prompt: string }, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
+    streamSse("/api/app/builder/app-draft/stream", body, onEvent, signal),
   approveAppBuilderDraft: (body: { prompt?: string; draft?: AppBuilderDraft; runBuild?: boolean; runSmoke?: boolean; targetStatus?: AppBuilderApplyStatus }) =>
     j<AppBuilderApproveResult>("/api/app/builder/app-draft/apply", { method: "POST", body: JSON.stringify(body) }),
   generateAppBuilderIteration: (body: AppBuilderIterationRequest) =>
     j<AppBuilderIterationResult>("/api/app/builder/app-iteration", { method: "POST", body: JSON.stringify(body) }),
+  streamAppBuilderIteration: (body: AppBuilderIterationRequest, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
+    streamSse("/api/app/builder/app-iteration/stream", body, onEvent, signal),
   applyAppBuilderIterationDiff: (body: AppBuilderIterationApplyRequest) =>
     j<AppBuilderIterationApplyResult>("/api/app/builder/app-iteration/apply", { method: "POST", body: JSON.stringify(body) }),
   draftBuilderChangeSet: (body: AppBuilderIterationRequest) =>

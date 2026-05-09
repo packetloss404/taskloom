@@ -1061,3 +1061,116 @@ test("builder publish creates self-hosted history, compose export, logs, and rol
   assert.equal(stored?.currentPublishId, firstPublish.publish?.id);
   assert.ok(stored?.publishHistory?.some((entry) => entry.id === secondPublish.publish?.id && entry.rollbackResult?.status === "succeeded"));
 });
+
+async function readSseEvents(stream: ReadableStream<Uint8Array>): Promise<Array<{ type: string; [k: string]: unknown }>> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const events: Array<{ type: string; [k: string]: unknown }> = [];
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let separator: number;
+      while ((separator = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("data:")) {
+            const data = line.slice(5).trimStart();
+            if (data) events.push(JSON.parse(data));
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return events;
+}
+
+test("builder app-draft/stream requires authentication", async () => {
+  const app = createTestApp();
+  const response = await app.request("/api/app/builder/app-draft/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: "Build a small CRM for renewals." }),
+  });
+  assert.equal(response.status, 401);
+});
+
+test("builder app-draft/stream emits step events, a draft event, and done", async () => {
+  resetStoreForTests();
+  const previous = process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+  process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = "0";
+  try {
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const response = await app.request("/api/app/builder/app-draft/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a small CRM for renewals and contacts." }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+    assert.ok(response.body, "response should expose a streaming body");
+
+    const events = await readSseEvents(response.body!);
+    const types = events.map((e) => e.type);
+    assert.ok(types.includes("step"), "expected at least one step event");
+    assert.ok(types.includes("draft"), "expected a draft event");
+    assert.equal(types[types.length - 1], "done");
+    const draftEvent = events.find((e) => e.type === "draft") as { type: "draft"; draft: { app: { name: string; slug: string } } };
+    assert.ok(draftEvent.draft.app.name);
+    assert.ok(draftEvent.draft.app.slug);
+  } finally {
+    if (previous === undefined) delete process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+    else process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = previous;
+  }
+});
+
+test("builder app-iteration/stream emits step events, a diff event, and done", async () => {
+  resetStoreForTests();
+  const previous = process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+  process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = "0";
+  try {
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const draftResponse = await app.request("/api/app/builder/app-draft", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a small CRM for renewals and contacts." }),
+    });
+    const draftBody = await draftResponse.json() as { draft: unknown };
+
+    const response = await app.request("/api/app/builder/app-iteration/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        draft: draftBody.draft,
+        prompt: "Add inline notes to the contact detail page.",
+        target: { id: "target_app_test", kind: "app", label: "Whole app" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+    assert.ok(response.body, "response should expose a streaming body");
+
+    const events = await readSseEvents(response.body!);
+    const types = events.map((e) => e.type);
+    assert.ok(types.includes("step"), "expected at least one step event");
+    assert.ok(types.includes("diff"), "expected a diff event");
+    assert.equal(types[types.length - 1], "done");
+    const diffEvent = events.find((e) => e.type === "diff") as { type: "diff"; iteration: { id: string; files: unknown[] } };
+    assert.ok(diffEvent.iteration.id);
+    assert.ok(Array.isArray(diffEvent.iteration.files));
+  } finally {
+    if (previous === undefined) delete process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+    else process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = previous;
+  }
+});
