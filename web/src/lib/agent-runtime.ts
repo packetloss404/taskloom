@@ -20,13 +20,13 @@ export function triggerLabel(kind: AgentTriggerKind | undefined): string {
 export function triggerToneClass(kind: AgentTriggerKind | undefined): string {
   switch (kind) {
     case "schedule":
-      return "border-sky-400/30 bg-sky-500/10 text-sky-200";
+      return "border-signal-info/30 bg-signal-info/10 text-signal-info";
     case "webhook":
-      return "border-violet-400/30 bg-violet-500/10 text-violet-200";
+      return "border-ink-600 bg-ink-800 text-ink-100";
     case "email":
-      return "border-amber-400/30 bg-amber-500/10 text-amber-200";
+      return "border-signal-green/30 bg-signal-green/10 text-signal-green";
     default:
-      return "border-ink-700 bg-ink-950/40 text-ink-300";
+      return "border-ink-700 bg-ink-875 text-ink-200";
   }
 }
 

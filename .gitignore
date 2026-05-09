@@ -12,3 +12,4 @@ data/*.db
 data/artifacts/
 !.gitkeep
 .claude/
+.design-bundle/

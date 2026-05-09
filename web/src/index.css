@@ -1,8 +1,51 @@
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,30..100&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ====================================================================== */
+/*  DESIGN TOKENS — silver / grey foundation, green-light accent           */
+/*  Source: Claude Design "Taskloom — Agent & App Workbench" handoff       */
+/* ====================================================================== */
+:root {
+  --bg: #0E1112;
+  --bg-elev: #14181A;
+  --panel: #181C1E;
+  --panel-2: #1E2225;
+  --line: #262B2E;
+  --line-2: #2F3539;
+  --line-3: #3A4146;
+
+  --silver-50: #F2F4F5;
+  --silver-100: #DCE0E2;
+  --silver-200: #B5BBBE;
+  --silver-300: #8A9094;
+  --silver-400: #686E72;
+  --silver-500: #4A5054;
+  --silver-600: #353A3D;
+
+  --ink: #0A0C0D;
+  --ink-2: #060708;
+
+  --green: #B8F25C;
+  --green-soft: #D8FA9E;
+  --green-deep: #5C8A1F;
+  --green-glow: rgba(184, 242, 92, 0.12);
+
+  --warn: #F2C45C;
+  --danger: #F26B5C;
+  --info: #6BB5F2;
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-serif: "Instrument Serif", Georgia, serif;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+}
 
 @layer base {
   html,
@@ -12,38 +55,45 @@
   }
 
   html {
-    background: #070809;
+    background: var(--bg);
   }
 
   body {
-    color: #cdced4;
+    color: var(--silver-100);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
     background:
-      radial-gradient(ellipse 1200px 600px at 18% -10%, rgba(255, 176, 0, 0.04), transparent 60%),
-      radial-gradient(ellipse 800px 500px at 100% 110%, rgba(255, 176, 0, 0.025), transparent 60%),
-      #070809;
-    font-feature-settings: "ss01", "ss02", "cv05", "cv11";
+      radial-gradient(800px 400px at 20% -10%, rgba(184, 242, 92, 0.04), transparent 60%),
+      radial-gradient(600px 300px at 80% 0%, rgba(120, 140, 150, 0.04), transparent 60%),
+      var(--bg);
     letter-spacing: -0.003em;
     -webkit-font-smoothing: antialiased;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   ::selection {
-    background: #ffb000;
-    color: #070809;
+    background: var(--green);
+    color: var(--ink);
   }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--line-3); }
 
   h1, h2, h3, h4 {
-    font-family: "Fraunces", serif;
-    font-feature-settings: "ss01", "ss02", "ss03";
-    font-variation-settings: "opsz" 80, "SOFT" 30;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    color: var(--silver-50);
   }
 
-  /* Subtle horizontal rule used everywhere instead of a box border */
   hr {
     border: 0;
-    border-top: 1px solid #2a2c34;
+    border-top: 1px solid var(--line);
   }
 
-  /* Tabular numerics globally for dashboards */
   .num,
   table {
     font-feature-settings: "tnum", "ss01";
@@ -53,56 +103,61 @@
 
 @layer components {
   /* ------------------------------------------------------------------ */
-  /*  KICKER — small-caps monospace label used above section headings  */
+  /*  KICKER — small-caps mono label above section headings             */
   /* ------------------------------------------------------------------ */
   .kicker {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 0.6875rem;
     text-transform: uppercase;
-    letter-spacing: 0.22em;
-    color: #80828d;
+    letter-spacing: 0.14em;
+    color: var(--silver-400);
   }
 
   .kicker-amber {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 0.6875rem;
     text-transform: uppercase;
-    letter-spacing: 0.22em;
-    color: #ffb000;
+    letter-spacing: 0.14em;
+    color: var(--green);
   }
 
   /* ------------------------------------------------------------------ */
-  /*  DISPLAY HEADINGS — serif, dramatic, used on page titles          */
+  /*  DISPLAY HEADINGS — Geist, tightly tracked, used on page titles    */
   /* ------------------------------------------------------------------ */
   .display {
-    font-family: "Fraunces", serif;
-    font-weight: 600;
-    letter-spacing: -0.025em;
-    font-variation-settings: "opsz" 144, "SOFT" 0, "wght" 600;
-    line-height: 0.95;
-    color: #ebebef;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    color: var(--silver-50);
   }
 
   .display-xl {
-    font-family: "Fraunces", serif;
-    font-weight: 700;
-    font-size: clamp(2.5rem, 5.5vw, 4.25rem);
-    letter-spacing: -0.035em;
-    line-height: 0.92;
-    font-variation-settings: "opsz" 144, "SOFT" 0;
-    color: #ebebef;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    font-size: clamp(2rem, 4vw, 2.75rem);
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    color: var(--silver-50);
   }
 
+  /* Short-form headings matching the design's .h1/.h2/.h3 */
+  .h1 { font-size: 32px; line-height: 1.1; letter-spacing: -0.02em; font-weight: 500; color: var(--silver-50); }
+  .h2 { font-size: 22px; line-height: 1.2; letter-spacing: -0.015em; font-weight: 500; color: var(--silver-50); }
+  .h3 { font-size: 16px; line-height: 1.3; letter-spacing: -0.01em; font-weight: 600; color: var(--silver-100); }
+  .muted { color: var(--silver-400); }
+  .mono { font-family: var(--font-mono); }
+  .serif { font-family: var(--font-serif); font-style: italic; }
+
   /* ------------------------------------------------------------------ */
-  /*  SPEC FRAME — fieldset-like bordered region (replaces .card)      */
-  /*  Use with <div className="spec-frame"><div className="spec-label">LABEL</div>...</div>
-   */
+  /*  SPEC FRAME — fieldset-style bordered region                       */
   /* ------------------------------------------------------------------ */
   .spec-frame {
     position: relative;
-    border: 1px solid #2a2c34;
-    background: linear-gradient(180deg, rgba(20, 21, 26, 0.55), rgba(12, 13, 16, 0.55));
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(20, 24, 26, 0.55), rgba(14, 17, 18, 0.55));
     padding: 1.25rem 1.5rem 1.5rem;
+    border-radius: var(--radius-lg);
   }
 
   .spec-frame--tight {
@@ -114,23 +169,23 @@
     top: -0.55rem;
     left: 1rem;
     padding: 0 0.5rem;
-    background: #070809;
-    font-family: "JetBrains Mono", monospace;
+    background: var(--bg);
+    font-family: var(--font-mono);
     font-size: 0.625rem;
     text-transform: uppercase;
-    letter-spacing: 0.22em;
-    color: #80828d;
+    letter-spacing: 0.14em;
+    color: var(--silver-400);
   }
 
   .spec-label--amber {
-    color: #ffb000;
+    color: var(--green);
   }
 
   /* ------------------------------------------------------------------ */
-  /*  SECTION BAND — full-bleed band divided by hairline rules         */
+  /*  SECTION BAND — full-bleed band divided by hairline rules          */
   /* ------------------------------------------------------------------ */
   .section-band {
-    border-top: 1px solid #2a2c34;
+    border-top: 1px solid var(--line);
     padding: 2.25rem 0 2rem;
   }
 
@@ -140,94 +195,124 @@
   }
 
   .section-marker {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 0.6875rem;
-    color: #5a5c66;
-    letter-spacing: 0.18em;
+    color: var(--silver-500);
+    letter-spacing: 0.14em;
   }
 
   /* ------------------------------------------------------------------ */
-  /*  DATA TABLE — hairline grid with mono numerics                     */
+  /*  DATA TABLE — hairline grid, mono numerics                         */
   /* ------------------------------------------------------------------ */
   .data-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.8125rem;
-    color: #cdced4;
+    color: var(--silver-100);
   }
 
   .data-table th {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 0.625rem;
     text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: #80828d;
+    letter-spacing: 0.14em;
+    color: var(--silver-400);
     text-align: left;
     padding: 0.625rem 0.875rem;
-    border-bottom: 1px solid #2a2c34;
+    border-bottom: 1px solid var(--line);
     font-weight: 500;
   }
 
   .data-table td {
     padding: 0.75rem 0.875rem;
-    border-bottom: 1px solid #1a1c22;
+    border-bottom: 1px solid var(--line);
+    color: var(--silver-200);
   }
 
   .data-table tbody tr:hover {
-    background: rgba(255, 176, 0, 0.04);
+    background: rgba(255, 255, 255, 0.015);
   }
 
   .data-table .num {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     text-align: right;
   }
+
+  /* Design's short-form table */
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tbl th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 500;
+    color: var(--silver-400);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    color: var(--silver-200);
+    vertical-align: middle;
+  }
+  .tbl tr:hover td { background: rgba(255, 255, 255, 0.015); }
+  .tbl tr:last-child td { border-bottom: none; }
 
   /* ------------------------------------------------------------------ */
   /*  RULES & DIVIDERS                                                  */
   /* ------------------------------------------------------------------ */
-  .rule {
-    border-top: 1px solid #2a2c34;
-  }
+  .rule { border-top: 1px solid var(--line); }
+  .rule-thin { border-top: 1px solid var(--line); opacity: 0.6; }
+  .rule-amber { border-top: 1px solid var(--green); }
+  .divider { height: 1px; background: var(--line); width: 100%; }
 
-  .rule-thin {
-    border-top: 1px solid #1a1c22;
-  }
-
-  .rule-amber {
-    border-top: 1px solid #ffb000;
-  }
-
-  /* Dotted leader line, like a table-of-contents row */
   .leader {
-    background-image: radial-gradient(circle, #3a3c45 1px, transparent 1px);
+    background-image: radial-gradient(circle, var(--line-3) 1px, transparent 1px);
     background-size: 6px 1px;
     background-repeat: repeat-x;
     background-position: 0 60%;
   }
 
   /* ------------------------------------------------------------------ */
-  /*  BUTTONS — sharp-cornered                                          */
+  /*  BUTTONS — rounded, mono-cased ghost / soft primary                */
   /* ------------------------------------------------------------------ */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--line-2);
+    background: var(--panel);
+    color: var(--silver-100);
+    transition: border-color 120ms, background 120ms, color 120ms;
+  }
+  .btn:hover { border-color: var(--line-3); background: var(--panel-2); }
+  .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+
   .btn-primary {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
-    background: #ffb000;
-    color: #070809;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.75rem;
+    background: var(--green);
+    color: #0E1A02;
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    border: 1px solid #ffb000;
-    border-radius: 0;
-    transition: background 120ms, color 120ms;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    border: 1px solid var(--green);
+    border-radius: 8px;
+    transition: background 120ms, color 120ms, border-color 120ms;
   }
 
   .btn-primary:hover {
-    background: #ffd16a;
-    border-color: #ffd16a;
+    background: var(--green-soft);
+    border-color: var(--green-soft);
   }
 
   .btn-primary:disabled {
@@ -241,20 +326,21 @@
     gap: 0.5rem;
     padding: 0.5rem 0.875rem;
     background: transparent;
-    color: #cdced4;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.75rem;
+    color: var(--silver-200);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
     font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    border: 1px solid #2a2c34;
-    border-radius: 0;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
     transition: border-color 120ms, color 120ms, background 120ms;
   }
 
   .btn-ghost:hover:not(:disabled) {
-    border-color: #ffb000;
-    color: #ffb000;
+    border-color: var(--line-3);
+    color: var(--silver-50);
+    background: var(--panel);
   }
 
   .btn-ghost:disabled {
@@ -263,55 +349,61 @@
   }
 
   .btn-link {
-    color: #ffb000;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
+    color: var(--green);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    text-transform: none;
+    letter-spacing: 0.01em;
     text-decoration: none;
-    border-bottom: 1px solid #ffb000;
+    border-bottom: 1px solid var(--green);
     padding-bottom: 1px;
   }
 
   /* ------------------------------------------------------------------ */
-  /*  STATUS PILLS — square, mono, hairline                             */
+  /*  STATUS PILLS — supports BEM (--good) and design (.good) variants  */
   /* ------------------------------------------------------------------ */
   .pill {
     display: inline-flex;
     align-items: center;
-    gap: 0.375rem;
-    padding: 0.125rem 0.5rem;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.625rem;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
     text-transform: uppercase;
-    letter-spacing: 0.16em;
-    border: 1px solid #2a2c34;
-    color: #a7a9b3;
-    background: rgba(20, 21, 26, 0.6);
+    letter-spacing: 0.08em;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    color: var(--silver-300);
   }
+  .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--silver-400); }
 
-  .pill--good { color: #00d68f; border-color: rgba(0, 214, 143, 0.4); }
-  .pill--warn { color: #ffb000; border-color: rgba(255, 176, 0, 0.5); }
-  .pill--danger { color: #ff3b30; border-color: rgba(255, 59, 48, 0.5); }
-  .pill--muted { color: #80828d; }
+  .pill--good, .pill.good { color: var(--green); border-color: rgba(184, 242, 92, 0.25); background: rgba(184, 242, 92, 0.06); }
+  .pill--good .dot, .pill.good .dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .pill--warn, .pill.warn { color: var(--warn); border-color: rgba(242, 196, 92, 0.25); background: rgba(242, 196, 92, 0.06); }
+  .pill--warn .dot, .pill.warn .dot { background: var(--warn); }
+  .pill--danger, .pill.danger { color: var(--danger); border-color: rgba(242, 107, 92, 0.25); background: rgba(242, 107, 92, 0.06); }
+  .pill--danger .dot, .pill.danger .dot { background: var(--danger); }
+  .pill--info, .pill.info { color: var(--info); border-color: rgba(107, 181, 242, 0.25); background: rgba(107, 181, 242, 0.06); }
+  .pill--muted, .pill.muted { color: var(--silver-400); }
 
   /* ------------------------------------------------------------------ */
-  /*  TAB STRIP — underline-only active state                           */
+  /*  TAB STRIPS                                                        */
   /* ------------------------------------------------------------------ */
   .tab-strip {
     display: flex;
     gap: 1.75rem;
-    border-bottom: 1px solid #2a2c34;
+    border-bottom: 1px solid var(--line);
   }
 
   .tab-strip__item {
     position: relative;
     padding: 0.625rem 0;
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 0.75rem;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: #80828d;
+    letter-spacing: 0.12em;
+    color: var(--silver-400);
     border: 0;
     background: transparent;
     cursor: pointer;
@@ -319,11 +411,11 @@
   }
 
   .tab-strip__item:hover {
-    color: #cdced4;
+    color: var(--silver-100);
   }
 
   .tab-strip__item--active {
-    color: #ebebef;
+    color: var(--silver-50);
   }
 
   .tab-strip__item--active::after {
@@ -333,14 +425,32 @@
     right: 0;
     bottom: -1px;
     height: 1px;
-    background: #ffb000;
+    background: var(--green);
   }
 
+  /* Design's short-form tab bar */
+  .tabbar {
+    display: flex; gap: 2px;
+    padding: 0 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .tab {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--silver-300);
+    border-bottom: 1.5px solid transparent;
+    margin-bottom: -1px;
+    cursor: pointer;
+  }
+  .tab:hover { color: var(--silver-100); }
+  .tab.active { color: var(--silver-50); border-bottom-color: var(--green); }
+
   /* ------------------------------------------------------------------ */
-  /*  PAGE FRAME — generous top padding, page number on right          */
+  /*  PAGE FRAME                                                        */
   /* ------------------------------------------------------------------ */
   .page-frame {
-    padding: 2.5rem 3rem 3.5rem;
+    padding: 2rem 2.25rem 3rem;
     max-width: 1320px;
     margin: 0 auto;
   }
@@ -350,42 +460,70 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /*  WORKFLOW INPUT (replaces the previous card-style input)           */
+  /*  FORM FIELDS                                                       */
   /* ------------------------------------------------------------------ */
   .workflow-input {
     width: 100%;
-    background: rgba(7, 8, 9, 0.6);
-    border: 1px solid #2a2c34;
-    border-radius: 0;
-    padding: 0.625rem 0.75rem;
-    color: #ebebef;
-    font-family: "IBM Plex Sans", sans-serif;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.5625rem 0.75rem;
+    color: var(--silver-50);
+    font-family: var(--font-sans);
     font-size: 0.875rem;
-    transition: border-color 120ms, background 120ms;
+    transition: border-color 120ms, box-shadow 120ms, background 120ms;
   }
 
   .workflow-input:focus {
     outline: 0;
-    border-color: #ffb000;
-    background: rgba(20, 21, 26, 0.8);
+    border-color: var(--line-3);
+    background: var(--panel);
+    box-shadow: 0 0 0 3px rgba(184, 242, 92, 0.08);
   }
 
   .workflow-input::placeholder {
-    color: #5a5c66;
+    color: var(--silver-500);
+  }
+
+  /* Design's short-form .field / .label */
+  .field {
+    width: 100%;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--silver-50);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    outline: none;
+  }
+  .field:focus { border-color: var(--line-3); box-shadow: 0 0 0 3px rgba(184, 242, 92, 0.08); }
+  textarea.field { resize: vertical; min-height: 80px; line-height: 1.5; }
+
+  .label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--silver-400);
+    margin-bottom: 6px;
+    display: block;
   }
 
   /* ------------------------------------------------------------------ */
-  /*  Backwards-compatible .card class — flattened, square-edge,        */
-  /*  fieldset-style. Pages should migrate to .spec-frame, but until    */
-  /*  they do this avoids a visual regression.                          */
+  /*  CARD                                                              */
   /* ------------------------------------------------------------------ */
   .card {
-    @apply border border-ink-700 bg-ink-875;
-    border-radius: 0;
+    @apply border border-ink-700;
+    background: var(--panel);
+    border-radius: var(--radius-lg);
     padding: 1.25rem 1.5rem;
   }
 }
 
+/* ====================================================================== */
+/*  app-main scope: keeps the workbench shell consistent with the design   */
+/* ====================================================================== */
 .app-main h1,
 .app-main h2,
 .app-main h3,
@@ -393,9 +531,8 @@
 .app-main .display,
 .app-main .display-xl,
 .app-main .font-serif {
-  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-feature-settings: "ss01", "ss02", "cv05", "cv11";
-  font-variation-settings: normal;
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
 }
 
 .app-main .display,
@@ -405,22 +542,22 @@
 }
 
 .app-main .display {
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .app-main .display-xl {
-  font-size: clamp(2.125rem, 3.25vw, 3.25rem);
-  font-weight: 700;
+  font-size: clamp(2rem, 3vw, 2.75rem);
+  font-weight: 500;
   letter-spacing: -0.025em;
 }
 
 .app-main .page-frame {
-  max-width: 1240px;
+  max-width: 1320px;
   padding: 2rem 2.25rem 3rem;
 }
 
 .app-main header p.font-mono {
-  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-size: 0.875rem;
   line-height: 1.55;
   letter-spacing: normal;
@@ -430,22 +567,22 @@
 .app-main .btn-primary,
 .app-main .btn-ghost,
 .app-main .btn-link {
-  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-size: 0.875rem;
   letter-spacing: 0.01em;
   text-transform: none;
 }
 
 .app-main select.workflow-input {
-  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-size: 0.875rem;
   letter-spacing: normal;
 }
 
 .app-main .card,
 .app-main .spec-frame {
-  border-color: rgba(42, 44, 52, 0.88);
-  background: linear-gradient(180deg, rgba(20, 21, 26, 0.68), rgba(12, 13, 16, 0.72));
+  border-color: var(--line);
+  background: linear-gradient(180deg, rgba(24, 28, 30, 0.68), rgba(14, 17, 18, 0.72));
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset;
 }
 
@@ -455,8 +592,8 @@
 
 .app-main .card-hover:hover,
 .app-main a.card:hover {
-  border-color: #3a3c45;
-  background: rgba(20, 21, 26, 0.82);
+  border-color: var(--line-3);
+  background: rgba(24, 28, 30, 0.82);
 }
 
 .app-main .data-table td {
@@ -470,21 +607,26 @@
 }
 
 .sidebar-glow {
-  background: rgb(7 8 9 / 0.92);
+  background: linear-gradient(180deg, #131618 0%, #0E1112 100%);
 }
 
-/* Graph-paper texture used by canvas-style pages (lineage, telemetry) */
+/* Graph-paper texture for canvas-style pages */
 .bg-grid {
   background-image:
-    linear-gradient(rgba(42, 44, 52, 0.3) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(42, 44, 52, 0.3) 1px, transparent 1px);
-  background-size: 32px 32px;
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 28px 28px;
   background-position: -1px -1px;
 }
 
 .bg-grid-fine {
   background-image:
-    linear-gradient(rgba(42, 44, 52, 0.18) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(42, 44, 52, 0.18) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
   background-size: 16px 16px;
 }
+
+/* loading shimmer / spinner */
+@keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; }}
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
