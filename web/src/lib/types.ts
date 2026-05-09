@@ -444,6 +444,21 @@ export type AppBuilderRouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type AppBuilderCheckStatus = "pending" | "pass" | "warn" | "fail";
 export type AppBuilderRouteAccess = "public" | "private" | "admin";
 export type AppBuilderApplyStatus = "draft" | "saved" | "built";
+export type GeneratedAppStatus = AppBuilderApplyStatus;
+export type GeneratedAppPublishStatus = "pending" | "published" | "failed" | "rolled_back";
+
+export interface GeneratedAppSummary {
+  id: string;
+  slug: string;
+  name: string;
+  status: GeneratedAppStatus;
+  previewUrl?: string;
+  publishStatus?: GeneratedAppPublishStatus;
+  publishedUrl?: string;
+  checkpointId?: string;
+  updatedAt: string;
+  createdAt: string;
+}
 
 export interface AppBuilderPageDraft {
   name: string;

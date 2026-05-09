@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { I, type IconKey } from "../icons";
 import { Topbar } from "../Shell";
 import { api } from "@/lib/api";
 import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
+import { AgentBuilderPanel } from "./builder-agent";
 import type {
   AppBuilderApproveResult,
   AppBuilderApiRoute,
@@ -21,6 +22,7 @@ import type {
 } from "@/lib/types";
 
 type Mode = "empty" | "drafting" | "drafted" | "applying" | "applied" | "iterating";
+type BuilderKind = "app" | "agent";
 
 interface BuilderState {
   draft: AppBuilderDraft | null;
@@ -40,9 +42,41 @@ const TARGET_KINDS: { kind: AppBuilderIterationTargetKind; label: string }[] = [
   { kind: "smoke", label: "Smoke / build" },
 ];
 
+const BUILD_MODES: Array<{ id: BuilderKind; label: string; icon: IconKey; desc: string }> = [
+  { id: "app", label: "Build an app", icon: "layout", desc: "Pages · data · routes" },
+  { id: "agent", label: "Build an agent", icon: "bot", desc: "Tools · schedule · webhook" },
+];
+
+const SAMPLE_PROMPTS: Array<{ id: string; kind: BuilderKind; label: string; icon: IconKey; desc: string; prompt: string }> = [
+  { id: "crm", kind: "app", label: "Lightweight CRM", icon: "users", desc: "Track companies, contacts, deals", prompt: "Build a lightweight CRM app for account managers to track companies, contacts, opportunities, and renewal risk." },
+  { id: "portal", kind: "app", label: "Customer portal", icon: "globe", desc: "Self-serve requests + docs", prompt: "Build a customer portal where customers can manage profile details, open requests, and upload documents." },
+  { id: "tracker", kind: "app", label: "Task tracker", icon: "flow", desc: "Projects · tasks · review queue", prompt: "Create a task tracker app with projects, tasks, assignees, statuses, due dates, and a simple review queue." },
+  { id: "triage", kind: "agent", label: "Support triage", icon: "inbox", desc: "Webhook incident triage", prompt: "Create a webhook agent to triage customer incidents, open blockers for critical risks, and post a summary to Slack." },
+  { id: "leads", kind: "agent", label: "Lead enrichment", icon: "sparkle", desc: "Daily research + summary", prompt: "Build an agent that reviews new leads daily, researches each company website, and writes a sales-ready summary." },
+  { id: "report", kind: "agent", label: "Scheduled report", icon: "history", desc: "Daily ops digest", prompt: "Build an agent that monitors support tickets daily, summarizes urgent escalations, and reports outcomes to operators." },
+];
+
+function getPreviewNavigationTarget(previewUrl: string | null, appId: string | null) {
+  const cleanPreviewUrl = previewUrl?.trim();
+  if (cleanPreviewUrl) {
+    if (/^https?:\/\//i.test(cleanPreviewUrl) || cleanPreviewUrl.startsWith("/")) return cleanPreviewUrl;
+    return `/${cleanPreviewUrl}`;
+  }
+  return appId ? `/builder/preview/workspace/${encodeURIComponent(appId)}` : null;
+}
+
+function openPreviewTarget(target: string, navigate: NavigateFunction) {
+  if (/^https?:\/\//i.test(target)) {
+    window.open(target, "_blank", "noopener,noreferrer");
+    return;
+  }
+  navigate(target);
+}
+
 export function BuilderView() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>("empty");
+  const [builderKind, setBuilderKind] = useState<BuilderKind>("app");
   const [prompt, setPrompt] = useState("");
   const [iterPrompt, setIterPrompt] = useState("");
   const [iterTargetKind, setIterTargetKind] = useState<AppBuilderIterationTargetKind>("app");
@@ -56,6 +90,7 @@ export function BuilderView() {
   const [state, setState] = useState<BuilderState>({
     draft: null, appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null,
   });
+  const previewTarget = getPreviewNavigationTarget(state.previewUrl, state.appId);
 
   // Refresh checkpoints + publish state when an app is created
   useEffect(() => {
@@ -71,17 +106,30 @@ export function BuilderView() {
   }, [state.appId, state.checkpointId]);
 
   const generate = async () => {
-    if (!prompt.trim() || working) return;
+    const nextPrompt = prompt.trim();
+    if (!nextPrompt || working) return;
+    const previousMode = mode;
     setWorking(true);
     setError(null);
     setMode("drafting");
     try {
-      const draft = await api.generateAppBuilderDraft({ prompt });
-      setState((prev) => ({ ...prev, draft, iteration: null }));
+      const draft = await api.generateAppBuilderDraft({ prompt: nextPrompt });
+      setPrompt(draft.prompt || nextPrompt);
+      setState({
+        draft,
+        appId: null,
+        checkpointId: null,
+        previewUrl: null,
+        smoke: null,
+        iteration: null,
+      });
+      setCheckpoints([]);
+      setPublishState(null);
+      setTab("preview");
       setMode("drafted");
     } catch (e) {
       setError((e as Error).message);
-      setMode("empty");
+      setMode(previousMode);
     } finally {
       setWorking(false);
     }
@@ -93,7 +141,7 @@ export function BuilderView() {
     setError(null);
     setMode("applying");
     try {
-      const result: AppBuilderApproveResult = await api.approveAppBuilderDraft({ draft: state.draft, runBuild: true, runSmoke: true, targetStatus: "built" });
+      const result: AppBuilderApproveResult = await api.approveAppBuilderDraft({ prompt: state.draft.prompt, draft: state.draft, runBuild: true, runSmoke: true, targetStatus: "built" });
       setState({
         draft: result.draft,
         appId: result.app?.id ?? null,
@@ -160,8 +208,9 @@ export function BuilderView() {
       setState((prev) => ({
         ...prev,
         draft: result.diff?.draft ?? prev.draft,
+        appId: result.app?.id ?? prev.appId,
         checkpointId: result.checkpoint?.id ?? prev.checkpointId,
-        previewUrl: result.preview?.previewUrl ?? result.previewUrl ?? prev.previewUrl,
+        previewUrl: result.preview?.previewUrl ?? result.previewUrl ?? result.app?.previewUrl ?? prev.previewUrl,
         smoke: result.smoke ?? prev.smoke,
         iteration: null,
       }));
@@ -215,8 +264,8 @@ export function BuilderView() {
         crumbs={["__WS__", "Builder", draft?.app.name ?? "Untitled"]}
         actions={
           <>
-            {state.appId && (
-              <button className="top-btn" onClick={() => navigate(`/builder/preview/workspace/${draft?.app.slug ?? "app"}`)}>
+            {previewTarget && (
+              <button className="top-btn" onClick={() => openPreviewTarget(previewTarget, navigate)}>
                 <I.eye size={13}/> Preview
               </button>
             )}
@@ -227,30 +276,97 @@ export function BuilderView() {
       />
 
       {mode === "empty" && (
-        <div style={{ padding: "60px 32px", maxWidth: 760, margin: "0 auto" }}>
-          <div className="kicker">START A BUILD</div>
-          <h1 className="h1" style={{ fontSize: 32, marginTop: 6, marginBottom: 6 }}>Describe the app you want to build.</h1>
-          <p className="muted" style={{ fontSize: 13.5, marginBottom: 18 }}>
-            The builder drafts a plan with pages, data, API routes, and auth decisions. Approve to apply,
-            iterate to refine, and publish when smoke checks are green.
-          </p>
-          <div className="card" style={{ padding: 14, marginBottom: 14 }}>
-            <textarea
-              className="field"
-              style={{ background: "transparent", border: "none", padding: 0, fontSize: 15, minHeight: 100, resize: "vertical" }}
-              placeholder="e.g. A lightweight CRM for account managers to track companies, contacts, and renewal risk…"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-            />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-              <span className="mono muted" style={{ fontSize: 11 }}>{prompt.length} chars</span>
-              <button className="btn btn-primary" disabled={!prompt.trim() || working} onClick={() => { void generate(); }}>
-                {working ? <span className="spin"><I.refresh size={13}/></span> : <I.arrowUp size={13}/>}
-                {working ? " Drafting…" : " Generate draft"}
-              </button>
-            </div>
+        <div style={{ padding: "44px 32px 60px", maxWidth: 1180, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 28 }}>
+            <h1 className="h1" style={{ fontSize: 42, fontWeight: 400, marginBottom: 8 }}>
+              What do you want to <span className="serif" style={{ color: "var(--green)", fontWeight: 400 }}>weave</span> today?
+            </h1>
+            <p className="muted" style={{ maxWidth: 560, margin: "0 auto", fontSize: 14.5 }}>
+              Describe an internal app. Taskloom plans, generates, previews,
+              and publishes it to your self-hosted workspace.
+            </p>
           </div>
-          {error && <div className="card" style={{ padding: "10px 14px", borderColor: "rgba(242,107,92,0.3)", color: "var(--danger)" }}><span className="mono" style={{ fontSize: 11.5 }}>ERR · {error}</span></div>}
+
+          <div className="card" style={{ padding: 4, position: "relative", boxShadow: "0 0 0 1px var(--line), 0 30px 80px -40px rgba(184,242,92,0.15)" }}>
+            <div style={{ display: "flex", alignItems: "center", padding: "10px 14px 0", gap: 4, flexWrap: "wrap" }}>
+              {BUILD_MODES.map((m) => {
+                const Ico = I[m.icon];
+                const active = builderKind === m.id;
+                return (
+                  <button key={m.id} onClick={() => setBuilderKind(m.id)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "8px 14px",
+                      background: active ? "var(--bg-elev)" : "transparent",
+                      border: `1px solid ${active ? "var(--line-2)" : "transparent"}`,
+                      borderBottom: "none",
+                      borderRadius: "8px 8px 0 0",
+                      color: active ? "var(--silver-50)" : "var(--silver-400)",
+                      fontSize: 13, fontWeight: 500,
+                    }}>
+                    <Ico size={14} />
+                    {m.label}
+                    <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-500)", textTransform: "uppercase", letterSpacing: 0 }}>{m.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {builderKind === "app" ? (
+              <div style={{ padding: "14px 18px 16px", borderTop: "1px solid var(--line)" }}>
+                <textarea
+                  className="field"
+                  placeholder="e.g. A lightweight CRM for account managers to track companies, contacts, and renewal risk..."
+                  style={{ background: "transparent", border: "none", padding: 0, fontSize: 16, minHeight: 80, color: "var(--silver-50)" }}
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                  <button className="btn btn-sm"><I.doc size={12}/> Use brief</button>
+                  <button className="btn btn-sm"><I.shield size={12}/> Plan mode</button>
+                  <div style={{ flex: 1 }}></div>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--silver-500)" }}>{prompt.length} chars</span>
+                  <button className="btn-primary btn" disabled={!prompt.trim() || working} onClick={() => { void generate(); }}>
+                    {working ? <><span className="spin"><I.refresh size={13}/></span> Generating</> : <><I.arrowUp size={13}/> Build</>}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <AgentBuilderPanel initialPrompt={prompt} embedded />
+            )}
+          </div>
+
+          {error && <div className="card" style={{ padding: "10px 14px", marginTop: 14, borderColor: "rgba(242,107,92,0.3)", color: "var(--danger)" }}><span className="mono" style={{ fontSize: 11.5 }}>ERR · {error}</span></div>}
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginTop: 16 }}>
+            {SAMPLE_PROMPTS.map((sample) => {
+              const Ico = I[sample.icon];
+              return (
+                <button key={sample.id} onClick={() => { setBuilderKind(sample.kind); setPrompt(sample.prompt); }}
+                  style={{
+                    textAlign: "left", padding: "12px 14px",
+                    background: "var(--panel)", border: "1px solid var(--line)",
+                    borderRadius: 8, color: "var(--silver-100)",
+                    display: "flex", alignItems: "center", gap: 10,
+                    minWidth: 0,
+                  }}>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: 8,
+                    background: "var(--bg-elev)", border: "1px solid var(--line)",
+                    display: "grid", placeItems: "center", color: "var(--green)", flexShrink: 0,
+                  }}>
+                    <Ico size={14}/>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{sample.label}</div>
+                    <div className="muted" style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sample.desc}</div>
+                  </div>
+                  <span className="pill muted" style={{ marginLeft: "auto", flexShrink: 0 }}>{sample.kind}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

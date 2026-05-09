@@ -8,7 +8,7 @@ interface PaletteCommand {
   id: string;
   label: string;
   hint?: string;
-  group: "Navigation" | "Actions" | "Agents";
+  group: "Build" | "Projects" | "Runs" | "Settings" | "Advanced";
   keywords: string;
   icon: IconKey;
   perform: () => void | Promise<void>;
@@ -94,43 +94,44 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
   };
 
   const commands = useMemo<PaletteCommand[]>(() => {
-    const nav: PaletteCommand[] = [
-      { id: "nav-dashboard", label: "Dashboard", group: "Navigation", keywords: "dashboard home", icon: "home", perform: () => go("/dashboard") },
-      { id: "nav-landing", label: "New build", group: "Navigation", keywords: "new build prompt landing", icon: "sparkle", perform: () => go("/landing") },
-      { id: "nav-builder", label: "Builder", group: "Navigation", keywords: "builder app code", icon: "code", perform: () => go("/builder") },
-      { id: "nav-agents", label: "Agents", group: "Navigation", keywords: "agents bot", icon: "bot", perform: () => go("/agents") },
-      { id: "nav-workflows", label: "Workflows", group: "Navigation", keywords: "workflows brief plan blockers", icon: "flow", perform: () => go("/workflows") },
-      { id: "nav-runs", label: "Runs · Activity", group: "Navigation", keywords: "runs activity history", icon: "activity", perform: () => go("/runs") },
-      { id: "nav-providers", label: "Providers", group: "Navigation", keywords: "providers integrations llm tools env", icon: "key", perform: () => go("/integrations") },
-      { id: "nav-operations", label: "Operations", group: "Navigation", keywords: "operations health alerts jobs", icon: "pulse", perform: () => go("/operations") },
-      { id: "nav-sandbox", label: "Sandbox", group: "Navigation", keywords: "sandbox docker exec terminal", icon: "cpu", perform: () => go("/sandbox") },
-      { id: "nav-activation", label: "Activation", group: "Navigation", keywords: "activation onboarding", icon: "rocket", perform: () => go("/activation") },
-      { id: "nav-settings", label: "Settings", group: "Navigation", keywords: "settings members keys workspace audit", icon: "settings", perform: () => go("/settings") },
-      { id: "nav-billing", label: "Billing & plan", group: "Navigation", keywords: "billing usage spend", icon: "card", perform: () => go("/billing") },
-      { id: "nav-roles", label: "Roles & permissions", group: "Navigation", keywords: "roles permissions access", icon: "shield", perform: () => go("/roles") },
-      { id: "nav-sso", label: "SSO & auth", group: "Navigation", keywords: "sso saml auth", icon: "lock", perform: () => go("/sso") },
-      { id: "nav-secrets", label: "Secrets vault", group: "Navigation", keywords: "secrets vault env", icon: "vault", perform: () => go("/secrets") },
-      { id: "nav-webhooks", label: "Webhooks", group: "Navigation", keywords: "webhooks triggers", icon: "webhook", perform: () => go("/webhooks") },
-      { id: "nav-rate-limits", label: "Rate limits", group: "Navigation", keywords: "rate limits quota", icon: "gauge", perform: () => go("/rate-limits") },
-      { id: "nav-releases", label: "Releases", group: "Navigation", keywords: "releases deployments", icon: "branch", perform: () => go("/releases") },
-      { id: "nav-notifications", label: "Notifications", group: "Navigation", keywords: "notifications channels alerts", icon: "bell", perform: () => go("/notifications") },
-      { id: "nav-storage", label: "Storage & DB", group: "Navigation", keywords: "storage database tables", icon: "database", perform: () => go("/storage") },
-      { id: "nav-backups", label: "Backups & data", group: "Navigation", keywords: "backups data export", icon: "archive", perform: () => go("/backups") },
+    const build: PaletteCommand[] = [
+      { id: "action-open-builder", label: "Open Builder", hint: "Default workspace home", group: "Build", keywords: "builder build app code home", icon: "code", perform: () => go("/builder") },
+      { id: "action-new-build", label: "Start from prompt", hint: "Describe an app or agent", group: "Build", keywords: "new build prompt app agent landing", icon: "sparkle", perform: () => go("/builder") },
+      { id: "action-new-project", label: "New project", hint: "Create from the builder", group: "Build", keywords: "new project agent app create", icon: "plus", perform: () => go("/builder") },
     ];
-    const actions: PaletteCommand[] = [
-      { id: "action-new-agent", label: "New agent", hint: "Create from scratch", group: "Actions", keywords: "new agent create", icon: "plus", perform: () => go("/agents/new") },
-      { id: "action-new-build", label: "New build", hint: "Open prompt composer", group: "Actions", keywords: "new build prompt app agent", icon: "sparkle", perform: () => go("/landing") },
+    const primary: PaletteCommand[] = [
+      { id: "nav-projects", label: "Projects", group: "Projects", keywords: "projects agents bot", icon: "layout", perform: () => go("/agents") },
+      { id: "nav-runs", label: "Runs", group: "Runs", keywords: "runs activity history", icon: "activity", perform: () => go("/runs") },
+      { id: "nav-settings", label: "Settings", group: "Settings", keywords: "settings members keys workspace audit", icon: "settings", perform: () => go("/settings") },
+    ];
+    const advanced: PaletteCommand[] = [
+      { id: "nav-dashboard", label: "Dashboard", group: "Advanced", keywords: "dashboard home", icon: "home", perform: () => go("/dashboard") },
+      { id: "nav-workflows", label: "Workflows", group: "Advanced", keywords: "workflows brief plan blockers", icon: "flow", perform: () => go("/workflows") },
+      { id: "nav-providers", label: "Providers", group: "Advanced", keywords: "providers integrations llm tools env", icon: "key", perform: () => go("/integrations") },
+      { id: "nav-operations", label: "Operations", group: "Advanced", keywords: "operations health alerts jobs", icon: "pulse", perform: () => go("/operations") },
+      { id: "nav-sandbox", label: "Sandbox", group: "Advanced", keywords: "sandbox docker exec terminal", icon: "cpu", perform: () => go("/sandbox") },
+      { id: "nav-activation", label: "Activation", group: "Advanced", keywords: "activation onboarding", icon: "rocket", perform: () => go("/activation") },
+      { id: "nav-billing", label: "Billing & plan", group: "Advanced", keywords: "billing usage spend", icon: "card", perform: () => go("/billing") },
+      { id: "nav-roles", label: "Roles & permissions", group: "Advanced", keywords: "roles permissions access", icon: "shield", perform: () => go("/roles") },
+      { id: "nav-sso", label: "SSO & auth", group: "Advanced", keywords: "sso saml auth", icon: "lock", perform: () => go("/sso") },
+      { id: "nav-secrets", label: "Secrets vault", group: "Advanced", keywords: "secrets vault env", icon: "vault", perform: () => go("/secrets") },
+      { id: "nav-webhooks", label: "Webhooks", group: "Advanced", keywords: "webhooks triggers", icon: "webhook", perform: () => go("/webhooks") },
+      { id: "nav-rate-limits", label: "Rate limits", group: "Advanced", keywords: "rate limits quota", icon: "gauge", perform: () => go("/rate-limits") },
+      { id: "nav-releases", label: "Releases", group: "Advanced", keywords: "releases deployments", icon: "branch", perform: () => go("/releases") },
+      { id: "nav-notifications", label: "Notifications", group: "Advanced", keywords: "notifications channels alerts", icon: "bell", perform: () => go("/notifications") },
+      { id: "nav-storage", label: "Storage & DB", group: "Advanced", keywords: "storage database tables", icon: "database", perform: () => go("/storage") },
+      { id: "nav-backups", label: "Backups & data", group: "Advanced", keywords: "backups data export", icon: "archive", perform: () => go("/backups") },
     ];
     const agentCommands: PaletteCommand[] = agents.map((a) => ({
       id: `agent-${a.id}`,
       label: a.name,
       hint: a.description || a.model,
-      group: "Agents",
+      group: "Projects",
       keywords: `${a.name} ${a.id} ${a.description ?? ""} ${a.model ?? ""}`,
       icon: "bot",
       perform: async () => runAgentCommand(a.id),
     }));
-    return [...nav, ...actions, ...agentCommands];
+    return [...build, ...primary, ...agentCommands, ...advanced];
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents]);
 

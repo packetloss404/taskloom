@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { I, type IconKey } from "./icons";
 import { useUser, useWorkbench, useWorkspaceName } from "./WorkbenchContext";
@@ -14,14 +14,16 @@ export type ViewKey =
 
 type NavSpec = { id: ViewKey; label: string; icon: IconKey; badge?: string };
 
-const ADMIN_KEYS: ViewKey[] = [
+const ADVANCED_KEYS: ViewKey[] = [
+  "dashboard", "workflows", "integrations",
+  "operations", "sandbox", "activation",
   "billing","roles","sso","backups","secrets","webhooks","rate-limits","releases","notifications","storage",
 ];
 
 function viewFromPath(pathname: string): ViewKey {
   const m = pathname.match(/^\/?([^/?#]*)/);
   const key = (m?.[1] ?? "") as string;
-  if (!key) return "dashboard";
+  if (!key) return "builder";
   return (key as ViewKey);
 }
 
@@ -39,30 +41,29 @@ export function Sidebar({ agentBadge }: { agentBadge?: string }) {
   const role = useWorkbench().session.workspace.role ?? "member";
 
   const palette = useCommandPalette();
-  const [adminOpen, setAdminOpen] = useState<boolean>(ADMIN_KEYS.includes(active));
+  const [advancedOpen, setAdvancedOpen] = useState<boolean>(ADVANCED_KEYS.includes(active));
+
+  useEffect(() => {
+    if (ADVANCED_KEYS.includes(active)) setAdvancedOpen(true);
+  }, [active]);
 
   const setActive = (key: ViewKey) => {
     navigate(`/${key}`);
   };
 
-  const build: NavSpec[] = [
-    { id: "landing", label: "New build", icon: "sparkle" },
+  const primary: NavSpec[] = [
+    { id: "builder", label: "Build", icon: "code", badge: "live" },
+    { id: "agents", label: "Projects", icon: "layout", badge: agentBadge },
+    { id: "runs", label: "Runs", icon: "activity" },
+    { id: "settings", label: "Settings", icon: "settings" },
+  ];
+  const advanced: NavSpec[] = [
     { id: "dashboard", label: "Dashboard", icon: "home" },
-    { id: "builder", label: "Builder", icon: "code", badge: "live" },
-    { id: "agents", label: "Agents", icon: "bot", badge: agentBadge },
-  ];
-  const run: NavSpec[] = [
     { id: "workflows", label: "Workflows", icon: "flow" },
-    { id: "runs", label: "Runs · Activity", icon: "activity" },
     { id: "integrations", label: "Providers", icon: "key" },
-  ];
-  const workspaceItems: NavSpec[] = [
     { id: "operations", label: "Operations", icon: "pulse" },
     { id: "sandbox", label: "Sandbox", icon: "cpu" },
     { id: "activation", label: "Activation", icon: "rocket" },
-    { id: "settings", label: "Settings", icon: "settings" },
-  ];
-  const admin: NavSpec[] = [
     { id: "billing", label: "Billing & plan", icon: "card" },
     { id: "roles", label: "Roles & permissions", icon: "shield" },
     { id: "sso", label: "SSO & auth", icon: "lock" },
@@ -110,28 +111,19 @@ export function Sidebar({ agentBadge }: { agentBadge?: string }) {
       </div>
 
       <div className="nav-section">
-        <div className="nav-section-title">Build</div>
-        {build.map(it => (
-          <NavItem key={it.id} item={it} active={active === it.id} onClick={() => setActive(it.id)} />
-        ))}
-        <div className="nav-section-title">Run</div>
-        {run.map(it => (
-          <NavItem key={it.id} item={it} active={active === it.id} onClick={() => setActive(it.id)} />
-        ))}
-        <div className="nav-section-title">Workspace</div>
-        {workspaceItems.map(it => (
+        {primary.map(it => (
           <NavItem key={it.id} item={it} active={active === it.id} onClick={() => setActive(it.id)} />
         ))}
         <div
           className="nav-section-title"
-          onClick={() => setAdminOpen(o => !o)}
+          onClick={() => setAdvancedOpen(o => !o)}
           style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, userSelect: "none" }}
         >
-          <span>Admin</span>
-          <I.chevDown size={10} style={{ transform: adminOpen ? "none" : "rotate(-90deg)", transition: "transform .15s", color: "var(--silver-500)" }}/>
-          <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--silver-500)", textTransform: "none", letterSpacing: 0 }}>{admin.length}</span>
+          <span>Advanced</span>
+          <I.chevDown size={10} style={{ transform: advancedOpen ? "none" : "rotate(-90deg)", transition: "transform .15s", color: "var(--silver-500)" }}/>
+          <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--silver-500)", textTransform: "none", letterSpacing: 0 }}>{advanced.length}</span>
         </div>
-        {adminOpen && admin.map(it => (
+        {advancedOpen && advanced.map(it => (
           <NavItem key={it.id} item={it} active={active === it.id} onClick={() => setActive(it.id)} />
         ))}
       </div>

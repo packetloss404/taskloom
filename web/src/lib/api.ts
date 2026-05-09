@@ -8,6 +8,7 @@ import type {
   AgentRecord,
   AgentRunRecord,
   AgentTemplate,
+  GeneratedAppSummary,
   BuilderModelPreset,
   BuilderModelPresetId,
   AppBuilderApproveResult,
@@ -203,6 +204,7 @@ export const api = {
   listActivity: () => j<{ activities: ActivityRecord[] }>("/api/app/activity").then((payload) => payload.activities),
   getActivityDetail: (id: string) => j<ActivityDetailPayload>(`/api/app/activity/${id}`),
   listAgents: () => j<{ agents: AgentRecord[] }>("/api/app/agents").then((payload) => payload.agents),
+  listGeneratedApps: () => j<{ generatedApps: GeneratedAppSummary[] }>("/api/app/generated-apps").then((payload) => payload.generatedApps),
   getAgent: (id: string) => j<{ agent: AgentRecord; runs: AgentRunRecord[] }>(`/api/app/agents/${id}`),
   createAgent: (body: SaveAgentInput) => j<{ agent: AgentRecord }>("/api/app/agents", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
   generateAgentFromPrompt: (body: { prompt: string; create?: boolean; approve?: boolean; providerId?: string; model?: string; status?: AgentRecord["status"]; runPreview?: boolean; sampleInputs?: Record<string, unknown> }) =>

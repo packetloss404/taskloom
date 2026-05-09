@@ -1003,11 +1003,11 @@ The main roadmap now pivots from deployment-hardening phases to product-builder 
 
 ### Product Builder Goal
 
-Taskloom should become a self-hosted AI app and agent builder with this primary loop:
+Taskloom should become a self-hosted AI app and agent builder with this primary MVP loop:
 
-Prompt -> plan -> generate -> preview -> fix -> publish.
+Sign in -> /builder -> create app/agent -> preview/test -> iterate -> publish/run.
 
-The product-builder track keeps lightweight safety rails such as autosave checkpoints, rollback, preview before publish, destructive-action confirmation, secret redaction, and clear dev/prod/local labels. Heavier enterprise release evidence and topology gates remain available for advanced deployment mode, but they are not the default product path.
+The product-builder track keeps lightweight safety rails such as autosave checkpoints, rollback, preview before publish, destructive-action confirmation, secret redaction, and clear dev/prod/local labels. Dashboard/reporting, operations, admin, and deployment tools remain available behind Advanced surfaces; they are not deleted, but they are not the default MVP path. Heavier enterprise release evidence and topology gates remain available for Advanced deployment mode.
 
 ### Six Sprint Lanes
 
@@ -1018,7 +1018,7 @@ Every builder sprint should advance six lanes:
 - Runtime And Preview: live preview, first-run transcript, build/test status, smoke checks, and runtime-error fix handoff.
 - Integrations And Tools: provider setup, browser scraping, email/webhook triggers, Slack/GitHub-style webhooks, payments, database primitives, and model routing.
 - Publish And Hosting: local/self-hosted publish, Docker Compose export, URL handoff, health checks, publish history, and rollback.
-- UX, Templates, And Onboarding: builder dashboard, template gallery, empty-state prompts, first-run checklist, and nontechnical summaries.
+- UX, Templates, And Onboarding: builder home, template gallery, empty-state prompts, first-run checklist, and nontechnical summaries.
 
 ### Phase 67: Prompt-To-Agent Builder
 
@@ -1088,6 +1088,6 @@ Lane 6 setup surface complete: the Integrations page now exposes marketplace-lit
 
 Polish the builder into a beta-ready product path with saved prompt sessions, project memory, template expansion, generated tests, consolidated transcript/log/test timeline, model-routing presets, publish dashboard, and a first-run checklist.
 
-Lane 6 UX polish complete: `/builder` now keeps the existing prompt/review/save/publish structure while adding a first-run checklist, a template gallery with clearer outcomes, model preset selection, publish dashboard counters, and a builder timeline. Builder copy favors nontechnical user language for the primary path while keeping the underlying app draft details visible for review, smoke tests, and existing route/API contracts.
+Lane 6 UX polish complete: `/builder` now keeps the existing prompt/review/save/publish structure while adding a first-run checklist, a template gallery with clearer outcomes, model preset selection, publish counters, and a builder timeline. Builder copy favors nontechnical user language for the primary path while keeping the underlying app draft details visible for review, smoke tests, and existing route/API contracts. Advanced operations, admin, deployment, and reporting surfaces remain reachable for authorized users without taking over the first-run builder path.
 
 Exit when a beta user can create, iterate, preview, and publish at least three template categories without reading documentation.

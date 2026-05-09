@@ -1,10 +1,10 @@
 # Product Builder Sprint Plan
 
-Taskloom's next product track targets feature parity with prompt-first builders such as Replit, Anything, Base44, Twin, and Netlify while staying self-hostable. The product goal is simple:
+Taskloom's next product track targets feature parity with prompt-first builders such as Replit, Anything, Base44, Twin, and Netlify while staying self-hostable. The MVP product path is simple:
 
-> Prompt -> plan -> generate -> preview -> fix -> publish.
+> Sign in -> /builder -> create app/agent -> preview/test -> iterate -> publish/run.
 
-This track deliberately scales back the previous enterprise-first posture. Keep invisible safety rails that prevent obvious data loss, but make the primary user experience fast, visual, and builder-led.
+This track deliberately scales back the previous enterprise-first posture. Keep invisible safety rails that prevent obvious data loss, but make the primary user experience fast, visual, and builder-led. Advanced operations, admin, and deployment tools are hidden behind Advanced surfaces for the MVP; they are not deleted.
 
 ## Product Positioning
 
@@ -14,9 +14,9 @@ The core promise:
 
 - Describe an app, automation, or agent in plain English.
 - Get a working draft with UI, backend routes, database schema, auth, AI, triggers, and integrations.
-- Preview it immediately.
+- Preview and test it immediately.
 - Iterate in chat.
-- Publish to a local/self-hosted URL.
+- Publish to a local/self-hosted URL or run the generated agent.
 - Keep the code and data portable.
 
 ## Guardrail Policy
@@ -30,13 +30,15 @@ The main product path should feel lightweight. Keep these guardrails:
 - Secrets are stored through the existing API key/environment variable surfaces and never printed in logs.
 - Clear dev/prod/local labels.
 
-Defer these guardrails to advanced deployment mode:
+Defer these guardrails to Advanced deployment mode:
 
 - Multi-stage release evidence bundles.
 - Strict production activation gates.
 - Managed database topology certification.
 - Extended operator handoff reports.
 - Compliance-oriented review workflows.
+
+Advanced mode preserves the existing operations/admin/deployment surfaces for teams that need them. The MVP reset changes their prominence, not their availability.
 
 ## Six Sprint Lanes
 
@@ -113,10 +115,10 @@ Exit signal: a generated project can be published to a self-hosted URL with logs
 
 Owns product feel and first-run success.
 
-- Builder dashboard as the primary landing experience.
+- Builder home as the primary signed-in experience.
 - Template gallery for app and agent starters.
 - Empty states that suggest useful prompts.
-- Guided onboarding: connect provider, create first app/agent, preview, publish.
+- Guided onboarding: sign in, open `/builder`, create first app/agent, preview/test, iterate, publish/run.
 - "What changed?" summaries after each AI action.
 - Credit/cost visibility where provider calls are used.
 - Polished logs/transcripts that non-developers can understand.
@@ -142,7 +144,7 @@ Lane deliverables:
 
 Lane 1 acceptance criteria:
 
-- The builder page is available to signed-in workspace users at a primary app route such as `/builder`, with navigation from the dashboard/sidebar and role-aware disabled states when the user cannot create agents.
+- The builder page is available to signed-in workspace users at `/builder`, with primary navigation from the workbench shell and role-aware disabled states when the user cannot create agents.
 - The empty state shows starter prompt cards for lead enrichment, support triage, research assistant, and scheduled report writer. Selecting a starter fills the prompt input without immediately calling the model.
 - Submitting a prompt creates a dry-run plan first; it does not create, update, run, schedule, or expose a webhook for an agent until the user approves the plan.
 - When the prompt lacks a clear goal, trigger, required inputs, provider/model, or tool/integration intent, the builder returns up to three clarifying questions and keeps the user in a reviewable "needs clarification" state.
@@ -412,7 +414,7 @@ The new product-builder phases begin after Phase 66:
 - Phase 71: Integrations Marketplace Lite.
 - Phase 72: Builder Beta Polish.
 
-These phases supersede further enterprise-hardening work as the main product priority. The earlier deployment-hardening track remains available for advanced deployments, but it is no longer the default roadmap spine.
+These phases supersede further enterprise-hardening work as the main product priority. The earlier deployment-hardening track remains available behind Advanced for deployments that need it, but it is no longer the default roadmap spine or first-run user path.
 
 ## Documentation Updates Required Per Sprint
 

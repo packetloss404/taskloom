@@ -10,7 +10,6 @@ import { RunDeepView } from "./views/run-deep";
 import { RunDetailView } from "./views/run-detail";
 import { AppPreviewView } from "./views/app-preview";
 import { useApiData } from "./useApiData";
-import { LandingView } from "./views/landing";
 import { DashboardView } from "./views/dashboard";
 import { BuilderView } from "./views/builder";
 import { AgentsView } from "./views/agents";
@@ -84,8 +83,8 @@ function WorkbenchInner() {
       <main className="main">
         <div className="view">
           <Routes>
-            <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="landing" element={<LandingView />} />
+            <Route index element={<Navigate to="builder" replace />} />
+            <Route path="landing" element={<Navigate to="/builder" replace />} />
             <Route path="dashboard" element={<DashboardView />} />
             <Route path="builder" element={<BuilderView />} />
             <Route path="builder/preview/:workspaceId/:appId/*" element={<AppPreviewView />} />
@@ -112,7 +111,7 @@ function WorkbenchInner() {
             <Route path="notifications" element={<NotificationsView />} />
             <Route path="storage" element={<StorageView />} />
             <Route path="backups" element={<BackupsView />} />
-            <Route path="*" element={<RedirectToDashboard />} />
+            <Route path="*" element={<RedirectToBuilder />} />
           </Routes>
         </div>
       </main>
@@ -120,8 +119,8 @@ function WorkbenchInner() {
   );
 }
 
-function RedirectToDashboard() {
+function RedirectToBuilder() {
   const navigate = useNavigate();
-  useEffect(() => { navigate("/dashboard", { replace: true }); }, [navigate]);
+  useEffect(() => { navigate("/builder", { replace: true }); }, [navigate]);
   return null;
 }

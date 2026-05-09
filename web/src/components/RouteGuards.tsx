@@ -38,7 +38,7 @@ export function PublicOnly({ children }: { children: ReactNode }) {
 
   if (loading) return <FullScreenLoader />;
   if (session) {
-    return <Navigate to={requestedNext && requestedNext.startsWith("/") ? requestedNext : "/dashboard"} replace />;
+    return <Navigate to={requestedNext && requestedNext.startsWith("/") ? requestedNext : "/builder"} replace />;
   }
   return <>{children}</>;
 }
@@ -54,7 +54,7 @@ export function RequireOnboarding({ children }: { children: ReactNode }) {
     return <Navigate to={`/sign-in?next=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`} replace />;
   }
   if (session.onboarding.completed) {
-    return <Navigate to={next && next.startsWith("/") ? next : "/"} replace />;
+    return <Navigate to={next && next.startsWith("/") ? next : "/builder"} replace />;
   }
   return <>{children}</>;
 }

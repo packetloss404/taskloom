@@ -1,15 +1,21 @@
 # MVP Testing Guide
 
-End-to-end manual test plan for verifying that a Taskloom MVP deployment behaves correctly. Use this checklist before any beta handoff, after every meaningful UI change, and as a smoke pass for new self-hosted deployments.
+End-to-end manual test plan for the builder-first Taskloom MVP. The golden path is:
 
-Estimated time: **30–45 minutes** for a full pass; **~10 minutes** for the golden-path subset (marked ⭐).
+```text
+sign in -> /builder -> create app/agent -> preview/test -> iterate -> publish/run
+```
+
+Use this checklist before beta handoff, after meaningful UI changes, and as a smoke pass for new self-hosted deployments. Advanced operations, admin, and deployment tools are still part of the product, but they are no longer the first-run path; verify them from the Advanced area after the builder loop works.
+
+Estimated time: **25-35 minutes** for a full pass; **~10 minutes** for the golden-path subset marked with a star.
 
 ---
 
 ## 0. Prerequisites
 
 - Node `>=22.5.0` and npm installed.
-- (Optional but recommended) Docker daemon running so the sandbox subsystem uses the `docker` driver instead of falling back to `native`.
+- Optional but recommended: Docker daemon running so sandbox smoke checks can use the `docker` driver.
 - Clean working tree on the repo.
 
 ```bash
@@ -18,9 +24,9 @@ npm run db:migrate          # if testing against SQLite
 npm run db:seed              # creates seed accounts
 ```
 
-Seed accounts (password `demo12345`):
+Seed accounts, all with password `demo12345`:
 
-- `alpha@taskloom.local` (owner)
+- `alpha@taskloom.local` owner
 - `beta@taskloom.local`
 - `gamma@taskloom.local`
 
@@ -33,397 +39,251 @@ npm run db:reset       # SQLite store
 
 ---
 
-## 1. Boot the app ⭐
+## 1. Boot The App Star
 
 ```bash
 npm run dev
 ```
 
-Open `http://localhost:7341/` (dev) or `http://localhost:8484/` (built `npm start`).
+Open `http://localhost:7341/` in development, or `http://localhost:8484/` after `npm run build:web && npm start`.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Page loads to the workbench (silver/grey/green theme — no Tailwind amber, no white-on-black "raw" look).
-- [ ] Unauthenticated user sees the marketing/landing hero with "What do you want to weave today?" + "Sign in" / "Get started" buttons.
-- [ ] Sign-in button routes to `/sign-in` rendered in workbench design (serif "in" with green accent).
-- [ ] No console errors; no failed asset requests in the network tab.
+- [ ] Page loads with the workbench visual design, not unstyled HTML.
+- [ ] Signed-out users see a clear sign-in/get-started entry point.
+- [ ] Sign-in routes to `/sign-in`.
+- [ ] No console errors or failed asset requests appear on first load.
 
 ---
 
-## 2. Auth + onboarding ⭐
-
-### Sign-in
+## 2. Sign In To Builder Star
 
 1. Click **Sign in**.
-2. Enter `alpha@taskloom.local` / `demo12345`. Submit.
+2. Enter `alpha@taskloom.local` / `demo12345` and submit.
+3. Land on `/builder`, or navigate there immediately if a transitional route sends you elsewhere.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Redirects to `/dashboard`.
-- [ ] Sidebar shows the workspace name (not "Acme Renewals"), user display name, and `OWNER` role pill.
-- [ ] Topbar crumb shows the real workspace name as the first segment.
+- [ ] The signed-in MVP entry is the builder workspace at `/builder`.
+- [ ] Sidebar/top navigation makes **Builder** or **New build** the primary creation action.
+- [ ] Workspace name, user display name, and role are visible somewhere in the workbench shell.
+- [ ] The user can start creating without visiting reporting, operations, or admin pages first.
 
-### Sign-up (in a private window)
+Sign-up smoke, in a private window:
 
-1. Visit `/sign-up`. Enter a new display name / email / password.
-2. After redirect, complete the onboarding steps at `/onboarding`.
-
-**Acceptance**
-
-- [ ] Each onboarding step's "Mark done" button advances the progress bar and toasts on error.
-- [ ] When all steps complete, you redirect to `/dashboard` automatically.
-
-### Sign-out
-
-1. Click the user footer in the sidebar.
-
-**Acceptance**
-
-- [ ] Returns to the unauthenticated marketing page.
+- [ ] `/sign-up` creates a workspace user.
+- [ ] Onboarding completion moves the user into the builder-first workbench path.
+- [ ] Sign-out returns to the unauthenticated entry point.
 
 ---
 
-## 3. Dashboard ⭐
-
-Visit `/dashboard`.
-
-**Acceptance**
-
-- [ ] Greeting uses the signed-in user's first name.
-- [ ] Four KPI cards render real numbers: Active agents, Runs · 24h, Total agents, Spend · 24h.
-- [ ] "Recent agents" panel lists agents from the API (or shows the empty state "No agents yet — create your first one").
-- [ ] "Activation" panel shows real % from `/api/app/activation`. "Open checklist" button routes to `/activation`.
-- [ ] "Recent activity" pulls from `/api/app/activity`.
-- [ ] **Refresh** button forces a refetch.
-- [ ] **New build** button routes to `/landing`.
-
----
-
-## 4. New build (landing) → Agents
-
-Visit `/landing`.
-
-1. Pick a sample-prompt card to populate the textarea.
-2. Switch the mode pill to **Build an agent**.
-3. Click **Build**.
-
-**Acceptance**
-
-- [ ] Mode pill toggles between "Build an app" / "Build an agent" with active styling.
-- [ ] Clicking **Build** calls `POST /api/app/builder/agent-draft` and routes to `/agents` on success.
-- [ ] If the API errors, the form displays an inline `ERR · …` message in danger color.
-- [ ] "Continue a recent build" lists real recent agents (or empty state).
-
----
-
-## 5. Agents catalog + editor
-
-### Catalog
-
-Visit `/agents`.
-
-**Acceptance**
-
-- [ ] Tab strip: **Catalog** | **Templates**. Catalog is selected by default.
-- [ ] Catalog grid renders one card per agent with: status pill, model, trigger, tool count, 7-day run stats, success rate (only when there are runs).
-- [ ] **Refresh** button refetches.
-- [ ] **New agent** button (top-right) routes to `/agents/new`.
-- [ ] Click any agent card → routes to `/agents/:id`.
-
-### Templates
-
-1. Click the **Templates** tab.
-2. Click **Use template** on any card.
-
-**Acceptance**
-
-- [ ] Templates load via `GET /api/app/agent-templates`.
-- [ ] **Use template** calls `POST /api/app/agents/from-template/:id` and routes to the new agent's editor.
-
-### Editor
-
-Visit `/agents/:id` (any existing agent).
-
-**Acceptance**
-
-- [ ] Form sections: Identity, Model, Instructions, Trigger (with cron validation when `Schedule` is selected), Playbook editor, Tool picker (read/write/exec columns), Input schema editor.
-- [ ] Editing the cron value shows next-run estimate or `ERR · …` when invalid.
-- [ ] **Save agent** posts to `PATCH /api/app/agents/:id` and shows `OK · Agent saved.`
-- [ ] **Run now** posts to `POST /api/app/agents/:id/runs`. After the run completes, "Recent runs" lists the new run with an expandable transcript + tool-call timeline.
-- [ ] If trigger is `webhook`, the **Generate webhook URL** / **Rotate token** / **Remove** buttons are wired and update the displayed token.
-- [ ] **Archive** sends to `DELETE /api/app/agents/:id` and routes back to `/agents`.
-
-### New agent
-
-Visit `/agents/new`. Fill out a minimal form. Submit.
-
-**Acceptance**
-
-- [ ] **Create agent** posts to `POST /api/app/agents` and redirects to `/agents/:newId`.
-
----
-
-## 6. Builder iteration loop ⭐
+## 3. Builder App Loop Star
 
 Visit `/builder`.
 
-### Drafting
+### Create A Draft
 
-1. Type a prompt (e.g. "Build a lightweight CRM for renewal tracking").
-2. Click **Generate draft**.
+1. Type a prompt such as `Build a lightweight CRM for renewal tracking`.
+2. Click the primary generate action.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Calls `POST /api/app/builder/app-draft` and renders the draft in the left chat column: app name, summary, plan steps, acceptance checks, open questions.
-- [ ] Right pane defaults to the **Preview** tab and shows app skeleton (pages, API routes, data entities).
+- [ ] Calls `POST /api/app/builder/app-draft`.
+- [ ] The draft is shown before mutation with app name, summary, plan steps, page map, data model, acceptance checks, warnings, and open questions when needed.
+- [ ] Preview/test/build status is visible in the builder flow, even when checks are `not_run`, `blocked`, or `failed`.
+- [ ] Missing provider, tool, env, auth, or smoke prerequisites are shown as setup guidance without exposing secrets.
 
-### Approve & apply
+### Apply And Preview
 
-1. Click **Approve & apply**.
+1. Approve/apply the reviewed draft.
+2. Open the preview area.
 
-**Acceptance**
+Acceptance:
 
 - [ ] Calls `POST /api/app/builder/app-draft/apply`.
-- [ ] Status pill flips from `draft` to `built`.
-- [ ] **Smoke / Build** tab shows a status: `pass` / `fail` / `warn` with per-check entries.
-- [ ] **Checkpoints** tab shows at least one checkpoint marked `current`.
-- [ ] **Sandbox** tab appears (see §10 for what to verify there).
+- [ ] A generated app record/checkpoint is created.
+- [ ] The preview path is visible, preferably under `/builder/preview/:workspaceId/:appId/...`.
+- [ ] Build/smoke results are visible with check names, statuses, timestamps, and redacted logs.
+- [ ] At least one generated CRUD smoke case covers create, read, update, and delete or archive when removal is part of the app.
 
 ### Iterate
 
-1. With an approved app, type a refinement (e.g. "Add an inline notes field to Account").
-2. Choose a target pill (e.g. `Whole app`). Click the up-arrow button.
+1. Submit a refinement such as `Add an inline notes field to Account`.
+2. Review the proposed change or diff before applying it.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Calls `POST /api/app/builder/app-iteration`.
-- [ ] An iteration card appears with file diff list (A/M/D markers + paths).
-- [ ] **Apply diff** calls `POST /api/app/builder/app-iteration/apply`, runs build + smoke, creates a new checkpoint, and refreshes the preview.
+- [ ] Iteration creates a dry-run change set before mutation.
+- [ ] The preview explains affected artifacts, route/privacy changes, acceptance checks, build/smoke plan, warnings, and rollback target.
+- [ ] Applying the change creates a new checkpoint, refreshes preview/test status, and keeps the previous working preview available until the new result is usable.
+- [ ] Runtime or build errors can be sent back into the builder as a fix prompt with redacted context.
 
 ### Rollback
 
-1. Open **Checkpoints**. Click **Restore** on a non-current entry.
+1. Open the checkpoint/history area.
+2. Restore a previous non-current checkpoint.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Calls `POST /api/app/builder/checkpoints/:id/rollback` and updates the current pointer.
-
-### Publish
-
-1. Open the **Publish** tab.
-
-**Acceptance**
-
-- [ ] Status panel shows publish status from `GET /api/app/builder/publish/state`.
-- [ ] **Publish now** posts to `POST /api/app/builder/publish`. History table populates.
-- [ ] If history has entries, status pills color-map (`published` → good, `rolled_back` → warn, others → muted).
+- [ ] Calls the builder checkpoint rollback endpoint.
+- [ ] Current pointer, preview state, and build/smoke metadata update.
+- [ ] The rollback event is visible in the builder timeline/history.
 
 ---
 
-## 7. Workflows
+## 4. Builder Agent Loop Star
 
-Visit `/workflows`.
+From `/builder`, switch to agent creation or choose an agent template/starter.
 
-**Acceptance**
+1. Type a prompt such as `Create a support triage agent that summarizes new tickets and drafts a reply`.
+2. Generate a draft.
+3. Approve/save the agent.
+4. Run it with the generated sample input.
 
-- [ ] Tab strip: Brief / Requirements / Plan / Blockers · Questions / Validation / Release.
-- [ ] **Brief** tab pulls from `GET /api/app/workflow/brief` (or shows the empty-state copy if not saved yet).
-- [ ] **Plan** tab lists items from `GET /api/app/workflow/plan-items` with status pills (`done` / `in_progress` / `todo`).
-- [ ] **Blockers · Questions** renders both columns.
-- [ ] **Release** tab — the **Confirm release** button posts to `POST /api/app/workflow/release-confirmation` and refreshes the panel.
+Acceptance:
 
----
-
-## 8. Runs · Activity ⭐
-
-Visit `/runs`.
-
-**Acceptance**
-
-- [ ] KPI row shows real numbers (Total · 24h, Success rate, Median latency, Failed).
-- [ ] Hourly sparkline renders (green = success, red = failed).
-- [ ] Filter buttons (`all` / `success` / `failed` / `running` / `queued`) filter the table.
-- [ ] **View** on a row routes to `/runs/:id`.
-
-### Run detail
-
-Visit `/runs/:id` (clicked from the list).
-
-**Acceptance**
-
-- [ ] Shows status pill, agent name, trigger, model, cost, duration in the header.
-- [ ] Transcript, Tool calls, Output, Logs panels render real data when present.
-- [ ] **Cancel** and **Retry** buttons wire to `POST /api/app/agent-runs/:id/cancel` / `…/retry` (visible only when `canCancel` / `canRetry` is true).
-- [ ] **Diagnose** button calls `POST /api/app/agent-runs/:id/diagnose` and prints the summary in the diagnostic banner.
+- [ ] Calls `POST /api/app/builder/agent-draft` for dry-run planning.
+- [ ] Draft preview includes name, description, instructions, input schema, trigger, schedule or webhook recommendation, tools, provider/model recommendation, starter playbook, sample input, acceptance checks, and readiness warnings.
+- [ ] Approval calls `POST /api/app/builder/agent-draft/approve` or the documented compatibility route.
+- [ ] The saved agent can be edited before the first run.
+- [ ] The first run result appears in the builder flow with transcript, tool calls, model/cost, output, logs, and status when available.
+- [ ] Webhook tokens, API keys, provider secrets, and bearer values are never rendered in full.
 
 ---
 
-## 9. Providers / Tools / Env
+## 5. Publish Or Run Star
 
-Visit `/integrations`.
+### Generated App Publish
 
-**Acceptance**
+From the builder publish area:
 
-- [ ] Provider cards show real entries from `GET /api/app/providers` with status pills.
-- [ ] Tool registry table populates from `GET /api/app/tools`.
-- [ ] Env vars table populates from `GET /api/app/env-vars`. Secret rows show the shield icon.
+- [ ] Publish readiness shows env readiness, production build, health checks, smoke checks, Docker Compose export, URL handoff, publish history, rollback target, and redacted logs.
+- [ ] Missing provider keys, webhook secrets, email credentials, payment secrets, database settings, and base URLs are named by env key or feature without exposing values.
+- [ ] Publish validates a private/operator URL first.
+- [ ] A public URL is shared only after required checks pass and the user explicitly approves public visibility.
+- [ ] Failed required checks keep publish private and preserve the previous known-good publish.
+- [ ] Publish history records each attempt and rollback can restore the previous known-good publish.
+
+### Agent Run
+
+For an approved agent:
+
+- [ ] Run action starts from the builder or saved agent link.
+- [ ] `/runs` or the builder run panel shows the resulting status.
+- [ ] Run detail includes transcript, tool calls, output, logs, cost/model, and retry/diagnose controls where allowed.
 
 ---
 
-## 10. Sandbox ⭐
+## 6. Preview, Sandbox, And Smoke
 
-### Status
+Sandbox is an Advanced-capable system, but the builder may surface it when smoke checks use sandbox execution.
 
-Visit `/sandbox`.
+Visit `/sandbox` only after the builder path works, or open the builder Sandbox tab after an app is approved.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Status panel shows the active driver:
-  - `docker` → green pill, runtimes (`node-20`, `python-3.11`, `ubuntu-22`) listed with ready dots.
-  - `native` → warn pill labelled **INSECURE** with the host-isolation note.
-- [ ] If `TASKLOOM_SANDBOX_DRIVER=docker` is set but Docker isn't running, status reports `available: false`.
+- [ ] Status panel shows the active driver: `docker` as ready when available, or `native` clearly marked insecure.
+- [ ] Running `echo hello sandbox` succeeds with stdout visible and exit code `0`.
+- [ ] Canceling a long-running command updates status to `canceled`.
+- [ ] Builder-scoped sandbox executions are tied to the current app/checkpoint when smoke checks run.
 
-### Run a command
-
-1. In the composer: command `echo hello sandbox`, runtime `node-20` (or `ubuntu-22` for `native` fallback), working dir `/workspace`. Click **Start**.
-
-**Acceptance**
-
-- [ ] An exec appears in the history table with status `running` or `success`.
-- [ ] Selecting it opens the live log viewer; stdout shows `hello sandbox`.
-- [ ] Exit code = 0, status pill = `success`.
-- [ ] Stream automatically closes when the exec completes.
-
-### Cancel a long-running command
-
-1. Run `sleep 60` (native) or `sleep 60` against `ubuntu-22`.
-2. While it's still running, click **Cancel**.
-
-**Acceptance**
-
-- [ ] Status pill flips to `canceled` within a few seconds.
-- [ ] No zombie processes (verify with `ps` or Docker `docker ps`).
-
-### Builder Sandbox tab
-
-In the Builder, after an app is approved, open the **Sandbox** tab.
-
-**Acceptance**
-
-- [ ] Lists execs scoped to the current `appId` (ones run during smoke / approve, if any).
-- [ ] Selected exec shows the same log viewer as the Sandbox view.
-
-### Smoke integration (opt-in)
+Opt-in smoke integration:
 
 1. Stop the dev server.
-2. Set `TASKLOOM_SANDBOX_SMOKE_ENABLED=1` in your env.
-3. Restart, sign in, run an `app-draft/apply` with `runSmoke: true`.
+2. Set `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`.
+3. Restart, sign in, and apply an app draft with smoke enabled.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Smoke build status `message` ends with `(verified via sandbox · driver=…)`.
-- [ ] Each check `detail` ends with `sandbox: exit N · Mms`.
-- [ ] If sandbox isn't available, the smoke result still computes (synthetic) and the response includes a `Sandbox driver "…" reports unavailable; smoke ran in fallback mode.` blocker.
-
----
-
-## 11. Operations
-
-Visit `/operations`.
-
-**Acceptance**
-
-- [ ] Subsystems grid renders `store`, `scheduler`, `jobs_queue`, `managed_pg`, `rate_limit`, `access_log`, `alerts`, `sandbox` with status pills (`ok`/`degraded`/`down`/`disabled`).
-- [ ] Alerts panel pulls from `GET /api/app/operations/alerts`.
-- [ ] Job metrics table pulls from `GET /api/app/operations/job-metrics/history` and color-codes p95.
+- [ ] Smoke messages identify sandbox verification and driver when sandbox execution is available.
+- [ ] If sandbox is unavailable, fallback smoke status is explicit and actionable.
 
 ---
 
-## 12. Settings + admin surfaces
+## 7. Advanced Surfaces
 
-Walk through (no specific actions required — verify each surface renders without error and shows real data):
+These areas are hidden behind Advanced navigation in the MVP posture. They are not deleted, and they should still render for users with the right role.
 
-- [ ] `/settings` — Members, Invitations, Share tokens, API keys, Workspace, Audit tabs.
-  - **Workspace** tab: editing name/website/automationGoal and clicking Save persists via `PATCH /api/app/workspace`.
-- [ ] `/billing` — usage / spend by provider / spend by agent / spend by route. Numbers come from `GET /api/app/usage/summary`.
-- [ ] `/roles` — role member counts reflect real workspace membership.
-- [ ] `/sso` — surfaces SSO env vars (or empty-state when none configured).
-- [ ] `/secrets` — lists secret env vars with rotate / delete buttons.
-- [ ] `/webhooks` — lists webhook-triggered agents with rotate / remove buttons.
-- [ ] `/rate-limits` — lists scopes derived from real API keys / agents / providers.
-- [ ] `/releases` — release history pulls from `GET /api/app/release-history`. Preflight panel renders.
-- [ ] `/notifications` — alerts list + channel cards from notify env vars.
-- [ ] `/storage` — engine, on-disk size, page size, last-vacuum stats from `GET /api/app/operations/status`.
-- [ ] `/backups` — storage topology + release evidence panels render JSON dumps from operations status.
-- [ ] `/activation` — onboarding step list with **Mark done** wired to `POST /api/app/onboarding/steps/:key/complete`.
+Operations and deployment:
 
----
+- [ ] `/operations` renders subsystem health, alerts, and job metrics.
+- [ ] `/storage` renders store status and database details.
+- [ ] `/backups` renders storage topology and release evidence panels.
+- [ ] `/releases` renders release history and preflight status.
 
-## 13. Command palette ⭐
+Workspace admin:
 
-Press **⌘K** (or **Ctrl+K**), or click the sidebar **Search…** bar.
+- [ ] `/settings` renders Members, Invitations, Share tokens, API keys, Workspace, and Audit tabs.
+- [ ] `/roles` renders role membership counts.
+- [ ] `/sso`, `/secrets`, `/webhooks`, `/rate-limits`, `/notifications`, and `/billing` render without forcing the first-run builder path through admin setup.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Modal opens with a search input + groups: Navigation, Actions, Agents.
-- [ ] ↑ / ↓ moves the active item; ↵ runs it; ESC closes.
-- [ ] Typing filters across labels and keywords.
-- [ ] Selecting a Navigation entry routes there.
-- [ ] Selecting an Agent entry calls `POST /api/app/agents/:id/runs` and routes to `/runs`.
+- [ ] Advanced pages are reachable through Advanced navigation or direct URL for authorized users.
+- [ ] Advanced pages do not replace `/builder` as the MVP starting point.
+- [ ] Role-aware disabled states or redirects appear for users who lack permission.
 
 ---
 
-## 14. Public share
+## 8. Command Palette
 
-1. From the Settings → Share tokens tab, copy a token preview value.
-2. Open `/share/<token>` in a private window.
+Press **Cmd+K** or **Ctrl+K**, or click the sidebar search affordance.
 
-**Acceptance**
+Acceptance:
 
-- [ ] Page renders in workbench design with the workspace name + scoped brief / plan content.
-- [ ] No sidebar, no auth required.
-- [ ] Sign-in link is visible in the header.
-
----
-
-## 15. 404 handling
-
-Visit `/this-route-does-not-exist`.
-
-**Acceptance**
-
-- [ ] Renders the workbench-styled 404 page (giant serif "404.", green-accent path, action buttons).
-- [ ] **Back to dashboard** routes to `/dashboard` (signed in) or `/` (signed out).
+- [ ] Modal opens with navigation/actions.
+- [ ] Typing filters entries.
+- [ ] Keyboard navigation works with up/down, enter, and escape.
+- [ ] Builder/new-build entries are prominent.
+- [ ] Advanced operations/admin entries are present but visually secondary or grouped under Advanced.
 
 ---
 
-## 16. Build + tests
+## 9. Public Share And 404
+
+Public share:
+
+- [ ] A valid `/share/<token>` renders without auth.
+- [ ] It does not show the signed-in workbench sidebar.
+- [ ] A sign-in link is visible.
+
+404:
+
+- [ ] Unknown routes render a styled 404.
+- [ ] Primary recovery action returns signed-in users to `/builder` or the builder-first workbench entry, and signed-out users to `/`.
+
+---
+
+## 10. Build And Tests
+
+Run the relevant layer for the change being handed off:
 
 ```bash
-npm run typecheck    # api + web
-npm run test:api     # backend unit/integration tests
-npm run test:web     # frontend smoke
-npm run build        # full local release gate
+npm run typecheck
+npm run test:api
+npm run test:web
+npm run build
 ```
 
-**Acceptance**
+Acceptance:
 
-- [ ] All three commands exit `0`.
+- [ ] Commands selected for the change exit `0`.
 - [ ] No new TypeScript errors.
-- [ ] Production bundle generated under `web/dist/` (do not commit it).
+- [ ] Production bundle is generated under `web/dist/` when `npm run build:web` or `npm run build` is selected; do not commit it.
 
 ---
 
-## Golden-path subset ⭐ (≈ 10 minutes)
+## Golden-Path Subset Star
 
-If you only have time for one pass, do these in order:
+If you only have time for one pass, do this:
 
 1. Sign in as `alpha@taskloom.local`.
-2. Verify the **Dashboard** loads with real numbers.
-3. Run the **Builder** flow: prompt → draft → approve → preview → iterate → publish.
-4. Open **Runs**, drill into one run, verify transcript + diagnose.
-5. Open **Sandbox**: run `echo hello`, verify exit 0; cancel a long-running command.
-6. Press **⌘K**, run an agent from the palette, confirm it lands on `/runs`.
-7. Sign out, verify you land on the marketing/sign-in page.
+2. Go directly to `/builder`.
+3. Create an app draft from a prompt.
+4. Apply it, preview it, and check build/smoke status.
+5. Iterate once, apply the change, and verify checkpoint history.
+6. Publish the app or verify publish readiness blocks with actionable guidance.
+7. Create or save an agent from `/builder`, run it once, and verify transcript/tool-call output.
+8. Confirm Advanced surfaces are still reachable but are not the first-run path.
 
-If any acceptance line above fails, capture the network request/response (DevTools → Network tab) and the console output before filing the issue. Reference the section number in the bug title (e.g. "MVP §6 builder iteration: rollback returns 404").
+If an acceptance line fails, capture the network request/response and browser console output before filing the issue. Reference the section number in the bug title, for example `MVP 3 builder iteration: rollback returns 404`.

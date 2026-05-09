@@ -1,11 +1,54 @@
 import { useState } from "react";
-import { I } from "../icons";
+import { useNavigate } from "react-router-dom";
+import { I, type IconKey } from "../icons";
 import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { useWorkbench } from "../WorkbenchContext";
 import { api } from "@/lib/api";
 
-type Tab = "members" | "invitations" | "shares" | "keys" | "workspace" | "audit";
+type Tab = "members" | "invitations" | "shares" | "keys" | "workspace" | "audit" | "advanced";
+
+type AdvancedEntry = {
+  label: string;
+  path: string;
+  icon: IconKey;
+  owner: "Workspace" | "Admin";
+  description: string;
+};
+
+const ADVANCED_GROUPS: Array<{ title: string; note: string; entries: AdvancedEntry[] }> = [
+  {
+    title: "Run Control",
+    note: "Operational views for diagnosing, testing, and tuning live workspaces.",
+    entries: [
+      { label: "Operations", path: "/operations", icon: "pulse", owner: "Workspace", description: "Health, alerts, and background job metrics." },
+      { label: "Sandbox", path: "/sandbox", icon: "cpu", owner: "Workspace", description: "Inspect and run isolated command executions." },
+      { label: "Activation", path: "/activation", icon: "rocket", owner: "Workspace", description: "Track builder adoption and usage signals." },
+      { label: "Rate limits", path: "/rate-limits", icon: "gauge", owner: "Admin", description: "Provider quotas, throttles, and usage limits." },
+    ],
+  },
+  {
+    title: "Access And Trust",
+    note: "Admin-only controls for people, authentication, and sensitive credentials.",
+    entries: [
+      { label: "Billing", path: "/billing", icon: "card", owner: "Admin", description: "Plan status, seats, and payment records." },
+      { label: "Roles", path: "/roles", icon: "shield", owner: "Admin", description: "Workspace permissions and grant bundles." },
+      { label: "SSO", path: "/sso", icon: "lock", owner: "Admin", description: "Single sign-on and authentication policy." },
+      { label: "Secrets", path: "/secrets", icon: "vault", owner: "Admin", description: "Credential storage, rotation, and access state." },
+    ],
+  },
+  {
+    title: "Platform Plumbing",
+    note: "Advanced admin tools that usually sit behind the builder workflow.",
+    entries: [
+      { label: "Webhooks", path: "/webhooks", icon: "webhook", owner: "Admin", description: "Outbound events, retry state, and signing keys." },
+      { label: "Releases", path: "/releases", icon: "branch", owner: "Admin", description: "Version promotion, rollout state, and evidence." },
+      { label: "Notifications", path: "/notifications", icon: "bell", owner: "Admin", description: "Email, inbox, and alert delivery settings." },
+      { label: "Storage", path: "/storage", icon: "database", owner: "Admin", description: "Database, file storage, and retention posture." },
+      { label: "Backups", path: "/backups", icon: "archive", owner: "Admin", description: "Exports, restore points, and data safeguards." },
+    ],
+  },
+];
 
 export function SettingsView() {
   const [tab, setTab] = useState<Tab>("members");
@@ -30,6 +73,7 @@ export function SettingsView() {
           { id: "keys", label: "API keys", count: keyCount },
           { id: "workspace", label: "Workspace" },
           { id: "audit", label: "Audit log" },
+          { id: "advanced", label: "Advanced", count: ADVANCED_GROUPS.reduce((sum, group) => sum + group.entries.length, 0) },
         ] as const).map(t => (
           <div key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id as Tab)}>
             {t.label}{"count" in t && t.count !== undefined && <span className="mono muted" style={{ fontSize: 10.5, marginLeft: 6 }}>{t.count}</span>}
@@ -43,6 +87,7 @@ export function SettingsView() {
         {tab === "keys" && <KeysTab data={apiKeys.data} loading={apiKeys.loading} refresh={apiKeys.refresh}/>}
         {tab === "workspace" && <WorkspaceTab/>}
         {tab === "audit" && <AuditTab data={activity.data} loading={activity.loading}/>}
+        {tab === "advanced" && <AdvancedTab/>}
       </div>
     </>
   );
@@ -54,7 +99,7 @@ function MembersTab({ data, loading, refresh }: { data: { members: ReadonlyArray
     <div>
       <div style={{ display: "flex", alignItems: "baseline", marginBottom: 14 }}>
         <h1 className="h1" style={{ fontSize: 24 }}>Members</h1>
-        <span className="muted" style={{ marginLeft: 8 }}>· roles enforced server-side</span>
+        <span className="muted" style={{ marginLeft: 8 }}>· workspace access</span>
         <button className="btn btn-primary" style={{ marginLeft: "auto" }}><I.plus size={12}/> Invite</button>
       </div>
       {loading && <div className="muted">Loading…</div>}
@@ -117,7 +162,7 @@ function SharesTab({ data, loading, refresh }: { data: ReadonlyArray<{ id: strin
   return (
     <div>
       <h1 className="h1" style={{ fontSize: 24, marginBottom: 14 }}>Share tokens</h1>
-      <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>Read-only public links. Scopes are enforced server-side; token rotation invalidates any prior URL.</p>
+      <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>Read-only public links for previews and handoffs. Rotate a token to expire old URLs.</p>
       {loading && <div className="muted">Loading…</div>}
       {list.map(s => (
         <div key={s.id} className="card" style={{ padding: 14, marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
@@ -204,7 +249,7 @@ function WorkspaceTab() {
           <input className="field" value={website} onChange={e => setWebsite(e.target.value)}/>
         </div>
         <div style={{ marginBottom: 18 }}>
-          <label className="label">Automation goal</label>
+          <label className="label">Builder goal</label>
           <textarea className="field" value={goal} onChange={e => setGoal(e.target.value)}/>
         </div>
         <div style={{ display: "flex", gap: 8, paddingTop: 14, borderTop: "1px solid var(--line)", alignItems: "center" }}>
@@ -240,6 +285,86 @@ function AuditTab({ data, loading }: { data: ReadonlyArray<{ id: string; event: 
         </table>
       </div>
     </div>
+  );
+}
+
+function AdvancedTab() {
+  const navigate = useNavigate();
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 18 }}>
+        <div style={{ flex: 1 }}>
+          <div className="kicker">ADVANCED</div>
+          <h1 className="h1" style={{ fontSize: 24, marginTop: 4 }}>Admin and operations tools</h1>
+          <p className="muted" style={{ fontSize: 13, marginTop: 8, marginBottom: 0, maxWidth: 650 }}>
+            These views are available when a workspace needs deeper control. Builders can stay focused on apps, agents, and runs until one of these tools is needed.
+          </p>
+        </div>
+        <span className="pill warn" style={{ marginTop: 3 }}>ADVANCED</span>
+      </div>
+
+      <div style={{ display: "grid", gap: 18 }}>
+        {ADVANCED_GROUPS.map(group => (
+          <section key={group.title}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+              <h2 className="h3" style={{ fontSize: 14 }}>{group.title}</h2>
+              <span className="muted" style={{ fontSize: 12 }}>{group.note}</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
+              {group.entries.map(entry => (
+                <AdvancedEntryCard key={entry.path} entry={entry} onOpen={() => navigate(entry.path)} />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdvancedEntryCard({ entry, onOpen }: { entry: AdvancedEntry; onOpen: () => void }) {
+  const EntryIcon = I[entry.icon];
+
+  return (
+    <button
+      className="card"
+      onClick={onOpen}
+      style={{
+        width: "100%",
+        minHeight: 126,
+        padding: 14,
+        textAlign: "left",
+        color: "inherit",
+        background: "var(--panel)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{
+          width: 30,
+          height: 30,
+          borderRadius: 8,
+          border: "1px solid var(--line-2)",
+          background: "var(--bg-elev)",
+          display: "grid",
+          placeItems: "center",
+          color: "var(--green)",
+          flexShrink: 0,
+        }}>
+          <EntryIcon size={15} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--silver-50)" }}>{entry.label}</div>
+          <div className="mono muted" style={{ fontSize: 10.5 }}>{entry.owner} tool</div>
+        </div>
+        <I.chevRight size={14} style={{ color: "var(--silver-400)" }} />
+      </div>
+      <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45 }}>{entry.description}</div>
+      <div className="mono" style={{ marginTop: "auto", fontSize: 11, color: "var(--silver-300)" }}>{entry.path}</div>
+    </button>
   );
 }
 

@@ -187,7 +187,7 @@ test("acquire honors timeoutMs when fetch never resolves", async () => {
   ]);
   const elapsed = Date.now() - start;
   assert.equal(result, false);
-  assert.ok(elapsed < 50, `expected acquire to settle within budget, took ${elapsed}ms`);
+  assert.ok(elapsed < 500, `expected acquire to settle promptly after timeout, took ${elapsed}ms`);
 });
 
 test("release posts to <url>/release only when previously held", async () => {

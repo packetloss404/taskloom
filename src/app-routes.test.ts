@@ -380,6 +380,79 @@ test("activity list and detail do not expose another workspace", async () => {
   assert.deepEqual(detailBody, { error: "activity not found" });
 });
 
+test("generated apps list is workspace-scoped and returns lightweight summaries", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  mutateStore((data) => {
+    data.generatedApps ??= [];
+    data.generatedApps.unshift(
+      {
+        id: "gapp_alpha_summary_route_test",
+        workspaceId: "alpha",
+        slug: "alpha-bookings",
+        name: "Alpha Bookings",
+        description: "Booking app for Alpha",
+        prompt: "Build a booking app for Alpha.",
+        templateId: "booking",
+        status: "built",
+        draft: { app: { name: "Alpha Bookings" } },
+        checkpointId: "gapp_ckpt_alpha_summary_route_test",
+        previewUrl: "/builder/preview/alpha/alpha-bookings",
+        buildStatus: "passed",
+        smokeStatus: "pass",
+        publishStatus: "published",
+        publishedUrl: "https://apps.example.test/alpha/alpha-bookings",
+        createdByUserId: "user_alpha",
+        createdAt: "2026-05-01T10:00:00.000Z",
+        updatedAt: "2026-05-02T10:00:00.000Z",
+      },
+      {
+        id: "gapp_beta_summary_route_test",
+        workspaceId: "beta",
+        slug: "beta-private",
+        name: "Beta Private",
+        description: "Private beta app",
+        prompt: "Build a private app for Beta.",
+        templateId: "crm",
+        status: "saved",
+        draft: { app: { name: "Beta Private" } },
+        checkpointId: "gapp_ckpt_beta_summary_route_test",
+        createdByUserId: "user_beta",
+        createdAt: "2026-05-01T11:00:00.000Z",
+        updatedAt: "2026-05-02T11:00:00.000Z",
+      },
+    );
+  });
+
+  const response = await app.request("/api/app/generated-apps", {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const body = await response.json() as {
+    generatedApps?: Array<Record<string, unknown>>;
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.generatedApps?.length, 1);
+  assert.deepEqual(body.generatedApps?.[0], {
+    id: "gapp_alpha_summary_route_test",
+    slug: "alpha-bookings",
+    name: "Alpha Bookings",
+    status: "built",
+    previewUrl: "/builder/preview/alpha/alpha-bookings",
+    publishStatus: "published",
+    publishedUrl: "https://apps.example.test/alpha/alpha-bookings",
+    checkpointId: "gapp_ckpt_alpha_summary_route_test",
+    updatedAt: "2026-05-02T10:00:00.000Z",
+    createdAt: "2026-05-01T10:00:00.000Z",
+  });
+  assert.equal(JSON.stringify(body).includes("gapp_beta_summary_route_test"), false);
+  assert.equal(Object.hasOwn(body.generatedApps?.[0] ?? {}, "workspaceId"), false);
+  assert.equal(Object.hasOwn(body.generatedApps?.[0] ?? {}, "draft"), false);
+  assert.equal(Object.hasOwn(body.generatedApps?.[0] ?? {}, "prompt"), false);
+});
+
 test("builder agent draft can be approved into an agent", async () => {
   resetStoreForTests();
   const app = createTestApp();

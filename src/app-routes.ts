@@ -402,6 +402,7 @@ appRoutes.post("/app/builder/app-draft", async (c) => {
   }
 });
 
+appRoutes.get("/app/generated-apps", async (c) => listGeneratedApps(c));
 appRoutes.post("/app/builder/app-draft/apply", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-draft/approve", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-iteration", async (c) => generateAppIteration(c));
@@ -1511,6 +1512,22 @@ async function findGeneratedAppRecordForPublish(
   });
 }
 
+async function listGeneratedApps(c: Context) {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "viewWorkspace");
+    const data = await loadStoreAsync();
+    const generatedApps = (data.generatedApps ?? [])
+      .filter((entry) => entry.workspaceId === context.workspace.id)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.createdAt.localeCompare(left.createdAt))
+      .map(generatedAppSummary);
+
+    return c.json({ generatedApps });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
 function checkpointForPublish(record: GeneratedAppRecord, checkpointId: string | undefined): GeneratedAppCheckpointRecord | null {
   if (!checkpointId || checkpointId === record.checkpointId) {
     return (record.checkpoints ?? []).find((checkpoint) => checkpoint.id === record.checkpointId) ?? {
@@ -1551,6 +1568,22 @@ function publishedAppSummary(record: GeneratedAppRecord) {
     publishStatus: record.publishStatus,
     currentPublishId: record.currentPublishId,
     publishedUrl: record.publishedUrl,
+  };
+}
+
+function generatedAppSummary(record: GeneratedAppRecord) {
+  const current = currentPublishedRecord(record);
+  return {
+    id: record.id,
+    slug: record.slug,
+    name: record.name,
+    status: record.status,
+    previewUrl: record.previewUrl,
+    publishStatus: record.publishStatus ?? current?.status,
+    publishedUrl: record.publishedUrl ?? (current ? current.visibility === "public" ? current.publicUrl : current.privateUrl : undefined),
+    checkpointId: record.checkpointId,
+    updatedAt: record.updatedAt,
+    createdAt: record.createdAt,
   };
 }
 

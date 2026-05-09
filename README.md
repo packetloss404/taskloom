@@ -1,22 +1,21 @@
 # Taskloom
 
-Taskloom is an open-source, self-hosted workspace and app builder for non-developers — prompt your way to internal CRUD apps, persistent agents (manual / scheduled / webhook / email triggers), and a complete activation/operations console, with a pluggable sandbox runtime for safe code execution. Single-binary friendly, BYO model keys (Anthropic, OpenAI, MiniMax, Ollama).
+Taskloom is an open-source, self-hosted app and agent builder for non-developers: sign in, open `/builder`, create an app or agent from a prompt, preview/test it, iterate, then publish or run it. Advanced operations, admin, and deployment tools remain available behind Advanced surfaces; they are not deleted, but they are no longer the MVP starting point. Single-binary friendly, BYO model keys (Anthropic, OpenAI, MiniMax, Ollama).
 
 ## Quick links
 
 - **Run locally:** [Run locally](#run-locally)
-- **MVP testing walkthrough:** [`docs/MVP_TESTING.md`](docs/MVP_TESTING.md) — end-to-end manual test plan covering auth, builder, agents, workflows, sandbox, and operations.
+- **MVP testing walkthrough:** [`docs/MVP_TESTING.md`](docs/MVP_TESTING.md) — builder-first manual test plan for sign in -> `/builder` -> create app/agent -> preview/test -> iterate -> publish/run.
 - **Roadmap:** [`docs/roadmap.md`](docs/roadmap.md)
 - **Builder sprint plan:** [`docs/product-builder-sprint-plan.md`](docs/product-builder-sprint-plan.md)
 
 ## Workbench
 
-The web UI is a unified workbench mounted at `/`. It auto-redirects to `/dashboard` for signed-in users and shows the marketing/sign-in surface for everyone else. Surfaces:
+The web UI is a unified workbench mounted at `/`. The MVP path treats `/builder` as the signed-in home: create the first app or agent, preview/test it, iterate, then publish or run. Signed-out users see the marketing/sign-in surface. Surfaces:
 
-- **Build:** New build (prompt composer), Dashboard, Builder (full draft → diff → apply → checkpoint → publish loop), Agents (catalog + template gallery + dedicated editor at `/agents/:id`)
+- **Build:** Builder (full draft -> diff -> apply -> preview/test -> checkpoint -> publish/run loop), New build (prompt composer), Agents (catalog + template gallery + dedicated editor at `/agents/:id`)
 - **Run:** Workflows (brief / requirements / plan / blockers / questions / validation / release), Runs · Activity (with run drilldown at `/runs/:id` — transcript, tool-call timeline, logs, diagnose), Providers (model + tool registry, env vars)
-- **Workspace:** Operations (subsystem health, alerts, job metrics), **Sandbox** (see below), Activation, Settings (members, invitations, share tokens, API keys, workspace, audit)
-- **Admin:** Billing & plan, Roles & permissions, SSO & auth, Secrets vault, Webhooks, Rate limits, Releases, Notifications, Storage & DB, Backups & data
+- **Advanced:** Dashboard/reporting, Operations (subsystem health, alerts, job metrics), **Sandbox** (see below), Activation, Settings (members, invitations, share tokens, API keys, workspace, audit), Billing & plan, Roles & permissions, SSO & auth, Secrets vault, Webhooks, Rate limits, Releases, Notifications, Storage & DB, Backups & data
 - **⌘K command palette** for fast navigation + agent-run shortcuts. Sidebar search opens it on click.
 
 ## Sandboxed code-exec
@@ -86,7 +85,7 @@ The local app uses `data/taskloom.json` for file-backed persistence by default. 
 
 Phase 50 documents the managed Postgres adapter/backfill foundation, Phase 51 completes the tracked runtime call-site migration needed after that foundation, and Phase 52 asserts/validates managed Postgres startup support after that migration. Phase 53 is the multi-writer topology requirements/design gate after Phase 52, Phase 54 turns that into an owned design-package gate, Phase 55 adds review plus implementation-authorization evidence, Phase 56 adds implementation-readiness plus rollout-safety evidence, Phase 57 adds the implementation-scope gate before any multi-writer implementation claim can proceed, Phase 58 adds a conservative runtime-implementation validation gate after Phase 57, Phase 59 adds a conservative release-enable approval gate after Phase 58, Phase 60 adds a conservative support-presence assertion gate after Phase 59, Phase 61 adds runtime activation controls plus activation-ready reporting after Phase 60, Phase 62 completes managed Postgres horizontal app-writer concurrency hardening, Phase 63 enforces production-safe shared dependencies before strict activation, Phase 64 completes failover, PITR, and recovery validation for the supported posture, Phase 65 completes the cutover preflight, activation dry-run, post-activation smoke, rollback-command, and observability-threshold automation, and Phase 66 closes the final release/documentation track for the supported posture: horizontal Taskloom app writers against one managed Postgres primary/cluster with provider-owned HA/PITR. That support does not include active-active multi-region writes, Taskloom-owned regional database failover, Taskloom-owned PITR runtime behavior, or distributed SQLite. `npm start` still runs the managed database runtime guard before the Hono server starts. The landed foundation adds the `pg` adapter dependency, the `TASKLOOM_MANAGED_DATABASE_ADAPTER` advisory/guard hint, and the `db:backfill-managed-postgres` / `db:verify-managed-postgres` CLIs. Managed/Postgres startup hints can be accepted only when a recognized Postgres adapter value (`postgres`, `postgresql`, `managed-postgres`, or `managed-postgresql`) is paired with a managed database URL hint (`TASKLOOM_MANAGED_DATABASE_URL`, `TASKLOOM_DATABASE_URL`, or `DATABASE_URL`) and the Phase 52 startup support assertion is present. Other managed store names, missing adapter/URL pairs, unsupported multi-writer topology hints outside the supported managed Postgres app-writer posture, Taskloom-owned regional failover/PITR runtime hints, and active-active writes remain blocked.
 
-The next main product track is documented in `docs/product-builder-sprint-plan.md`. It moves Taskloom toward a self-hosted Replit/Anything/Base44/Twin/Netlify-style builder loop: prompt, plan, generate, preview, fix, and publish. Phases 67 through 72 cover prompt-to-agent, prompt-to-app, live preview and iteration chat, one-click self-hosted publish, integrations marketplace lite, and builder beta polish. Phase 68 implements the prompt-to-app dry-run/apply contract, including page map, data model, auth needs, workflows, route privacy decisions, acceptance checks, persisted generated-app checkpoints, a routable preview shell, and builder-visible build/smoke status. Phase 69 documents the iteration contracts for scoped change prompts, diff review/apply, checkpoint-tied preview refresh, runtime/build error fix prompts, and rollback to previous working checkpoints. Phase 72 adds beta-facing UX polish on `/builder`: nontechnical prompt language, first-run checklist, clearer template gallery cards, model-routing presets, publish dashboard counters, and a builder timeline.
+The next main product track is documented in `docs/product-builder-sprint-plan.md`. It moves Taskloom toward a self-hosted Replit/Anything/Base44/Twin/Netlify-style builder loop: sign in, open `/builder`, create an app or agent, preview/test it, iterate, then publish or run. Phases 67 through 72 cover prompt-to-agent, prompt-to-app, live preview and iteration chat, one-click self-hosted publish, integrations marketplace lite, and builder beta polish. Phase 68 implements the prompt-to-app dry-run/apply contract, including page map, data model, auth needs, workflows, route privacy decisions, acceptance checks, persisted generated-app checkpoints, a routable preview shell, and builder-visible build/smoke status. Phase 69 documents the iteration contracts for scoped change prompts, diff review/apply, checkpoint-tied preview refresh, runtime/build error fix prompts, and rollback to previous working checkpoints. Phase 72 adds beta-facing UX polish on `/builder`: nontechnical prompt language, first-run checklist, clearer template gallery cards, model-routing presets, publish counters, and a builder timeline. Advanced operations/admin/deployment tools remain available behind Advanced for teams that need them.
 
 ## Local Data
 
@@ -453,20 +452,20 @@ Browser-capable tools are available to agent runs, with operational caveats:
 
 ## Frontend
 
-Taskloom now uses a React/Vite GUI modeled on the Automate shell and patterns:
+Taskloom now uses a React/Vite GUI modeled on the Automate shell and patterns, with `/builder` as the MVP creation path:
 
 - guarded auth routes
 - onboarding route
-- dashboard shell with sidebar
+- workbench shell with builder-first navigation
 - settings page
 - activity page
 - activation detail page
 - activity detail page
 - workflow page and API client types for brief, requirements, plan items, blockers, questions, validation evidence, release confirmation, templates, prompt-generated drafts, and Plan Mode
-- agents, runs, operations, and integrations pages with role-aware controls
+- builder, agents, runs, integrations, and Advanced operations/admin pages with role-aware controls
 - failed-run diagnostics, agent enum options, and Plan Mode wiring in the UI/API seam
 - settings share-token management and public `/share/:token` rendering
-- product-builder docs for Phase 67 agent drafts, Phase 68 prompt-to-app app-draft contracts, Phase 69 scoped iteration contracts, and Phase 72 builder beta UX polish
+- product-builder docs for Phase 67 agent drafts, Phase 68 prompt-to-app app-draft contracts, Phase 69 scoped iteration contracts, Phase 70 publish readiness, and Phase 72 builder beta UX polish
 
 Key docs:
 
