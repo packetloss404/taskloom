@@ -13,7 +13,12 @@ export default defineConfig({
   server: {
     port: 7341,
     proxy: {
-      "/api": "http://127.0.0.1:8484",
+      "/api": {
+        target: "http://127.0.0.1:8484",
+        // Keep the browser's Host header so the API's same-origin check
+        // (src/route-security.ts) sees Origin and Host on the same hostname.
+        changeOrigin: false,
+      },
     },
   },
   build: {
