@@ -19,7 +19,20 @@ import type {
   AppBuilderPageDraft,
   AppBuilderPublishState,
   AppBuilderSmokeBuildStatus,
+  BuilderModelPresetId,
 } from "@/lib/types";
+
+interface SelectedElement {
+  selector: string;
+  label: string;
+}
+
+const PRESET_OPTIONS: Array<{ id: BuilderModelPresetId; label: string; hint: string }> = [
+  { id: "fast", label: "Lightning", hint: "Low latency" },
+  { id: "smart", label: "Pro", hint: "Best quality" },
+  { id: "cheap", label: "Cheap", hint: "Cost-aware" },
+  { id: "local", label: "Local", hint: "Ollama-first" },
+];
 
 type ChatBody =
   | { kind: "text"; text: string }
@@ -83,6 +96,35 @@ function getPreviewNavigationTarget(previewUrl: string | null, appId: string | n
   return appId ? `/builder/preview/workspace/${encodeURIComponent(appId)}` : null;
 }
 
+function cssPathFor(el: Element): string {
+  const segments: string[] = [];
+  let current: Element | null = el;
+  while (current && current.nodeType === 1 && segments.length < 6) {
+    const node: Element = current;
+    const tag = node.tagName.toLowerCase();
+    let segment = tag;
+    const id = node.getAttribute("id");
+    if (id) {
+      segment = `${tag}#${id}`;
+      segments.unshift(segment);
+      break;
+    }
+    const className = (node.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 2).join(".");
+    if (className) segment += `.${className}`;
+    const parent: Element | null = node.parentElement;
+    if (parent) {
+      const sameTagSiblings: Element[] = Array.from(parent.children).filter((sibling) => sibling.tagName === node.tagName);
+      if (sameTagSiblings.length > 1) {
+        const index = sameTagSiblings.indexOf(node) + 1;
+        segment += `:nth-of-type(${index})`;
+      }
+    }
+    segments.unshift(segment);
+    current = parent;
+  }
+  return segments.join(" > ");
+}
+
 function openPreviewTarget(target: string, navigate: NavigateFunction) {
   if (/^https?:\/\//i.test(target)) {
     window.open(target, "_blank", "noopener,noreferrer");
@@ -109,6 +151,9 @@ export function BuilderView() {
     draft: null, appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null,
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [composerPreset, setComposerPreset] = useState<BuilderModelPresetId>("smart");
+  const [inspectMode, setInspectMode] = useState(false);
+  const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const previewTarget = getPreviewNavigationTarget(state.previewUrl, state.appId);
 
@@ -148,7 +193,7 @@ export function BuilderView() {
     const assistantId = newId();
     appendMessage({ id: assistantId, role: "assistant", body: { kind: "steps", steps: [] }, streaming: true });
     try {
-      await api.streamAppBuilderDraft({ prompt: nextPrompt }, (event) => {
+      await api.streamAppBuilderDraft({ prompt: nextPrompt, preset: composerPreset }, (event) => {
         if (event.type === "step") {
           updateMessage(assistantId, (m) => {
             if (m.body.kind !== "steps") return m;
@@ -219,26 +264,32 @@ export function BuilderView() {
 
   const iterate = async () => {
     if (!state.draft || !iterPrompt.trim() || working) return;
+    const scopeKind: AppBuilderIterationTargetKind = selectedElement ? "page" : iterTargetKind;
+    const scopeLabel = selectedElement ? `${iterTargetLabel} → ${selectedElement.selector}` : iterTargetLabel;
     const target: AppBuilderIterationTarget = {
-      id: `target_${iterTargetKind}_${Date.now().toString(36)}`,
-      kind: iterTargetKind,
-      label: iterTargetLabel,
+      id: `target_${scopeKind}_${Date.now().toString(36)}`,
+      kind: scopeKind,
+      label: scopeLabel,
     };
-    const submittedPrompt = iterPrompt;
+    const composedPrompt = selectedElement
+      ? `On the element \`${selectedElement.selector}\`${selectedElement.label ? ` ("${selectedElement.label}")` : ""}: ${iterPrompt}`
+      : iterPrompt;
     setWorking(true);
     setError(null);
     setMode("iterating");
-    appendMessage({ id: newId(), role: "user", body: { kind: "text", text: submittedPrompt } });
+    appendMessage({ id: newId(), role: "user", body: { kind: "text", text: composedPrompt } });
     const assistantId = newId();
     appendMessage({ id: assistantId, role: "assistant", body: { kind: "steps", steps: [] }, streaming: true });
     setIterPrompt("");
+    setSelectedElement(null);
     try {
       await api.streamAppBuilderIteration({
         appId: state.appId ?? undefined,
         checkpointId: state.checkpointId ?? undefined,
         draft: state.draft,
         target,
-        prompt: submittedPrompt,
+        prompt: composedPrompt,
+        preset: composerPreset,
       }, (event) => {
         if (event.type === "step") {
           updateMessage(assistantId, (m) => {
@@ -317,6 +368,45 @@ export function BuilderView() {
       setCheckpoints(cps.checkpoints);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const branch = async (checkpointId: string) => {
+    if (!state.appId || working) return;
+    const sourceCheckpointShort = checkpointId.slice(0, 12);
+    const sourceAppName = state.draft?.app.name ?? "the source app";
+    setWorking(true);
+    setError(null);
+    try {
+      const result = await api.branchBuilderCheckpoint(checkpointId, { appId: state.appId });
+      setState({
+        draft: result.draft,
+        appId: result.app.id,
+        checkpointId: result.checkpoint.id,
+        previewUrl: result.app.previewUrl ?? null,
+        smoke: result.smoke ?? null,
+        iteration: null,
+      });
+      setMessages([]);
+      setSelectedElement(null);
+      setInspectMode(false);
+      setTab("preview");
+      setMode("applied");
+      pushSystemStatus(`Branched from ${sourceCheckpointShort} in '${sourceAppName}'.`, "info");
+      try {
+        const cps = await api.listBuilderCheckpoints({ appId: result.app.id });
+        setCheckpoints(cps.checkpoints);
+      } catch { /* ignore */ }
+      try {
+        const ps = await api.getBuilderPublishState({ appId: result.app.id });
+        setPublishState(ps);
+      } catch { /* ignore */ }
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      pushSystemStatus(message, "error");
     } finally {
       setWorking(false);
     }
@@ -404,9 +494,31 @@ export function BuilderView() {
                   onChange={(event) => setPrompt(event.target.value)}
                 />
 
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-                  <button className="btn btn-sm"><I.doc size={12}/> Use brief</button>
-                  <button className="btn btn-sm"><I.shield size={12}/> Plan mode</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                  {PRESET_OPTIONS.map((p) => {
+                    const active = composerPreset === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => setComposerPreset(p.id)}
+                        title={p.hint}
+                        style={{
+                          padding: "3px 9px",
+                          borderRadius: 999,
+                          border: `1px solid ${active ? "var(--green-deep)" : "var(--line-2)"}`,
+                          background: active ? "rgba(184,242,92,0.08)" : "transparent",
+                          color: active ? "var(--green)" : "var(--silver-300)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 10.5,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.08em",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
                   <div style={{ flex: 1 }}></div>
                   <span className="mono" style={{ fontSize: 11, color: "var(--silver-500)" }}>{prompt.length} chars</span>
                   <button className="btn-primary btn" disabled={!prompt.trim() || working} onClick={() => { void generate(); }}>
@@ -506,10 +618,29 @@ export function BuilderView() {
                   );
                 })}
               </div>
+              {selectedElement && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "6px 10px", marginBottom: 8,
+                  background: "rgba(184,242,92,0.08)",
+                  border: "1px solid rgba(184,242,92,0.3)",
+                  borderRadius: 8,
+                  fontSize: 11.5, color: "var(--green)",
+                }}>
+                  <I.zap size={11}/>
+                  <span className="mono" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    scoped: {selectedElement.selector}
+                    {selectedElement.label && <span style={{ color: "var(--silver-300)" }}> · "{selectedElement.label}"</span>}
+                  </span>
+                  <button onClick={() => setSelectedElement(null)} style={{ background: "transparent", border: "none", color: "var(--silver-300)", cursor: "pointer", padding: 0 }}>
+                    <I.close size={11}/>
+                  </button>
+                </div>
+              )}
               <div style={{ position: "relative" }}>
                 <textarea
                   className="field"
-                  placeholder={state.appId ? "Refine — e.g. 'add inline notes' or 'fix smoke check'" : "Refine — what should change next?"}
+                  placeholder={selectedElement ? "Tell me what to change about that element" : state.appId ? "Refine — e.g. 'add inline notes' or 'fix smoke check'" : "Refine — what should change next?"}
                   value={iterPrompt}
                   onChange={(e) => setIterPrompt(e.target.value)}
                   onKeyDown={(e) => {
@@ -526,10 +657,36 @@ export function BuilderView() {
                   </button>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 4, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+                {PRESET_OPTIONS.map((p) => {
+                  const active = composerPreset === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => setComposerPreset(p.id)}
+                      title={p.hint}
+                      style={{
+                        padding: "3px 9px",
+                        borderRadius: 999,
+                        border: `1px solid ${active ? "var(--green-deep)" : "var(--line-2)"}`,
+                        background: active ? "rgba(184,242,92,0.08)" : "transparent",
+                        color: active ? "var(--green)" : "var(--silver-300)",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 10.5,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+                <span className="mono muted" style={{ marginLeft: "auto", fontSize: 10.5 }}>⌘↵ to send</span>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                 <span className="pill muted">target: {iterTargetKind}</span>
                 {state.smoke && <span className={`pill ${state.smoke.status === "pass" ? "good" : state.smoke.status === "fail" ? "danger" : "warn"}`}><span className="dot"></span>build {state.smoke.status}</span>}
-                <span className="mono muted" style={{ marginLeft: "auto", fontSize: 10.5 }}>⌘↵ to send</span>
               </div>
             </div>
           </aside>
@@ -556,12 +713,24 @@ export function BuilderView() {
             </div>
 
             <div style={{ flex: 1, overflow: "auto" }}>
-              {tab === "preview" && <PreviewTab draft={draft} previewUrl={state.previewUrl}/>}
+              {tab === "preview" && (
+                <PreviewTab
+                  draft={draft}
+                  previewUrl={state.previewUrl}
+                  inspectMode={inspectMode}
+                  onToggleInspect={() => setInspectMode((v) => !v)}
+                  onSelectElement={(sel) => {
+                    setSelectedElement(sel);
+                    setInspectMode(false);
+                  }}
+                  selectedSelector={selectedElement?.selector ?? null}
+                />
+              )}
               {tab === "files" && <FilesTab draft={draft} iteration={state.iteration}/>}
               {tab === "smoke" && <SmokeTab smoke={state.smoke ?? draft.smokeBuildStatus}/>}
               {tab === "logs" && <LogsTab iteration={state.iteration}/>}
               {tab === "sandbox" && <SandboxBuilderTab appId={state.appId}/>}
-              {tab === "checkpoints" && <CheckpointsTab checkpoints={checkpoints} currentId={state.checkpointId} onRollback={(id) => { void rollback(id); }} working={working}/>}
+              {tab === "checkpoints" && <CheckpointsTab checkpoints={checkpoints} currentId={state.checkpointId} onRollback={(id) => { void rollback(id); }} onBranch={(id) => { void branch(id); }} working={working}/>}
               {tab === "publish" && <PublishTab state={publishState} canPublish={!!state.appId} onPublish={() => { void publish(); }} working={working}/>}
             </div>
           </div>
@@ -762,11 +931,140 @@ function IterationCard({ iteration, onApply, working }: { iteration: AppBuilderI
   );
 }
 
-function PreviewTab({ draft, previewUrl }: { draft: AppBuilderDraft; previewUrl: string | null }) {
+function PreviewTab({
+  draft,
+  previewUrl,
+  inspectMode,
+  onToggleInspect,
+  onSelectElement,
+  selectedSelector,
+}: {
+  draft: AppBuilderDraft;
+  previewUrl: string | null;
+  inspectMode: boolean;
+  onToggleInspect: () => void;
+  onSelectElement: (sel: SelectedElement) => void;
+  selectedSelector: string | null;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [hoverRect, setHoverRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    if (!inspectMode) {
+      setHoverRect(null);
+      return;
+    }
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    const attach = () => {
+      let doc: Document | null = null;
+      try { doc = iframe.contentDocument; } catch { doc = null; }
+      if (!doc) return;
+      doc.body.style.cursor = "crosshair";
+
+      const onMove = (event: MouseEvent) => {
+        const target = event.target as HTMLElement | null;
+        if (!target || target === doc!.documentElement || target === doc!.body) {
+          setHoverRect(null);
+          return;
+        }
+        const rect = target.getBoundingClientRect();
+        setHoverRect({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+      };
+      const onLeave = () => setHoverRect(null);
+      const onClick = (event: MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const target = event.target as HTMLElement | null;
+        if (!target) return;
+        onSelectElement({
+          selector: cssPathFor(target),
+          label: (target.textContent ?? "").trim().slice(0, 60),
+        });
+        setHoverRect(null);
+      };
+      doc.addEventListener("mousemove", onMove);
+      doc.addEventListener("mouseleave", onLeave);
+      doc.addEventListener("click", onClick, true);
+      return () => {
+        doc!.removeEventListener("mousemove", onMove);
+        doc!.removeEventListener("mouseleave", onLeave);
+        doc!.removeEventListener("click", onClick, true);
+        try { doc!.body.style.cursor = ""; } catch { /* ignore */ }
+      };
+    };
+
+    let cleanup = attach();
+    const onLoad = () => {
+      if (cleanup) cleanup();
+      cleanup = attach();
+    };
+    iframe.addEventListener("load", onLoad);
+    return () => {
+      iframe.removeEventListener("load", onLoad);
+      if (cleanup) cleanup();
+    };
+  }, [inspectMode, previewUrl, onSelectElement]);
+
   return (
-    <div style={{ padding: 20, height: "100%" }}>
+    <div style={{ padding: 20, height: "100%", position: "relative" }}>
+      <div style={{
+        position: "absolute", top: 28, right: 28, zIndex: 10,
+        display: "flex", gap: 6, alignItems: "center",
+        padding: "4px 8px",
+        background: "var(--panel)",
+        border: `1px solid ${inspectMode ? "var(--green-deep)" : "var(--line-2)"}`,
+        borderRadius: 8,
+      }}>
+        <button
+          onClick={onToggleInspect}
+          title={inspectMode ? "Exit inspect mode" : "Click an element in the preview to scope the next message"}
+          style={{
+            background: "transparent", border: "none", padding: "2px 6px",
+            color: inspectMode ? "var(--green)" : "var(--silver-300)",
+            cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
+            fontSize: 11.5,
+            fontFamily: "var(--font-mono)",
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          }}
+        >
+          <I.zap size={12}/> {inspectMode ? "Inspecting" : "Inspect"}
+        </button>
+        {selectedSelector && (
+          <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-400)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            · {selectedSelector}
+          </span>
+        )}
+      </div>
       {previewUrl ? (
-        <iframe src={previewUrl} style={{ width: "100%", height: "100%", border: "1px solid var(--line)", borderRadius: 8, background: "var(--ink)" }}/>
+        <div style={{ position: "relative", width: "100%", height: "100%" }}>
+          <iframe
+            ref={iframeRef}
+            src={previewUrl}
+            style={{
+              width: "100%", height: "100%",
+              border: `1px solid ${inspectMode ? "rgba(184,242,92,0.5)" : "var(--line)"}`,
+              borderRadius: 8,
+              background: "var(--ink)",
+            }}
+          />
+          {inspectMode && hoverRect && (
+            <div style={{
+              position: "absolute",
+              left: hoverRect.left,
+              top: hoverRect.top,
+              width: hoverRect.width,
+              height: hoverRect.height,
+              border: "2px solid var(--green)",
+              background: "rgba(184,242,92,0.08)",
+              borderRadius: 2,
+              pointerEvents: "none",
+              boxSizing: "border-box",
+            }}/>
+          )}
+        </div>
       ) : (
         <div className="card grid-bg" style={{ height: "100%", overflow: "hidden", padding: 24 }}>
           <div className="kicker" style={{ marginBottom: 8 }}>PREVIEW · NOT YET LIVE</div>
@@ -952,9 +1250,21 @@ function LogsTab({ iteration }: { iteration: AppBuilderIterationResult | null })
   );
 }
 
-function CheckpointsTab({ checkpoints, currentId, onRollback, working }: { checkpoints: AppBuilderCheckpointSummary[]; currentId: string | null; onRollback: (id: string) => void; working: boolean }) {
+function CheckpointsTab({
+  checkpoints,
+  currentId,
+  onRollback,
+  onBranch,
+  working,
+}: {
+  checkpoints: AppBuilderCheckpointSummary[];
+  currentId: string | null;
+  onRollback: (id: string) => void;
+  onBranch: (id: string) => void;
+  working: boolean;
+}) {
   return (
-    <div style={{ padding: 22, maxWidth: 800 }}>
+    <div style={{ padding: 22, maxWidth: 880 }}>
       <div className="kicker">CHECKPOINTS · {checkpoints.length} TOTAL</div>
       <h2 className="h2" style={{ marginBottom: 14 }}>History</h2>
       {checkpoints.length === 0 && <div className="card muted" style={{ padding: 22, textAlign: "center" }}>No checkpoints yet. Approving the draft creates the first one.</div>}
@@ -969,9 +1279,11 @@ function CheckpointsTab({ checkpoints, currentId, onRollback, working }: { check
                 <div className="mono muted" style={{ fontSize: 11 }}>{c.id.slice(0, 16)}{c.previousCheckpointId ? ` · ← ${c.previousCheckpointId.slice(0, 12)}` : ""} · {c.source}</div>
               </div>
               <span className="mono muted" style={{ fontSize: 11 }}>{new Date(c.createdAt).toLocaleString()}</span>
-              {isCurrent
-                ? <span className="pill good"><span className="dot"></span>current</span>
-                : <button className="btn btn-sm" disabled={working} onClick={() => onRollback(c.id)}><I.history size={11}/> Restore</button>}
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {isCurrent && <span className="pill good"><span className="dot"></span>current</span>}
+                {!isCurrent && <button className="btn btn-sm" disabled={working} onClick={() => onRollback(c.id)} title="Restore this checkpoint as the current state"><I.history size={11}/> Restore</button>}
+                <button className="btn btn-sm" disabled={working} onClick={() => onBranch(c.id)} title="Fork into a new app starting from this checkpoint"><I.branch size={11}/> Branch</button>
+              </div>
             </div>
           );
         })}

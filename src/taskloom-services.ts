@@ -162,6 +162,7 @@ export interface AgentDraftResult {
 
 export interface AgentBuilderPromptInput {
   prompt?: string;
+  preset?: import("./model-routing-presets.js").ModelRoutingPresetId;
 }
 
 interface AgentBuilderWebhookTriggerReadiness extends WebhookTriggerReadiness {

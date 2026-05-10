@@ -41,6 +41,7 @@ import {
   createGeneratedAppPublishRollbackCommand,
   orderGeneratedAppPublishHistory,
 } from "./app-publish-history.js";
+import type { ModelRoutingPresetId } from "./model-routing-presets.js";
 import { buildAppPublishReadiness } from "./app-publish-readiness.js";
 import { inspectAppPublishIntegrations } from "./app-publish-integrations.js";
 import { buildIntegrationMarketplace } from "./integration-marketplace.js";
@@ -361,8 +362,8 @@ appRoutes.post("/app/builder/agent-draft", async (c) => {
   try {
     const context = await requireAuthenticatedContextAsync(c);
     await requireWorkspacePermission(context, "manageWorkspace");
-    const body = (await c.req.json()) as { prompt?: string };
-    return c.json({ draft: await generateAgentBuilderDraftAsync(context, { prompt: body.prompt }) });
+    const body = (await c.req.json()) as { prompt?: string; preset?: ModelRoutingPresetId };
+    return c.json({ draft: await generateAgentBuilderDraftAsync(context, { prompt: body.prompt, preset: body.preset }) });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -395,7 +396,7 @@ appRoutes.post("/app/builder/app-draft", async (c) => {
   try {
     const context = await requireAuthenticatedContextAsync(c);
     await requireWorkspacePermission(context, "manageWorkspace");
-    const body = (await c.req.json()) as { prompt?: string };
+    const body = (await c.req.json()) as { prompt?: string; preset?: ModelRoutingPresetId };
     const draft = generateAppDraftFromPrompt(promptFromBody(body.prompt));
     return c.json({ draft: buildAppBuilderDraft(draft, context) });
   } catch (error) {
@@ -405,16 +406,21 @@ appRoutes.post("/app/builder/app-draft", async (c) => {
 
 appRoutes.post("/app/builder/app-draft/stream", async (c) => {
   let context: Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>;
-  let body: { prompt?: string };
+  let body: { prompt?: string; preset?: ModelRoutingPresetId };
   try {
     context = await requireAuthenticatedContextAsync(c);
     await requireWorkspacePermission(context, "manageWorkspace");
-    body = (await c.req.json()) as { prompt?: string };
+    body = (await c.req.json()) as { prompt?: string; preset?: ModelRoutingPresetId };
   } catch (error) {
     return errorResponse(c, error);
   }
   return streamSSE(c, async (sse) => {
     try {
+      const presetLabel = presetStepLabel(body.preset);
+      if (presetLabel) {
+        await emitStep(sse, presetLabel);
+        await chatStreamDelay();
+      }
       await emitStep(sse, "Reading the prompt");
       await chatStreamDelay();
       const prompt = promptFromBody(body.prompt);
@@ -450,6 +456,11 @@ appRoutes.post("/app/builder/app-iteration/stream", async (c) => {
   }
   return streamSSE(c, async (sse) => {
     try {
+      const presetLabel = presetStepLabel(body.preset);
+      if (presetLabel) {
+        await emitStep(sse, presetLabel);
+        await chatStreamDelay();
+      }
       const result = await runAppIterationCore(context, body, async (text) => {
         await emitStep(sse, text);
         await chatStreamDelay();
@@ -467,6 +478,7 @@ appRoutes.post("/app/builder/preview/refresh", async (c) => refreshBuilderPrevie
 appRoutes.post("/app/builder/fix-prompt", async (c) => buildBuilderFixPrompt(c));
 appRoutes.get("/app/builder/checkpoints", async (c) => listAppCheckpoints(c));
 appRoutes.post("/app/builder/checkpoints/:checkpointId/rollback", async (c) => rollbackAppCheckpoint(c));
+appRoutes.post("/app/builder/checkpoints/:checkpointId/branch", async (c) => branchAppCheckpoint(c));
 appRoutes.post("/app/builder/publish/prepare", async (c) => prepareGeneratedAppPublish(c));
 appRoutes.post("/app/builder/publish/readiness", async (c) => prepareGeneratedAppPublish(c));
 appRoutes.post("/app/builder/publishes/readiness", async (c) => prepareGeneratedAppPublish(c));
@@ -640,6 +652,7 @@ interface AppIterationRouteRequest {
   selectedContext?: unknown;
   errorContext?: { source?: "build" | "runtime" | "smoke"; message?: string; prompt?: string };
   mode?: string;
+  preset?: ModelRoutingPresetId;
   sourceError?: {
     source: "build" | "runtime" | "smoke";
     message: string;
@@ -1210,6 +1223,116 @@ async function rollbackAppCheckpoint(c: Context) {
       draft: rolledBack.draft,
       command,
     });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+async function branchAppCheckpoint(c: Context) {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "manageWorkspace");
+    const checkpointId = c.req.param("checkpointId");
+    const body = (await c.req.json().catch(() => ({}))) as { appId?: string };
+    const sourceRecord = await findGeneratedAppRecord(context, body.appId, checkpointId);
+    if (!sourceRecord) throw httpRouteError(404, "generated app not found");
+    const sourceCheckpoint = (sourceRecord.checkpoints ?? []).find((checkpoint) => checkpoint.id === checkpointId)
+      ?? (sourceRecord.checkpointId === checkpointId
+        ? {
+          id: sourceRecord.checkpointId,
+          appId: sourceRecord.id,
+          workspaceId: sourceRecord.workspaceId,
+          label: sourceRecord.name,
+          draft: sourceRecord.draft,
+          previewUrl: sourceRecord.previewUrl,
+          buildStatus: sourceRecord.buildStatus,
+          smokeStatus: sourceRecord.smokeStatus,
+          source: "initial" as const,
+          createdByUserId: sourceRecord.createdByUserId,
+          createdAt: sourceRecord.createdAt,
+        }
+        : undefined);
+    if (!sourceCheckpoint) throw httpRouteError(404, "checkpoint not found");
+
+    const branched = await mutateStoreAsync((data) => {
+      data.generatedApps ??= [];
+      const timestamp = new Date().toISOString();
+      const branchSeed = `${context.workspace.id}:${sourceRecord.id}:branch:${sourceCheckpoint.id}:${timestamp}`;
+      const newAppId = `gapp_${stableHash(branchSeed)}`;
+      const newCheckpointId = `gapp_ckpt_${stableHash(`${branchSeed}:checkpoint`)}`;
+      const branchSlug = `${sourceRecord.slug}-branch-${stableHash(branchSeed).slice(0, 6)}`;
+      const branchName = sourceRecord.name.endsWith(" (branch)") ? sourceRecord.name : `${sourceRecord.name} (branch)`;
+      const initialCheckpoint: GeneratedAppCheckpointRecord = {
+        id: newCheckpointId,
+        appId: newAppId,
+        workspaceId: context.workspace.id,
+        label: `Branched from ${sourceCheckpoint.label}`,
+        draft: sourceCheckpoint.draft,
+        previewUrl: sourceCheckpoint.previewUrl,
+        buildStatus: sourceCheckpoint.buildStatus,
+        smokeStatus: sourceCheckpoint.smokeStatus,
+        source: "branch",
+        previousCheckpointId: sourceCheckpoint.id,
+        createdByUserId: context.user.id,
+        createdAt: timestamp,
+      };
+      const newApp: GeneratedAppRecord = {
+        id: newAppId,
+        workspaceId: context.workspace.id,
+        slug: branchSlug,
+        name: branchName,
+        description: sourceRecord.description,
+        prompt: sourceRecord.prompt,
+        templateId: sourceRecord.templateId,
+        status: "saved",
+        draft: sourceCheckpoint.draft,
+        checkpointId: newCheckpointId,
+        previewUrl: sourceCheckpoint.previewUrl,
+        buildStatus: sourceCheckpoint.buildStatus,
+        smokeStatus: sourceCheckpoint.smokeStatus,
+        checkpoints: [initialCheckpoint],
+        createdByUserId: context.user.id,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      data.generatedApps.push(newApp);
+      recordActivity(data, {
+        id: `activity_generated_app_branch_${newApp.id}`,
+        workspaceId: context.workspace.id,
+        scope: "workspace",
+        event: "builder.generated_app.branch",
+        actor: { type: "user", id: context.user.id },
+        data: {
+          title: `${newApp.name} branched from ${sourceRecord.name}`,
+          appId: newApp.id,
+          sourceAppId: sourceRecord.id,
+          sourceCheckpointId: sourceCheckpoint.id,
+        },
+        occurredAt: timestamp,
+      });
+      return newApp;
+    });
+    if (!branched) throw httpRouteError(500, "failed to branch generated app");
+
+    return c.json({
+      branched: true,
+      app: {
+        id: branched.id,
+        slug: branched.slug,
+        name: branched.name,
+        status: branched.status,
+        previewUrl: branched.previewUrl,
+      },
+      checkpoint: {
+        id: branched.checkpointId,
+        appId: branched.id,
+        savedAt: branched.updatedAt,
+      },
+      sourceAppId: sourceRecord.id,
+      sourceCheckpointId: sourceCheckpoint.id,
+      draft: branched.draft,
+      smoke: (branched.draft as AppBuilderDraftContract).smokeBuildStatus,
+    }, 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -2909,4 +3032,15 @@ async function emitStep(sse: { writeSSE: (event: { event: string; data: string }
 function chatStreamDelay(): Promise<void> {
   if (CHAT_STEP_DELAY_MS <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, CHAT_STEP_DELAY_MS));
+}
+
+function presetStepLabel(preset: ModelRoutingPresetId | undefined): string | null {
+  if (!preset) return null;
+  const labels: Record<ModelRoutingPresetId, string> = {
+    fast: "Routing through the fast preset",
+    smart: "Routing through the smart preset",
+    cheap: "Routing through the cheap preset",
+    local: "Routing through the local-first preset",
+  };
+  return labels[preset] ?? null;
 }

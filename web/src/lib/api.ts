@@ -27,6 +27,7 @@ import type {
   AppBuilderPublishRollbackResult,
   AppBuilderPublishState,
   AppBuilderRollbackResult,
+  AppBuilderSmokeBuildStatus,
   ActivationDetailPayload,
   BootstrapPayload,
   ConfirmWorkflowReleaseInput,
@@ -281,19 +282,19 @@ export const api = {
   createAgent: (body: SaveAgentInput) => j<{ agent: AgentRecord }>("/api/app/agents", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
   generateAgentFromPrompt: (body: { prompt: string; create?: boolean; approve?: boolean; providerId?: string; model?: string; status?: AgentRecord["status"]; runPreview?: boolean; sampleInputs?: Record<string, unknown> }) =>
     j<AgentPromptDraftResult>("/api/app/agents/generate-from-prompt", { method: "POST", body: JSON.stringify(body) }),
-  generateAgentBuilderDraft: (body: { prompt: string }) =>
+  generateAgentBuilderDraft: (body: { prompt: string; preset?: BuilderModelPresetId }) =>
     j<AgentBuilderDraftResult>("/api/app/builder/agent-draft", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.draft),
   approveAgentBuilderDraft: (body: { prompt?: string; draft?: AgentBuilderDraft; status?: AgentRecord["status"]; runPreview?: boolean; sampleInputs?: Record<string, unknown> }) =>
     j<AgentBuilderApproveResult>("/api/app/builder/agent-draft/approve", { method: "POST", body: JSON.stringify(body) }),
-  generateAppBuilderDraft: (body: { prompt: string }) =>
+  generateAppBuilderDraft: (body: { prompt: string; preset?: BuilderModelPresetId }) =>
     j<AppBuilderDraftResult>("/api/app/builder/app-draft", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.draft),
-  streamAppBuilderDraft: (body: { prompt: string }, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
+  streamAppBuilderDraft: (body: { prompt: string; preset?: BuilderModelPresetId }, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
     streamSse("/api/app/builder/app-draft/stream", body, onEvent, signal),
   approveAppBuilderDraft: (body: { prompt?: string; draft?: AppBuilderDraft; runBuild?: boolean; runSmoke?: boolean; targetStatus?: AppBuilderApplyStatus }) =>
     j<AppBuilderApproveResult>("/api/app/builder/app-draft/apply", { method: "POST", body: JSON.stringify(body) }),
-  generateAppBuilderIteration: (body: AppBuilderIterationRequest) =>
+  generateAppBuilderIteration: (body: AppBuilderIterationRequest & { preset?: BuilderModelPresetId }) =>
     j<AppBuilderIterationResult>("/api/app/builder/app-iteration", { method: "POST", body: JSON.stringify(body) }),
-  streamAppBuilderIteration: (body: AppBuilderIterationRequest, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
+  streamAppBuilderIteration: (body: AppBuilderIterationRequest & { preset?: BuilderModelPresetId }, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
     streamSse("/api/app/builder/app-iteration/stream", body, onEvent, signal),
   applyAppBuilderIterationDiff: (body: AppBuilderIterationApplyRequest) =>
     j<AppBuilderIterationApplyResult>("/api/app/builder/app-iteration/apply", { method: "POST", body: JSON.stringify(body) }),
@@ -313,6 +314,16 @@ export const api = {
   },
   rollbackBuilderCheckpoint: (checkpointId: string, body: { appId?: string; agentId?: string; reason?: string } = {}) =>
     j<AppBuilderRollbackResult>(`/api/app/builder/checkpoints/${checkpointId}/rollback`, { method: "POST", body: JSON.stringify(body) }),
+  branchBuilderCheckpoint: (checkpointId: string, body: { appId: string }) =>
+    j<{
+      branched: boolean;
+      app: { id: string; slug: string; name: string; status: string; previewUrl?: string };
+      checkpoint: { id: string; appId: string; savedAt: string };
+      sourceAppId: string;
+      sourceCheckpointId: string;
+      draft: AppBuilderDraft;
+      smoke?: AppBuilderSmokeBuildStatus;
+    }>(`/api/app/builder/checkpoints/${checkpointId}/branch`, { method: "POST", body: JSON.stringify(body) }),
   getBuilderPublishState: (query: { appId?: string; checkpointId?: string }) => {
     const params = new URLSearchParams();
     if (query.appId) params.set("appId", query.appId);

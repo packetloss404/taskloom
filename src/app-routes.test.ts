@@ -1132,6 +1132,93 @@ test("builder app-draft/stream emits step events, a draft event, and done", asyn
   }
 });
 
+test("builder app-draft/stream echoes the chosen routing preset in step events", async () => {
+  resetStoreForTests();
+  const previous = process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+  process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = "0";
+  try {
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const response = await app.request("/api/app/builder/app-draft/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a small CRM for renewals.", preset: "fast" }),
+    });
+    assert.equal(response.status, 200);
+    const events = await readSseEvents(response.body!);
+    const stepTexts = events.filter((e) => e.type === "step").map((e) => (e as unknown as { text: string }).text);
+    assert.ok(stepTexts.some((text) => text.toLowerCase().includes("fast preset")), `expected a step mentioning the fast preset, got: ${stepTexts.join(" | ")}`);
+  } finally {
+    if (previous === undefined) delete process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+    else process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = previous;
+  }
+});
+
+test("checkpoint branch creates a new app with previousCheckpointId chain", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build a public booking app with services and appointments." }),
+  });
+  const draftBody = await draftResponse.json() as { draft: unknown };
+
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft: draftBody.draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string; name: string }; checkpoint: { id: string } };
+  assert.equal(applyResponse.status, 201);
+
+  const branchResponse = await app.request(`/api/app/builder/checkpoints/${applied.checkpoint.id}/branch`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ appId: applied.app.id }),
+  });
+  const branched = await branchResponse.json() as {
+    branched: boolean;
+    app: { id: string; name: string; slug: string };
+    checkpoint: { id: string; appId: string };
+    sourceAppId: string;
+    sourceCheckpointId: string;
+  };
+  assert.equal(branchResponse.status, 201);
+  assert.equal(branched.branched, true);
+  assert.notEqual(branched.app.id, applied.app.id);
+  assert.equal(branched.sourceAppId, applied.app.id);
+  assert.equal(branched.sourceCheckpointId, applied.checkpoint.id);
+  assert.match(branched.app.name, / \(branch\)$/);
+  assert.match(branched.app.slug, /-branch-/);
+
+  const stored = loadStore().generatedApps ?? [];
+  const sourceApp = stored.find((entry) => entry.id === applied.app.id);
+  const branchApp = stored.find((entry) => entry.id === branched.app.id);
+  assert.ok(sourceApp, "source app survives");
+  assert.ok(branchApp, "branch app exists");
+  const branchInitial = (branchApp.checkpoints ?? []).find((checkpoint) => checkpoint.id === branched.checkpoint.id);
+  assert.ok(branchInitial, "branch app has its own initial checkpoint");
+  assert.equal(branchInitial.source, "branch");
+  assert.equal(branchInitial.previousCheckpointId, applied.checkpoint.id);
+});
+
+test("checkpoint branch requires authentication", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const response = await app.request("/api/app/builder/checkpoints/some-id/branch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ appId: "some-app" }),
+  });
+  assert.equal(response.status, 401);
+});
+
 test("builder app-iteration/stream emits step events, a diff event, and done", async () => {
   resetStoreForTests();
   const previous = process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;

@@ -443,7 +443,7 @@ export interface GeneratedAppCheckpointRecord {
   previewUrl?: string;
   buildStatus?: string;
   smokeStatus?: string;
-  source: "initial" | "iteration" | "rollback";
+  source: "initial" | "iteration" | "rollback" | "branch";
   previousCheckpointId?: string;
   createdByUserId: string;
   createdAt: string;
