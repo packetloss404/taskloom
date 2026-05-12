@@ -1,7 +1,7 @@
 # =============================================================================
 # Taskloom access-log shipping example: Fluent Bit (v1.9 / v2.x / v3.x)
 # -----------------------------------------------------------------------------
-# This is an EXAMPLE Fluent Bit configuration that tails the redacted Phase 20
+# This is an EXAMPLE Fluent Bit configuration that tails the redacted
 # file-mode access log and forwards it to Loki and (optionally) a downstream
 # Fluentd / aggregator. You MUST adapt paths, hosts, ports, credentials, and
 # tags to your environment before using it in production.
@@ -15,7 +15,7 @@
 #
 # Operator notes:
 #   - The tail input uses a DB file so that file position survives Fluent Bit
-#     restarts AND the Phase 23 cascade rotation (<path> -> <path>.1 -> ...).
+#     restarts AND cascade rotation (<path> -> <path>.1 -> ...).
 #   - Rotate_Wait gives Fluent Bit a grace window to drain the renamed file
 #     before TASKLOOM_ACCESS_LOG_MAX_FILES prunes it.
 #   - High-cardinality fields (userId, workspaceId, requestId) MUST stay in

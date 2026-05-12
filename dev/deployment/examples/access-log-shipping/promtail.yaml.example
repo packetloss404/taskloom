@@ -1,7 +1,7 @@
 # =============================================================================
 # Taskloom access-log shipping example: Grafana Promtail (v2 / v3)
 # -----------------------------------------------------------------------------
-# This is an EXAMPLE Promtail configuration that tails the redacted Phase 20
+# This is an EXAMPLE Promtail configuration that tails the redacted
 # file-mode access log and pushes it to a Loki cluster. You MUST adapt paths,
 # endpoints, credentials, and labels to your environment before using it in
 # production.
@@ -11,7 +11,7 @@
 #   https://grafana.com/docs/loki/latest/clients/promtail/stages/
 #
 # Operator notes:
-#   - Phase 23 cascade-rotates the access log (<path> -> <path>.1 -> ...).
+#   - Access-log rotation is cascade-style (<path> -> <path>.1 -> ...).
 #     Promtail tracks file inodes via the positions file, so it follows
 #     renamed files automatically. The optional `*` glob form picks up
 #     already-rotated siblings on first start (cold backfill only).
@@ -55,7 +55,7 @@ scrape_configs:
           service: taskloom
           env: production
           # Substitute __path__ with TASKLOOM_ACCESS_LOG_PATH from the
-          # Taskloom service environment. To also pick up Phase 23
+          # Taskloom service environment. To also pick up
           # rotated siblings on first start, use the glob form:
           #   __path__: /var/log/taskloom/access.log*
           __path__: /var/log/taskloom/access.log

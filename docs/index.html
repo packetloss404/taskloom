@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Taskloom — Self-hosted agent &amp; app workbench</title>
-  <meta name="description" content="Taskloom is the open-source, self-hosted answer to v0 and Bolt — describe an internal app or agent in plain English, plan it, preview it, and run it on your own infrastructure.">
+  <meta name="description" content="Taskloom is an open-source, self-hosted workbench for internal apps and agents — describe what you need in plain English, plan it, preview it, and run it on your own infrastructure.">
   <meta name="theme-color" content="#0E1112">
   <meta property="og:title" content="Taskloom — Self-hosted agent &amp; app workbench">
   <meta property="og:description" content="Describe an internal app or agent. Taskloom drafts a brief, plans it, previews it, and runs it on your own infrastructure. MIT-licensed, no telemetry.">
@@ -913,7 +913,7 @@
           <span class="sep">·</span>
           <span class="pill">BRING YOUR KEYS</span>
           <span class="sep">·</span>
-          <span class="pill">v0.18.4</span>
+          <span class="pill">v0.1.0</span>
         </div>
       </div>
     </div>
@@ -1216,7 +1216,7 @@
             </li>
             <li>
               <svg width="16" height="16" aria-hidden="true"><use href="#i-check"/></svg>
-              <span><strong style="color:var(--silver-50);font-weight:500;">SQLite by default, Postgres for teams</strong> — one connection string flips between them.</span>
+              <span><strong style="color:var(--silver-50);font-weight:500;">JSON for local dev, SQLite or Postgres for deploys</strong> — choose the store that matches your topology.</span>
             </li>
             <li>
               <svg width="16" height="16" aria-hidden="true"><use href="#i-check"/></svg>
@@ -1302,7 +1302,7 @@
           </details>
           <details>
             <summary>What models do I need?</summary>
-            <div class="a">Any one of Anthropic, OpenAI, MiniMax, or a local Ollama instance is enough to get going. You configure a key per provider, then pick which model handles which agent. Most teams pin Claude Sonnet 4.5 for planning and pair it with a cheaper draft model.</div>
+            <div class="a">Any one of Anthropic, OpenAI, MiniMax, or a local Ollama instance is enough to get going. You configure a key per provider, then pick which model handles each app or agent workflow.</div>
           </details>
           <details>
             <summary>How is this different from v0, Bolt, or Lovable?</summary>
@@ -1310,7 +1310,7 @@
           </details>
           <details>
             <summary>Is there a hosted version?</summary>
-            <div class="a">Not today. Taskloom is currently shipped as source you run yourself. If a managed offering shows up later it will live alongside the self-hosted edition, not replace it.</div>
+            <div class="a">No. Taskloom ships as source you run yourself, and the project does not plan to operate a managed Taskloom service.</div>
           </details>
           <details>
             <summary>Can I run it without Docker?</summary>
@@ -1318,7 +1318,7 @@
           </details>
           <details>
             <summary>What database does it use?</summary>
-            <div class="a">SQLite by default — zero-config, perfect for a single operator. Switch to Postgres by setting one connection string when you want a team to share a workspace. Migrations run on boot.</div>
+            <div class="a">File-backed JSON is the default contributor store. Use SQLite for a single-node deployment, or switch to Postgres with one connection string when you need horizontal app writers. Migrations run on boot.</div>
           </details>
         </div>
       </div>
@@ -1392,7 +1392,7 @@
       </div>
       <div class="foot-bottom">
         <span>© 2026 TASKLOOM CONTRIBUTORS · MIT</span>
-        <span>v0.18.4 · NO TELEMETRY · BUILT WITH GEIST</span>
+        <span>v0.1.0 · NO TELEMETRY · BUILT WITH GEIST</span>
       </div>
     </div>
   </footer>

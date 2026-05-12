@@ -550,7 +550,7 @@ test("builder app draft can be generated and applied with smoke metadata", async
         slug?: string;
         pages?: Array<{ route: string; access: string; components: string[] }>;
         dataSchema?: Array<{ name: string }>;
-        apiRoutes?: Array<{ path: string; authRequired: boolean }>;
+        apiRoutes?: Array<{ path: string; access: string; authRequired: boolean; requiredRole?: string }>;
       };
       smokeBuildStatus?: { status?: string; checks?: unknown[]; blockers?: string[] };
     };
@@ -562,6 +562,7 @@ test("builder app draft can be generated and applied with smoke metadata", async
   assert.ok(draftBody.draft?.app?.pages?.some((page) => page.route === "/book" && page.access === "public" && page.components.length > 0));
   assert.ok(draftBody.draft?.app?.dataSchema?.some((entity) => entity.name === "appointment"));
   assert.ok(draftBody.draft?.app?.apiRoutes?.some((route) => route.path.includes("/api/app/generated/") && route.path.includes("/appointments") && route.authRequired));
+  assert.ok(draftBody.draft?.app?.apiRoutes?.some((route) => route.path.includes("/services") && route.access === "admin" && route.authRequired && route.requiredRole === "admin"));
   assert.equal(draftBody.draft?.smokeBuildStatus?.status, "pending");
   assert.ok((draftBody.draft?.smokeBuildStatus?.checks?.length ?? 0) > 0);
   assert.deepEqual(draftBody.draft?.smokeBuildStatus?.blockers, []);
@@ -1001,10 +1002,12 @@ test("builder publish creates self-hosted history, compose export, logs, and rol
   const stateResponse = await app.request(`/api/app/builder/publish/state?appId=${applied.app.id}`, {
     headers,
   });
-  const state = await stateResponse.json() as { publishedUrl?: string; history?: unknown[] };
+  const state = await stateResponse.json() as { publishedUrl?: string; history?: unknown[]; readiness?: { workspaceSlug?: string; localPublishPath?: string } };
 
   assert.equal(stateResponse.status, 200);
   assert.match(state.publishedUrl ?? "", /apps\.example\.test/);
+  assert.equal(state.readiness?.workspaceSlug, "alpha-workspace");
+  assert.match(state.readiness?.localPublishPath ?? "", /alpha-workspace/);
   assert.ok((state.history?.length ?? 0) >= 1);
 
   const composeResponse = await app.request(`/api/app/builder/publish/docker-compose?appId=${applied.app.id}`, {
@@ -1060,6 +1063,128 @@ test("builder publish creates self-hosted history, compose export, logs, and rol
   const stored = loadStore().generatedApps?.find((entry) => entry.id === applied.app.id);
   assert.equal(stored?.currentPublishId, firstPublish.publish?.id);
   assert.ok(stored?.publishHistory?.some((entry) => entry.id === secondPublish.publish?.id && entry.rollbackResult?.status === "succeeded"));
+});
+
+test("builder publish prepare and compose export require workspace management", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build a public booking app with services and appointment slots." }),
+  });
+  const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string }; checkpoint: { id: string } };
+  assert.equal(applyResponse.status, 201);
+
+  mutateStore((data) => {
+    const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+    assert.ok(membership);
+    membership.role = "viewer";
+  });
+
+  const stateResponse = await app.request(`/api/app/builder/publish/state?appId=${applied.app.id}`, {
+    headers,
+  });
+  assert.equal(stateResponse.status, 200);
+
+  const prepareResponse = await app.request("/api/app/builder/publish/prepare", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ appId: applied.app.id, checkpointId: applied.checkpoint.id }),
+  });
+  const prepareBody = await prepareResponse.json() as { error?: string };
+  assert.equal(prepareResponse.status, 403);
+  assert.match(prepareBody.error ?? "", /admin/);
+
+  const composeResponse = await app.request(`/api/app/builder/publish/docker-compose?appId=${applied.app.id}`, {
+    headers,
+  });
+  const composeBody = await composeResponse.json() as { error?: string };
+  assert.equal(composeResponse.status, 403);
+  assert.match(composeBody.error ?? "", /admin/);
+});
+
+test("builder publish blocks requested integrations that are not ready", async (t) => {
+  resetStoreForTests();
+  const integrationEnvKeys = [
+    "RESEND_API_KEY",
+    "SENDGRID_API_KEY",
+    "POSTMARK_TOKEN",
+    "SMTP_URL",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_PRICE_ID",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+  ] as const;
+  const previous = new Map<string, string | undefined>();
+  for (const key of integrationEnvKeys) {
+    previous.set(key, process.env[key]);
+    delete process.env[key];
+  }
+  t.after(() => {
+    for (const key of integrationEnvKeys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build an ops app that sends Stripe payment receipts over email and syncs GitHub issues." }),
+  });
+  const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string }; checkpoint: { id: string } };
+  assert.equal(applyResponse.status, 201);
+
+  const prepareResponse = await app.request("/api/app/builder/publish/prepare", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ appId: applied.app.id, checkpointId: applied.checkpoint.id }),
+  });
+  const prepare = await prepareResponse.json() as {
+    ready?: boolean;
+    integrations?: { canPublish?: boolean; canUseAllRequestedIntegrations?: boolean; featureBlockers?: string[] };
+    state?: { canPublish?: boolean; nextActions?: string[] };
+  };
+  assert.equal(prepareResponse.status, 200);
+  assert.equal(prepare.integrations?.canPublish, true);
+  assert.equal(prepare.integrations?.canUseAllRequestedIntegrations, false);
+  assert.equal(prepare.ready, false);
+  assert.equal(prepare.state?.canPublish, false);
+  assert.ok(prepare.integrations?.featureBlockers?.some((blocker) => blocker.includes("Email delivery")));
+  assert.ok(prepare.integrations?.featureBlockers?.some((blocker) => blocker.includes("Stripe payments")));
+  assert.ok(prepare.state?.nextActions?.some((action) => action.includes("Email delivery") || action.includes("Stripe payments")));
+
+  const publishResponse = await app.request("/api/app/builder/publish", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ appId: applied.app.id, checkpointId: applied.checkpoint.id }),
+  });
+  const publish = await publishResponse.json() as { error?: string; integrations?: { canUseAllRequestedIntegrations?: boolean } };
+  assert.equal(publishResponse.status, 409);
+  assert.equal(publish.error, "publish validation failed");
+  assert.equal(publish.integrations?.canUseAllRequestedIntegrations, false);
 });
 
 async function readSseEvents(stream: ReadableStream<Uint8Array>): Promise<Array<{ type: string; [k: string]: unknown }>> {

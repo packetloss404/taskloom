@@ -13,8 +13,10 @@ import {
   providerReadinessTone,
   runStatusTone,
   safeJson,
+  sampleInputIssuesForDraft,
   sampleInputsForDraft,
   toolReadinessTone,
+  type AgentBuilderSampleInputIssue,
   type AgentBuilderSampleInputs,
   type ReadinessTone,
 } from "./builder-agent-utils";
@@ -29,7 +31,7 @@ export interface AgentBuilderPanelProps {
 
 export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgentSaved }: AgentBuilderPanelProps) {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<BuilderMode>(initialPrompt.trim() ? "empty" : "empty");
+  const [mode, setMode] = useState<BuilderMode>("empty");
   const [prompt, setPrompt] = useState(initialPrompt);
   const [draft, setDraft] = useState<AgentBuilderDraft | null>(null);
   const [sampleInputs, setSampleInputs] = useState<AgentBuilderSampleInputs>({});
@@ -44,6 +46,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
     for (const field of draft?.agent.inputSchema ?? []) map.set(field.key, field);
     return map;
   }, [draft]);
+  const sampleInputIssues = useMemo(() => draft ? sampleInputIssuesForDraft(draft, sampleInputs) : [], [draft, sampleInputs]);
 
   useEffect(() => {
     if (draft || savedAgent || working) return;
@@ -58,9 +61,10 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
     setMode("drafting");
     try {
       const nextDraft = await api.generateAgentBuilderDraft({ prompt: prompt.trim() });
+      const nextSampleInputs = sampleInputsForDraft(nextDraft);
       setDraft(nextDraft);
-      setSampleInputs(sampleInputsForDraft(nextDraft));
-      setRunPreview(nextDraft.readiness.firstRun.canRun);
+      setSampleInputs(nextSampleInputs);
+      setRunPreview(nextDraft.readiness.firstRun.canRun && sampleInputIssuesForDraft(nextDraft, nextSampleInputs).length === 0);
       setMode("drafted");
     } catch (e) {
       setError((e as Error).message);
@@ -77,7 +81,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
         prompt: prompt.trim() || draft.prompt,
         draft,
         status: "active",
-        runPreview,
+        runPreview: runPreview && draft.readiness.firstRun.canRun && sampleInputIssues.length === 0,
         sampleInputs,
       });
       setDraft(result.draft);
@@ -148,6 +152,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
             <SampleInputs
               draft={draft}
               sampleInputs={sampleInputs}
+              issues={sampleInputIssues}
               onUpdate={updateSample}
             />
             <ApproveCard
@@ -155,6 +160,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
               working={working}
               savedAgent={savedAgent}
               runPreview={runPreview}
+              sampleInputIssues={sampleInputIssues}
               onRunPreviewChange={setRunPreview}
               onApprove={() => { void approveDraft(); }}
               onOpenAgent={() => savedAgent && navigate(agentEditorPath(savedAgent.id))}
@@ -313,13 +319,14 @@ function AgentConfiguration({ draft }: { draft: AgentBuilderDraft }) {
   );
 }
 
-function SampleInputs({ draft, sampleInputs, onUpdate }: { draft: AgentBuilderDraft; sampleInputs: AgentBuilderSampleInputs; onUpdate: (key: string, value: string | boolean) => void }) {
+function SampleInputs({ draft, sampleInputs, issues, onUpdate }: { draft: AgentBuilderDraft; sampleInputs: AgentBuilderSampleInputs; issues: AgentBuilderSampleInputIssue[]; onUpdate: (key: string, value: string | boolean) => void }) {
   const schema = draft.agent.inputSchema ?? [];
   const looseKeys = Object.keys(sampleInputs).filter((key) => !schema.some((field) => field.key === key));
+  const issuesByKey = new Map(issues.map((issue) => [issue.key, issue.message]));
   return (
     <div className="card" style={{ padding: 16 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-        <div className="kicker">GENERATED SAMPLE INPUTS</div>
+        <div className="kicker">SAMPLE INPUTS</div>
         <span className="mono muted" style={{ fontSize: 10.5 }}>{Object.keys(sampleInputs).length} field{Object.keys(sampleInputs).length === 1 ? "" : "s"}</span>
       </div>
       {schema.length === 0 && looseKeys.length === 0 ? (
@@ -327,7 +334,7 @@ function SampleInputs({ draft, sampleInputs, onUpdate }: { draft: AgentBuilderDr
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
           {schema.map((field) => (
-            <SampleInputControl key={field.key} field={field} value={sampleInputs[field.key]} onUpdate={onUpdate}/>
+            <SampleInputControl key={field.key} field={field} value={sampleInputs[field.key]} issue={issuesByKey.get(field.key)} onUpdate={onUpdate}/>
           ))}
           {looseKeys.map((key) => (
             <label key={key} style={{ display: "block" }}>
@@ -341,13 +348,16 @@ function SampleInputs({ draft, sampleInputs, onUpdate }: { draft: AgentBuilderDr
   );
 }
 
-function SampleInputControl({ field, value, onUpdate }: { field: AgentInputField; value: string | number | boolean | undefined; onUpdate: (key: string, value: string | boolean) => void }) {
+function SampleInputControl({ field, value, issue, onUpdate }: { field: AgentInputField; value: string | number | boolean | undefined; issue?: string; onUpdate: (key: string, value: string | boolean) => void }) {
   if (field.type === "boolean") {
     return (
-      <label style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 18 }}>
-        <input type="checkbox" checked={value === true} onChange={(e) => onUpdate(field.key, e.target.checked)} style={{ accentColor: "var(--green)" }}/>
-        <span style={{ fontSize: 12.5, color: "var(--silver-200)" }}>{field.label}</span>
-      </label>
+      <div style={{ paddingTop: 18 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input type="checkbox" checked={value === true} onChange={(e) => onUpdate(field.key, e.target.checked)} style={{ accentColor: "var(--green)" }}/>
+          <span style={{ fontSize: 12.5, color: "var(--silver-200)" }}>{field.label}{field.required ? " *" : ""}</span>
+        </label>
+        {issue && <div className="mono" style={{ color: "var(--danger)", fontSize: 10.5, marginTop: 5 }}>{issue}</div>}
+      </div>
     );
   }
   if (field.type === "enum") {
@@ -358,6 +368,7 @@ function SampleInputControl({ field, value, onUpdate }: { field: AgentInputField
           <option value="">- select -</option>
           {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
         </select>
+        {issue && <div className="mono" style={{ color: "var(--danger)", fontSize: 10.5, marginTop: 5 }}>{issue}</div>}
       </label>
     );
   }
@@ -371,12 +382,17 @@ function SampleInputControl({ field, value, onUpdate }: { field: AgentInputField
         placeholder={field.description}
         onChange={(e) => onUpdate(field.key, e.target.value)}
       />
+      {issue && <div className="mono" style={{ color: "var(--danger)", fontSize: 10.5, marginTop: 5 }}>{issue}</div>}
     </label>
   );
 }
 
-function ApproveCard({ draft, working, savedAgent, runPreview, onRunPreviewChange, onApprove, onOpenAgent }: { draft: AgentBuilderDraft; working: boolean; savedAgent: AgentRecord | null; runPreview: boolean; onRunPreviewChange: (next: boolean) => void; onApprove: () => void; onOpenAgent: () => void }) {
-  const canRunPreview = draft.readiness.firstRun.canRun;
+function ApproveCard({ draft, working, savedAgent, runPreview, sampleInputIssues, onRunPreviewChange, onApprove, onOpenAgent }: { draft: AgentBuilderDraft; working: boolean; savedAgent: AgentRecord | null; runPreview: boolean; sampleInputIssues: AgentBuilderSampleInputIssue[]; onRunPreviewChange: (next: boolean) => void; onApprove: () => void; onOpenAgent: () => void }) {
+  const setupCanRun = draft.readiness.firstRun.canRun;
+  const canRunPreview = setupCanRun && sampleInputIssues.length === 0;
+  const runBlocker = setupCanRun
+    ? sampleInputIssues[0]?.message
+    : draft.readiness.firstRun.blockers.join(", ") || "not available";
   return (
     <div className="card" style={{ padding: 16, borderColor: savedAgent ? "var(--green-deep)" : "var(--line)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -401,7 +417,7 @@ function ApproveCard({ draft, working, savedAgent, runPreview, onRunPreviewChang
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)", color: canRunPreview ? "var(--silver-200)" : "var(--silver-400)", fontSize: 12.5 }}>
           <input type="checkbox" checked={runPreview && canRunPreview} disabled={!canRunPreview || working} onChange={(e) => onRunPreviewChange(e.target.checked)} style={{ accentColor: "var(--green)" }}/>
           Run once after save
-          {!canRunPreview && <span className="mono muted" style={{ fontSize: 10.5 }}>({draft.readiness.firstRun.blockers.join(", ") || "not available"})</span>}
+          {!canRunPreview && <span className="mono muted" style={{ fontSize: 10.5 }}>({runBlocker})</span>}
         </label>
       )}
     </div>

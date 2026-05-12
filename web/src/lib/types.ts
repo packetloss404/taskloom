@@ -489,6 +489,7 @@ export interface AppBuilderApiRoute {
   purpose: string;
   handler: string;
   authRequired: boolean;
+  requiredRole?: "admin";
 }
 
 export interface AppBuilderCrudFlow {
@@ -737,13 +738,186 @@ export interface AppPublishEnvChecklistItem {
   required: boolean;
   purpose: string;
   ready?: boolean;
+  source?: "runtime" | "bundle" | "operator";
+  configured?: boolean | null;
+}
+
+export type AppPublishIntegrationCategory =
+  | "provider_keys"
+  | "webhook"
+  | "email"
+  | "payment"
+  | "database"
+  | "browser"
+  | "github";
+export type AppPublishIntegrationStatus = "not_required" | "ready" | "warning" | "blocked";
+export type AppPublishIntegrationReadinessStatus = "ready" | "warnings" | "blocked";
+
+export interface AppPublishIntegrationCheck {
+  category: AppPublishIntegrationCategory;
+  label: string;
+  status: AppPublishIntegrationStatus;
+  required: boolean;
+  ready: boolean;
+  sourceSignals: string[];
+  requiredSecrets: string[];
+  missingSetup: string[];
+  warnings: string[];
+  setupGuide: string[];
+}
+
+export interface AppPublishConnectorReadiness {
+  id: string;
+  label: string;
+  feature: string;
+  category: AppPublishIntegrationCategory;
+  status: AppPublishIntegrationStatus;
+  required: boolean;
+  ready: boolean;
+  configured: boolean;
+  connected: boolean;
+  requiredSecrets: string[];
+  missingSecrets: string[];
+  missingSetup: string[];
+  warnings: string[];
+  setupGuide: string[];
+}
+
+export interface AppPublishIntegrationsReadiness {
+  version: string;
+  status: AppPublishIntegrationReadinessStatus;
+  canPublish: boolean;
+  canUseAllRequestedIntegrations: boolean;
+  blockers: string[];
+  featureBlockers: string[];
+  warnings: string[];
+  checks: AppPublishIntegrationCheck[];
+  connectorReadiness: AppPublishConnectorReadiness[];
+}
+
+export interface AppPublishBuildCommand {
+  id: string;
+  command: string;
+  required: boolean;
+  produces: string[];
+  description: string;
+}
+
+export interface AppPublishGeneratedCheck {
+  id: string;
+  kind: "health" | "smoke";
+  label: string;
+  path: string;
+  command: string;
+  expectedStatus: number;
+  expected: string[];
+  failureAction: string;
+}
+
+export interface AppPublishArtifactManifestEntry {
+  path: string;
+  kind: "source" | "build_output" | "generated_bundle" | "manifest" | "config";
+  required: boolean;
+  description: string;
+}
+
+export interface AppPublishArtifactManifest {
+  fileName: "publish-artifacts.json" | string;
+  packageId: string;
+  entries: AppPublishArtifactManifestEntry[];
+}
+
+export interface AppPublishDockerComposeExport {
+  fileName: "docker-compose.publish.yml" | string;
+  projectName?: string;
+  services: Array<string | {
+    name: string;
+    imageHint?: string;
+    buildContext?: string;
+    ports?: string[];
+    envFile?: string;
+    volumes?: string[];
+    dependsOn?: string[];
+    healthcheck?: Record<string, unknown>;
+  }>;
+  networks?: string[];
+  volumes?: string[];
+  outline: string[];
+  yaml?: string;
+}
+
+export interface AppPublishRuntimeAssumption {
+  id: string;
+  summary: string;
+  detail: string;
+}
+
+export interface AppPublishRuntimeConfig {
+  runtime: "hono-vite";
+  nodeVersion: string;
+  workingDirectory: string;
+  startCommand: string;
+  portEnv: string;
+  storeEnv: string;
+  publishRootEnv: string;
+  publicBaseUrlEnv: string;
+  privateBaseUrlEnv: string;
+  healthBasePath: string;
+  appRouteBase: string;
+  agentRouteBase: string | null;
+  generatedBundlePath: string;
+  envFileName: string;
+}
+
+export interface AppPublishChecklistItem {
+  id: string;
+  label: string;
+  required: boolean;
+  expectation: string;
+  failureGuidance: string;
+}
+
+export interface AppPublishValidationFailure {
+  stage: "build" | "health" | "smoke" | "url";
+  message: string;
+  action: string;
+}
+
+export interface AppPublishValidation {
+  version: string;
+  status: "pending" | "ready" | "blocked";
+  canPublish: boolean;
+  productionBuild?: Record<string, unknown>;
+  healthCheck?: Record<string, unknown>;
+  smokeCheck?: Record<string, unknown>;
+  validatedUrl?: Record<string, unknown>;
+  actionableFailures: AppPublishValidationFailure[];
 }
 
 export interface AppPublishReadiness {
   version: string;
   draftSlug: string;
+  agentSlug?: string | null;
   workspaceSlug: string;
+  publishId?: string;
   localPublishPath: string;
+  runtimeAssumptions?: AppPublishRuntimeAssumption[];
+  publishChecklist?: AppPublishChecklistItem[];
+  packageContract?: {
+    version: string;
+    packageId: string;
+    packageName: string;
+    packageVersion: string;
+    bundleKind: "app" | "agent" | "app_agent" | string;
+    runtimeConfig: AppPublishRuntimeConfig;
+    buildCommands: AppPublishBuildCommand[];
+    envChecklist: AppPublishEnvChecklistItem[];
+    healthChecks: AppPublishGeneratedCheck[];
+    smokeChecks: AppPublishGeneratedCheck[];
+    artifactManifest: AppPublishArtifactManifest;
+    dockerComposeExport: AppPublishDockerComposeExport;
+    rollback: Record<string, unknown>;
+  };
   packaging: {
     runtime: "hono-vite" | string;
     notes: string[];
@@ -751,11 +925,14 @@ export interface AppPublishReadiness {
     artifactPaths: string[];
   };
   envChecklist: AppPublishEnvChecklistItem[];
+  publishIntegrations?: AppPublishIntegrationsReadiness;
+  publishArtifactManifest?: AppPublishArtifactManifest;
   dockerComposeExport: {
     fileName: "docker-compose.publish.yml" | string;
-    services: string[];
+    services: Array<string | { name: string; [key: string]: unknown }>;
     outline: string[];
     contents?: string;
+    yaml?: string;
   };
   healthCheck: {
     livePath: string;
@@ -766,6 +943,8 @@ export interface AppPublishReadiness {
     command: string;
     expected: string[];
   };
+  publishHistory?: Record<string, unknown>;
+  rollback?: Record<string, unknown>;
   rollbackNote: string;
   urlHandoff: {
     visibility: AppPublishVisibility;
@@ -791,6 +970,8 @@ export interface AppBuilderPublishState {
   status: AppBuilderPublishStatus;
   publishedUrl?: string;
   readiness: AppPublishReadiness;
+  validation?: AppPublishValidation;
+  integrations?: AppPublishIntegrationsReadiness;
   logs: AgentRunLogEntry[];
   history: AppBuilderPublishHistoryEntry[];
   nextActions: string[];

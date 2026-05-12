@@ -163,7 +163,7 @@ export default function AuthPage({ mode }: { mode: "sign-in" | "sign-up" }) {
         </main>
 
         <footer style={{ borderTop: "1px solid var(--line)", padding: "20px 32px", display: "flex", alignItems: "center", gap: 14, maxWidth: 1100, margin: "0 auto" }}>
-          <span className="mono muted" style={{ fontSize: 11 }}>© Taskloom · v0.18.4</span>
+          <span className="mono muted" style={{ fontSize: 11 }}>© Taskloom · v0.1.0</span>
           <span className="mono muted" style={{ fontSize: 11, marginLeft: "auto" }}>self-hosted · MIT</span>
         </footer>
       </div>

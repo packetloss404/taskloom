@@ -169,8 +169,12 @@ test("acquire preserves held flag on network error when failOpen is true", async
 });
 
 test("acquire honors timeoutMs when fetch never resolves", async () => {
+  let observedAbort = false;
   const fetchImpl: typeof fetch = (_input, init) => new Promise((_, reject) => {
-    init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+    init?.signal?.addEventListener("abort", () => {
+      observedAbort = true;
+      reject(new Error("aborted"));
+    });
   });
   const lock = httpLeaderLock({
     url: "https://coord",
@@ -180,14 +184,9 @@ test("acquire honors timeoutMs when fetch never resolves", async () => {
     fetchImpl,
   });
 
-  const start = Date.now();
-  const result = await Promise.race([
-    lock.acquire(),
-    new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 50)),
-  ]);
-  const elapsed = Date.now() - start;
+  const result = await lock.acquire();
   assert.equal(result, false);
-  assert.ok(elapsed < 500, `expected acquire to settle promptly after timeout, took ${elapsed}ms`);
+  assert.equal(observedAbort, true);
 });
 
 test("release posts to <url>/release only when previously held", async () => {

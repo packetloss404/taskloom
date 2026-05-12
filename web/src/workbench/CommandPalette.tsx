@@ -62,7 +62,7 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
-  const [running, setRunning] = useState<string | null>(null);
+  const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -83,20 +83,20 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const go = (path: string) => { onClose(); navigate(path); };
 
   const runAgentCommand = async (agentId: string) => {
-    setRunning(agentId);
+    setRunningAgentId(agentId);
     try {
       await api.runAgent(agentId);
       onClose();
       navigate("/runs");
     } catch {
-      setRunning(null);
+      setRunningAgentId(null);
     }
   };
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const build: PaletteCommand[] = [
       { id: "action-open-builder", label: "Open Builder", hint: "Default workspace home", group: "Build", keywords: "builder build app code home", icon: "code", perform: () => go("/builder") },
-      { id: "action-new-build", label: "Start from prompt", hint: "Describe an app or agent", group: "Build", keywords: "new build prompt app agent landing", icon: "sparkle", perform: () => go("/builder") },
+      { id: "action-new-build", label: "Start from prompt", hint: "Describe an app or agent", group: "Build", keywords: "new build prompt app agent", icon: "sparkle", perform: () => go("/builder") },
       { id: "action-new-project", label: "New project", hint: "Create from the builder", group: "Build", keywords: "new project agent app create", icon: "plus", perform: () => go("/builder") },
     ];
     const primary: PaletteCommand[] = [
@@ -122,15 +122,23 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
       { id: "nav-storage", label: "Storage & DB", group: "Advanced", keywords: "storage database tables", icon: "database", perform: () => go("/storage") },
       { id: "nav-backups", label: "Backups & data", group: "Advanced", keywords: "backups data export", icon: "archive", perform: () => go("/backups") },
     ];
-    const agentCommands: PaletteCommand[] = agents.map((a) => ({
-      id: `agent-${a.id}`,
+    const agentCommands: PaletteCommand[] = agents.flatMap((a) => [{
+      id: `open-agent-${a.id}`,
       label: a.name,
-      hint: a.description || a.model,
+      hint: a.description || a.model || "Open project",
       group: "Projects",
-      keywords: `${a.name} ${a.id} ${a.description ?? ""} ${a.model ?? ""}`,
+      keywords: `open view project agent ${a.name} ${a.id} ${a.description ?? ""} ${a.model ?? ""}`,
       icon: "bot",
+      perform: () => go(`/agents/${a.id}`),
+    }, {
+      id: `run-agent-${a.id}`,
+      label: `Run ${a.name}`,
+      hint: a.triggerKind ? `Start ${a.triggerKind} run` : "Start manual run",
+      group: "Runs",
+      keywords: `run start execute agent ${a.name} ${a.id} ${a.description ?? ""} ${a.model ?? ""}`,
+      icon: "play",
       perform: async () => runAgentCommand(a.id),
-    }));
+    }]);
     return [...build, ...primary, ...agentCommands, ...advanced];
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents]);
@@ -227,7 +235,7 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
                       <div style={{ fontSize: 13.5, color: "var(--silver-50)" }}>{cmd.label}</div>
                       {cmd.hint && <div className="mono muted" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cmd.hint}</div>}
                     </div>
-                    {running === cmd.id.replace(/^agent-/, "") && (
+                    {cmd.id === `run-agent-${runningAgentId}` && (
                       <span className="spin"><I.refresh size={12}/></span>
                     )}
                     {active && (

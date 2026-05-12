@@ -12,9 +12,10 @@ Estimated time: 25-35 minutes for a full pass; about 10 minutes for the golden p
 
 ```bash
 npm install
-npm run db:migrate    # if testing against SQLite (TASKLOOM_STORE=sqlite)
-npm run db:seed       # creates seed accounts and workspaces
+npm run store:seed    # default JSON store; creates seed accounts and workspaces
 ```
+
+When testing SQLite specifically, set `TASKLOOM_STORE=sqlite`, then run `npm run db:migrate` and `npm run db:seed` before booting the app.
 
 Seed accounts (all password `demo12345`):
 
@@ -28,7 +29,7 @@ To wipe state between full passes:
 
 ```bash
 npm run store:reset    # JSON store at data/taskloom.json
-npm run db:reset       # SQLite store
+TASKLOOM_STORE=sqlite npm run db:reset
 ```
 
 Boot the app:
@@ -43,7 +44,7 @@ Open `http://localhost:7341/` in development, or `http://localhost:8484/` after 
 
 Sign in → `/builder` → describe an app → preview → iterate → publish.
 
-1. From the unauthenticated landing page, click **Sign in** and submit `alpha@taskloom.local` / `demo12345`.
+1. From the unauthenticated sign-in entry, submit `alpha@taskloom.local` / `demo12345`.
 2. Confirm you land on `/builder`. The Build mode toggle should show **Build an app** selected.
 3. Type a prompt such as `Build a lightweight CRM for renewal tracking`, then click the primary generate action.
 4. Confirm a draft renders before any mutation. It should show app name, summary, plan steps, page map, data model, acceptance checks, and warnings/open questions when relevant.
@@ -98,9 +99,9 @@ In a private window, sign up a fresh account at `/sign-up`. Walk through each on
 1. The dashboard "activation steps complete" counter increments.
 2. The `/activation` view stage label moves through Discovery → Definition → Implementation → Validation → Complete as expected.
 3. `GET /api/app/activation` and `GET /api/activation/:workspaceId` reflect the same status.
-4. Sign-out returns to the unauthenticated landing entry.
+4. Sign-out returns to the unauthenticated sign-in entry.
 
-Reset between passes by deleting `data/taskloom.json` (JSON store) or running `npm run db:reset` (SQLite store).
+Reset between passes by deleting `data/taskloom.json` or running `npm run store:reset` for the JSON store. For SQLite, run `TASKLOOM_STORE=sqlite npm run db:reset`.
 
 ## Provider Configuration
 
@@ -143,19 +144,19 @@ Run from the command line:
 ```bash
 npm run jobs:recompute-activation         # refreshes activation read models
 npm run jobs:repair-activation            # refreshes stale read models
-npm run db:status                         # inspects pending SQLite migrations
+TASKLOOM_STORE=sqlite npm run db:status   # inspects pending SQLite migrations
 ```
 
 Each should exit `0` with no warnings.
 
 ## Self-Host Sanity
 
-Backup → restart → restore → confirm data round-trips.
+SQLite backup → restart → restore → confirm data round-trips. Use this section when `TASKLOOM_STORE=sqlite`.
 
 1. With seed data loaded, run:
 
    ```bash
-   npm run db:backup -- --backup-path=data/taskloom.sqlite.bak
+   TASKLOOM_STORE=sqlite npm run db:backup -- --backup-path=data/taskloom.sqlite.bak
    ```
 
 2. Confirm a backup file is written.
@@ -163,7 +164,7 @@ Backup → restart → restore → confirm data round-trips.
 4. Run the restore:
 
    ```bash
-   npm run db:restore -- --backup-path=data/taskloom.sqlite.bak
+   TASKLOOM_STORE=sqlite npm run db:restore -- --backup-path=data/taskloom.sqlite.bak
    ```
 
 5. Restart the server and sign in. Confirm the app draft created in step 3 is gone and the seed data is restored exactly.

@@ -2,10 +2,10 @@
 
 **Self-hosted, open-source app and agent workbench. Describe what you want, ship it, own it.**
 
-Taskloom is the OSS, self-hosted answer to v0, Bolt, and Lovable-style builders — but for internal apps and agents instead of marketing pages. Sign in, open `/builder`, describe an internal tool or agent in plain English, get a brief, plan, and clickable preview, iterate with scoped change prompts, then publish to a workspace you operate end-to-end. Bring your own model keys (Anthropic, OpenAI, MiniMax, Ollama). MIT licensed. No telemetry.
+Taskloom is an OSS, self-hosted workbench for building internal apps and agents from plain-language prompts. Sign in, open `/builder`, describe an internal tool or agent, get a brief, plan, and clickable preview, iterate with scoped change prompts, then publish to a workspace you operate end-to-end. Bring your own model keys (Anthropic, OpenAI, MiniMax, Ollama). MIT licensed. No telemetry.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Version](https://img.shields.io/badge/version-v0.18.4-blue.svg)](https://github.com/packetloss404/taskloom/releases)
+[![Version](https://img.shields.io/badge/version-v0.1.0-blue.svg)](https://github.com/packetloss404/taskloom/releases)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.5.0-brightgreen.svg)](https://nodejs.org)
 [![Built with TypeScript](https://img.shields.io/badge/built%20with-TypeScript-blue.svg)](https://www.typescriptlang.org)
 [![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev)
@@ -60,7 +60,7 @@ You can also register a new account from the sign-up page. To reset local data b
 
 - **Prompt-to-app and prompt-to-agent.** Describe an internal app or agent in plain language; Taskloom drafts a brief, page map, data model, and acceptance checks.
 - **Draft, preview, iterate, publish.** Diff-review every change before applying. Each apply creates a checkpoint you can preview, smoke-test, and roll back to.
-- **Template gallery.** Six production-quality agent templates ship in the box (see below). Use them as starting points or compose from scratch.
+- **Template gallery.** Six ready-to-edit agent templates ship in the box (see below). Use them as starting points or compose from scratch.
 - **First-class scoped iteration.** Targeted change prompts edit one slice of the app instead of regenerating everything.
 
 ### Run
@@ -86,7 +86,7 @@ You can also register a new account from the sign-up page. To reset local data b
 - **MIT licensed**, single-binary friendly, runs anywhere Node 22 runs.
 - **No telemetry.** Nothing phones home.
 - **BYO keys.** No vendored model relationships; no proxy in the middle.
-- **SQLite or managed Postgres.** Default is file-backed JSON for contributor flow; flip to SQLite for single-node deployments or managed Postgres for horizontal app writers.
+- **JSON, SQLite, or managed Postgres.** Default is file-backed JSON for contributor flow; flip to SQLite for single-node deployments or managed Postgres for horizontal app writers.
 
 ## Agent templates
 

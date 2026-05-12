@@ -9,7 +9,7 @@ Taskloom is a self-hosted, MIT-licensed app and agent workbench. The builder loo
 Concretely, today's surface includes:
 
 - **Builder-first flow** at `/builder` for both prompt-to-app and prompt-to-agent, with diff-review on every apply and rollback to any prior checkpoint.
-- **Six production-quality agent templates** in [`src/agent-templates.ts`](../src/agent-templates.ts): support inbox triage, daily workspace brief, release audit, blocker watcher, weekly release notes, research summarizer.
+- **Six ready-to-edit agent templates** in [`src/agent-templates.ts`](../src/agent-templates.ts): support inbox triage, daily workspace brief, release audit, blocker watcher, weekly release notes, research summarizer.
 - **Four model providers** routable per agent: Anthropic, OpenAI, MiniMax, Ollama. BYO keys, stored in the encrypted secrets vault.
 - **Sandboxed code execution** via `/api/app/sandbox/*` and the `/sandbox` workbench view, with a Docker driver (default) and a clearly-marked-insecure native fallback. Opt-in routing of builder smoke checks through the sandbox.
 - **Full operate surface** in the workbench: alerts, audit log, secrets vault (AES-256-GCM at rest), inbound + outbound webhooks with retry and dead-letter, persistent jobs queue with five-field cron, RBAC (viewer / member / admin / owner), rate limits, releases, backups, storage, SSE-streamed runs, command palette.
@@ -74,7 +74,7 @@ First step:
 
 Items we have looked at and explicitly chosen not to do right now. Worth revisiting later or worth a discussion issue first.
 
-- **Public draft preview / anonymous "try it before installing"**. A rate-limited unsigned-in `/builder` preview would shorten the funnel from "saw the README" to "drafted my first app". Out of scope for now — the product is self-hosted and the trust boundary for prompt-to-execute is much cleaner with a real account on a real workspace. Reconsider if a hosted demo node ever happens.
+- **Public draft preview / anonymous "try it before installing"**. A rate-limited unsigned-in `/builder` preview would shorten the funnel from "saw the README" to "drafted my first app". Out of scope for now — the product is self-hosted and the trust boundary for prompt-to-execute is much cleaner with a real account on a real workspace. Reconsider only if there is a local demo path that preserves that boundary.
 - **App / agent marketplace between workspaces**. Workspaces are isolated by design today. Sharing apps and agents across workspaces in a single node is plausible (one writer, multiple tenants); sharing across nodes is a much larger change that bumps into trust, signing, and update flow. Not worth designing until the in-node case is well-defined.
 - **More builder modes** (test-driven, schema-first, mockup-first). The current freeform-prompt-plus-scoped-iteration is doing the job. Revisit only if a real user workflow keeps tripping over it.
 

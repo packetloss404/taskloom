@@ -1341,7 +1341,7 @@ async function branchAppCheckpoint(c: Context) {
 async function prepareGeneratedAppPublish(c: Context) {
   try {
     const context = await requireAuthenticatedContextAsync(c);
-    await requireWorkspacePermission(context, "viewWorkspace");
+    await requireWorkspacePermission(context, "manageWorkspace");
     const body = (await c.req.json().catch(() => ({}))) as AppPublishRouteRequest;
     if (body.agentId && !body.appId) return c.json(await buildAgentPublishPayload(context, body));
     const record = await findGeneratedAppRecord(context, body.appId, body.checkpointId);
@@ -1370,13 +1370,13 @@ async function prepareGeneratedAppPublish(c: Context) {
     });
 
     return c.json({
-      ready: validation.canPublish && integrations.canPublish,
+      ready: validation.canPublish && integrationsReadyForPublish(integrations),
       app: publishedAppSummary(record),
       publish: readiness,
       validation,
       integrations,
       history: orderGeneratedAppPublishHistory(record.publishHistory ?? []),
-      state: builderPublishState(record, readiness, validation, integrations),
+      state: builderPublishState(record, context.workspace.slug, readiness, validation, integrations),
     });
   } catch (error) {
     return errorResponse(c, error);
@@ -1415,7 +1415,7 @@ async function getGeneratedAppPublishState(c: Context) {
       createdByUserId: context.user.id,
     });
 
-    return c.json(builderPublishState(record, readiness, validation, integrations));
+    return c.json(builderPublishState(record, context.workspace.slug, readiness, validation, integrations));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -1481,7 +1481,7 @@ async function publishGeneratedApp(c: Context) {
     const checkpoint = checkpointForPublish(record, body.checkpointId);
     if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
     const { validation, integrations } = await buildPublishPreflight(context, record, checkpoint, body);
-    if (!validation.canPublish || !integrations.canPublish) {
+    if (!validation.canPublish || !integrationsReadyForPublish(integrations)) {
       return c.json({ error: "publish validation failed", validation, integrations }, 409);
     }
 
@@ -1547,7 +1547,7 @@ async function publishGeneratedApp(c: Context) {
       history: orderGeneratedAppPublishHistory(saved.publishHistory ?? []),
       dockerComposeExport: publish.dockerComposeExport,
       rollbackToPrevious: publish.rollbackCommand,
-      state: builderPublishState(saved, publish, validation, integrations),
+      state: builderPublishState(saved, context.workspace.slug, publish, validation, integrations),
     }, 201);
   } catch (error) {
     return errorResponse(c, error);
@@ -1622,7 +1622,7 @@ async function rollbackGeneratedAppPublish(c: Context) {
       publish: (saved.publishHistory ?? []).find((entry) => entry.id === target.id),
       history: orderGeneratedAppPublishHistory(saved.publishHistory ?? []),
       rollback: { command, result },
-      state: builderPublishState(saved),
+      state: builderPublishState(saved, context.workspace.slug),
     });
   } catch (error) {
     return errorResponse(c, error);
@@ -1632,7 +1632,7 @@ async function rollbackGeneratedAppPublish(c: Context) {
 async function exportGeneratedAppDockerCompose(c: Context) {
   try {
     const context = await requireAuthenticatedContextAsync(c);
-    await requireWorkspacePermission(context, "viewWorkspace");
+    await requireWorkspacePermission(context, "manageWorkspace");
     const appId = c.req.query("appId");
     const agentId = c.req.query("agentId");
     if (agentId && !appId) {
@@ -2064,6 +2064,7 @@ async function localPublishHealthObservation() {
 
 function builderPublishState(
   record: GeneratedAppRecord,
+  workspaceSlug: string,
   publish?: GeneratedAppPublishRecord,
   validation?: ReturnType<typeof buildAppPublishValidation>,
   integrations?: ReturnType<typeof inspectAppPublishIntegrations>,
@@ -2071,15 +2072,15 @@ function builderPublishState(
   const history = orderGeneratedAppPublishHistory(record.publishHistory ?? []);
   const current = publish ?? currentPublishedRecord(record) ?? history[0];
   const readiness = buildAppPublishReadiness({
-    appName: record.name,
     draftId: record.slug,
-    workspaceSlug: record.workspaceId,
+    workspaceSlug,
     visibility: current?.visibility ?? "private",
     runtimeEnv: publishRuntimeEnv(),
   });
   const blockers = [
     ...(validation?.actionableFailures ?? []).map((failure) => `${failure.stage}: ${failure.message}`),
     ...(integrations?.blockers ?? []),
+    ...(integrations?.featureBlockers ?? []),
   ];
 
   return {
@@ -2107,7 +2108,7 @@ function builderPublishState(
         "Export docker-compose.publish.yml for self-hosted handoff.",
         "Keep the previous publish available until the new URL is verified.",
       ],
-    canPublish: validation ? validation.canPublish && (integrations?.canPublish ?? true) : true,
+    canPublish: validation ? validation.canPublish && (integrations ? integrationsReadyForPublish(integrations) : true) : true,
     rollbackActions: history
       .filter((entry) => entry.id !== record.currentPublishId)
       .map((entry) => ({
@@ -2118,6 +2119,10 @@ function builderPublishState(
         disabled: entry.status === "failed",
       })),
   };
+}
+
+function integrationsReadyForPublish(integrations: ReturnType<typeof inspectAppPublishIntegrations>) {
+  return integrations.canPublish && integrations.canUseAllRequestedIntegrations;
 }
 
 function publishRuntimeEnv() {
@@ -2342,6 +2347,7 @@ function fromGeneratedAppDraftLike(
     purpose: String(route.purpose ?? `Generated route for ${route.path}`),
     handler: typeof route.handler === "string" ? route.handler : routeHandlerName(appRouteMethod(route.method), route.path),
     authRequired: route.access !== "public",
+    requiredRole: appRouteAccess(route.access) === "admin" ? "admin" as const : undefined,
   }));
   const nextDraft = {
     ...base,
@@ -2505,8 +2511,8 @@ function buildAppBuilderDraft(draft: AppDraft, context: AuthenticatedRouteContex
       steps: [
         planStep("Generate pages", `Create ${draft.pageMap.length} routed screens and shared navigation from the page map.`),
         planStep("Create data layer", `Provision ${draft.dataSchema.database} tables for ${draft.dataSchema.entities.map((entry) => entry.name).join(", ")}.`),
-        planStep("Wire API stubs", `Implement ${draft.apiRouteStubs.length} generated route contracts with validation and auth checks.`),
-        planStep("Run smoke build", "Render the generated preview and run page, API, and CRUD smoke checks."),
+        planStep("Document API stubs", `Review ${draft.apiRouteStubs.length} generated route contracts with validation and auth expectations before runtime implementation.`),
+        planStep("Run smoke build", "Render the generated preview and run page plus API contract smoke checks."),
       ],
       acceptanceChecks: draft.acceptanceChecks,
       openQuestions: [],
@@ -2642,6 +2648,7 @@ function mapApiRoute(route: ApiRouteStub) {
     purpose: route.purpose,
     handler: handlerName(route),
     authRequired: route.access !== "public",
+    requiredRole: route.access === "admin" ? "admin" as const : undefined,
   };
 }
 

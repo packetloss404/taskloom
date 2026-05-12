@@ -16,8 +16,7 @@ export function RateLimitsView() {
 
   return (
     <>
-      <Topbar crumbs={["__WS__", "Admin", "Rate limits"]}
-        actions={<button className="top-btn"><I.plus size={13}/> New limit</button>}/>
+      <Topbar crumbs={["__WS__", "Admin", "Rate limits"]}/>
       <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <div className="kicker">QUOTAS</div>
         <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Rate limits & quotas</h1>
@@ -27,7 +26,7 @@ export function RateLimitsView() {
 
         <div className="card" style={{ overflow: "hidden", marginBottom: 18 }}>
           <table className="tbl">
-            <thead><tr><th>Scope</th><th>Per-minute</th><th>Daily tokens</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Scope</th><th>Per-minute</th><th>Daily tokens</th><th>Status</th></tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i}>
@@ -39,10 +38,9 @@ export function RateLimitsView() {
                       ? <span className="pill warn"><span className="dot"></span>provider not connected</span>
                       : <span className="pill good"><span className="dot"></span>ok</span>}
                   </td>
-                  <td><button className="btn btn-sm" style={{ padding: "3px 8px" }} disabled><I.edit size={11}/> Edit</button></td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={5} className="muted" style={{ padding: 18, textAlign: "center" }}>No rate-limit scopes configured.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 18, textAlign: "center" }}>No rate-limit scopes configured.</td></tr>}
             </tbody>
           </table>
         </div>

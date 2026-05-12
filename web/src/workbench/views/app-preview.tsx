@@ -1,6 +1,8 @@
 import { Link, useParams } from "react-router-dom";
 import { I, type IconKey } from "../icons";
 import { Topbar } from "../Shell";
+import { api } from "@/lib/api";
+import { useApiData } from "../useApiData";
 
 interface PreviewCheck { icon: IconKey; label: string; value: string }
 
@@ -14,6 +16,12 @@ const CHECKS: PreviewCheck[] = [
 export function AppPreviewView() {
   const { workspaceId = "workspace", appId = "generated-app" } = useParams();
   const appName = titleFromSlug(appId);
+  const publish = useApiData(() => api.getBuilderPublishState({ appId }), [appId]);
+  const checkpoints = useApiData(() => api.listBuilderCheckpoints({ appId }), [appId]);
+  const checkpointList = checkpoints.data?.checkpoints ?? [];
+  const currentCheckpoint = checkpointList.find((checkpoint) => checkpoint.id === publish.data?.checkpointId)
+    ?? checkpointList.find((checkpoint) => checkpoint.id === checkpoints.data?.currentCheckpointId)
+    ?? checkpointList[0];
 
   return (
     <>
@@ -28,16 +36,24 @@ export function AppPreviewView() {
             <p className="kicker" style={{ color: "var(--silver-500)" }}>{workspaceId}</p>
             <h1 className="h1" style={{ fontSize: 32, marginTop: 6 }}>{appName}</h1>
             <p className="muted" style={{ fontSize: 13.5, lineHeight: 1.65, maxWidth: 560, marginTop: 10 }}>
-              This generated app checkpoint is saved and routable. The builder records the draft, route map,
-              data model, auth decisions, and smoke metadata so later iterations can replace this preview shell
-              with rendered generated files.
+              This generated app checkpoint is saved and routable. The builder keeps the plan, route map,
+              data model, auth decisions, smoke status, and publish handoff tied to this app id.
             </p>
             <div style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
               <Link to="/builder" className="btn btn-sm" style={{ textDecoration: "none" }}><I.layout size={12}/> Builder</Link>
-              <span className="pill good"><span className="dot"></span>Preview route live</span>
+              <span className={`pill ${publish.data?.canPublish ? "good" : "warn"}`}><span className="dot"></span>{publish.data?.status ?? "checking"}</span>
             </div>
+            {(publish.loading || checkpoints.loading) && <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>Loading checkpoint state…</p>}
+            {(publish.error || checkpoints.error) && <p style={{ color: "var(--danger)", fontSize: 12, marginTop: 14 }}>{publish.error ?? checkpoints.error}</p>}
           </div>
           <div style={{ display: "grid", gap: 8, alignContent: "start" }}>
+            {currentCheckpoint && (
+              <div className="card" style={{ padding: 14 }}>
+                <p className="kicker" style={{ marginBottom: 4 }}>Current checkpoint</p>
+                <p className="mono" style={{ fontSize: 12, color: "var(--silver-200)" }}>{currentCheckpoint.id}</p>
+                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>{currentCheckpoint.label}</p>
+              </div>
+            )}
             {CHECKS.map((c) => {
               const Ico = I[c.icon];
               return (
@@ -50,6 +66,12 @@ export function AppPreviewView() {
                 </div>
               );
             })}
+            {publish.data?.nextActions?.slice(0, 3).map((action) => (
+              <div key={action} className="card" style={{ padding: 14, display: "flex", gap: 10 }}>
+                <I.arrow size={16} style={{ color: "var(--silver-400)", flexShrink: 0, marginTop: 2 }}/>
+                <p style={{ fontSize: 13, color: "var(--silver-200)" }}>{action}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>

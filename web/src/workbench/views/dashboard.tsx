@@ -45,7 +45,7 @@ export function DashboardView() {
             <button className="top-btn" onClick={() => { void bootstrap.refresh(); void agents.refresh(); void runs.refresh(); void usage.refresh(); void activity.refresh(); }}>
               <I.refresh size={13}/> Refresh
             </button>
-            <button className="top-btn" onClick={() => setActive("landing")}><I.plus size={13}/> New build</button>
+            <button className="top-btn" onClick={() => setActive("builder")}><I.plus size={13}/> New build</button>
           </>
         }
       />

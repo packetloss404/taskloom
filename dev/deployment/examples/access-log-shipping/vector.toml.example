@@ -2,7 +2,7 @@
 # Taskloom access-log shipping example: Vector (vector.dev)
 # -----------------------------------------------------------------------------
 # This is an EXAMPLE Vector v0.x configuration that ships the redacted
-# Phase 20 file-mode access log to Loki, S3, and CloudWatch Logs. You MUST
+# file-mode access log to Loki, S3, and CloudWatch Logs. You MUST
 # adapt paths, endpoints, credentials, and labels to your environment before
 # using it in production.
 #
@@ -14,11 +14,11 @@
 #   https://vector.dev/docs/reference/configuration/sinks/aws_cloudwatch_logs/
 #
 # Operator notes:
-#   - Each access-log line is a single redacted JSON object (see
-#     docs/deployment-access-log-shipping.md for the line shape).
+#   - Each access-log line is a single redacted JSON object. See
+#     dev/deployment/operations.md for the current line shape.
 #   - Token-bearing routes are pre-redacted by the middleware. Do NOT add
 #     additional sinks that re-expose the raw request URL.
-#   - Phase 23 rotates files cascade-style: <path> -> <path>.1 -> <path>.2.
+#   - Access-log rotation is cascade-style: <path> -> <path>.1 -> <path>.2.
 #     The Vector `file` source follows the primary `<path>` after rotation
 #     because rotation is rename-based; if you also want to backfill from
 #     already-rotated files on first start, switch to a glob (see comments).

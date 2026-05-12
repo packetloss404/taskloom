@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { I } from "../icons";
 
-const VERSION = "v0.18.4";
+const VERSION = "v0.1.0";
 
 export function LoggedOutView({ onSignIn: _onSignIn }: { onSignIn: () => void }) {
   const { signIn } = useAuth();

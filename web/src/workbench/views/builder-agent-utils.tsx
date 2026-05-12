@@ -1,28 +1,55 @@
 import type { AgentBuilderDraft, AgentInputField, AgentRunRecord } from "@/lib/types";
 
 export type AgentBuilderSampleInputs = Record<string, string | number | boolean>;
+export type AgentBuilderSampleInputIssue = {
+  key: string;
+  message: string;
+};
 export type ReadinessTone = "good" | "warn" | "danger" | "muted";
 
 export function sampleInputsForDraft(draft: AgentBuilderDraft): AgentBuilderSampleInputs {
-  const schema = draft.agent.inputSchema ?? [];
-  const next: AgentBuilderSampleInputs = { ...draft.sampleInputs };
-
-  for (const field of schema) {
-    if (next[field.key] !== undefined) continue;
-    next[field.key] = generatedFieldSample(field);
-  }
-
-  return next;
+  return { ...draft.sampleInputs };
 }
 
 export function coerceSampleValue(field: AgentInputField | undefined, value: string | boolean): string | number | boolean {
   if (!field) return value;
   if (field.type === "boolean") return Boolean(value);
   if (field.type === "number") {
-    const numberValue = Number(value);
-    return Number.isFinite(numberValue) ? numberValue : 0;
+    const text = String(value);
+    if (text.trim() === "") return "";
+    const numberValue = Number(text);
+    return Number.isFinite(numberValue) ? numberValue : text;
   }
   return String(value);
+}
+
+export function sampleInputIssuesForDraft(draft: AgentBuilderDraft, sampleInputs: AgentBuilderSampleInputs): AgentBuilderSampleInputIssue[] {
+  const issues: AgentBuilderSampleInputIssue[] = [];
+  for (const field of draft.agent.inputSchema ?? []) {
+    const value = sampleInputs[field.key];
+    const label = field.label || field.key;
+    const text = value === undefined || value === null ? "" : String(value);
+    const hasTextValue = text.trim().length > 0;
+
+    if (field.required && !hasTextValue) {
+      issues.push({ key: field.key, message: `${label} is required.` });
+      continue;
+    }
+    if (!hasTextValue) continue;
+
+    if (field.type === "number" && !Number.isFinite(Number(value))) {
+      issues.push({ key: field.key, message: `${label} must be a number.` });
+      continue;
+    }
+    if (field.type === "url" && !isHttpUrl(text)) {
+      issues.push({ key: field.key, message: `${label} must be a valid http(s) URL.` });
+      continue;
+    }
+    if (field.type === "enum" && !(field.options ?? []).includes(text)) {
+      issues.push({ key: field.key, message: `${label} must match one of the available options.` });
+    }
+  }
+  return issues;
 }
 
 export function inputValueForField(value: string | number | boolean | undefined): string {
@@ -79,21 +106,13 @@ export function safeJson(value: unknown): string {
   }
 }
 
-function generatedFieldSample(field: AgentInputField): string | number | boolean {
-  if (field.defaultValue !== undefined) {
-    if (field.type === "boolean") return field.defaultValue === "true";
-    if (field.type === "number") {
-      const numberValue = Number(field.defaultValue);
-      return Number.isFinite(numberValue) ? numberValue : 1;
-    }
-    return field.defaultValue;
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
-
-  if (field.type === "boolean") return false;
-  if (field.type === "number") return 1;
-  if (field.type === "url") return "https://example.com";
-  if (field.type === "enum") return field.options?.[0] ?? "";
-  return `Sample ${field.label || field.key}`;
 }
 
 function uniqueStrings(values: string[] | undefined): string[] {

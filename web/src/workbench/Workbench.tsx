@@ -84,7 +84,6 @@ function WorkbenchInner() {
         <div className="view">
           <Routes>
             <Route index element={<Navigate to="builder" replace />} />
-            <Route path="landing" element={<Navigate to="/builder" replace />} />
             <Route path="dashboard" element={<DashboardView />} />
             <Route path="builder" element={<BuilderView />} />
             <Route path="builder/preview/:workspaceId/:appId/*" element={<AppPreviewView />} />

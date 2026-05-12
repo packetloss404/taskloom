@@ -81,7 +81,8 @@ function ProjectsCatalog({ onOpenAgent }: { onOpenAgent: (a: AgentRecord) => voi
   };
 
   const openApp = (app: GeneratedAppSummary) => {
-    const target = app.previewUrl ?? app.publishedUrl;
+    const isPublished = app.publishStatus === "published" || Boolean(app.publishedUrl);
+    const target = isPublished ? app.publishedUrl ?? app.previewUrl : app.previewUrl ?? app.publishedUrl;
     if (!target) {
       navigate("/builder");
       return;
@@ -223,34 +224,53 @@ function formatShortDate(value: string) {
 
 function AgentTemplates({ onCreated }: { onCreated: (a: AgentRecord) => void }) {
   const templates = useApiData(() => api.listAgentTemplates(), []);
+  const [creatingTemplateId, setCreatingTemplateId] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const createFromTemplate = async (templateId: string) => {
+    if (creatingTemplateId) return;
+    setCreatingTemplateId(templateId);
+    setCreateError(null);
+    try {
+      const created = await api.createAgentFromTemplate(templateId);
+      onCreated(created);
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreatingTemplateId(null);
+    }
+  };
+
   return (
     <div style={{ padding: "26px 28px" }}>
       <div className="kicker">TEMPLATES</div>
       <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 16 }}>Start from a template</h1>
       {templates.loading && <div className="muted">Loading…</div>}
       {templates.error && <div className="card" style={{ padding: 16, color: "var(--danger)" }}>{templates.error}</div>}
+      {createError && (
+        <div className="card" style={{ padding: 16, color: "var(--danger)", marginBottom: 12 }}>
+          {createError}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        {(templates.data ?? []).map(t => (
-          <div key={t.id} className="card" style={{ padding: 16 }}>
-            <div className="kicker" style={{ color: "var(--green)" }}>{t.category.toUpperCase()}</div>
-            <div className="h3" style={{ fontSize: 15, marginTop: 6 }}>{t.name}</div>
-            <p className="muted" style={{ fontSize: 12.5, marginTop: 4, minHeight: 40 }}>{t.summary || t.description}</p>
-            <button
-              className="btn btn-sm"
-              style={{ marginTop: 8 }}
-              onClick={async () => {
-                try {
-                  const created = await api.createAgentFromTemplate(t.id);
-                  onCreated(created);
-                } catch (e) {
-                  console.error("createAgentFromTemplate failed", e);
-                }
-              }}
-            >
-              Use template <I.arrow size={11}/>
-            </button>
-          </div>
-        ))}
+        {(templates.data ?? []).map(t => {
+          const creating = creatingTemplateId === t.id;
+          return (
+            <div key={t.id} className="card" style={{ padding: 16 }}>
+              <div className="kicker" style={{ color: "var(--green)" }}>{t.category.toUpperCase()}</div>
+              <div className="h3" style={{ fontSize: 15, marginTop: 6 }}>{t.name}</div>
+              <p className="muted" style={{ fontSize: 12.5, marginTop: 4, minHeight: 40 }}>{t.summary || t.description}</p>
+              <button
+                className="btn btn-sm"
+                style={{ marginTop: 8 }}
+                disabled={Boolean(creatingTemplateId)}
+                onClick={() => { void createFromTemplate(t.id); }}
+              >
+                {creating ? <><span className="spin"><I.refresh size={11}/></span> Creating…</> : <>Use template <I.arrow size={11}/></>}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

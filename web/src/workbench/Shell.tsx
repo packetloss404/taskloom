@@ -5,7 +5,7 @@ import { useUser, useWorkbench, useWorkspaceName } from "./WorkbenchContext";
 import { useCommandPalette } from "./CommandPalette";
 
 export type ViewKey =
-  | "landing" | "dashboard" | "builder" | "agents"
+  | "dashboard" | "builder" | "agents"
   | "workflows" | "runs" | "integrations"
   | "operations" | "sandbox" | "activation" | "settings"
   | "billing" | "roles" | "sso" | "secrets"

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { I, type IconKey } from "../icons";
 import { Topbar } from "../Shell";
-import { api, type BuilderStreamEvent } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
 import { AgentBuilderPanel } from "./builder-agent";
@@ -15,7 +15,6 @@ import type {
   AppBuilderIterationDiffFile,
   AppBuilderIterationResult,
   AppBuilderIterationTarget,
-  AppBuilderIterationTargetKind,
   AppBuilderPageDraft,
   AppBuilderPublishState,
   AppBuilderSmokeBuildStatus,
@@ -64,14 +63,9 @@ interface BuilderState {
   iteration: AppBuilderIterationResult | null;
 }
 
-const TARGET_KINDS: { kind: AppBuilderIterationTargetKind; label: string }[] = [
-  { kind: "app", label: "Whole app" },
-  { kind: "page", label: "Page" },
-  { kind: "data_entity", label: "Data" },
-  { kind: "api_route", label: "API route" },
-  { kind: "auth", label: "Auth" },
-  { kind: "smoke", label: "Smoke / build" },
-];
+type IterationTargetOption = AppBuilderIterationTarget & { group: string };
+type PublishRollbackAction = AppBuilderPublishState["rollbackActions"][number];
+type PublishRollbackBody = NonNullable<Parameters<typeof api.rollbackBuilderPublish>[1]> & { targetPublishId?: string };
 
 const BUILD_MODES: Array<{ id: BuilderKind; label: string; icon: IconKey; desc: string }> = [
   { id: "app", label: "Build an app", icon: "layout", desc: "Pages · data · routes" },
@@ -96,6 +90,66 @@ function getPreviewNavigationTarget(previewUrl: string | null, appId: string | n
   return appId ? `/builder/preview/workspace/${encodeURIComponent(appId)}` : null;
 }
 
+function stableTargetKey(value: string): string {
+  return encodeURIComponent(value.trim().toLowerCase()).replace(/%/g, "_");
+}
+
+function buildIterationTargetOptions(draft: AppBuilderDraft | null): IterationTargetOption[] {
+  if (!draft) {
+    return [{ id: "app:draft", kind: "app", label: "Whole app", group: "App" }];
+  }
+  const appKey = stableTargetKey(draft.app.slug || draft.app.name || "app");
+  return [
+    { id: `app:${appKey}`, kind: "app", label: draft.app.name || "Whole app", path: draft.app.slug, group: "App" },
+    ...draft.app.pages.map((page) => ({
+      id: `page:${stableTargetKey(page.route || page.name)}`,
+      kind: "page" as const,
+      label: `${page.name} (${page.route})`,
+      path: page.route,
+      group: "Pages",
+    })),
+    ...draft.app.dataSchema.map((entity) => ({
+      id: `data_entity:${stableTargetKey(entity.name)}`,
+      kind: "data_entity" as const,
+      label: entity.name,
+      path: entity.name,
+      group: "Data",
+    })),
+    ...draft.app.apiRoutes.map((route) => ({
+      id: `api_route:${stableTargetKey(`${route.method}:${route.path}`)}`,
+      kind: "api_route" as const,
+      label: `${route.method} ${route.path}`,
+      path: route.path,
+      group: "API",
+    })),
+    ...(draft.app.authDecisions.length > 0
+      ? [{
+          id: `auth:${appKey}`,
+          kind: "auth" as const,
+          label: `Auth (${draft.app.authDecisions.map((decision) => decision.area).join(", ")})`,
+          path: "auth",
+          group: "Auth",
+        }]
+      : []),
+    {
+      id: `smoke:${appKey}`,
+      kind: "smoke",
+      label: `Smoke / build (${draft.smokeBuildStatus.status})`,
+      path: "smoke",
+      group: "Quality",
+    },
+  ];
+}
+
+function escapeCssIdent(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+  return value.replace(/[\0-\x1f\x7f]|^-?\d|^-$|[^\w-]/g, (char, offset) => {
+    if (char === "\0") return "\uFFFD";
+    const code = char.charCodeAt(0).toString(16).toUpperCase();
+    return offset === 0 || /[\0-\x1f\x7f]/.test(char) ? `\\${code} ` : `\\${char}`;
+  });
+}
+
 function cssPathFor(el: Element): string {
   const segments: string[] = [];
   let current: Element | null = el;
@@ -105,12 +159,12 @@ function cssPathFor(el: Element): string {
     let segment = tag;
     const id = node.getAttribute("id");
     if (id) {
-      segment = `${tag}#${id}`;
+      segment = `${tag}#${escapeCssIdent(id)}`;
       segments.unshift(segment);
       break;
     }
-    const className = (node.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 2).join(".");
-    if (className) segment += `.${className}`;
+    const classes = (node.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+    if (classes.length > 0) segment += classes.map((className) => `.${escapeCssIdent(className)}`).join("");
     const parent: Element | null = node.parentElement;
     if (parent) {
       const sameTagSiblings: Element[] = Array.from(parent.children).filter((sibling) => sibling.tagName === node.tagName);
@@ -139,8 +193,7 @@ export function BuilderView() {
   const [builderKind, setBuilderKind] = useState<BuilderKind>("app");
   const [prompt, setPrompt] = useState("");
   const [iterPrompt, setIterPrompt] = useState("");
-  const [iterTargetKind, setIterTargetKind] = useState<AppBuilderIterationTargetKind>("app");
-  const [iterTargetLabel, setIterTargetLabel] = useState<string>("Whole app");
+  const [iterTargetId, setIterTargetId] = useState<string>("app:draft");
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const [tab, setTab] = useState<"preview" | "files" | "smoke" | "logs" | "sandbox" | "checkpoints" | "publish">("preview");
@@ -156,12 +209,22 @@ export function BuilderView() {
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const previewTarget = getPreviewNavigationTarget(state.previewUrl, state.appId);
+  const iterationTargetOptions = useMemo(() => buildIterationTargetOptions(state.draft), [state.draft]);
+  const selectedIterationTarget = iterationTargetOptions.find((target) => target.id === iterTargetId) ?? iterationTargetOptions[0]!;
+  const selectedTargetKind = selectedElement ? "page" : selectedIterationTarget.kind;
+  const pageIterationTarget = iterationTargetOptions.find((target) => target.kind === "page") ?? selectedIterationTarget;
 
   useEffect(() => {
     if (threadRef.current) {
       threadRef.current.scrollTop = threadRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (!iterationTargetOptions.some((target) => target.id === iterTargetId)) {
+      setIterTargetId(iterationTargetOptions[0]!.id);
+    }
+  }, [iterationTargetOptions, iterTargetId]);
 
   const appendMessage = (msg: ChatMessage) => setMessages((prev) => [...prev, msg]);
   const updateMessage = (id: string, updater: (msg: ChatMessage) => ChatMessage) =>
@@ -264,13 +327,16 @@ export function BuilderView() {
 
   const iterate = async () => {
     if (!state.draft || !iterPrompt.trim() || working) return;
-    const scopeKind: AppBuilderIterationTargetKind = selectedElement ? "page" : iterTargetKind;
-    const scopeLabel = selectedElement ? `${iterTargetLabel} → ${selectedElement.selector}` : iterTargetLabel;
-    const target: AppBuilderIterationTarget = {
-      id: `target_${scopeKind}_${Date.now().toString(36)}`,
-      kind: scopeKind,
-      label: scopeLabel,
-    };
+    const baseTarget = selectedElement ? pageIterationTarget : selectedIterationTarget;
+    const target: AppBuilderIterationTarget = selectedElement
+      ? {
+          ...baseTarget,
+          id: `${baseTarget.id}:element:${stableTargetKey(selectedElement.selector)}`,
+          kind: "page",
+          label: `${baseTarget.label} -> ${selectedElement.selector}`,
+          path: selectedElement.selector,
+        }
+      : baseTarget;
     const composedPrompt = selectedElement
       ? `On the element \`${selectedElement.selector}\`${selectedElement.label ? ` ("${selectedElement.label}")` : ""}: ${iterPrompt}`
       : iterPrompt;
@@ -361,13 +427,29 @@ export function BuilderView() {
       const result = await api.rollbackBuilderCheckpoint(checkpointId, { appId: state.appId });
       setState((prev) => ({
         ...prev,
+        draft: result.draft ?? prev.draft,
+        appId: result.app?.id ?? prev.appId,
         checkpointId: result.checkpoint?.id ?? prev.checkpointId,
-        previewUrl: result.preview?.url ?? prev.previewUrl,
+        previewUrl: result.preview?.url ?? result.app?.previewUrl ?? prev.previewUrl,
+        smoke: result.smoke ?? prev.smoke,
+        iteration: null,
       }));
-      const cps = await api.listBuilderCheckpoints({ appId: state.appId });
+      setSelectedElement(null);
+      setInspectMode(false);
+      setMode("applied");
+      setTab("preview");
+      const nextAppId = result.app?.id ?? state.appId;
+      const cps = await api.listBuilderCheckpoints({ appId: nextAppId });
       setCheckpoints(cps.checkpoints);
+      try {
+        const ps = await api.getBuilderPublishState({ appId: nextAppId, checkpointId: result.checkpoint?.id });
+        setPublishState(ps);
+      } catch { /* ignore */ }
+      pushSystemStatus(result.preview?.message ?? "Checkpoint restored.", "ok");
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      pushSystemStatus(message, "error");
     } finally {
       setWorking(false);
     }
@@ -421,6 +503,49 @@ export function BuilderView() {
       setPublishState(result.state);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const rollbackPublish = async (action: PublishRollbackAction) => {
+    if (!state.appId || !publishState || working) return;
+    if (!action.publishId) {
+      const message = "Publish rollback action is missing a target publish id.";
+      setError(message);
+      pushSystemStatus(message, "error");
+      return;
+    }
+    const currentPublishId = publishState.history.find((entry) =>
+      !publishState.rollbackActions.some((rollbackAction) => rollbackAction.publishId === entry.id)
+    )?.id;
+    if (!currentPublishId) {
+      const message = "Current publish id could not be resolved for rollback.";
+      setError(message);
+      pushSystemStatus(message, "error");
+      return;
+    }
+    setWorking(true);
+    setError(null);
+    try {
+      const body: PublishRollbackBody = {
+        appId: state.appId,
+        checkpointId: action.checkpointId,
+        targetPublishId: action.publishId,
+        reason: `Rollback via builder publish panel to ${action.label}.`,
+      };
+      const result = await api.rollbackBuilderPublish(currentPublishId, body);
+      setPublishState(result.state);
+      setState((prev) => ({
+        ...prev,
+        checkpointId: result.state.checkpointId ?? action.checkpointId ?? prev.checkpointId,
+        iteration: null,
+      }));
+      pushSystemStatus(`${action.label} complete.`, "ok");
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      pushSystemStatus(message, "error");
     } finally {
       setWorking(false);
     }
@@ -604,10 +729,10 @@ export function BuilderView() {
 
             <div style={{ padding: 12, borderTop: "1px solid var(--line)", background: "var(--bg)" }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                {TARGET_KINDS.map((t) => {
-                  const active = iterTargetKind === t.kind;
+                {iterationTargetOptions.map((t) => {
+                  const active = selectedIterationTarget.id === t.id && !selectedElement;
                   return (
-                    <button key={t.kind} className="btn btn-sm" onClick={() => { setIterTargetKind(t.kind); setIterTargetLabel(t.label); }} style={{
+                    <button key={t.id} className="btn btn-sm" title={t.group} onClick={() => { setIterTargetId(t.id); setSelectedElement(null); }} style={{
                       background: active ? "var(--bg-elev)" : "var(--panel)",
                       borderColor: active ? "var(--green-deep)" : "var(--line-2)",
                       color: active ? "var(--green)" : "var(--silver-300)",
@@ -685,7 +810,7 @@ export function BuilderView() {
                 <span className="mono muted" style={{ marginLeft: "auto", fontSize: 10.5 }}>⌘↵ to send</span>
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span className="pill muted">target: {iterTargetKind}</span>
+                <span className="pill muted">target: {selectedTargetKind}</span>
                 {state.smoke && <span className={`pill ${state.smoke.status === "pass" ? "good" : state.smoke.status === "fail" ? "danger" : "warn"}`}><span className="dot"></span>build {state.smoke.status}</span>}
               </div>
             </div>
@@ -731,7 +856,7 @@ export function BuilderView() {
               {tab === "logs" && <LogsTab iteration={state.iteration}/>}
               {tab === "sandbox" && <SandboxBuilderTab appId={state.appId}/>}
               {tab === "checkpoints" && <CheckpointsTab checkpoints={checkpoints} currentId={state.checkpointId} onRollback={(id) => { void rollback(id); }} onBranch={(id) => { void branch(id); }} working={working}/>}
-              {tab === "publish" && <PublishTab state={publishState} canPublish={!!state.appId} onPublish={() => { void publish(); }} working={working}/>}
+              {tab === "publish" && <PublishTab state={publishState} canPublish={!!state.appId} onPublish={() => { void publish(); }} onRollback={(action) => { void rollbackPublish(action); }} working={working}/>}
             </div>
           </div>
         </div>
@@ -1292,7 +1417,19 @@ function CheckpointsTab({
   );
 }
 
-function PublishTab({ state, canPublish, onPublish, working }: { state: AppBuilderPublishState | null; canPublish: boolean; onPublish: () => void; working: boolean }) {
+function PublishTab({
+  state,
+  canPublish,
+  onPublish,
+  onRollback,
+  working,
+}: {
+  state: AppBuilderPublishState | null;
+  canPublish: boolean;
+  onPublish: () => void;
+  onRollback: (action: PublishRollbackAction) => void;
+  working: boolean;
+}) {
   if (!canPublish) {
     return (
       <div style={{ padding: 22 }}>
@@ -1317,7 +1454,7 @@ function PublishTab({ state, canPublish, onPublish, working }: { state: AppBuild
           {working ? " Publishing…" : " Publish now"}
         </button>
         {state.rollbackActions.map((action) => (
-          <button key={action.id} className="btn btn-sm" disabled={action.disabled || working}>
+          <button key={action.id} className="btn btn-sm" disabled={action.disabled || working || !action.publishId} onClick={() => onRollback(action)}>
             <I.history size={11}/> {action.label}
           </button>
         ))}

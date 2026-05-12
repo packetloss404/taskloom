@@ -93,10 +93,7 @@ export function RolesView() {
                 <div className="h3" style={{ fontSize: 15 }}>{role.name}</div>
                 <div className="mono muted" style={{ fontSize: 11.5 }}>{role.id} · {counts[role.id] ?? 0} member{(counts[role.id] ?? 0) === 1 ? "" : "s"}</div>
               </div>
-              <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                <button className="btn btn-sm" disabled><I.edit size={12}/> Rename</button>
-                <button className="btn btn-primary btn-sm" disabled>Save changes</button>
-              </div>
+              <div className="pill muted" style={{ marginLeft: "auto" }}>system managed</div>
             </div>
 
             {Object.entries(permGroups).map(([group, perms]) => (

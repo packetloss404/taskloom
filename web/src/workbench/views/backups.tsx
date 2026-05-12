@@ -1,12 +1,16 @@
 import { I } from "../icons";
 import { Topbar, PanelHeader } from "../Shell";
 import { useApiData } from "../useApiData";
+import { useWorkbench } from "../WorkbenchContext";
 import { api } from "@/lib/api";
+import { canManageWorkspaceRole } from "@/lib/roles";
 
 export function BackupsView() {
+  const role = useWorkbench().session.workspace.role;
+  const canManageWorkspace = canManageWorkspaceRole(role);
   const status = useApiData<{ storageTopology?: Record<string, unknown>; releaseEvidence?: Record<string, unknown>; managedDatabaseTopology?: Record<string, unknown> }>(
-    () => api.getOperationsStatus() as Promise<{ storageTopology?: Record<string, unknown>; releaseEvidence?: Record<string, unknown> }>,
-    [],
+    () => canManageWorkspace ? api.getOperationsStatus() as Promise<{ storageTopology?: Record<string, unknown>; releaseEvidence?: Record<string, unknown> }> : Promise.resolve({}),
+    [canManageWorkspace],
   );
   const evidence = status.data?.releaseEvidence;
   const topology = status.data?.storageTopology;
@@ -14,8 +18,17 @@ export function BackupsView() {
   return (
     <>
       <Topbar crumbs={["__WS__", "Admin", "Backups & data"]}
-        actions={<button className="top-btn" onClick={() => { void status.refresh(); }}><I.refresh size={13}/> Refresh</button>}/>
+        actions={canManageWorkspace ? <button className="top-btn" onClick={() => { void status.refresh(); }}><I.refresh size={13}/> Refresh</button> : null}/>
       <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
+        {!canManageWorkspace ? (
+          <div className="card" style={{ padding: 18 }}>
+            <div className="h3" style={{ fontSize: 14, marginBottom: 8 }}>Admin access required</div>
+            <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: 0 }}>
+              Backup topology, release evidence, and data export posture are only available to workspace admins.
+            </p>
+          </div>
+        ) : (
+        <>
         <div className="kicker">DATA PROTECTION</div>
         <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Backups & restore</h1>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
@@ -49,13 +62,12 @@ export function BackupsView() {
           <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginBottom: 12 }}>
             One-click export of the workspace as a portable archive — agents, runs, audit log, secrets envelope (encrypted).
           </p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn" disabled><I.doc size={12}/> Export full archive</button>
-            <button className="btn" disabled><I.doc size={12}/> Export audit only</button>
-            <button className="btn" style={{ color: "var(--danger)", borderColor: "rgba(242,107,92,0.25)", marginLeft: "auto" }} disabled><I.trash size={12}/> Purge old backups…</button>
-          </div>
-          <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>Export and purge actions require server-side endpoints not yet exposed.</p>
+          <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: 0 }}>
+            Export and purge controls are not exposed by the server in this build.
+          </p>
         </div>
+        </>
+        )}
       </div>
     </>
   );
