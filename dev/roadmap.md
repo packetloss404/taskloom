@@ -4,16 +4,23 @@ This document describes where Taskloom is today and the tracks we think are most
 
 ## Where we are
 
-Taskloom is a self-hosted, MIT-licensed app and agent workbench. The builder loop — describe an internal app or agent in plain English, review a brief and plan, preview a clickable build, iterate with scoped change prompts, then publish — is the supported MVP and is used end-to-end. The same workbench that drafts the work also operates it: workflows, runs, integrations, operations, and settings all live behind one sign-in.
+Taskloom is a self-hosted, MIT-licensed app and agent workbench. The builder loop — describe an internal app or agent in plain English, review a brief and plan, inspect generated source files, preview a saved local checkpoint, iterate with scoped change prompts, then create a publish handoff — is the supported MVP and is used end-to-end. The same workbench that drafts the work also operates it: workflows, runs, integrations, operations, and settings all live behind one sign-in.
 
 Concretely, today's surface includes:
 
-- **Builder-first flow** at `/builder` for both prompt-to-app and prompt-to-agent, with diff-review on every apply and rollback to any prior checkpoint.
+- **Builder-first flow** at `/builder` for both prompt-to-app and prompt-to-agent, with diff-review on every apply, saved local previews, publish handoff metadata, and rollback to any prior checkpoint.
 - **Six ready-to-edit agent templates** in [`src/agent-templates.ts`](../src/agent-templates.ts): support inbox triage, daily workspace brief, release audit, blocker watcher, weekly release notes, research summarizer.
 - **Four model providers** routable per agent: Anthropic, OpenAI, MiniMax, Ollama. BYO keys, stored in the encrypted secrets vault.
 - **Sandboxed code execution** via `/api/app/sandbox/*` and the `/sandbox` workbench view, with a Docker driver (default) and a clearly-marked-insecure native fallback. Opt-in routing of builder smoke checks through the sandbox.
 - **Full operate surface** in the workbench: alerts, audit log, secrets vault (AES-256-GCM at rest), inbound + outbound webhooks with retry and dead-letter, persistent jobs queue with five-field cron, RBAC (viewer / member / admin / owner), rate limits, releases, backups, storage, SSE-streamed runs, command palette.
 - **Self-host quick start** with three storage modes: file-backed JSON for contributor flow, single-node SQLite (WAL, foreign keys, busy_timeout) for production single-node, and managed Postgres for horizontal app writers.
+
+Known limits in the current builder-first pass:
+
+- Preview is a Taskloom-served local checkpoint backed by generated files on disk, not proof of a public deployment.
+- Publish is a local package and URL handoff with validation and rollback metadata; operators still provide the runtime, network, and public host.
+- Generated source now includes a narrow React/Vite CRUD bundle, seed data, schema, API helper, and migration starter. A full browser IDE/editor surface remains future work.
+- Taskloom is self-host-first and does not claim Replit, Anything, v0, Bolt, or Lovable parity.
 
 Workbench screens that exist as of today (each one a file under [`web/src/workbench/views/`](../web/src/workbench/views/)): builder, agents, agent-editor, builder-agent, app-preview, run-detail, run-deep, runs, workflows, integrations, sandbox, operations, secrets, webhooks, rate-limits, releases, notifications, storage, backups, billing, roles, sso, settings, admin-controls, dashboard, activation.
 

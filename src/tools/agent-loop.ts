@@ -3,6 +3,7 @@ import { getDefaultRouter } from "../providers/router.js";
 import type {
   ProviderCallResult,
   ProviderMessage,
+  ProviderName,
   ProviderToolDef,
 } from "../providers/types.js";
 import { getDefaultToolRegistry } from "./registry.js";
@@ -15,6 +16,8 @@ export interface AgentLoopInput {
   runId?: string;
   agentId?: string;
   routeKey: string;
+  providerName?: ProviderName;
+  model?: string;
   systemPrompt: string;
   userPrompt: string;
   toolNames?: string[];
@@ -44,7 +47,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     .filter((t): t is ToolDefinition => Boolean(t));
   const toolDefs = tools.map(toolDefForProvider);
   const router = getDefaultRouter();
-  const route = router.resolve(input.routeKey);
+  const route = input.providerName && input.model
+    ? { provider: input.providerName, model: input.model }
+    : { ...router.resolve(input.routeKey), ...(input.model ? { model: input.model } : {}) };
+  if (route.provider !== "stub" && !router.has(route.provider)) {
+    throw new Error(`provider "${route.provider}" is not registered for agent execution`);
+  }
   const maxTurns = Math.max(1, Math.min(input.maxTurns ?? MAX_TURNS_DEFAULT, 16));
 
   const messages: ProviderMessage[] = [
@@ -70,8 +78,10 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
       () => router.call({
         workspaceId: input.workspaceId,
         routeKey: input.routeKey,
+        provider: route.provider,
         messages,
         ...(toolDefs.length > 0 ? { tools: toolDefs } : {}),
+        model: route.model,
         ...(input.signal ? { signal: input.signal } : {}),
         maxTokens: 2048,
       }),

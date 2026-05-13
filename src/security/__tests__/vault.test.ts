@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decryptSecret, deriveMasterKey, encryptSecret, maskSecret } from "../vault.js";
+import {
+  decryptSecret,
+  deriveMasterKey,
+  encryptSecret,
+  loadMasterKey,
+  maskSecret,
+  resetMasterKeyCacheForTests,
+} from "../vault.js";
 
 const KEY = deriveMasterKey("phase-1-test");
 
@@ -45,4 +52,18 @@ test("encryption uses fresh IV per call (different ciphertext)", () => {
   const b = encryptSecret("same", KEY);
   assert.notEqual(a.iv, b.iv);
   assert.notEqual(a.ciphertext + a.authTag, b.ciphertext + b.authTag);
+});
+
+test("loadMasterKey requires MASTER_KEY in production", () => {
+  resetMasterKeyCacheForTests();
+  assert.throws(
+    () => loadMasterKey({ NODE_ENV: "production" }),
+    /MASTER_KEY must be set/,
+  );
+});
+
+test("loadMasterKey allows deterministic fallback outside production", () => {
+  resetMasterKeyCacheForTests();
+  const key = loadMasterKey({ NODE_ENV: "development" });
+  assert.equal(key.length, 32);
 });

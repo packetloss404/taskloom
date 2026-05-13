@@ -2,9 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAppPublishValidation,
+  derivePublishArtifactStatus,
   deriveProductionBuildStatus,
   deriveValidatedPublishUrl,
 } from "./app-publish-service";
+
+const READY_ARTIFACTS = {
+  expectedArtifacts: ["web/dist", "data/published-apps/alpha/ops-board/bundle"],
+  manifestPath: "data/published-apps/alpha/ops-board/publish-artifacts.json",
+  artifacts: [
+    { path: "web/dist", kind: "build_output" as const, source: "build" as const },
+    { path: "data/published-apps/alpha/ops-board/bundle", kind: "generated_bundle" as const, source: "generated_draft" as const, bytes: 4096 },
+  ],
+};
 
 test("buildAppPublishValidation marks a self-hosted URL ready when build, health, and smoke pass", () => {
   const validation = buildAppPublishValidation({
@@ -13,6 +23,7 @@ test("buildAppPublishValidation marks a self-hosted URL ready when build, health
       command: "npm run build:web",
       expectedArtifacts: ["web/dist", "data/published-apps/alpha/ops-board"],
     },
+    artifacts: READY_ARTIFACTS,
     health: {
       live: { statusCode: 200, bodyStatus: "live" },
       ready: { statusCode: 200, bodyStatus: "ready" },
@@ -34,11 +45,39 @@ test("buildAppPublishValidation marks a self-hosted URL ready when build, health
   assert.equal(validation.status, "ready");
   assert.equal(validation.canPublish, true);
   assert.equal(validation.productionBuild.status, "pass");
+  assert.equal(validation.artifactPresence.status, "pass");
   assert.equal(validation.healthCheck.status, "pass");
   assert.equal(validation.smokeCheck.status, "pass");
   assert.equal(validation.validatedUrl.status, "valid");
   assert.equal(validation.validatedUrl.url, "http://localhost:8484/app/alpha/ops-board");
   assert.deepEqual(validation.actionableFailures, []);
+});
+
+test("publish validation blocks without generated app artifact presence", () => {
+  const validation = buildAppPublishValidation({
+    build: {
+      phase: "passed",
+      expectedArtifacts: ["web/dist", "data/published-apps/alpha/missing-app/bundle"],
+    },
+    artifacts: {
+      manifestPath: "data/published-apps/alpha/missing-app/publish-artifacts.json",
+      artifacts: [{ path: "web/dist", kind: "build_output", source: "build" }],
+    },
+    health: {
+      live: { statusCode: 200, bodyStatus: "live" },
+      ready: { statusCode: 200, bodyStatus: "ready" },
+    },
+    smoke: {
+      checks: [{ id: "page:/", label: "Open home", status: "pass" }],
+    },
+    url: { url: "http://localhost:8484/app/alpha/missing-app", visibility: "private" },
+  });
+
+  assert.equal(validation.canPublish, false);
+  assert.equal(validation.status, "blocked");
+  assert.equal(validation.artifactPresence.status, "fail");
+  assert.deepEqual(validation.artifactPresence.missingArtifacts, ["data/published-apps/alpha/missing-app/bundle"]);
+  assert.ok(validation.actionableFailures.some((failure) => failure.stage === "artifact" && failure.message.includes("No generated app bundle")));
 });
 
 test("production build failures are deterministic, redacted, and actionable", () => {
@@ -71,6 +110,7 @@ test("production build failures are deterministic, redacted, and actionable", ()
 test("health check failures identify the failing probe and next action", () => {
   const validation = buildAppPublishValidation({
     build: { phase: "passed" },
+    artifacts: READY_ARTIFACTS,
     health: {
       live: { path: "/api/health/live", statusCode: 200, bodyStatus: "live" },
       ready: { path: "/api/health/ready", statusCode: 503, bodyStatus: "not_ready" },
@@ -95,6 +135,7 @@ test("health check failures identify the failing probe and next action", () => {
 test("smoke validation reports failed and pending checks without running external commands", () => {
   const validation = buildAppPublishValidation({
     build: { phase: "passed" },
+    artifacts: READY_ARTIFACTS,
     health: {
       live: { statusCode: 200, bodyStatus: "live" },
       ready: { statusCode: 200, bodyStatus: "ready" },
@@ -153,4 +194,23 @@ test("deriveProductionBuildStatus defaults to a pending production build gate", 
   assert.equal(status.phase, "not_run");
   assert.deepEqual(status.expectedArtifacts, ["web/dist"]);
   assert.match(status.failures[0]?.action ?? "", /npm run build:web/);
+});
+
+test("derivePublishArtifactStatus records manifest details for concrete bundle handoff", () => {
+  const build = deriveProductionBuildStatus({
+    phase: "passed",
+    expectedArtifacts: ["web/dist", "exports/taskloom/alpha/booking/bundle"],
+  });
+  const status = derivePublishArtifactStatus({
+    manifestPath: "exports/taskloom/alpha/booking/publish-artifacts.json",
+    artifacts: [
+      { path: "exports\\taskloom\\alpha\\booking\\bundle\\", kind: "generated_bundle", source: "generated_draft", bytes: 2048 },
+      { path: "web/dist", kind: "build_output", source: "build" },
+    ],
+  }, build);
+
+  assert.equal(status.status, "pass");
+  assert.equal(status.manifestPath, "exports/taskloom/alpha/booking/publish-artifacts.json");
+  assert.deepEqual(status.expectedArtifacts, ["exports/taskloom/alpha/booking/bundle", "web/dist"]);
+  assert.equal(status.observedArtifacts.find((artifact) => artifact.kind === "generated_bundle")?.bytes, 2048);
 });

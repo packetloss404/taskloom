@@ -124,6 +124,28 @@ test("agent tool runtime settings persist on create and update", () => {
   assert.equal(updated.agent.routeKey, "agent.fast");
 });
 
+test("agent runs with enabled tools fail as setup-required instead of falling back to a stub", async () => {
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Runtime Setup Check",
+    description: "Exercises setup-required execution behavior.",
+    instructions: "Use runtime tools only when the provider and tools are actually available.",
+    enabledTools: ["missing_runtime_tool"],
+    routeKey: "agent.reasoning",
+  });
+
+  const result = await runAgent(auth.context, created.agent.id);
+
+  assert.equal(result.run.status, "failed");
+  assert.match(result.run.title, /setup required/);
+  assert.match(result.run.error ?? "", /setup required/i);
+  assert.equal(result.run.output, undefined);
+  assert.ok(result.run.logs.some((entry) => /not registered|setup/i.test(entry.message)));
+  assert.equal((result.run.toolCalls ?? []).length, 0);
+});
+
 test("integration readiness summarizes generated plan tool and provider setup gaps", () => {
   resetStoreForTests();
   const auth = login({ email: "beta@taskloom.local", password: "demo12345" });
@@ -133,7 +155,7 @@ test("integration readiness summarizes generated plan tool and provider setup ga
   assert.equal(readiness.status, "needs_setup");
   assert.ok(readiness.tools.availableCount > 0);
   assert.ok(readiness.tools.names.includes("read_workflow_brief"));
-  assert.ok(readiness.tools.missingForGeneratedPlans.includes("gmail"));
+  assert.equal(readiness.tools.missingForGeneratedPlans.includes("gmail"), false);
   assert.deepEqual(readiness.providers.missingApiKeys, [{ provider: "anthropic", providerName: "Anthropic" }]);
   assert.ok(readiness.providers.missingProviderKinds.includes("openai"));
   assert.ok(readiness.recommendedSetup.some((entry) => entry.includes("Store vault keys")));
@@ -252,7 +274,7 @@ test("agent prompt generation can attach a first preview run with sample inputs"
   assert.equal(result.firstRun.status, "success");
   assert.equal(result.firstRun.inputs?.release_label, "next release");
   assert.equal(result.firstRun.inputs?.evidence_url, "https://example.com");
-  assert.match(result.firstRun.output ?? "", /preview run|simulated run completed/i);
+  assert.match(result.firstRun.output ?? "", /preview dry run|did not call a model/i);
   assert.ok(result.firstRun.transcript?.some((step) => step.title === "Understand request"));
   assert.ok(result.firstRun.logs?.some((entry) => entry.message.includes("without invoking tools or a model")));
 

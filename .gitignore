@@ -5,11 +5,15 @@ coverage/
 *.log
 .env
 .env.*
+!.env.example
 data/*.json
 data/*.sqlite
 data/*.sqlite-*
 data/*.db
 data/artifacts/
+data/generated-apps/
+data/published-apps/
+exports/
 !.gitkeep
 .claude/
 .design-bundle/

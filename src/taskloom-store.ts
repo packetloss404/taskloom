@@ -368,7 +368,23 @@ export interface GeneratedAppDockerComposeExportPayload {
   services: string[];
   environment: Record<string, string>;
   volumes: string[];
+  bundlePath: string;
+  manifestPath: string;
+  instructions: string[];
   yaml: string;
+}
+
+export interface GeneratedAppPublishArtifactManifestEntry {
+  path: string;
+  kind: "source" | "build_output" | "generated_bundle" | "manifest" | "config";
+  required: boolean;
+  description: string;
+}
+
+export interface GeneratedAppPublishArtifactManifest {
+  fileName: "publish-artifacts.json";
+  packageId: string;
+  entries: GeneratedAppPublishArtifactManifestEntry[];
 }
 
 export interface GeneratedAppPublishRollbackCommand {
@@ -418,12 +434,15 @@ export interface GeneratedAppPublishRecord {
   visibility: GeneratedAppPublishVisibility;
   versionLabel: string;
   localPublishPath: string;
+  workspacePath: string;
   publicUrl: string;
   privateUrl: string;
   previewUrl?: string;
   buildStatus?: string;
   smokeStatus?: string;
   dockerComposeExport: GeneratedAppDockerComposeExportPayload;
+  artifactManifest: GeneratedAppPublishArtifactManifest;
+  manifest: GeneratedAppPublishArtifactManifest;
   artifactPaths: string[];
   logs: GeneratedAppPublishLogEntry[];
   previousPublishId?: string;
@@ -434,12 +453,29 @@ export interface GeneratedAppPublishRecord {
   completedAt?: string;
 }
 
+export interface GeneratedAppSourceFileRecord {
+  path: string;
+  content: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  role: "entrypoint" | "source" | "manifest" | "config" | "docs";
+}
+
+export interface GeneratedAppRuntimeArtifactRecord {
+  entrypoint: string;
+  files: GeneratedAppSourceFileRecord[];
+  renderedAt: string;
+}
+
 export interface GeneratedAppCheckpointRecord {
   id: string;
   appId: string;
   workspaceId: string;
   label: string;
   draft: Record<string, unknown>;
+  runtimeArtifact?: GeneratedAppRuntimeArtifactRecord;
+  sourceFiles?: GeneratedAppSourceFileRecord[];
   previewUrl?: string;
   buildStatus?: string;
   smokeStatus?: string;
@@ -460,6 +496,8 @@ export interface GeneratedAppRecord {
   status: GeneratedAppStatus;
   draft: Record<string, unknown>;
   checkpointId: string;
+  runtimeArtifact?: GeneratedAppRuntimeArtifactRecord;
+  sourceFiles?: GeneratedAppSourceFileRecord[];
   previewUrl?: string;
   buildStatus?: string;
   smokeStatus?: string;

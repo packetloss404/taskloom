@@ -12,6 +12,7 @@ const IV_LEN = 12;
 const TAG_LEN = 16;
 const SALT = Buffer.from("taskloom-vault-v1");
 const ITERATIONS = 100_000;
+const DEV_MASTER_KEY = "taskloom-dev-master";
 
 export function deriveMasterKey(passphrase: string): Buffer {
   return pbkdf2Sync(passphrase, SALT, ITERATIONS, KEY_LEN, "sha256");
@@ -50,19 +51,31 @@ export function maskSecret(value: string): string {
 }
 
 let cachedKey: Buffer | null = null;
+let cachedKeyPassphrase: string | null = null;
 
-export function loadMasterKey(): Buffer {
-  if (cachedKey) return cachedKey;
-  const fromEnv = process.env.MASTER_KEY;
+function isProduction(env: NodeJS.ProcessEnv): boolean {
+  return env.NODE_ENV === "production";
+}
+
+export function loadMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  const fromEnv = env.MASTER_KEY;
   if (fromEnv && fromEnv.length > 0) {
+    if (cachedKey && cachedKeyPassphrase === fromEnv) return cachedKey;
     cachedKey = deriveMasterKey(fromEnv);
+    cachedKeyPassphrase = fromEnv;
     return cachedKey;
   }
+  if (isProduction(env)) {
+    throw new Error("vault: MASTER_KEY must be set when NODE_ENV=production");
+  }
+  if (cachedKey && cachedKeyPassphrase === DEV_MASTER_KEY) return cachedKey;
   console.warn("[vault] MASTER_KEY not set; using deterministic dev key. DO NOT USE IN PRODUCTION.");
-  cachedKey = deriveMasterKey("taskloom-dev-master");
+  cachedKey = deriveMasterKey(DEV_MASTER_KEY);
+  cachedKeyPassphrase = DEV_MASTER_KEY;
   return cachedKey;
 }
 
 export function resetMasterKeyCacheForTests(): void {
   cachedKey = null;
+  cachedKeyPassphrase = null;
 }

@@ -547,6 +547,37 @@ export interface AppBuilderDraftResult {
   draft: AppBuilderDraft;
 }
 
+export interface AppBuilderSourceFileSummary {
+  path: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  role: "entrypoint" | "source" | "manifest" | "config" | "docs" | string;
+}
+
+export interface AppBuilderArtifactSummary {
+  entrypoint?: string;
+  renderedAt?: string;
+  files: AppBuilderSourceFileSummary[];
+}
+
+export interface AppBuilderWorkspaceSummary {
+  id: string;
+  slug: string;
+  path: string;
+  appPath: string;
+  checkpointPath: string;
+  manifest: {
+    path: string;
+    version: string;
+    fileCount: number;
+    totalBytes: number;
+    entrypoint: string;
+    renderedAt: string;
+    checkpointId: string;
+  };
+}
+
 export interface AppBuilderApproveResult {
   draft: AppBuilderDraft;
   created: true;
@@ -571,6 +602,9 @@ export interface AppBuilderApproveResult {
   smoke?: AppBuilderSmokeBuildStatus;
   previewUrl?: string;
   smokeBuild?: AppBuilderSmokeBuildStatus;
+  artifact?: AppBuilderArtifactSummary;
+  sourceFiles?: AppBuilderSourceFileSummary[];
+  workspace?: AppBuilderWorkspaceSummary;
 }
 
 export type AppBuilderIterationTargetKind = "app" | "page" | "data_entity" | "api_route" | "auth" | "smoke" | "config" | "file" | "agent" | "tool";
@@ -590,6 +624,12 @@ export interface AppBuilderIterationDiffFile {
   changeType: AppBuilderIterationFileChangeType;
   summary: string;
   diff: string;
+  source?: "draft" | "runtime";
+  beforeSha256?: string;
+  afterSha256?: string;
+  beforeSize?: number;
+  afterSize?: number;
+  role?: string;
 }
 
 export interface AppBuilderIterationResult {
@@ -601,6 +641,9 @@ export interface AppBuilderIterationResult {
   summary: string;
   status: AppBuilderIterationDiffStatus;
   files: AppBuilderIterationDiffFile[];
+  sourceDiffFiles?: AppBuilderIterationDiffFile[];
+  sourceFiles?: AppBuilderSourceFileSummary[];
+  artifact?: AppBuilderArtifactSummary;
   draft?: AppBuilderDraft;
   preview?: {
     url?: string;
@@ -683,6 +726,9 @@ export interface AppBuilderIterationApplyResult {
     reason: string;
     previewUrl?: string;
   };
+  artifact?: AppBuilderArtifactSummary;
+  sourceFiles?: AppBuilderSourceFileSummary[];
+  workspace?: AppBuilderWorkspaceSummary;
 }
 
 export interface AppBuilderChangeSetResult {

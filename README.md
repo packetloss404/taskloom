@@ -1,8 +1,8 @@
 # Taskloom
 
-**Self-hosted, open-source app and agent workbench. Describe what you want, ship it, own it.**
+**Self-hosted, open-source app and agent workbench. Describe what you need, preview it locally, own the runtime.**
 
-Taskloom is an OSS, self-hosted workbench for building internal apps and agents from plain-language prompts. Sign in, open `/builder`, describe an internal tool or agent, get a brief, plan, and clickable preview, iterate with scoped change prompts, then publish to a workspace you operate end-to-end. Bring your own model keys (Anthropic, OpenAI, MiniMax, Ollama). MIT licensed. No telemetry.
+Taskloom is an OSS, self-hosted workbench for building internal apps and agents from plain-language prompts. Sign in, open `/builder`, describe an internal tool or agent, get a brief, plan, generated source files, and a saved local preview, iterate with scoped change prompts, then create a local publish package and URL handoff for the workspace you operate. Bring your own model keys (Anthropic, OpenAI, MiniMax, Ollama). MIT licensed. No telemetry.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue.svg)](https://github.com/packetloss404/taskloom/releases)
@@ -19,7 +19,7 @@ Taskloom is an OSS, self-hosted workbench for building internal apps and agents 
 
 Most prompt-to-app builders are hosted SaaS that own your data, your runtime, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, or behind your VPN. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, and audit included.
 
-If you have used v0, Bolt, Lovable, Replit Agents, or Base44 and wished you could host the whole thing yourself: that is what this is.
+If you have used v0, Bolt, Lovable, Replit Agents, or Base44 and wished the workbench and runtime were easier to self-host, Taskloom is pointed in that direction. It is not claiming hosted-builder feature parity; the current focus is local generation, preview, validation, and self-host handoff.
 
 ## Quick start
 
@@ -44,6 +44,17 @@ npm run build:web
 npm start
 ```
 
+### First 10 minutes: self-host path
+
+1. Run `npm install && npm run dev`.
+2. Sign in at `http://localhost:7341` with `alpha@taskloom.local` / `demo12345`.
+3. Open `/builder`, choose **Build an app**, and use a starter prompt such as `Build a lightweight CRM for renewal tracking`.
+4. Review the generated brief, routes, data model, and acceptance checks. Approve only when the draft looks right.
+5. Confirm Taskloom writes generated files under `data/generated-apps/<workspace>/<app>/workspace` and exposes the file manifest in **Generated source**.
+6. Use the saved local preview at `/api/app/generated-apps/:appId/preview` to inspect the running checkpoint. Use scoped iteration for changes such as `Add renewal risk notes to accounts`.
+7. Open **Publish handoff** after checks run. Treat it as a local package, artifact manifest, health/smoke checklist, and URL handoff. It opens the Taskloom-served generated preview locally; it does not deploy a separate cloud runtime for you.
+8. For a single-port local serve, run `npm run build:web && npm start`, then validate the health and preview URLs shown by the handoff panel.
+
 ### Seed accounts (development only)
 
 The local seed includes three workspace accounts; password is `demo12345` for each. **Do not use these in any production environment.**
@@ -59,7 +70,7 @@ You can also register a new account from the sign-up page. To reset local data b
 ### Build
 
 - **Prompt-to-app and prompt-to-agent.** Describe an internal app or agent in plain language; Taskloom drafts a brief, page map, data model, and acceptance checks.
-- **Draft, preview, iterate, publish.** Diff-review every change before applying. Each apply creates a checkpoint you can preview, smoke-test, and roll back to.
+- **Draft, preview, iterate, publish handoff.** Diff-review every change before applying. Each apply creates a checkpoint with source files on disk, a Taskloom-served local preview, smoke checks, and rollback metadata.
 - **Template gallery.** Six ready-to-edit agent templates ship in the box (see below). Use them as starting points or compose from scratch.
 - **First-class scoped iteration.** Targeted change prompts edit one slice of the app instead of regenerating everything.
 
@@ -105,7 +116,7 @@ Every template is editable; instantiate one and tune the instructions, tools, sc
 
 ## Sandboxed code execution
 
-A first-class sandbox runtime ships under `/api/app/sandbox/*` with a `/sandbox` view in the workbench. It powers ad-hoc command execution and (opt-in) the app-builder smoke pipeline that verifies generated apps before publish.
+A first-class sandbox runtime ships under `/api/app/sandbox/*` with a `/sandbox` view in the workbench. It powers ad-hoc command execution and (opt-in) the app-builder smoke pipeline that verifies generated apps before publish handoff.
 
 - **Drivers.** `docker` (default) runs `docker run --rm -i --network=none --cpus --memory --read-only --tmpfs /tmp` against runtimes `node-20`, `python-3.11`, `ubuntu-22`. A `native` host-process fallback is available and clearly marked **insecure** in the UI.
 - **Endpoints.** `GET /status`, `GET /runtimes`, `POST /exec`, `GET /exec`, `GET /exec/:id`, `POST /exec/:id/cancel`, `GET /exec/:id/stream` (SSE).
@@ -164,6 +175,14 @@ npm run build
 
 Generated `web/dist/` is gitignored; rebuild locally rather than committing it.
 
+## Known limits
+
+- **Preview is local.** Builder preview routes serve generated source files from disk through Taskloom. They are not public deployments unless you configure and validate a public URL.
+- **Publish is a handoff.** The publish surface records package metadata, artifact manifests, validation state, compose guidance, history, and rollback targets. Operators still run the self-hosted runtime and networking.
+- **Generated source is real but intentionally narrow.** The builder writes a generated React/Vite CRUD bundle, seed data, schema, API helper, and migration starter. It is not yet a full hosted IDE with arbitrary repo editing or per-app package installation.
+- **Sandbox smoke is opt-in.** Docker-backed smoke checks require Docker and `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`; otherwise statuses should remain explicit about pending, blocked, or fallback checks.
+- **No hosted SaaS parity claim.** Taskloom is not Replit, v0, Bolt, Lovable, or Anything. It is a self-host-first engine with an expanding builder loop.
+
 ### SQLite mode
 
 ```bash
@@ -176,7 +195,7 @@ npm run db:seed
 
 ## Project status
 
-Taskloom is in active development. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, preview, publish) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates; active-active multi-region writes, Taskloom-owned regional failover, and distributed SQLite are not.
+Taskloom is in active development. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
 
 For the current roadmap and sprint plan, see the [project website](https://packetloss404.github.io/taskloom/) and the [GitHub Issues](https://github.com/packetloss404/taskloom/issues) tab.
 

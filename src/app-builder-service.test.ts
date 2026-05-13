@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  generateAppSourceArtifactBundle,
   generateAppDraftFromPrompt,
   listAppDraftTemplateIds,
 } from "./app-builder-service";
@@ -109,6 +110,73 @@ test("phase 71 custom API prompts add generated setup routes and env guidance", 
   assert.ok(draft.integrationMetadata.setupGuidance.some((entry) => entry.includes("CUSTOM_API_BASE_URL")));
   assert.ok(draft.apiRouteStubs.some((route) => route.path.endsWith("/integrations/custom_api/setup") && route.purpose.includes("CUSTOM_API_KEY")));
   assert.ok(draft.acceptanceChecks.some((check) => check.includes("Custom API provider setup guidance")));
+});
+
+test("generateAppSourceArtifactBundle creates a deterministic minimal app source tree", () => {
+  const draft = generateAppDraftFromPrompt(
+    "Create a booking app for clinics with providers, appointment slots, calendar scheduling, and reservations.",
+  );
+
+  const first = generateAppSourceArtifactBundle(draft);
+  const second = generateAppSourceArtifactBundle(draft);
+
+  assert.deepEqual(first, second);
+  assert.equal(first.appName, draft.appName);
+  assert.equal(first.templateId, "booking");
+  assert.equal(first.entrypoint, "src/App.tsx");
+  assert.deepEqual(
+    first.files.map((file) => file.path),
+    [
+      "package.json",
+      "index.html",
+      "tsconfig.json",
+      "vite.config.ts",
+      "src/main.tsx",
+      "src/App.tsx",
+      "src/styles.css",
+      "src/routes/page-data.ts",
+      "src/api/generated-api.ts",
+      "src/data/seed-data.json",
+      "README.md",
+    ],
+  );
+  assert.ok(first.files.every((file) => file.sizeBytes > 0));
+  assert.ok(first.files.every((file) => /^[a-f0-9]{64}$/.test(file.checksum)));
+});
+
+test("generated app source includes pages, app name, and seed data", () => {
+  const draft = generateAppDraftFromPrompt(
+    "Build a CRM for boutique sales teams to track leads, accounts, deals, and pipeline follow-up.",
+  );
+  const bundle = generateAppSourceArtifactBundle(draft);
+  const appFile = bundle.files.find((file) => file.path === "src/App.tsx");
+  const pageDataFile = bundle.files.find((file) => file.path === "src/routes/page-data.ts");
+  const seedFile = bundle.files.find((file) => file.path === "src/data/seed-data.json");
+  const readme = bundle.files.find((file) => file.path === "README.md");
+
+  assert.ok(appFile?.contents.includes(draft.appName));
+  assert.ok(pageDataFile?.contents.includes("\"route\": \"/crm/deals/:dealId\""));
+  assert.ok(pageDataFile?.contents.includes("\"components\""));
+  assert.ok(seedFile?.contents.includes("\"deal_001\""));
+  assert.ok(readme?.contents.includes(`# ${draft.appName}`));
+  assert.ok(readme?.contents.includes("Pipeline"));
+});
+
+test("generated app source includes API and data contracts without route-stub wording", () => {
+  const draft = generateAppDraftFromPrompt(
+    "Build an internal dashboard for operations KPIs, reports, monitoring alerts, and weekly analytics.",
+  );
+  const bundle = generateAppSourceArtifactBundle(draft);
+  const apiFile = bundle.files.find((file) => file.path === "src/api/generated-api.ts");
+  const allGeneratedText = bundle.files.map((file) => file.contents).join("\n");
+
+  assert.ok(apiFile?.contents.includes("export const apiRoutes"));
+  assert.ok(apiFile?.contents.includes("export const dataContracts"));
+  assert.ok(apiFile?.contents.includes("handleGeneratedApiRequest"));
+  assert.ok(apiFile?.contents.includes("\"name\": \"metricSnapshot\""));
+  assert.ok(apiFile?.contents.includes("\"requiredFields\""));
+  assert.ok(apiFile?.contents.includes("/api/app/generated/"));
+  assert.equal(/route[-\s]?stub|stub/i.test(allGeneratedText), false);
 });
 
 test("listAppDraftTemplateIds exposes the supported heuristics", () => {

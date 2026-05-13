@@ -29,13 +29,21 @@ test("generated app publish records include local hosting metadata and compose p
   assert.equal(publish.status, "published");
   assert.equal(publish.visibility, "public");
   assert.equal(publish.localPublishPath, "exports/taskloom/alpha-workspace/booking-app");
+  assert.equal(publish.workspacePath, "exports/taskloom/alpha-workspace/booking-app");
   assert.equal(publish.publicUrl, "https://apps.example.test/alpha-workspace/booking-app");
-  assert.equal(publish.privateUrl, "http://localhost:8484/app/alpha-workspace/booking-app");
+  assert.equal(publish.privateUrl, "http://localhost:8484/api/app/generated-apps/gapp_booking/preview?checkpointId=ckpt_1");
   assert.equal(publish.dockerComposeExport.fileName, "docker-compose.publish.yml");
   assert.equal(publish.dockerComposeExport.services.includes("taskloom-app"), true);
   assert.match(publish.dockerComposeExport.yaml, /taskloom-app:/);
-  assert.ok(publish.artifactPaths.some((path) => path.endsWith("publish-manifest.json")));
-  assert.ok(publish.logs.some((entry) => entry.message.includes("Published metadata")));
+  assert.equal(publish.dockerComposeExport.bundlePath, "exports/taskloom/alpha-workspace/booking-app/bundle");
+  assert.equal(publish.dockerComposeExport.manifestPath, "exports/taskloom/alpha-workspace/booking-app/publish-artifacts.json");
+  assert.match(publish.dockerComposeExport.yaml, /TASKLOOM_APP_BUNDLE_PATH/);
+  assert.ok(publish.dockerComposeExport.instructions.some((step) => step.includes("generated app bundle")));
+  assert.equal(publish.artifactManifest.fileName, "publish-artifacts.json");
+  assert.equal(publish.manifest.fileName, "publish-artifacts.json");
+  assert.ok(publish.artifactManifest.entries.some((entry) => entry.kind === "generated_bundle" && entry.path.endsWith("/bundle")));
+  assert.ok(publish.artifactPaths.some((path) => path.endsWith("publish-artifacts.json")));
+  assert.ok(publish.logs.some((entry) => entry.message.includes("Published artifact manifest")));
 });
 
 test("second publish keeps previous publish rollback command and result shape", () => {

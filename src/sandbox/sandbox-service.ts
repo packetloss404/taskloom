@@ -45,6 +45,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_RUNTIME = "node-20";
 const NATIVE_INSECURE_NOTE =
   "Native driver is active. Commands run on the host with no isolation; use only on trusted dev hosts.";
+const NATIVE_PRODUCTION_BLOCK_MESSAGE =
+  "sandbox: native driver is blocked when NODE_ENV=production; use TASKLOOM_SANDBOX_DRIVER=docker or set TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX=true only for a trusted development host";
 
 export interface SandboxExecRequest {
   workspaceId: string;
@@ -431,6 +433,7 @@ export class SandboxService {
     if (this.cachedDriver && this.cachedDriverAvailable !== null) return this.cachedDriver;
     const requested = (this.forcedDriver ?? this.env.TASKLOOM_SANDBOX_DRIVER ?? "auto").toLowerCase();
     if (requested === "native") {
+      this.assertNativeAllowedInProduction();
       this.cachedDriver = this.nativeDriver;
       this.cachedDriverAvailable = true;
       return this.nativeDriver;
@@ -447,6 +450,7 @@ export class SandboxService {
       this.cachedDriverAvailable = true;
       return this.dockerDriver;
     }
+    this.assertNativeAllowedInProduction();
     this.cachedDriver = this.nativeDriver;
     this.cachedDriverAvailable = true;
     return this.nativeDriver;
@@ -582,12 +586,23 @@ export class SandboxService {
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+
+  private assertNativeAllowedInProduction(): void {
+    if (this.env.NODE_ENV !== "production") return;
+    if (isTruthy(this.env.TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX)) return;
+    throw new Error(NATIVE_PRODUCTION_BLOCK_MESSAGE);
+  }
 }
 
 function clampPositive(value: number | undefined, fallback: number, min: number, max: number): number {
   const candidate = value ?? fallback;
   if (!Number.isFinite(candidate) || candidate < min) return Math.max(min, fallback);
   return Math.min(candidate, max);
+}
+
+function isTruthy(value: string | undefined): boolean {
+  if (!value) return false;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
 let defaultInstance: SandboxService | null = null;

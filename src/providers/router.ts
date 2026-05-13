@@ -46,8 +46,9 @@ export class ProviderRouter {
     return this.routes.get(routeKey) ?? FALLBACK_ROUTE;
   }
 
-  private select(routeKey: string, modelOverride?: string): { provider: LLMProvider; route: ProviderRoute } {
-    const route = this.resolve(routeKey);
+  private select(routeKey: string, modelOverride?: string, providerOverride?: ProviderName): { provider: LLMProvider; route: ProviderRoute } {
+    const baseRoute = this.resolve(routeKey);
+    const route = providerOverride ? { ...baseRoute, provider: providerOverride } : baseRoute;
     let provider = this.providers.get(route.provider);
     if (!provider) {
       console.warn(
@@ -61,13 +62,13 @@ export class ProviderRouter {
     };
   }
 
-  async call(opts: Omit<ProviderCallOptions, "model"> & { model?: string }): Promise<ProviderCallResult> {
-    const { provider, route } = this.select(opts.routeKey, opts.model);
+  async call(opts: Omit<ProviderCallOptions, "model"> & { model?: string; provider?: ProviderName }): Promise<ProviderCallResult> {
+    const { provider, route } = this.select(opts.routeKey, opts.model, opts.provider);
     return provider.call({ ...opts, model: route.model });
   }
 
-  stream(opts: Omit<ProviderCallOptions, "model"> & { model?: string }): AsyncIterable<ProviderStreamChunk> {
-    const { provider, route } = this.select(opts.routeKey, opts.model);
+  stream(opts: Omit<ProviderCallOptions, "model"> & { model?: string; provider?: ProviderName }): AsyncIterable<ProviderStreamChunk> {
+    const { provider, route } = this.select(opts.routeKey, opts.model, opts.provider);
     return provider.stream({ ...opts, model: route.model });
   }
 

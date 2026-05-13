@@ -78,6 +78,8 @@ import {
 } from "./taskloom-store";
 import { AGENT_TEMPLATES, findAgentTemplate } from "./agent-templates.js";
 import { DEFAULT_PROVIDER_NAMES } from "./providers/bootstrap.js";
+import { getDefaultRouter } from "./providers/router.js";
+import type { ProviderName } from "./providers/types.js";
 import { listDefaultToolSummaries } from "./tools/bootstrap.js";
 import { buildWebhookTriggerReadiness, type WebhookTriggerReadiness } from "./webhook-readiness.js";
 import { getDefaultToolRegistry } from "./tools/registry.js";
@@ -1466,17 +1468,26 @@ export async function runAgent(
     const liveAgent = findAgent(store, agentId);
     if (!liveAgent) throw httpError(404, "agent not found");
     const provider = liveAgent.providerId ? findProvider(store, liveAgent.providerId) : null;
-    const providerReady = !provider || provider.status === "connected";
-    const transcript = buildRunTranscript(liveAgent.playbook ?? [], providerReady, timestamp);
+    const providerReady = provider ? isProviderReadyForAgentRuns(store, context.workspace.id, provider) : false;
+    const transcript = buildDryRunTranscript(liveAgent.playbook ?? [], timestamp);
 
     const logs: AgentRunLogEntry[] = [
-      { at: timestamp, level: "info", message: `Run started for ${liveAgent.name}.` },
+      { at: timestamp, level: "info", message: `Dry run started for ${liveAgent.name}.` },
+      { at: timestamp, level: "warn", message: "No model or runtime tools were invoked; this run only records the planned local transcript." },
     ];
     if (provider) {
       logs.push({
         at: timestamp,
         level: providerReady ? "info" : "warn",
-        message: `Provider ${provider.name} status: ${provider.status}.`,
+        message: providerReady
+          ? `Provider ${provider.name} is configured, but this dry run did not call it.`
+          : `Provider ${provider.name} is not ready for real execution: ${provider.status}.`,
+      });
+    } else {
+      logs.push({
+        at: timestamp,
+        level: "warn",
+        message: "No provider is selected for this agent; configure a provider and enabled tools for real execution.",
       });
     }
     for (const field of liveAgent.inputSchema ?? []) {
@@ -1484,26 +1495,19 @@ export async function runAgent(
         logs.push({ at: timestamp, level: "info", message: `Input ${field.key} = ${formatInputValue(inputs[field.key])}` });
       }
     }
-    if (providerReady) {
-      logs.push({ at: timestamp, level: "info", message: "Run recorded locally. Attach an execution adapter to perform real work." });
-    } else {
-      logs.push({ at: timestamp, level: "error", message: "Provider API key is not configured." });
-    }
-
-    const output = providerReady ? buildRunOutput(liveAgent.name, inputs) : undefined;
+    logs.push({ at: timestamp, level: "info", message: "Dry run recorded locally. Enable registered tools to execute through the agent loop." });
 
     const run = upsertAgentRun(store, {
       workspaceId: context.workspace.id,
       agentId: liveAgent.id,
-      title: providerReady ? `${liveAgent.name} run completed` : `${liveAgent.name} run failed`,
-      status: providerReady ? "success" : "failed",
+      title: `${liveAgent.name} dry run recorded`,
+      status: "success",
       triggerKind,
       transcript,
       startedAt: timestamp,
       completedAt: timestamp,
       inputs: Object.keys(inputs).length ? inputs : undefined,
-      output,
-      error: providerReady ? undefined : "Provider API key is not configured.",
+      output: buildDryRunOutput(liveAgent.name, inputs),
       logs,
     }, timestamp);
 
@@ -1530,6 +1534,14 @@ async function runAgentWithToolLoop(args: {
   const enabledTools = agent.enabledTools ?? [];
   const routeKey = agent.routeKey || "agent.reasoning";
   const runId = generateId();
+  const storeSnapshot = await loadStoreAsync();
+  const executionTarget = resolveAgentExecutionTarget(storeSnapshot, context.workspace.id, agent, routeKey);
+  const registeredToolNames = new Set(getDefaultToolRegistry().list().map((tool) => tool.name));
+  const missingTools = enabledTools.filter((tool) => !registeredToolNames.has(tool));
+  const blockers = [
+    ...executionTarget.blockers,
+    ...(missingTools.length > 0 ? [`Enabled tools are not registered in the runtime: ${missingTools.join(", ")}.`] : []),
+  ];
 
   const userPromptParts = [agent.instructions];
   if (Object.keys(inputs).length > 0) {
@@ -1544,7 +1556,22 @@ async function runAgentWithToolLoop(args: {
   const logs: AgentRunLogEntry[] = [
     { at: timestamp, level: "info", message: `Tool-loop run started for ${agent.name}.` },
     { at: timestamp, level: "info", message: `Tools enabled: ${enabledTools.join(", ")}` },
+    ...executionTarget.notes.map((message) => ({ at: timestamp, level: "info" as const, message })),
   ];
+
+  if (blockers.length > 0) {
+    for (const blocker of blockers) logs.push({ at: timestamp, level: "error", message: blocker });
+    return recordFailedAgentExecutionRun({
+      context,
+      agent,
+      inputs,
+      triggerKind,
+      timestamp,
+      runId,
+      logs,
+      error: `Agent execution setup required: ${blockers.join(" ")}`,
+    });
+  }
 
   let loopResult: Awaited<ReturnType<typeof runAgentLoop>> | null = null;
   let loopError: string | undefined;
@@ -1555,6 +1582,8 @@ async function runAgentWithToolLoop(args: {
       runId,
       agentId: agent.id,
       routeKey,
+      providerName: executionTarget.providerName,
+      model: executionTarget.model,
       systemPrompt: "You are a workspace agent. Use the supplied tools to complete the user's task. When finished, return a concise final answer.",
       userPrompt: userPromptParts.join("\n"),
       toolNames: enabledTools,
@@ -1619,39 +1648,136 @@ async function runAgentWithToolLoop(args: {
   });
 }
 
-function buildRunTranscript(playbook: AgentPlaybookStep[], providerReady: boolean, timestamp: string): AgentRunStep[] {
+function resolveAgentExecutionTarget(
+  data: TaskloomData,
+  workspaceId: string,
+  agent: AgentRecord,
+  routeKey: string,
+): { providerName?: ProviderName; model?: string; blockers: string[]; notes: string[] } {
+  const blockers: string[] = [];
+  const notes: string[] = [];
+  const router = getDefaultRouter();
+
+  if (agent.providerId) {
+    const provider = findProvider(data, agent.providerId);
+    if (!provider || provider.workspaceId !== workspaceId) {
+      return {
+        blockers: [`Selected provider ${agent.providerId} is not available in this workspace.`],
+        notes,
+      };
+    }
+
+    const providerName = providerNameForKind(provider.kind);
+    const model = agent.model || provider.defaultModel;
+    notes.push(`Using agent provider ${provider.name} with model ${model}.`);
+
+    if (!providerName) {
+      blockers.push(`Provider ${provider.name} uses kind "${provider.kind}", which is not wired to the agent runtime yet.`);
+    } else if (!router.has(providerName)) {
+      blockers.push(`Provider ${provider.name} (${providerName}) is configured on the agent but not registered in this runtime.`);
+    }
+    if (!isProviderReadyForAgentRuns(data, workspaceId, provider)) {
+      blockers.push(`Provider ${provider.name} is not ready for real execution; connect its API key or enable the provider before running.`);
+    }
+
+    return { providerName: providerName ?? undefined, model, blockers, notes };
+  }
+
+  const route = router.resolve(routeKey);
+  const model = agent.model || route.model;
+  notes.push(agent.model
+    ? `Using route ${routeKey} provider ${route.provider} with agent model override ${agent.model}.`
+    : `Using route ${routeKey} provider ${route.provider} with model ${route.model}.`);
+  if (route.provider === "stub") {
+    blockers.push(`Route ${routeKey} resolves to the stub provider; choose a real provider before executing tools.`);
+  } else if (!router.has(route.provider)) {
+    blockers.push(`Route ${routeKey} targets provider ${route.provider}, but that provider is not registered in this runtime.`);
+  }
+  return { providerName: undefined, model, blockers, notes };
+}
+
+function providerNameForKind(kind: ProviderKind): ProviderName | null {
+  if (kind === "openai" || kind === "anthropic" || kind === "minimax" || kind === "ollama") return kind;
+  return null;
+}
+
+async function recordFailedAgentExecutionRun(input: {
+  context: AuthenticatedContext;
+  agent: AgentRecord;
+  inputs: Record<string, string | number | boolean>;
+  triggerKind: AgentTriggerKind;
+  timestamp: string;
+  runId: string;
+  logs: AgentRunLogEntry[];
+  error: string;
+}): Promise<{ run: AgentRunRecord }> {
+  const completedAt = new Date().toISOString();
+  return mutateStoreAsync((store) => {
+    const run = upsertAgentRun(store, {
+      id: input.runId,
+      workspaceId: input.context.workspace.id,
+      agentId: input.agent.id,
+      title: `${input.agent.name} setup required`,
+      status: "failed",
+      triggerKind: input.triggerKind,
+      startedAt: input.timestamp,
+      completedAt,
+      inputs: Object.keys(input.inputs).length ? input.inputs : undefined,
+      transcript: [
+        {
+          id: generateId(),
+          title: "Resolve execution setup",
+          status: "failed",
+          output: input.error,
+          durationMs: 0,
+          startedAt: input.timestamp,
+        },
+        ...(input.agent.playbook ?? []).map((step) => ({
+          id: generateId(),
+          title: step.title,
+          status: "skipped" as const,
+          output: "Skipped because agent execution setup is incomplete.",
+          durationMs: 0,
+          startedAt: input.timestamp,
+        })),
+      ],
+      error: input.error,
+      logs: input.logs,
+      toolCalls: [],
+    }, input.timestamp);
+
+    recordActivity(store, makeActivity(input.context.workspace.id, "workspace", "agent.run", {
+      type: "user",
+      id: input.context.user.id,
+      displayName: input.context.user.displayName,
+    }, { title: run.title, agentId: input.agent.id, runId: run.id, status: run.status, triggerKind: input.triggerKind }, input.timestamp));
+
+    return { run: decorateRun(run) };
+  });
+}
+
+function buildDryRunTranscript(playbook: AgentPlaybookStep[], timestamp: string, label = "Dry run"): AgentRunStep[] {
   if (playbook.length === 0) {
     return [
       {
         id: generateId(),
-        title: "Execute instructions",
-        status: providerReady ? "success" : "failed",
-        output: providerReady
-          ? "Instructions executed against the configured provider."
-          : "Provider API key is not configured.",
-        durationMs: providerReady ? 420 : 60,
+        title: "Plan instructions",
+        status: "success",
+        output: `${label} only: instructions were not sent to a model and no runtime tools were invoked.`,
+        durationMs: 60,
         startedAt: timestamp,
       },
     ];
-  }
-
-  if (!providerReady) {
-    return playbook.map((step, index) => ({
-      id: generateId(),
-      title: step.title,
-      status: index === 0 ? "failed" : "skipped",
-      output: index === 0 ? "Provider API key is not configured." : "Skipped because the previous step failed.",
-      durationMs: index === 0 ? 60 : 0,
-      startedAt: timestamp,
-    }));
   }
 
   return playbook.map((step) => ({
     id: generateId(),
     title: step.title,
     status: "success",
-    output: step.instruction ? `Completed: ${step.instruction.slice(0, 160)}` : "Step completed.",
-    durationMs: 200 + Math.floor(Math.random() * 600),
+    output: step.instruction
+      ? `${label} only: would run "${step.instruction.slice(0, 160)}".`
+      : `${label} only: step was planned but not executed.`,
+    durationMs: 60,
     startedAt: timestamp,
   }));
 }
@@ -1791,16 +1917,16 @@ async function recordAgentPreviewRun(
     const run = upsertAgentRun(store, {
       workspaceId: context.workspace.id,
       agentId: liveAgent.id,
-      title: `${liveAgent.name} preview run completed`,
+      title: `${liveAgent.name} preview dry run recorded`,
       status: "success",
       triggerKind: "manual",
-      transcript: buildRunTranscript(liveAgent.playbook ?? [], true, timestamp),
+      transcript: buildDryRunTranscript(liveAgent.playbook ?? [], timestamp, "Preview dry run"),
       startedAt: timestamp,
       completedAt: timestamp,
       inputs: Object.keys(inputs).length ? inputs : undefined,
-      output: buildRunOutput(liveAgent.name, inputs),
+      output: buildDryRunOutput(liveAgent.name, inputs, "Preview dry run"),
       logs: [
-        { at: timestamp, level: "info", message: `Preview run started for ${liveAgent.name}.` },
+        { at: timestamp, level: "info", message: `Preview dry run started for ${liveAgent.name}.` },
         { at: timestamp, level: "info", message: "Sample inputs generated for first-run visibility." },
         { at: timestamp, level: "info", message: "Preview run recorded locally without invoking tools or a model." },
       ],
@@ -3079,11 +3205,11 @@ function formatInputValue(value: string | number | boolean): string {
   return String(value);
 }
 
-function buildRunOutput(agentName: string, inputs: Record<string, string | number | boolean>): string {
+function buildDryRunOutput(agentName: string, inputs: Record<string, string | number | boolean>, label = "Dry run"): string {
   const inputSummary = Object.keys(inputs).length === 0
     ? "no inputs"
     : Object.entries(inputs).map(([key, value]) => `${key}=${formatInputValue(value)}`).join(", ");
-  return `${agentName} simulated run completed with ${inputSummary}.`;
+  return `${label} only: ${agentName} did not call a model, external provider, or runtime tools. Planned inputs: ${inputSummary}.`;
 }
 
 function validateProvider(data: ReturnType<typeof loadStore>, workspaceId: string, providerId?: string) {

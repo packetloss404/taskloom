@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils";
 import { appRoutes } from "./app-routes";
@@ -14,6 +17,7 @@ import {
   type ManagedPostgresStoreClientConfig,
   type ManagedPostgresStoreQueryClient,
   type ManagedPostgresStoreQueryResult,
+  type GeneratedAppRecord,
   type TaskloomData,
 } from "./taskloom-store";
 
@@ -57,6 +61,26 @@ function createTestApp() {
 
 function authHeaders(cookieValue: string) {
   return { Cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
+}
+
+async function withGeneratedAppWorkspaceRoot(run: (rootPath: string) => Promise<void> | void) {
+  const previous = process.env.TASKLOOM_GENERATED_APP_WORKSPACES_DIR;
+  const rootPath = mkdtempSync(join(tmpdir(), "taskloom-generated-apps-"));
+  process.env.TASKLOOM_GENERATED_APP_WORKSPACES_DIR = rootPath;
+  try {
+    await run(rootPath);
+  } finally {
+    if (previous === undefined) delete process.env.TASKLOOM_GENERATED_APP_WORKSPACES_DIR;
+    else process.env.TASKLOOM_GENERATED_APP_WORKSPACES_DIR = previous;
+    rmSync(rootPath, { recursive: true, force: true });
+  }
+}
+
+function assertPathInside(parentPath: string, childPath: string) {
+  if (resolve(parentPath) === resolve(childPath)) return;
+  const scoped = relative(parentPath, childPath);
+  if (scoped === "") return;
+  assert.ok(!scoped.startsWith("..") && !isAbsolute(scoped), `${childPath} should be inside ${parentPath}`);
 }
 
 function cookieValue(response: Response) {
@@ -593,6 +617,317 @@ test("builder app draft can be generated and applied with smoke metadata", async
   assert.ok(loadStore().generatedApps?.some((entry) => entry.id === applyBody.app?.id && entry.checkpointId === applyBody.checkpoint?.id));
 });
 
+test("builder app-draft/apply stores generated source files for the current checkpoint", async () => {
+  await withGeneratedAppWorkspaceRoot(async (rootPath) => {
+    resetStoreForTests();
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const draftResponse = await app.request("/api/app/builder/app-draft", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "Build a public booking app with service selection, appointment slots, and staff scheduling.",
+      }),
+    });
+    const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+    const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ draft, runSmoke: true }),
+    });
+    const applied = await applyResponse.json() as {
+      app?: { id?: string; slug?: string; previewUrl?: string };
+      checkpoint?: { id?: string };
+      sourceFiles?: Array<{ path: string; role: string; sha256: string }>;
+      artifact?: { entrypoint?: string; files?: unknown[] };
+      workspace?: {
+        id?: string;
+        slug?: string;
+        path?: string;
+        checkpointPath?: string;
+        manifest?: { path?: string; fileCount?: number; entrypoint?: string; checkpointId?: string };
+      };
+    };
+
+    assert.equal(applyResponse.status, 201);
+    assert.ok(applied.app?.id);
+    assert.ok(applied.checkpoint?.id);
+    assert.match(applied.app?.previewUrl ?? "", new RegExp(`/builder/preview/alpha/${applied.app.id}$`));
+    assert.equal(applied.artifact?.entrypoint, "index.html");
+    assert.ok(applied.sourceFiles?.some((file) => file.path === "index.html" && file.role === "entrypoint" && file.sha256));
+    assert.ok(applied.sourceFiles?.some((file) => file.path === "src/App.tsx" && file.role === "source"));
+
+    assert.equal(applied.workspace?.id, "alpha");
+    assert.equal(applied.workspace?.slug, "alpha-workspace");
+    assert.ok(applied.workspace?.path);
+    assert.ok(applied.workspace?.checkpointPath);
+    assert.ok(applied.workspace?.manifest?.path);
+    assert.equal(applied.workspace.manifest.entrypoint, "index.html");
+    assert.equal(applied.workspace.manifest.checkpointId, applied.checkpoint.id);
+    assertPathInside(rootPath, applied.workspace.path);
+    assertPathInside(applied.workspace.path, applied.workspace.checkpointPath);
+    assertPathInside(applied.workspace.checkpointPath, applied.workspace.manifest.path);
+    assert.ok(existsSync(join(applied.workspace.checkpointPath, "index.html")));
+    assert.ok(existsSync(join(applied.workspace.checkpointPath, "src", "App.tsx")));
+    const manifest = JSON.parse(readFileSync(applied.workspace.manifest.path, "utf8")) as {
+      workspace?: { id?: string; slug?: string };
+      app?: { id?: string };
+      checkpoint?: { id?: string };
+      files?: unknown[];
+    };
+    assert.equal(manifest.workspace?.id, "alpha");
+    assert.equal(manifest.workspace?.slug, "alpha-workspace");
+    assert.equal(manifest.app?.id, applied.app.id);
+    assert.equal(manifest.checkpoint?.id, applied.checkpoint.id);
+    assert.equal(manifest.files?.length, applied.workspace.manifest.fileCount);
+
+    const stored = loadStore().generatedApps?.find((entry) => entry.id === applied.app?.id) as
+      | ({ sourceFiles?: Array<{ path: string }>; checkpoints?: Array<{ id: string; sourceFiles?: Array<{ path: string }> }> })
+      | undefined;
+    assert.ok(stored);
+    const currentCheckpoint = stored.checkpoints?.find((checkpoint) => checkpoint.id === applied.checkpoint?.id);
+    assert.ok(currentCheckpoint?.sourceFiles?.some((file) => file.path === "src/App.tsx"));
+    assert.ok(stored.sourceFiles?.some((file) => file.path === "index.html"));
+  });
+});
+
+test("generated app source routes are workspace-scoped", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build a CRM app for accounts, contacts, deals, and renewal notes." }),
+  });
+  const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string }; checkpoint: { id: string } };
+  assert.equal(applyResponse.status, 201);
+
+  mutateStore((data) => {
+    data.generatedApps ??= [];
+    const betaApp = {
+      id: "gapp_beta_source_route_test",
+      workspaceId: "beta",
+      slug: "beta-secret-source",
+      name: "Beta Secret Source",
+      description: "Private beta app",
+      prompt: "Build private beta source app.",
+      templateId: "crm",
+      status: "built",
+      draft: { prompt: "secret", intent: "crm", summary: "secret", app: { slug: "beta-secret-source", name: "Beta Secret Source" } },
+      checkpointId: "gapp_ckpt_beta_source_route_test",
+      sourceFiles: [{
+        path: "index.html",
+        content: "beta secret artifact",
+        contentType: "text/html; charset=utf-8",
+        size: 20,
+        sha256: "beta-secret",
+        role: "entrypoint",
+      }],
+      createdByUserId: "user_beta",
+      createdAt: "2026-05-02T11:00:00.000Z",
+      updatedAt: "2026-05-02T11:00:00.000Z",
+    } satisfies GeneratedAppRecord & { sourceFiles: Array<{ path: string; content: string; contentType: string; size: number; sha256: string; role: "entrypoint" }> };
+    data.generatedApps.push(betaApp);
+  });
+
+  const sourceResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/source?checkpointId=${applied.checkpoint.id}`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const sourceBody = await sourceResponse.json() as {
+    app?: { id?: string };
+    checkpoint?: { id?: string };
+    workspace?: { id?: string; slug?: string; path?: string; manifest?: { path?: string; checkpointId?: string } };
+    files?: Array<{ path?: string; content?: string }>;
+  };
+
+  assert.equal(sourceResponse.status, 200);
+  assert.equal(sourceBody.app?.id, applied.app.id);
+  assert.equal(sourceBody.checkpoint?.id, applied.checkpoint.id);
+  assert.equal(sourceBody.workspace?.id, "alpha");
+  assert.equal(sourceBody.workspace?.slug, "alpha-workspace");
+  assert.ok(sourceBody.workspace?.path?.includes("alpha-workspace"));
+  assert.equal(sourceBody.workspace?.manifest?.checkpointId, applied.checkpoint.id);
+  assert.ok(sourceBody.files?.some((file) => file.path === "index.html" && file.content?.includes("generated-app-data")));
+  assert.equal(JSON.stringify(sourceBody).includes("beta secret artifact"), false);
+
+  const betaResponse = await app.request("/api/app/generated-apps/gapp_beta_source_route_test/source", {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const betaBody = await betaResponse.json() as { error?: string };
+  assert.equal(betaResponse.status, 404);
+  assert.equal(betaBody.error, "generated app not found");
+});
+
+test("builder preview refresh rewrites generated app workspace files", async () => {
+  await withGeneratedAppWorkspaceRoot(async (rootPath) => {
+    resetStoreForTests();
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const draftResponse = await app.request("/api/app/builder/app-draft", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a project dashboard app for tasks, risks, milestones, and approvals." }),
+    });
+    const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+    const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ draft, runSmoke: false }),
+    });
+    const applied = await applyResponse.json() as {
+      app?: { id?: string };
+      workspace?: { checkpointPath?: string };
+    };
+    assert.equal(applyResponse.status, 201);
+    assert.ok(applied.app?.id);
+    assert.ok(applied.workspace?.checkpointPath);
+    rmSync(applied.workspace.checkpointPath, { recursive: true, force: true });
+    assert.equal(existsSync(applied.workspace.checkpointPath), false);
+
+    const refreshResponse = await app.request("/api/app/builder/preview/refresh", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ appId: applied.app.id, runSmoke: false }),
+    });
+    const refreshed = await refreshResponse.json() as {
+      workspace?: {
+        id?: string;
+        slug?: string;
+        path?: string;
+        checkpointPath?: string;
+        manifest?: { path?: string; fileCount?: number; entrypoint?: string };
+      };
+      sourceFiles?: Array<{ path: string }>;
+    };
+
+    assert.equal(refreshResponse.status, 200);
+    assert.equal(refreshed.workspace?.id, "alpha");
+    assert.equal(refreshed.workspace?.slug, "alpha-workspace");
+    assert.ok(refreshed.workspace?.path);
+    assert.ok(refreshed.workspace?.checkpointPath);
+    assert.ok(refreshed.workspace?.manifest?.path);
+    assertPathInside(rootPath, refreshed.workspace.path);
+    assertPathInside(refreshed.workspace.path, refreshed.workspace.checkpointPath);
+    assert.equal(refreshed.workspace.manifest.entrypoint, "index.html");
+    assert.ok((refreshed.workspace.manifest.fileCount ?? 0) >= 1);
+    assert.ok(existsSync(join(refreshed.workspace.checkpointPath, "index.html")));
+    assert.ok(existsSync(refreshed.workspace.manifest.path));
+    assert.ok(refreshed.sourceFiles?.some((file) => file.path === "src/App.tsx"));
+  });
+});
+
+test("generated app preview route resolves by actual app id or slug", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build a task tracker app for launch projects, assignees, comments, and review queues." }),
+  });
+  const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string; slug: string; previewUrl?: string } };
+
+  assert.equal(applyResponse.status, 201);
+  assert.match(applied.app.previewUrl ?? "", new RegExp(`/builder/preview/alpha/${applied.app.id}(?:/|$)`));
+
+  mutateStore((data) => {
+    const generated = data.generatedApps?.find((entry) => entry.id === applied.app.id);
+    assert.ok(generated);
+    const asset = {
+      path: "assets/preview.css",
+      content: "body { color: rgb(12, 34, 56); }",
+      contentType: "text/css; charset=utf-8",
+      size: 35,
+      sha256: "preview-css-test",
+      role: "source" as const,
+    };
+    generated.runtimeArtifact?.files.push(asset);
+    generated.sourceFiles?.push(asset);
+    const checkpoint = generated.checkpoints?.find((entry) => entry.id === generated.checkpointId);
+    checkpoint?.runtimeArtifact?.files.push(asset);
+    checkpoint?.sourceFiles?.push(asset);
+  });
+
+  const byIdResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const byIdHtml = await byIdResponse.text();
+  assert.equal(byIdResponse.status, 200);
+  assert.match(byIdResponse.headers.get("content-type") ?? "", /text\/html/);
+  assert.equal(byIdResponse.headers.get("x-taskloom-generated-app-id"), applied.app.id);
+  assert.equal(byIdResponse.headers.get("x-taskloom-generated-app-runtime"), "static");
+  assert.equal(byIdResponse.headers.get("x-taskloom-generated-app-live"), "false");
+  assert.match(byIdHtml, new RegExp(`data-app-id="${applied.app.id}"`));
+
+  const sourceFileResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview/src/App.tsx`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const sourceFileBody = await sourceFileResponse.text();
+  assert.equal(sourceFileResponse.status, 200);
+  assert.match(sourceFileResponse.headers.get("content-type") ?? "", /text\/typescript/);
+  assert.match(sourceFileBody, /export function GeneratedApp/);
+
+  const assetResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview/assets/preview.css`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const assetBody = await assetResponse.text();
+  assert.equal(assetResponse.status, 200);
+  assert.match(assetResponse.headers.get("content-type") ?? "", /text\/css/);
+  assert.equal(assetBody, "body { color: rgb(12, 34, 56); }");
+
+  const readinessResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview?format=json`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const readinessBody = await readinessResponse.json() as {
+    preview?: { path?: string; runtime?: { mode?: string; live?: boolean; servedBy?: string; process?: { status?: string; command?: string } } };
+    artifact?: { files?: Array<{ path?: string }> };
+  };
+  assert.equal(readinessResponse.status, 200);
+  assert.equal(readinessBody.preview?.path, "index.html");
+  assert.equal(readinessBody.preview?.runtime?.mode, "static");
+  assert.equal(readinessBody.preview?.runtime?.live, false);
+  assert.equal(readinessBody.preview?.runtime?.servedBy, "taskloom-static-workspace");
+  assert.equal(readinessBody.preview?.runtime?.process?.status, "not_started");
+  assert.match(readinessBody.preview?.runtime?.process?.command ?? "", /npm run dev/);
+  assert.ok(readinessBody.artifact?.files?.some((file) => file.path === "src/App.tsx"));
+
+  const bySlugResponse = await app.request(`/api/app/generated-apps/${applied.app.slug}/preview`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const bySlugHtml = await bySlugResponse.text();
+  assert.equal(bySlugResponse.status, 200);
+  assert.equal(bySlugResponse.headers.get("x-taskloom-generated-app-id"), applied.app.id);
+  assert.match(bySlugHtml, new RegExp(`data-app-slug="${applied.app.slug}"`));
+
+  const publishStateResponse = await app.request(`/api/app/builder/publish/state?appId=${applied.app.slug}`, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const publishState = await publishStateResponse.json() as { appId?: string };
+  assert.equal(publishStateResponse.status, 200);
+  assert.equal(publishState.appId, applied.app.id);
+});
+
 test("builder app-draft/apply runs smoke through the sandbox when TASKLOOM_SANDBOX_SMOKE_ENABLED=1", async () => {
   resetStoreForTests();
   const original = process.env.TASKLOOM_SANDBOX_SMOKE_ENABLED;
@@ -652,6 +987,13 @@ test("builder app iteration can generate a diff, apply it, and rollback checkpoi
     checkpoint: { id: string };
     draft: Record<string, unknown>;
   };
+  const initialRecord = loadStore().generatedApps?.find((entry) => entry.id === applied.app.id);
+  const initialSourceSha = initialRecord?.checkpoints
+    ?.find((checkpoint) => checkpoint.id === applied.checkpoint.id)
+    ?.sourceFiles
+    ?.find((file) => file.path === "src/App.tsx")
+    ?.sha256;
+  assert.ok(initialSourceSha);
 
   const iterationResponse = await app.request("/api/app/builder/app-iteration", {
     method: "POST",
@@ -667,7 +1009,9 @@ test("builder app iteration can generate a diff, apply it, and rollback checkpoi
   const iteration = await iterationResponse.json() as {
     id?: string;
     status?: string;
-    files?: Array<{ diff: string; path: string }>;
+    files?: Array<{ diff: string; path: string; source?: string; beforeSha256?: string; afterSha256?: string }>;
+    sourceDiffFiles?: Array<{ diff: string; path: string; source?: string; beforeSha256?: string; afterSha256?: string }>;
+    sourceFiles?: Array<{ path: string; sha256: string }>;
     draft?: { app?: { pages?: Array<{ route: string; purpose: string; actions: string[] }> } };
     preview?: { status?: string };
     rollback?: { checkpointId?: string };
@@ -677,6 +1021,9 @@ test("builder app iteration can generate a diff, apply it, and rollback checkpoi
   assert.equal(iteration.status, "generated");
   assert.ok(iteration.id);
   assert.ok(iteration.files?.some((file) => file.path.includes("page") && file.diff.includes("confirmation copy")));
+  assert.ok(iteration.files?.some((file) => file.path === "src/App.tsx" && file.source === "runtime" && file.beforeSha256 !== file.afterSha256));
+  assert.ok(iteration.sourceDiffFiles?.some((file) => file.path === "src/App.tsx" && file.diff.includes("sha256:")));
+  assert.ok(iteration.sourceFiles?.some((file) => file.path === "src/App.tsx" && file.sha256 !== initialSourceSha));
   assert.ok(iteration.draft?.app?.pages?.some((page) => page.route === "/book" && page.purpose.includes("Iteration request")));
   assert.equal(iteration.preview?.status, "pending");
   assert.ok(iteration.rollback?.checkpointId);
@@ -698,8 +1045,11 @@ test("builder app iteration can generate a diff, apply it, and rollback checkpoi
     applied?: boolean;
     checkpoint?: { id?: string };
     previewUrl?: string;
-    diff?: { status?: string; draft?: unknown };
+    diff?: { status?: string; draft?: unknown; sourceDiffFiles?: Array<{ path: string; beforeSha256?: string; afterSha256?: string }> };
+    sourceDiffFiles?: Array<{ path: string; beforeSha256?: string; afterSha256?: string }>;
+    sourceFiles?: Array<{ path: string; sha256: string }>;
     smoke?: { status?: string };
+    workspace?: { path?: string; checkpointPath?: string; manifest?: { path?: string; checkpointId?: string } };
   };
 
   assert.equal(applyIterationResponse.status, 201);
@@ -708,6 +1058,23 @@ test("builder app iteration can generate a diff, apply it, and rollback checkpoi
   assert.equal(appliedIteration.smoke?.status, "pass");
   assert.match(appliedIteration.previewUrl ?? "", /\/builder\/preview\/alpha\//);
   assert.notEqual(appliedIteration.checkpoint?.id, applied.checkpoint.id);
+  assert.ok(appliedIteration.sourceDiffFiles?.some((file) => file.path === "src/App.tsx" && file.beforeSha256 === initialSourceSha && file.afterSha256 !== initialSourceSha));
+  assert.ok(appliedIteration.diff?.sourceDiffFiles?.some((file) => file.path === "src/App.tsx"));
+  assert.ok(appliedIteration.workspace?.path?.includes("alpha-workspace"));
+  assert.equal(appliedIteration.workspace?.manifest?.checkpointId, appliedIteration.checkpoint?.id);
+  assert.ok(appliedIteration.workspace?.checkpointPath);
+  assert.ok(existsSync(join(appliedIteration.workspace.checkpointPath, "src", "App.tsx")));
+  assert.ok(appliedIteration.workspace?.manifest?.path);
+  assert.ok(existsSync(appliedIteration.workspace.manifest.path));
+
+  const iteratedRecord = loadStore().generatedApps?.find((entry) => entry.id === applied.app.id);
+  const iteratedSourceSha = iteratedRecord?.checkpoints
+    ?.find((checkpoint) => checkpoint.id === appliedIteration.checkpoint?.id)
+    ?.sourceFiles
+    ?.find((file) => file.path === "src/App.tsx")
+    ?.sha256;
+  assert.ok(iteratedSourceSha);
+  assert.notEqual(iteratedSourceSha, initialSourceSha);
 
   const checkpointResponse = await app.request(`/api/app/builder/checkpoints?appId=${applied.app.id}`, {
     headers,
@@ -727,12 +1094,23 @@ test("builder app iteration can generate a diff, apply it, and rollback checkpoi
     rolledBack?: boolean;
     checkpoint?: { id?: string };
     preview?: { message?: string };
+    sourceFiles?: Array<{ path: string; sha256: string }>;
   };
 
   assert.equal(rollbackResponse.status, 200);
   assert.equal(rollbackBody.rolledBack, true);
   assert.ok(rollbackBody.checkpoint?.id);
   assert.ok(rollbackBody.preview?.message?.includes(applied.checkpoint.id));
+  assert.ok(rollbackBody.sourceFiles?.some((file) => file.path === "src/App.tsx" && file.sha256 === initialSourceSha));
+
+  const rolledBackRecord = loadStore().generatedApps?.find((entry) => entry.id === applied.app.id);
+  const rollbackSourceSha = rolledBackRecord?.checkpoints
+    ?.find((checkpoint) => checkpoint.id === rollbackBody.checkpoint?.id)
+    ?.sourceFiles
+    ?.find((file) => file.path === "src/App.tsx")
+    ?.sha256;
+  assert.equal(rollbackSourceSha, initialSourceSha);
+  assert.notEqual(rollbackSourceSha, iteratedSourceSha);
 });
 
 test("builder canonical changes routes validate target app and expose preview, fix, and agent checkpoint contracts", async () => {
@@ -950,17 +1328,42 @@ test("builder publish creates self-hosted history, compose export, logs, and rol
   });
   const firstPublish = await firstPublishResponse.json() as {
     published?: boolean;
-    publish?: { id: string; status: string; localPublishPath: string; logs: unknown[] };
+    publish?: {
+      id: string;
+      status: string;
+      localPublishPath: string;
+      workspacePath?: string;
+      privateUrl?: string;
+      logs: unknown[];
+      manifest?: { fileName?: string };
+    };
     dockerComposeExport?: { yaml?: string; services?: string[] };
+    history?: Array<{ id?: string; workspacePath?: string; manifest?: { fileName?: string } }>;
   };
 
   assert.equal(firstPublishResponse.status, 201);
   assert.equal(firstPublish.published, true);
   assert.equal(firstPublish.publish?.status, "published");
   assert.match(firstPublish.publish?.localPublishPath ?? "", /^exports\/taskloom\/alpha-workspace\//);
+  assert.equal(firstPublish.publish?.workspacePath, firstPublish.publish?.localPublishPath);
+  assert.equal(firstPublish.publish?.manifest?.fileName, "publish-artifacts.json");
+  assert.ok(firstPublish.history?.some((entry) =>
+    entry.id === firstPublish.publish?.id
+    && entry.workspacePath === firstPublish.publish?.localPublishPath
+    && entry.manifest?.fileName === "publish-artifacts.json"
+  ));
+  assert.match(firstPublish.publish?.privateUrl ?? "", new RegExp(`/api/app/generated-apps/${applied.app.id}/preview`));
   assert.match(firstPublish.dockerComposeExport?.yaml ?? "", /taskloom-app:/);
   assert.ok(firstPublish.dockerComposeExport?.services?.includes("taskloom-app"));
   assert.ok((firstPublish.publish?.logs.length ?? 0) >= 3);
+
+  const privatePreviewUrl = new URL(firstPublish.publish?.privateUrl ?? "http://localhost/").pathname
+    + new URL(firstPublish.publish?.privateUrl ?? "http://localhost/").search;
+  const privatePreviewResponse = await app.request(privatePreviewUrl, {
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(privatePreviewResponse.status, 200);
+  assert.match(privatePreviewResponse.headers.get("x-taskloom-generated-app-id") ?? "", new RegExp(`^${applied.app.id}$`));
 
   const failedCheckpointId = "gapp_ckpt_publish_failed_test";
   mutateStore((data) => {
@@ -1030,8 +1433,14 @@ test("builder publish creates self-hosted history, compose export, logs, and rol
   });
   const secondPublish = await secondPublishResponse.json() as {
     published?: boolean;
-    publish?: { id: string; previousPublishId?: string; rollbackCommand?: { command?: string; toPublishId?: string } };
+    publish?: {
+      id: string;
+      privateUrl?: string;
+      previousPublishId?: string;
+      rollbackCommand?: { command?: string; toPublishId?: string };
+    };
     rollbackToPrevious?: { command?: string };
+    state?: { publishedUrl?: string };
   };
 
   assert.equal(secondPublishResponse.status, 201);
@@ -1039,6 +1448,7 @@ test("builder publish creates self-hosted history, compose export, logs, and rol
   assert.equal(secondPublish.publish?.previousPublishId, firstPublish.publish?.id);
   assert.equal(secondPublish.publish?.rollbackCommand?.toPublishId, firstPublish.publish?.id);
   assert.match(secondPublish.rollbackToPrevious?.command ?? "", /taskloom publish rollback/);
+  assert.match(secondPublish.state?.publishedUrl ?? "", new RegExp(`/api/app/generated-apps/${applied.app.id}/preview`));
 
   const rollbackResponse = await app.request(`/api/app/builder/publish/${secondPublish.publish?.id}/rollback`, {
     method: "POST",
@@ -1111,6 +1521,69 @@ test("builder publish prepare and compose export require workspace management", 
   const composeBody = await composeResponse.json() as { error?: string };
   assert.equal(composeResponse.status, 403);
   assert.match(composeBody.error ?? "", /admin/);
+});
+
+test("builder publish blocks when the generated workspace artifact is missing", async (t) => {
+  resetStoreForTests();
+  const publishRoot = mkdtempSync(join(tmpdir(), "taskloom-publish-missing-"));
+  t.after(() => rmSync(publishRoot, { recursive: true, force: true }));
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build a public booking app for artifact validation." }),
+  });
+  const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string }; checkpoint: { id: string } };
+  assert.equal(applyResponse.status, 201);
+
+  mutateStore((data) => {
+    const generated = data.generatedApps?.find((entry) => entry.id === applied.app.id);
+    assert.ok(generated);
+    delete generated.runtimeArtifact;
+    delete generated.sourceFiles;
+    const checkpoint = generated.checkpoints?.find((entry) => entry.id === applied.checkpoint.id);
+    assert.ok(checkpoint);
+    delete checkpoint.runtimeArtifact;
+    delete checkpoint.sourceFiles;
+  });
+
+  const publishResponse = await app.request("/api/app/builder/publish", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      appId: applied.app.id,
+      checkpointId: applied.checkpoint.id,
+      localPublishRoot: publishRoot,
+      privateBaseUrl: "http://localhost:8484",
+    }),
+  });
+  const publish = await publishResponse.json() as {
+    error?: string;
+    validation?: {
+      canPublish?: boolean;
+      artifactPresence?: { status?: string; missingArtifacts?: string[] };
+      actionableFailures?: Array<{ stage?: string; message?: string }>;
+    };
+  };
+
+  assert.equal(publishResponse.status, 409);
+  assert.equal(publish.error, "publish validation failed");
+  assert.equal(publish.validation?.canPublish, false);
+  assert.equal(publish.validation?.artifactPresence?.status, "fail");
+  assert.ok(publish.validation?.artifactPresence?.missingArtifacts?.some((path) => path.endsWith("/bundle")));
+  assert.ok(publish.validation?.actionableFailures?.some((failure) =>
+    failure.stage === "artifact" && /No generated app bundle/.test(failure.message ?? "")
+  ));
+  assert.equal(loadStore().generatedApps?.find((entry) => entry.id === applied.app.id)?.currentPublishId, undefined);
 });
 
 test("builder publish blocks requested integrations that are not ready", async (t) => {

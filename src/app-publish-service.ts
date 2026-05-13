@@ -1,10 +1,11 @@
 import { redactSensitiveString } from "./security/redaction.js";
 
-export type AppPublishValidationStage = "build" | "health" | "smoke" | "url";
+export type AppPublishValidationStage = "build" | "artifact" | "health" | "smoke" | "url";
 export type AppPublishValidationStatus = "pending" | "ready" | "blocked";
 export type AppPublishCheckStatus = "pending" | "running" | "pass" | "fail";
 export type AppPublishCommandPhase = "not_run" | "queued" | "running" | "passed" | "failed";
 export type AppPublishVisibility = "private" | "public";
+export type AppPublishArtifactValidationKind = "source" | "build_output" | "generated_bundle" | "manifest" | "config";
 
 export interface AppPublishFailure {
   stage: AppPublishValidationStage;
@@ -27,6 +28,33 @@ export interface ProductionBuildStatus {
   phase: AppPublishCommandPhase;
   command: string;
   expectedArtifacts: string[];
+  message: string;
+  failures: AppPublishFailure[];
+}
+
+export interface PublishArtifactObservation {
+  path: string;
+  kind?: AppPublishArtifactValidationKind;
+  required?: boolean;
+  present?: boolean;
+  bytes?: number;
+  source?: "build" | "preview_snapshot" | "generated_draft" | "publish_manifest" | "operator" | "disk";
+  description?: string;
+}
+
+export interface PublishArtifactValidationInput {
+  expectedArtifacts?: string[];
+  artifacts?: PublishArtifactObservation[];
+  manifestPath?: string;
+}
+
+export interface PublishArtifactStatus {
+  stage: "artifact";
+  status: Exclude<AppPublishCheckStatus, "running">;
+  manifestPath: string;
+  expectedArtifacts: string[];
+  observedArtifacts: PublishArtifactObservation[];
+  missingArtifacts: string[];
   message: string;
   failures: AppPublishFailure[];
 }
@@ -106,6 +134,7 @@ export interface ValidatedPublishUrlResult {
 
 export interface AppPublishValidationInput {
   build?: ProductionBuildValidationInput;
+  artifacts?: PublishArtifactValidationInput;
   health?: HealthCheckValidationInput;
   smoke?: SmokeCheckValidationInput;
   url?: PublishUrlValidationInput;
@@ -116,6 +145,7 @@ export interface AppPublishValidation {
   status: AppPublishValidationStatus;
   canPublish: boolean;
   productionBuild: ProductionBuildStatus;
+  artifactPresence: PublishArtifactStatus;
   healthCheck: HealthCheckStatus;
   smokeCheck: SmokeCheckStatus;
   validatedUrl: ValidatedPublishUrlResult;
@@ -185,6 +215,78 @@ export function deriveProductionBuildStatus(input: ProductionBuildValidationInpu
       message: "Production build has not run.",
       action: `Run \`${command}\` before sharing a self-hosted URL.`,
     }],
+  };
+}
+
+export function derivePublishArtifactStatus(
+  input: PublishArtifactValidationInput = {},
+  build: ProductionBuildStatus = deriveProductionBuildStatus(),
+): PublishArtifactStatus {
+  const expectedArtifacts = uniqueSorted(input.expectedArtifacts ?? build.expectedArtifacts);
+  const manifestPath = input.manifestPath?.trim() || "publish-artifacts.json";
+  const observedArtifacts = uniqueArtifacts(input.artifacts ?? []);
+  const observedByPath = new Map(observedArtifacts.map((artifact) => [normalizeArtifactPath(artifact.path), artifact]));
+  const requiredExpected = expectedArtifacts.map(normalizeArtifactPath).filter(Boolean);
+  const missingArtifacts = requiredExpected.filter((path) => {
+    const observed = observedByPath.get(path);
+    return !observed || observed.present === false;
+  });
+  const hasGeneratedArtifact = observedArtifacts.some((artifact) =>
+    artifact.present !== false
+    && (artifact.kind === "generated_bundle" || artifact.source === "generated_draft" || artifact.source === "preview_snapshot")
+  );
+  const failures: AppPublishFailure[] = [];
+
+  if (build.status !== "pass") {
+    return {
+      stage: "artifact",
+      status: "pending",
+      manifestPath,
+      expectedArtifacts,
+      observedArtifacts,
+      missingArtifacts: [],
+      message: "Publish artifact validation is waiting on the production build.",
+      failures: [],
+    };
+  }
+
+  if (expectedArtifacts.length === 0) {
+    failures.push({
+      stage: "artifact",
+      message: "No publish artifacts were declared.",
+      action: "Declare the generated app bundle and publish manifest paths before publish handoff.",
+    });
+  }
+
+  if (missingArtifacts.length > 0) {
+    failures.push({
+      stage: "artifact",
+      message: `Missing required publish artifacts: ${missingArtifacts.join(", ")}.`,
+      action: `Regenerate the app bundle and ${manifestPath}, then rerun publish validation.`,
+    });
+  }
+
+  if (!hasGeneratedArtifact) {
+    failures.push({
+      stage: "artifact",
+      message: "No generated app bundle artifact was observed for this publish.",
+      action: "Run the generated app build/preview step that emits the bundle artifact before publishing.",
+    });
+  }
+
+  const status: PublishArtifactStatus["status"] = failures.length > 0 ? "fail" : "pass";
+
+  return {
+    stage: "artifact",
+    status,
+    manifestPath,
+    expectedArtifacts,
+    observedArtifacts,
+    missingArtifacts,
+    message: status === "pass"
+      ? `Publish artifact manifest ${manifestPath} includes ${observedArtifacts.length} observed artifact${observedArtifacts.length === 1 ? "" : "s"}.`
+      : "Publish artifact validation is blocked.",
+    failures,
   };
 }
 
@@ -353,20 +455,28 @@ export function deriveValidatedPublishUrl(
 
 export function buildAppPublishValidation(input: AppPublishValidationInput = {}): AppPublishValidation {
   const productionBuild = deriveProductionBuildStatus(input.build);
+  const artifactPresence = derivePublishArtifactStatus({
+    expectedArtifacts: input.artifacts?.expectedArtifacts ?? productionBuild.expectedArtifacts,
+    artifacts: input.artifacts?.artifacts,
+    manifestPath: input.artifacts?.manifestPath,
+  }, productionBuild);
   const healthCheck = deriveHealthCheckStatus(input.health);
   const smokeCheck = deriveSmokeCheckStatus(input.smoke);
   const validatedUrl = deriveValidatedPublishUrl(input.url, [
     productionBuild.status,
+    artifactPresence.status,
     healthCheck.status,
     smokeCheck.status,
   ]);
   const actionableFailures = [
     ...productionBuild.failures,
+    ...artifactPresence.failures,
     ...healthCheck.failures,
     ...smokeCheck.failures,
     ...validatedUrl.failures,
   ];
   const canPublish = productionBuild.status === "pass"
+    && artifactPresence.status === "pass"
     && healthCheck.status === "pass"
     && smokeCheck.status === "pass"
     && validatedUrl.status === "valid";
@@ -381,6 +491,7 @@ export function buildAppPublishValidation(input: AppPublishValidationInput = {})
     status,
     canPublish,
     productionBuild,
+    artifactPresence,
     healthCheck,
     smokeCheck,
     validatedUrl,
@@ -464,6 +575,24 @@ function firstFailureDetail(value: unknown): string | undefined {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean);
+}
+
+function uniqueArtifacts(values: PublishArtifactObservation[]): PublishArtifactObservation[] {
+  const artifacts = new Map<string, PublishArtifactObservation>();
+  for (const value of values) {
+    const path = normalizeArtifactPath(value.path);
+    if (!path) continue;
+    artifacts.set(path, {
+      ...value,
+      path,
+      present: value.present ?? true,
+    });
+  }
+  return [...artifacts.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function normalizeArtifactPath(value: string): string {
+  return String(value ?? "").trim().replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
 function positiveInteger(value: number | undefined): number | undefined {

@@ -6,11 +6,15 @@ import { useApiData } from "../useApiData";
 
 interface PreviewCheck { icon: IconKey; label: string; value: string }
 
-const CHECKS: PreviewCheck[] = [
-  { icon: "branch", label: "Routes", value: "Page and API route contracts captured" },
+export const PREVIEW_TRUTH_COPY =
+  "This checkpoint is saved in Taskloom and available through the local preview route. It is not a public deployment unless publish history includes a validated handoff URL.";
+
+export const CHECKS: PreviewCheck[] = [
+  { icon: "code", label: "Generated source", value: "Source metadata, route map, and app manifest are captured" },
+  { icon: "branch", label: "Routes", value: "Page and API route contracts are available for review" },
   { icon: "database", label: "Data", value: "Schema and CRUD loops recorded" },
   { icon: "shield", label: "Auth", value: "Public/private/admin access preserved" },
-  { icon: "check", label: "Smoke", value: "Build and smoke status attached to apply response" },
+  { icon: "check", label: "Smoke", value: "Build and smoke status are attached when checks have run" },
 ];
 
 export function AppPreviewView() {
@@ -30,18 +34,17 @@ export function AppPreviewView() {
         actions={<Link to="/builder" className="top-btn"><I.code size={13}/> Back to builder</Link>}
       />
       <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">APP PREVIEW</div>
+        <div className="kicker">SAVED LOCAL PREVIEW</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 0.85fr", gap: 28, marginTop: 18 }}>
           <div>
             <p className="kicker" style={{ color: "var(--silver-500)" }}>{workspaceId}</p>
             <h1 className="h1" style={{ fontSize: 32, marginTop: 6 }}>{appName}</h1>
             <p className="muted" style={{ fontSize: 13.5, lineHeight: 1.65, maxWidth: 560, marginTop: 10 }}>
-              This generated app checkpoint is saved and routable. The builder keeps the plan, route map,
-              data model, auth decisions, smoke status, and publish handoff tied to this app id.
+              {PREVIEW_TRUTH_COPY}
             </p>
             <div style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
               <Link to="/builder" className="btn btn-sm" style={{ textDecoration: "none" }}><I.layout size={12}/> Builder</Link>
-              <span className={`pill ${publish.data?.canPublish ? "good" : "warn"}`}><span className="dot"></span>{publish.data?.status ?? "checking"}</span>
+              <span className={`pill ${publish.data?.canPublish ? "good" : "warn"}`}><span className="dot"></span>{publish.data?.canPublish ? "handoff ready" : publish.data?.status ?? "checking"}</span>
             </div>
             {(publish.loading || checkpoints.loading) && <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>Loading checkpoint state…</p>}
             {(publish.error || checkpoints.error) && <p style={{ color: "var(--danger)", fontSize: 12, marginTop: 14 }}>{publish.error ?? checkpoints.error}</p>}

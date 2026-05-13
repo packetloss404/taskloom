@@ -1,6 +1,8 @@
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import { applyCsrfCookie, clearCsrfCookie, rejectCrossOriginPrivateMutation } from "./route-security.js";
 import {
@@ -39,6 +41,7 @@ import {
   buildGeneratedAppPublishRecord,
   buildGeneratedAppPublishRollbackResult,
   createGeneratedAppPublishRollbackCommand,
+  generatedAppPublishUrlForBase,
   orderGeneratedAppPublishHistory,
 } from "./app-publish-history.js";
 import type { ModelRoutingPresetId } from "./model-routing-presets.js";
@@ -47,7 +50,20 @@ import { inspectAppPublishIntegrations } from "./app-publish-integrations.js";
 import { buildIntegrationMarketplace } from "./integration-marketplace.js";
 import { inspectIntegrationSandbox, type IntegrationSandboxConnectorId } from "./integration-sandbox.js";
 import { buildModelRoutingPresets } from "./model-routing-presets.js";
-import { buildAppPublishValidation } from "./app-publish-service.js";
+import { buildAppPublishValidation, type PublishArtifactObservation } from "./app-publish-service.js";
+import {
+  buildGeneratedAppRuntimeArtifact,
+  findGeneratedAppSourceFile,
+  summarizeGeneratedAppSourceFiles,
+  writeGeneratedAppRuntimeWorkspace,
+  type GeneratedAppRuntimeArtifactRecord,
+  type GeneratedAppSourceFileRecord,
+  type GeneratedAppSourceFileSummary,
+} from "./generated-app-runtime.js";
+import {
+  buildGeneratedAppPreviewReadiness,
+  resolveGeneratedAppPreviewFile,
+} from "./generated-app-process.js";
 import {
   applySessionCookie,
   acceptWorkspaceInvitation,
@@ -439,6 +455,10 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
 });
 
 appRoutes.get("/app/generated-apps", async (c) => listGeneratedApps(c));
+appRoutes.get("/app/generated-apps/:appId/source", async (c) => getGeneratedAppSourceFiles(c));
+appRoutes.get("/app/generated-apps/:appId/source-files", async (c) => getGeneratedAppSourceFiles(c));
+appRoutes.get("/app/generated-apps/:appId/preview", async (c) => previewGeneratedApp(c));
+appRoutes.get("/app/generated-apps/:appId/preview/*", async (c) => previewGeneratedApp(c));
 appRoutes.post("/app/builder/app-draft/apply", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-draft/approve", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-iteration", async (c) => generateAppIteration(c));
@@ -631,6 +651,42 @@ appRoutes.delete("/app/members/:userId", async (c) => {
 type AuthenticatedRouteContext = Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>;
 type AppBuilderCheckStatus = "pending" | "pass" | "warn" | "fail";
 type AppBuilderDraftContract = ReturnType<typeof buildAppBuilderDraft>;
+type GeneratedAppCheckpointWithRuntime = GeneratedAppCheckpointRecord & {
+  runtimeArtifact?: GeneratedAppRuntimeArtifactRecord;
+  sourceFiles?: GeneratedAppSourceFileRecord[];
+};
+type GeneratedAppRecordWithRuntime = GeneratedAppRecord & {
+  runtimeArtifact?: GeneratedAppRuntimeArtifactRecord;
+  sourceFiles?: GeneratedAppSourceFileRecord[];
+  checkpoints?: GeneratedAppCheckpointWithRuntime[];
+};
+interface GeneratedAppWorkspaceManifest {
+  version: "generated-app-workspace.v1";
+  workspace: { id: string; slug: string };
+  app: { id: string; slug: string; name: string };
+  checkpoint: { id: string; source?: GeneratedAppCheckpointRecord["source"]; createdAt: string };
+  artifact: {
+    entrypoint: string;
+    renderedAt: string;
+    files: GeneratedAppSourceFileSummary[];
+  };
+}
+interface GeneratedAppWorkspaceSummary {
+  id: string;
+  slug: string;
+  path: string;
+  appPath: string;
+  checkpointPath: string;
+  manifest: {
+    path: string;
+    version: GeneratedAppWorkspaceManifest["version"];
+    fileCount: number;
+    totalBytes: number;
+    entrypoint: string;
+    renderedAt: string;
+    checkpointId: string;
+  };
+}
 type AppBuilderIterationTargetKind = "app" | "page" | "data_entity" | "api_route" | "auth" | "smoke" | "config" | "file" | "agent" | "tool";
 type AppBuilderIterationDiffStatus = "generated" | "pending" | "applied" | "blocked";
 
@@ -705,7 +761,14 @@ interface AppIterationRouteResult {
   prompt: string;
   summary: string;
   status: AppBuilderIterationDiffStatus;
-  files: Array<{ path: string; changeType: "added" | "modified" | "deleted" | "renamed"; summary: string; diff: string }>;
+  files: AppIterationDiffFile[];
+  sourceDiffFiles?: AppIterationDiffFile[];
+  sourceFiles?: ReturnType<typeof summarizeGeneratedAppSourceFiles>;
+  artifact?: {
+    entrypoint?: string;
+    renderedAt?: string;
+    files: ReturnType<typeof summarizeGeneratedAppSourceFiles>;
+  };
   draft?: AppBuilderDraftContract;
   preview?: {
     url?: string;
@@ -723,6 +786,19 @@ interface AppIterationRouteResult {
   tools?: ReturnType<typeof inspectAppIterationTools>;
 }
 
+type AppIterationDiffFile = {
+  path: string;
+  changeType: "added" | "modified" | "deleted" | "renamed";
+  summary: string;
+  diff: string;
+  source?: "draft" | "runtime";
+  beforeSha256?: string;
+  afterSha256?: string;
+  beforeSize?: number;
+  afterSize?: number;
+  role?: GeneratedAppSourceFileRecord["role"];
+};
+
 async function applyAppBuilderDraft(c: Context) {
   try {
     const context = await requireAuthenticatedContextAsync(c);
@@ -737,13 +813,16 @@ async function applyAppBuilderDraft(c: Context) {
     const draft = body.draft ?? buildAppBuilderDraft(generateAppDraftFromPrompt(promptFromBody(body.prompt)), context);
     const runSmoke = Boolean(body.runSmoke || body.runBuild);
     const smokeBuild = await runAppSmokeViaSandbox(draft, context, runSmoke);
-    const previewUrl = smokeBuild.status === "pass" ? previewUrlForDraft(draft, context) : undefined;
+    const previewUrl = smokeBuild.status === "pass" ? previewUrlForDraft(draft, context, stableGeneratedAppId(draft, context)) : undefined;
     const record = await persistGeneratedAppDraft(context, draft, {
       status: body.targetStatus ?? (runSmoke ? "built" : "saved"),
       previewUrl,
       smokeStatus: smokeBuild.status,
       buildStatus: runSmoke ? "passed" : "not_run",
     });
+    const checkpoint = checkpointForPublish(record, record.checkpointId);
+    if (!checkpoint || !record.runtimeArtifact) throw httpRouteError(500, "generated app runtime artifact missing");
+    const workspace = await writeGeneratedAppWorkspace(context, record, checkpoint, record.runtimeArtifact);
 
     return c.json({
       draft: {
@@ -765,6 +844,13 @@ async function applyAppBuilderDraft(c: Context) {
         appId: record.id,
         savedAt: record.updatedAt,
       },
+      artifact: {
+        entrypoint: record.runtimeArtifact?.entrypoint,
+        renderedAt: record.runtimeArtifact?.renderedAt,
+        files: summarizeGeneratedAppSourceFiles(record.sourceFiles ?? []),
+      },
+      sourceFiles: summarizeGeneratedAppSourceFiles(record.sourceFiles ?? []),
+      workspace,
       build: {
         status: record.buildStatus ?? "not_run",
         checks: smokeBuild.checks,
@@ -817,9 +903,26 @@ async function runAppIterationCore(
   const candidateDraft = fromGeneratedAppDraftLike(draft, dryRun.draft);
   const smoke = buildAppSmokeStatusFromDraft(candidateDraft, context, false);
   const previousSnapshot = latestPreviewSnapshot(record);
+  const sourceAppId = record?.id ?? body.appId ?? stableGeneratedAppId(draft, context);
+  const previousCheckpoint = record ? checkpointForPublish(record, body.checkpointId ?? record.checkpointId) : null;
+  const previousArtifact = previousCheckpoint && record
+    ? generatedAppRuntimeArtifact(record, previousCheckpoint)
+    : buildGeneratedAppRuntimeArtifact({
+      appId: sourceAppId,
+      workspaceId: context.workspace.id,
+      checkpointId: body.checkpointId ?? "draft",
+      draft,
+    });
+  const candidateArtifact = buildGeneratedAppRuntimeArtifact({
+    appId: sourceAppId,
+    workspaceId: context.workspace.id,
+    checkpointId: plan.rollbackCheckpoint.checkpointId,
+    draft: candidateDraft,
+  });
+  const sourceDiffFiles = diffGeneratedAppSourceFiles(previousArtifact, candidateArtifact);
   const snapshot = buildAppPreviewSnapshotMetadata({
     workspaceId: context.workspace.id,
-    appId: record?.id ?? body.appId ?? stableGeneratedAppId(draft, context),
+    appId: sourceAppId,
     appSlug: draft.app.slug,
     appName: draft.app.name,
     checkpointId: plan.rollbackCheckpoint.checkpointId,
@@ -827,7 +930,7 @@ async function runAppIterationCore(
     buildStatus: "queued",
     smokeStatus: smoke.status,
     previewUrl: record?.previewUrl ?? body.previewUrl,
-    generatedFiles: plan.diffHunks.map((hunk) => diffFilePath(hunk)),
+    generatedFiles: sourceDiffFiles.map((file) => file.path),
     source: "builder",
     createdByUserId: context.user.id,
   });
@@ -869,10 +972,14 @@ async function runAppIterationCore(
       ...plan.warnings.map((warning) => routeLog("warn", warning)),
       ...plan.risks.map((risk) => routeLog(risk.severity === "high" ? "warn" : "info", risk.message)),
       ...tools.requests.map((request) => routeLog(request.ready ? "info" : "warn", request.rationale)),
+      routeLog("info", `Generated ${sourceDiffFiles.length} source file diff${sourceDiffFiles.length === 1 ? "" : "s"} for the candidate runtime artifact.`),
       routeLog("info", comparison.summary),
     ],
     snapshot,
     tools,
+    sourceDiffFiles,
+    sourceFiles: candidateArtifact.files,
+    artifact: candidateArtifact,
   });
 }
 
@@ -894,10 +1001,13 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
     if (diff.status !== "generated" || diff.tools?.canProceed === false) {
       throw httpRouteError(409, "blocked change set cannot be applied until setup blockers are resolved");
     }
+    const previousCheckpoint = checkpointForPublish(targetRecord, targetCheckpointId ?? targetRecord.checkpointId);
+    if (!previousCheckpoint) throw httpRouteError(404, "checkpoint not found");
+    const previousArtifact = generatedAppRuntimeArtifact(targetRecord, previousCheckpoint);
 
     const runSmoke = body.runSmoke ?? body.runBuild ?? true;
     const smoke = await runAppSmokeViaSandbox(draft, context, runSmoke, { appId: targetAppId, checkpointId: targetCheckpointId });
-    const previewUrl = smoke.status === "pass" ? previewUrlForDraft(draft, context) : body.previewUrl ?? diff?.preview?.url;
+    const previewUrl = smoke.status === "pass" ? previewUrlForDraft(draft, context, targetRecord.id) : body.previewUrl ?? diff?.preview?.url;
     const record = await persistGeneratedAppDraft(context, draft, {
       status: runSmoke ? "built" : "saved",
       previewUrl,
@@ -906,6 +1016,10 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
       checkpointLabel: diff ? `Apply iteration: ${diff.summary}` : "Apply generated app iteration",
       checkpointSource: "iteration",
     });
+    const newCheckpoint = checkpointForPublish(record, record.checkpointId);
+    const newArtifact = newCheckpoint ? generatedAppRuntimeArtifact(record, newCheckpoint) : record.runtimeArtifact;
+    const sourceDiffFiles = newArtifact ? diffGeneratedAppSourceFiles(previousArtifact, newArtifact) : [];
+    const mergedFiles = mergeIterationDiffFiles(diff?.files ?? body.files ?? [], sourceDiffFiles);
     const snapshot = buildAppPreviewSnapshotMetadata({
       workspaceId: context.workspace.id,
       appId: record.id,
@@ -916,7 +1030,7 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
       buildStatus: record.buildStatus,
       smokeStatus: record.smokeStatus,
       previewUrl: record.previewUrl,
-      generatedFiles: (diff?.files ?? body.files ?? []).map((file) => file.path),
+      generatedFiles: mergedFiles.map((file) => file.path),
       source: "checkpoint",
       createdByUserId: context.user.id,
     });
@@ -947,6 +1061,14 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
           checkpointId: record.checkpointId,
           status: "applied" as const,
           draft,
+          files: mergedFiles,
+          sourceDiffFiles,
+          sourceFiles: summarizeGeneratedAppSourceFiles(newArtifact?.files ?? []),
+          artifact: {
+            entrypoint: newArtifact?.entrypoint,
+            renderedAt: newArtifact?.renderedAt,
+            files: summarizeGeneratedAppSourceFiles(newArtifact?.files ?? []),
+          },
           preview: {
             url: record.previewUrl,
             refreshedAt: record.updatedAt,
@@ -960,6 +1082,9 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
             routeLog("info", preview.reason),
           ],
         }
+      : undefined;
+    const workspace = newCheckpoint && newArtifact
+      ? await writeGeneratedAppWorkspace(context, record, newCheckpoint, newArtifact)
       : undefined;
 
     const payload = {
@@ -981,6 +1106,15 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
       snapshot,
       smoke,
       diff: appliedDiff,
+      files: mergedFiles,
+      sourceDiffFiles,
+      sourceFiles: summarizeGeneratedAppSourceFiles(newArtifact?.files ?? []),
+      artifact: {
+        entrypoint: newArtifact?.entrypoint,
+        renderedAt: newArtifact?.renderedAt,
+        files: summarizeGeneratedAppSourceFiles(newArtifact?.files ?? []),
+      },
+      workspace,
     };
 
     if (responseShape === "changeSet") {
@@ -1005,7 +1139,7 @@ async function refreshBuilderPreview(c: Context) {
     const draft = record.draft as unknown as AppBuilderDraftContract;
     const runSmoke = Boolean(body.runSmoke || body.runBuild);
     const smoke = await runAppSmokeViaSandbox(draft, context, runSmoke, { appId: record.id, checkpointId: record.checkpointId });
-    const previewUrl = runSmoke && smoke.status === "pass" ? previewUrlForDraft(draft, context) : record.previewUrl;
+    const previewUrl = runSmoke && smoke.status === "pass" ? previewUrlForDraft(draft, context, record.id) : record.previewUrl;
     const snapshot = buildAppPreviewSnapshotMetadata({
       workspaceId: context.workspace.id,
       appId: record.id,
@@ -1038,6 +1172,10 @@ async function refreshBuilderPreview(c: Context) {
         previewUrl,
       } : undefined,
     });
+    const checkpoint = checkpointForPublish(record, body.checkpointId ?? record.checkpointId);
+    if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
+    const artifact = generatedAppRuntimeArtifact(record, checkpoint);
+    const workspace = await writeGeneratedAppWorkspace(context, record, checkpoint, artifact);
 
     return c.json({
       preview,
@@ -1045,6 +1183,13 @@ async function refreshBuilderPreview(c: Context) {
       smoke,
       checkpoint: { id: record.checkpointId, appId: record.id, savedAt: record.updatedAt },
       snapshot,
+      artifact: {
+        entrypoint: artifact.entrypoint,
+        renderedAt: artifact.renderedAt,
+        files: summarizeGeneratedAppSourceFiles(artifact.files),
+      },
+      sourceFiles: summarizeGeneratedAppSourceFiles(artifact.files),
+      workspace,
     });
   } catch (error) {
     return errorResponse(c, error);
@@ -1128,6 +1273,7 @@ async function rollbackAppCheckpoint(c: Context) {
     if (!record) throw httpRouteError(404, "generated app not found");
     const target = (record.checkpoints ?? []).find((checkpoint) => checkpoint.id === checkpointId);
     if (!target) throw httpRouteError(404, "checkpoint not found");
+    const targetSourceArtifact = cloneGeneratedAppRuntimeArtifact(generatedAppRuntimeArtifact(record, target));
     const currentSnapshot = buildAppPreviewSnapshotMetadata({
       workspaceId: context.workspace.id,
       appId: record.id,
@@ -1160,14 +1306,17 @@ async function rollbackAppCheckpoint(c: Context) {
 
     const rolledBack = await mutateStoreAsync((data) => {
       data.generatedApps ??= [];
-      const app = data.generatedApps?.find((entry) => entry.workspaceId === context.workspace.id && entry.id === record.id);
+      const app = data.generatedApps?.find((entry) => entry.workspaceId === context.workspace.id && entry.id === record.id) as GeneratedAppRecordWithRuntime | undefined;
       if (!app) return null;
       const timestamp = new Date().toISOString();
       const restoredCheckpointId = `gapp_ckpt_${stableHash(`${context.workspace.id}:${app.slug}:rollback:${target.id}:${timestamp}`)}`;
+      const runtimeArtifact = cloneGeneratedAppRuntimeArtifact(targetSourceArtifact);
       const restored = {
         ...target,
         id: restoredCheckpointId,
         label: `Rollback to ${target.label}`,
+        runtimeArtifact,
+        sourceFiles: runtimeArtifact.files,
         source: "rollback" as const,
         previousCheckpointId: app.checkpointId,
         createdByUserId: context.user.id,
@@ -1175,6 +1324,8 @@ async function rollbackAppCheckpoint(c: Context) {
       };
       app.draft = target.draft;
       app.checkpointId = restoredCheckpointId;
+      app.runtimeArtifact = runtimeArtifact;
+      app.sourceFiles = runtimeArtifact.files;
       app.previewUrl = target.previewUrl;
       app.buildStatus = target.buildStatus;
       app.smokeStatus = target.smokeStatus;
@@ -1221,6 +1372,12 @@ async function rollbackAppCheckpoint(c: Context) {
       build: { status: rolledBack.buildStatus ?? "not_run" },
       smoke: (rolledBack.draft as AppBuilderDraftContract).smokeBuildStatus,
       draft: rolledBack.draft,
+      artifact: {
+        entrypoint: rolledBack.runtimeArtifact?.entrypoint,
+        renderedAt: rolledBack.runtimeArtifact?.renderedAt,
+        files: summarizeGeneratedAppSourceFiles(rolledBack.sourceFiles ?? []),
+      },
+      sourceFiles: summarizeGeneratedAppSourceFiles(rolledBack.sourceFiles ?? []),
       command,
     });
   } catch (error) {
@@ -1244,6 +1401,8 @@ async function branchAppCheckpoint(c: Context) {
           workspaceId: sourceRecord.workspaceId,
           label: sourceRecord.name,
           draft: sourceRecord.draft,
+          runtimeArtifact: sourceRecord.runtimeArtifact,
+          sourceFiles: sourceRecord.sourceFiles,
           previewUrl: sourceRecord.previewUrl,
           buildStatus: sourceRecord.buildStatus,
           smokeStatus: sourceRecord.smokeStatus,
@@ -1262,13 +1421,23 @@ async function branchAppCheckpoint(c: Context) {
       const newCheckpointId = `gapp_ckpt_${stableHash(`${branchSeed}:checkpoint`)}`;
       const branchSlug = `${sourceRecord.slug}-branch-${stableHash(branchSeed).slice(0, 6)}`;
       const branchName = sourceRecord.name.endsWith(" (branch)") ? sourceRecord.name : `${sourceRecord.name} (branch)`;
-      const initialCheckpoint: GeneratedAppCheckpointRecord = {
+      const branchDraft = branchDraftForGeneratedApp(sourceCheckpoint.draft, branchSlug, branchName);
+      const runtimeArtifact = buildGeneratedAppRuntimeArtifact({
+        appId: newAppId,
+        workspaceId: context.workspace.id,
+        checkpointId: newCheckpointId,
+        draft: branchDraft as unknown as AppBuilderDraftContract,
+        renderedAt: timestamp,
+      });
+      const initialCheckpoint: GeneratedAppCheckpointWithRuntime = {
         id: newCheckpointId,
         appId: newAppId,
         workspaceId: context.workspace.id,
         label: `Branched from ${sourceCheckpoint.label}`,
-        draft: sourceCheckpoint.draft,
-        previewUrl: sourceCheckpoint.previewUrl,
+        draft: branchDraft,
+        runtimeArtifact,
+        sourceFiles: runtimeArtifact.files,
+        previewUrl: previewUrlForDraft(branchDraft as unknown as AppBuilderDraftContract, context, newAppId),
         buildStatus: sourceCheckpoint.buildStatus,
         smokeStatus: sourceCheckpoint.smokeStatus,
         source: "branch",
@@ -1276,7 +1445,7 @@ async function branchAppCheckpoint(c: Context) {
         createdByUserId: context.user.id,
         createdAt: timestamp,
       };
-      const newApp: GeneratedAppRecord = {
+      const newApp: GeneratedAppRecordWithRuntime = {
         id: newAppId,
         workspaceId: context.workspace.id,
         slug: branchSlug,
@@ -1285,9 +1454,11 @@ async function branchAppCheckpoint(c: Context) {
         prompt: sourceRecord.prompt,
         templateId: sourceRecord.templateId,
         status: "saved",
-        draft: sourceCheckpoint.draft,
+        draft: branchDraft,
         checkpointId: newCheckpointId,
-        previewUrl: sourceCheckpoint.previewUrl,
+        runtimeArtifact,
+        sourceFiles: runtimeArtifact.files,
+        previewUrl: initialCheckpoint.previewUrl,
         buildStatus: sourceCheckpoint.buildStatus,
         smokeStatus: sourceCheckpoint.smokeStatus,
         checkpoints: [initialCheckpoint],
@@ -1348,7 +1519,7 @@ async function prepareGeneratedAppPublish(c: Context) {
     if (!record) throw httpRouteError(404, "generated app not found");
     const checkpoint = checkpointForPublish(record, body.checkpointId);
     if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
-    const { validation, integrations } = await buildPublishPreflight(context, record, checkpoint, body);
+    const { validation, integrations } = await buildPublishPreflight(context, record, checkpoint, body, { materializeWorkspace: true });
     const previousPublish = currentPublishedRecord(record);
     const readiness = buildGeneratedAppPublishRecord({
       workspaceId: context.workspace.id,
@@ -1480,7 +1651,7 @@ async function publishGeneratedApp(c: Context) {
     if (!record) throw httpRouteError(404, "generated app not found");
     const checkpoint = checkpointForPublish(record, body.checkpointId);
     if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
-    const { validation, integrations } = await buildPublishPreflight(context, record, checkpoint, body);
+    const { validation, integrations } = await buildPublishPreflight(context, record, checkpoint, body, { materializeWorkspace: true });
     if (!validation.canPublish || !integrationsReadyForPublish(integrations)) {
       return c.json({ error: "publish validation failed", validation, integrations }, 409);
     }
@@ -1679,11 +1850,11 @@ async function findGeneratedAppRecord(
   context: AuthenticatedRouteContext,
   appId?: string,
   checkpointId?: string,
-): Promise<GeneratedAppRecord | undefined> {
+): Promise<GeneratedAppRecordWithRuntime | undefined> {
   const data = await loadStoreAsync();
-  return (data.generatedApps ?? []).find((entry) => {
+  return ((data.generatedApps ?? []) as GeneratedAppRecordWithRuntime[]).find((entry) => {
     if (entry.workspaceId !== context.workspace.id) return false;
-    if (appId && entry.id !== appId) return false;
+    if (appId && entry.id !== appId && entry.slug !== appId) return false;
     if (checkpointId && entry.checkpointId !== checkpointId && !(entry.checkpoints ?? []).some((checkpoint) => checkpoint.id === checkpointId)) return false;
     return Boolean(appId || checkpointId);
   });
@@ -1697,7 +1868,7 @@ async function findGeneratedAppRecordForPublish(
   const data = await loadStoreAsync();
   return (data.generatedApps ?? []).find((entry) => {
     if (entry.workspaceId !== context.workspace.id) return false;
-    if (appId && entry.id !== appId) return false;
+    if (appId && entry.id !== appId && entry.slug !== appId) return false;
     return (entry.publishHistory ?? []).some((publish) => publish.id === publishId);
   });
 }
@@ -1718,7 +1889,143 @@ async function listGeneratedApps(c: Context) {
   }
 }
 
-function checkpointForPublish(record: GeneratedAppRecord, checkpointId: string | undefined): GeneratedAppCheckpointRecord | null {
+async function getGeneratedAppSourceFiles(c: Context) {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "viewWorkspace");
+    const record = await findGeneratedAppRecord(context, c.req.param("appId"), c.req.query("checkpointId"));
+    if (!record) throw httpRouteError(404, "generated app not found");
+    const checkpoint = checkpointForPublish(record, c.req.query("checkpointId"));
+    if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
+    const artifact = generatedAppRuntimeArtifact(record, checkpoint);
+    const requestedPath = c.req.query("path");
+    const file = requestedPath ? findGeneratedAppSourceFile(artifact, requestedPath) : undefined;
+    if (requestedPath && !file) throw httpRouteError(404, "source file not found");
+    const includeContent = c.req.query("includeContent") !== "false";
+    const workspace = await writeGeneratedAppWorkspace(context, record, checkpoint, artifact);
+
+    return c.json({
+      app: {
+        id: record.id,
+        slug: record.slug,
+        name: record.name,
+      },
+      checkpoint: {
+        id: checkpoint.id,
+        appId: checkpoint.appId,
+        source: checkpoint.source,
+        createdAt: checkpoint.createdAt,
+      },
+      artifact: {
+        entrypoint: artifact.entrypoint,
+        renderedAt: artifact.renderedAt,
+        files: summarizeGeneratedAppSourceFiles(artifact.files),
+      },
+      workspace,
+      files: (file ? [file] : artifact.files).map((entry) => includeContent ? entry : {
+        path: entry.path,
+        contentType: entry.contentType,
+        size: entry.size,
+        sha256: entry.sha256,
+        role: entry.role,
+      }),
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+async function previewGeneratedApp(c: Context) {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "viewWorkspace");
+    const record = await findGeneratedAppRecord(context, c.req.param("appId"), c.req.query("checkpointId"));
+    if (!record) throw httpRouteError(404, "generated app not found");
+    const checkpoint = checkpointForPublish(record, c.req.query("checkpointId"));
+    if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
+    const artifact = generatedAppRuntimeArtifact(record, checkpoint);
+    const requestedPath = c.req.param("*") || generatedAppPreviewPathFromRequest(c, c.req.param("appId") ?? "");
+    const resolved = resolveGeneratedAppPreviewFile({
+      appId: record.id,
+      workspaceId: context.workspace.id,
+      checkpointId: checkpoint.id,
+      artifact,
+      requestedPath,
+    });
+    c.header("Cache-Control", "no-store");
+    c.header("X-Taskloom-Generated-App-Id", record.id);
+    c.header("X-Taskloom-Generated-App-Slug", record.slug);
+    c.header("X-Taskloom-Generated-App-Checkpoint", checkpoint.id);
+    c.header("X-Taskloom-Generated-App-Runtime", resolved.readiness.mode);
+    c.header("X-Taskloom-Generated-App-Live", String(resolved.readiness.live));
+
+    if (wantsGeneratedAppPreviewReadiness(c)) {
+      return c.json({
+        app: {
+          id: record.id,
+          slug: record.slug,
+          name: record.name,
+        },
+        checkpoint: {
+          id: checkpoint.id,
+          appId: checkpoint.appId,
+          createdAt: checkpoint.createdAt,
+        },
+        preview: {
+          path: resolved.path,
+          runtime: resolved.readiness,
+        },
+        artifact: {
+          entrypoint: artifact.entrypoint,
+          renderedAt: artifact.renderedAt,
+          files: summarizeGeneratedAppSourceFiles(artifact.files),
+        },
+      });
+    }
+
+    if (!("file" in resolved) && requestedPath && !requestedPath.includes(".")) {
+      const fallback = resolveGeneratedAppPreviewFile({
+        appId: record.id,
+        workspaceId: context.workspace.id,
+        checkpointId: checkpoint.id,
+        artifact,
+      });
+      if ("file" in fallback) {
+        c.header("X-Taskloom-Generated-App-Fallback", "entrypoint");
+        c.header("Content-Type", fallback.file.contentType);
+        return c.body(fallback.file.content);
+      }
+    }
+
+    if (!("file" in resolved)) throw httpRouteError(404, "preview file not found");
+    c.header("Content-Type", resolved.file.contentType);
+    return c.body(resolved.file.content);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+function wantsGeneratedAppPreviewReadiness(c: Context) {
+  const format = (c.req.query("format") ?? c.req.query("readiness") ?? "").toLowerCase();
+  if (format === "json" || format === "1" || format === "true") return true;
+  const accept = c.req.header("accept") ?? "";
+  return accept.includes("application/json") && !accept.includes("text/html");
+}
+
+function generatedAppPreviewPathFromRequest(c: Context, appId: string): string {
+  const path = new URL(c.req.url).pathname.replace(/\\/g, "/");
+  const markers = [
+    `/api/app/generated-apps/${encodeURIComponent(appId)}/preview/`,
+    `/app/generated-apps/${encodeURIComponent(appId)}/preview/`,
+    `/api/app/generated-apps/${appId}/preview/`,
+    `/app/generated-apps/${appId}/preview/`,
+  ];
+  const marker = markers.find((candidate) => path.includes(candidate));
+  if (!marker) return "";
+  return decodeURIComponent(path.slice(path.indexOf(marker) + marker.length));
+}
+
+function checkpointForPublish(record: GeneratedAppRecordWithRuntime, checkpointId: string | undefined): GeneratedAppCheckpointWithRuntime | null {
   if (!checkpointId || checkpointId === record.checkpointId) {
     return (record.checkpoints ?? []).find((checkpoint) => checkpoint.id === record.checkpointId) ?? {
       id: record.checkpointId,
@@ -1735,6 +2042,53 @@ function checkpointForPublish(record: GeneratedAppRecord, checkpointId: string |
     };
   }
   return (record.checkpoints ?? []).find((checkpoint) => checkpoint.id === checkpointId) ?? null;
+}
+
+function generatedAppRuntimeArtifact(record: GeneratedAppRecordWithRuntime, checkpoint: GeneratedAppCheckpointWithRuntime) {
+  if (checkpoint.runtimeArtifact) return checkpoint.runtimeArtifact;
+  if (checkpoint.sourceFiles?.length) return runtimeArtifactFromSourceFiles(checkpoint.sourceFiles, checkpoint.createdAt);
+  if (checkpoint.id === record.checkpointId) {
+    if (record.runtimeArtifact) return record.runtimeArtifact;
+    if (record.sourceFiles?.length) return runtimeArtifactFromSourceFiles(record.sourceFiles, record.updatedAt);
+  }
+  return buildGeneratedAppRuntimeArtifact({
+    appId: record.id,
+    workspaceId: record.workspaceId,
+    checkpointId: checkpoint.id,
+    draft: checkpoint.draft as unknown as AppBuilderDraftContract,
+    renderedAt: checkpoint.createdAt,
+  });
+}
+
+function runtimeArtifactFromSourceFiles(files: GeneratedAppSourceFileRecord[], renderedAt: string): GeneratedAppRuntimeArtifactRecord {
+  return {
+    entrypoint: files.find((file) => file.role === "entrypoint")?.path ?? files[0]?.path ?? "index.html",
+    files,
+    renderedAt,
+  };
+}
+
+function cloneGeneratedAppRuntimeArtifact(artifact: GeneratedAppRuntimeArtifactRecord): GeneratedAppRuntimeArtifactRecord {
+  return {
+    entrypoint: artifact.entrypoint,
+    renderedAt: artifact.renderedAt,
+    files: artifact.files.map((file) => ({ ...file })),
+  };
+}
+
+function branchDraftForGeneratedApp(draft: Record<string, unknown>, slug: string, name: string): Record<string, unknown> {
+  const app = draft.app && typeof draft.app === "object" && !Array.isArray(draft.app)
+    ? draft.app as Record<string, unknown>
+    : {};
+  return {
+    ...draft,
+    app: {
+      ...app,
+      slug,
+      name,
+      description: typeof app.description === "string" ? app.description : `${name} generated app branch.`,
+    },
+  };
 }
 
 function currentPublishedRecord(record: GeneratedAppRecord): GeneratedAppPublishRecord | null {
@@ -1789,11 +2143,35 @@ async function buildAgentPublishPayload(
   const providerReady = !agent.providerId || provider?.apiKeyConfigured === true || provider?.status === "connected";
   const webhookReady = agent.triggerKind !== "webhook" || Boolean(agent.webhookToken);
   const health = await localPublishHealthObservation();
+  const readiness = buildAppPublishReadiness({
+    draftId: agent.id,
+    agentName: agent.name,
+    workspaceSlug: context.workspace.slug,
+    bundleKind: "agent",
+    visibility: body.visibility ?? "private",
+    publicBaseUrl: body.publicBaseUrl,
+    privateBaseUrl: body.privateBaseUrl,
+    runtimeEnv: publishRuntimeEnv(),
+  });
+  const expectedArtifacts = readiness.publishArtifactManifest.entries
+    .filter((entry) => entry.required)
+    .map((entry) => entry.path);
   const validation = buildAppPublishValidation({
     build: {
       phase: agent.status === "archived" ? "failed" : "passed",
       command: "npm run build:web",
-      expectedArtifacts: ["web/dist", `data/published-apps/${context.workspace.slug}/${agent.id}`],
+      expectedArtifacts,
+    },
+    artifacts: {
+      expectedArtifacts,
+      manifestPath: `${readiness.localPublishPath}/${readiness.publishArtifactManifest.fileName}`,
+      artifacts: readiness.publishArtifactManifest.entries.map((entry) => ({
+        path: entry.path,
+        kind: entry.kind,
+        present: agent.status !== "archived",
+        source: entry.kind === "generated_bundle" || entry.path.includes("/agent/") ? "generated_draft" : "publish_manifest",
+        description: entry.description,
+      })),
     },
     health,
     smoke: {
@@ -1809,16 +2187,6 @@ async function buildAgentPublishPayload(
       path: `/agent/${context.workspace.slug}/${agent.id}`,
       visibility: body.visibility ?? "private",
     },
-  });
-  const readiness = buildAppPublishReadiness({
-    draftId: agent.id,
-    agentName: agent.name,
-    workspaceSlug: context.workspace.slug,
-    bundleKind: "agent",
-    visibility: body.visibility ?? "private",
-    publicBaseUrl: body.publicBaseUrl,
-    privateBaseUrl: body.privateBaseUrl,
-    runtimeEnv: publishRuntimeEnv(),
   });
   const timestamp = new Date().toISOString();
   const history = (agent.publishHistory ?? []) as Array<Record<string, unknown>>;
@@ -1996,20 +2364,47 @@ async function buildPublishPreflight(
   record: GeneratedAppRecord,
   checkpoint: GeneratedAppCheckpointRecord,
   body: AppPublishRouteRequest,
+  options: { materializeWorkspace?: boolean } = {},
 ) {
   const draft = checkpoint.draft as unknown as AppBuilderDraftContract;
   const env = publishRuntimeEnv();
-  const readinessUrl = body.visibility === "public"
-    ? body.publicBaseUrl
-    : body.privateBaseUrl;
   const health = await localPublishHealthObservation();
   const buildStatus = checkpoint.buildStatus ?? record.buildStatus;
   const smokeStatus = checkpoint.smokeStatus ?? record.smokeStatus;
+  const readiness = buildAppPublishReadiness({
+    appName: record.name,
+    draftId: record.slug,
+    workspaceSlug: context.workspace.slug,
+    visibility: body.visibility ?? "private",
+    localPublishRoot: body.localPublishRoot,
+    publicBaseUrl: body.publicBaseUrl,
+    privateBaseUrl: body.privateBaseUrl,
+    runtimeEnv: env,
+  });
+  if (options.materializeWorkspace) {
+    materializeGeneratedAppPublishWorkspace(record, checkpoint, readiness.localPublishPath, readiness.publishArtifactManifest);
+  }
+  const privateUrl = generatedAppPublishUrlForBase(readiness.urlHandoff.privateUrl, {
+    appId: record.id,
+    checkpointId: checkpoint.id,
+  });
+  const publicUrl = generatedAppPublishUrlForBase(readiness.urlHandoff.publicUrl, {
+    appId: record.id,
+    checkpointId: checkpoint.id,
+  });
+  const expectedArtifacts = readiness.publishArtifactManifest.entries
+    .filter((entry) => entry.required)
+    .map((entry) => entry.path);
   const validation = buildAppPublishValidation({
     build: {
       phase: buildStatus === "passed" ? "passed" : buildStatus === "failed" ? "failed" : "not_run",
       command: "npm run build:web",
-      expectedArtifacts: ["web/dist", `data/published-apps/${context.workspace.slug}/${record.slug}`],
+      expectedArtifacts,
+    },
+    artifacts: {
+      expectedArtifacts,
+      manifestPath: `${readiness.localPublishPath}/${readiness.publishArtifactManifest.fileName}`,
+      artifacts: publishArtifactObservations(record, checkpoint, readiness.localPublishPath, buildStatus),
     },
     health,
     smoke: {
@@ -2022,8 +2417,7 @@ async function buildPublishPreflight(
       })),
     },
     url: {
-      baseUrl: readinessUrl ?? (body.visibility === "public" ? "https://apps.taskloom.example" : "http://localhost:8484"),
-      path: `/app/${context.workspace.slug}/${record.slug}`,
+      url: (body.visibility ?? "private") === "public" ? publicUrl : privateUrl,
       visibility: body.visibility ?? "private",
     },
   });
@@ -2045,6 +2439,179 @@ async function buildPublishPreflight(
   });
 
   return { validation, integrations };
+}
+
+function materializeGeneratedAppPublishWorkspace(
+  record: GeneratedAppRecordWithRuntime,
+  checkpoint: GeneratedAppCheckpointWithRuntime,
+  localPublishPath: string,
+  artifactManifest: GeneratedAppPublishRecord["artifactManifest"],
+) {
+  const artifact = checkpoint.runtimeArtifact ?? record.runtimeArtifact;
+  if (!artifact?.files.length) return;
+
+  const publishRoot = resolve(process.cwd(), localPublishPath);
+  const bundleRoot = safePublishPath(publishRoot, "bundle");
+  mkdirSync(bundleRoot, { recursive: true });
+
+  for (const file of artifact.files) {
+    writeTextArtifact(
+      safePublishPath(bundleRoot, normalizeSourceFilePath(file.path)),
+      file.content,
+    );
+  }
+
+  writeJsonArtifact(safePublishPath(publishRoot, "app-manifest.json"), {
+    appId: record.id,
+    workspaceId: record.workspaceId,
+    checkpointId: checkpoint.id,
+    slug: record.slug,
+    name: record.name,
+    entrypoint: artifact.entrypoint,
+    renderedAt: artifact.renderedAt,
+    files: artifact.files.map((file) => ({
+      path: file.path,
+      contentType: file.contentType,
+      size: file.size,
+      sha256: file.sha256,
+      role: file.role,
+    })),
+  });
+  writeJsonArtifact(safePublishPath(publishRoot, "runtime-config.json"), {
+    runtime: "taskloom-generated-app-preview",
+    workspaceId: record.workspaceId,
+    appId: record.id,
+    checkpointId: checkpoint.id,
+    route: `/api/app/generated-apps/${encodeURIComponent(record.id)}/preview?checkpointId=${encodeURIComponent(checkpoint.id)}`,
+    bundlePath: `${localPublishPath}/bundle`,
+    entrypoint: artifact.entrypoint,
+  });
+  writeJsonArtifact(safePublishPath(publishRoot, artifactManifest.fileName), artifactManifest);
+}
+
+function publishArtifactObservations(
+  record: GeneratedAppRecordWithRuntime,
+  checkpoint: GeneratedAppCheckpointWithRuntime,
+  localPublishPath: string,
+  buildStatus: string | undefined,
+): PublishArtifactObservation[] {
+  const artifact = checkpoint.runtimeArtifact ?? record.runtimeArtifact;
+  const snapshot = latestPreviewSnapshot(record);
+  const snapshotPaths = snapshot?.checkpoint.id === checkpoint.id ? snapshot.build.artifactPaths : [];
+  const generatedBundlePresent = Boolean(artifact?.files.length);
+  const buildPassed = buildStatus === "passed";
+  const bundleObservation = diskArtifactObservation(
+    `${localPublishPath}/bundle`,
+    "generated_bundle",
+    "generated_draft",
+    `Generated runtime bundle with ${artifact?.files.length ?? 0} source files.`,
+  );
+  const appManifestObservation = diskArtifactObservation(
+    `${localPublishPath}/app-manifest.json`,
+    "manifest",
+    "publish_manifest",
+    "Generated app manifest derived from the runtime artifact.",
+  );
+  const runtimeConfigObservation = diskArtifactObservation(
+    `${localPublishPath}/runtime-config.json`,
+    "config",
+    "publish_manifest",
+    "Runtime config for mounting the generated bundle.",
+  );
+  const publishManifestObservation = diskArtifactObservation(
+    `${localPublishPath}/publish-artifacts.json`,
+    "manifest",
+    "publish_manifest",
+    "Publish artifact manifest generated from readiness metadata.",
+  );
+
+  return [
+    {
+      path: "src/server.ts",
+      kind: "source",
+      present: true,
+      source: "operator",
+      description: "Taskloom Hono server source that serves generated apps.",
+    },
+    {
+      path: "web/dist",
+      kind: "build_output",
+      present: buildPassed,
+      source: "build",
+      description: "Built Vite app shell for the generated app runtime.",
+    },
+    { ...bundleObservation, present: bundleObservation.present && generatedBundlePresent },
+    { ...appManifestObservation, present: appManifestObservation.present && generatedBundlePresent },
+    { ...runtimeConfigObservation, present: runtimeConfigObservation.present && generatedBundlePresent },
+    { ...publishManifestObservation, present: publishManifestObservation.present && generatedBundlePresent },
+    {
+      path: "docker-compose.publish.yml",
+      kind: "config",
+      present: generatedBundlePresent,
+      source: "publish_manifest",
+      description: "Self-hostable compose export for the generated bundle.",
+    },
+    ...snapshotPaths.map((path) => ({
+      path,
+      kind: "generated_bundle" as const,
+      present: true,
+      source: "preview_snapshot" as const,
+      description: "Preview snapshot artifact captured for this checkpoint.",
+    })),
+  ];
+}
+
+function diskArtifactObservation(
+  path: string,
+  kind: NonNullable<PublishArtifactObservation["kind"]>,
+  source: NonNullable<PublishArtifactObservation["source"]>,
+  description: string,
+): PublishArtifactObservation {
+  const stats = publishArtifactDiskStats(path);
+  return {
+    path,
+    kind,
+    present: stats.present,
+    bytes: stats.bytes,
+    source,
+    description: stats.present ? `${description} Observed on disk.` : `${description} Missing on disk.`,
+  };
+}
+
+function publishArtifactDiskStats(path: string): { present: boolean; bytes?: number } {
+  try {
+    const absolutePath = resolve(process.cwd(), path);
+    if (!existsSync(absolutePath)) return { present: false };
+    const stats = statSync(absolutePath);
+    return {
+      present: true,
+      bytes: stats.isFile() ? stats.size : undefined,
+    };
+  } catch {
+    return { present: false };
+  }
+}
+
+function writeJsonArtifact(path: string, value: unknown) {
+  writeTextArtifact(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeTextArtifact(path: string, content: string) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content, "utf8");
+}
+
+function safePublishPath(root: string, path: string) {
+  const target = resolve(root, path);
+  const relativePath = relative(root, target);
+  if (relativePath.startsWith("..") || resolve(relativePath) === relativePath) {
+    throw httpRouteError(400, "publish artifact path escapes workspace");
+  }
+  return target;
+}
+
+function normalizeSourceFilePath(path: string) {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
 async function localPublishHealthObservation() {
@@ -2097,6 +2664,8 @@ function builderPublishState(
       status: entry.status,
       url: entry.visibility === "public" ? entry.publicUrl : entry.privateUrl,
       checkpointId: entry.checkpointId,
+      workspacePath: entry.workspacePath ?? entry.localPublishPath,
+      manifest: entry.manifest ?? entry.artifactManifest,
       publishedAt: entry.completedAt ?? entry.createdAt,
       actor: entry.createdByUserId,
       summary: `${entry.versionLabel} ${entry.status}`,
@@ -2188,6 +2757,9 @@ function appIterationResponse(input: {
   logs: AppIterationRouteResult["logs"];
   snapshot: ReturnType<typeof buildAppPreviewSnapshotMetadata>;
   tools: ReturnType<typeof inspectAppIterationTools>;
+  sourceDiffFiles?: AppIterationDiffFile[];
+  sourceFiles?: GeneratedAppSourceFileRecord[];
+  artifact?: GeneratedAppRuntimeArtifactRecord;
 }): AppIterationRouteResult & { rollback: AppIterationPlan["rollbackCheckpoint"]; snapshot: unknown; tools: unknown } {
   const preview = derivePreviewRefreshState({
     appId: input.body.appId ?? stableGeneratedAppId(input.draft, input.context),
@@ -2221,7 +2793,14 @@ function appIterationResponse(input: {
     prompt: input.body.prompt ?? input.plan.request.requestedChange,
     summary: input.plan.diffHunks.map((hunk) => hunk.summary).join(" ") || "No generated app changes available for this prompt.",
     status: input.status,
-    files: input.plan.diffHunks.map(diffFileFromHunk),
+    files: mergeIterationDiffFiles(input.plan.diffHunks.map(diffFileFromHunk), input.sourceDiffFiles ?? []),
+    sourceDiffFiles: input.sourceDiffFiles ?? [],
+    sourceFiles: summarizeGeneratedAppSourceFiles(input.sourceFiles ?? []),
+    artifact: {
+      entrypoint: input.artifact?.entrypoint,
+      renderedAt: input.artifact?.renderedAt,
+      files: summarizeGeneratedAppSourceFiles(input.artifact?.files ?? []),
+    },
     draft: input.draft,
     preview: {
       url: input.previewUrl,
@@ -2396,7 +2975,93 @@ function diffFileFromHunk(hunk: AppIterationDiffHunk): AppIterationRouteResult["
       ...hunk.before.split("\n").map((line) => `- ${line}`),
       ...hunk.after.split("\n").map((line) => `+ ${line}`),
     ].join("\n"),
+    source: "draft",
   };
+}
+
+function diffGeneratedAppSourceFiles(
+  previous: GeneratedAppRuntimeArtifactRecord,
+  next: GeneratedAppRuntimeArtifactRecord,
+): AppIterationDiffFile[] {
+  const previousFiles = new Map(previous.files.map((file) => [normalizeGeneratedSourcePath(file.path), file]));
+  const nextFiles = new Map(next.files.map((file) => [normalizeGeneratedSourcePath(file.path), file]));
+  const paths = sortedUniqueStrings([...previousFiles.keys(), ...nextFiles.keys()]);
+
+  return paths.flatMap((path) => {
+    const before = previousFiles.get(path);
+    const after = nextFiles.get(path);
+    if (before?.sha256 && after?.sha256 && before.sha256 === after.sha256) return [];
+    const changeType = before && after ? "modified" : before ? "deleted" : "added";
+    const role = after?.role ?? before?.role;
+    return [{
+      path: after?.path ?? before?.path ?? path,
+      changeType,
+      summary: sourceDiffSummary(changeType, after?.path ?? before?.path ?? path, before, after),
+      diff: renderSourceFileDiff(before, after),
+      source: "runtime" as const,
+      beforeSha256: before?.sha256,
+      afterSha256: after?.sha256,
+      beforeSize: before?.size,
+      afterSize: after?.size,
+      role,
+    }];
+  });
+}
+
+function mergeIterationDiffFiles(draftFiles: AppIterationDiffFile[], sourceFiles: AppIterationDiffFile[]): AppIterationDiffFile[] {
+  const runtimePaths = new Set(sourceFiles.map((file) => `runtime:${normalizeGeneratedSourcePath(file.path)}`));
+  return [
+    ...draftFiles.filter((file) => file.source !== "runtime" || !runtimePaths.has(`runtime:${normalizeGeneratedSourcePath(file.path)}`)),
+    ...sourceFiles,
+  ];
+}
+
+function sourceDiffSummary(
+  changeType: AppIterationDiffFile["changeType"],
+  path: string,
+  before: GeneratedAppSourceFileRecord | undefined,
+  after: GeneratedAppSourceFileRecord | undefined,
+) {
+  const checksum = before && after ? ` (${before.sha256.slice(0, 8)} -> ${after.sha256.slice(0, 8)})` : "";
+  const size = before && after ? `, ${before.size} -> ${after.size} bytes` : "";
+  return `${changeType[0].toUpperCase()}${changeType.slice(1)} generated source file ${path}${checksum}${size}.`;
+}
+
+function renderSourceFileDiff(before: GeneratedAppSourceFileRecord | undefined, after: GeneratedAppSourceFileRecord | undefined) {
+  const beforeLines = before?.content.split(/\r?\n/) ?? [];
+  const afterLines = after?.content.split(/\r?\n/) ?? [];
+  const max = Math.max(beforeLines.length, afterLines.length);
+  const lines = [
+    `--- ${before?.path ?? "/dev/null"}${before?.sha256 ? ` sha256:${before.sha256}` : ""}`,
+    `+++ ${after?.path ?? "/dev/null"}${after?.sha256 ? ` sha256:${after.sha256}` : ""}`,
+    "@@ source artifact @@",
+  ];
+
+  for (let index = 0; index < max; index += 1) {
+    const left = beforeLines[index];
+    const right = afterLines[index];
+    if (left === right) {
+      if (left !== undefined && shouldKeepSourceContext(index, beforeLines, afterLines)) lines.push(`  ${left}`);
+      continue;
+    }
+    if (left !== undefined) lines.push(`- ${left}`);
+    if (right !== undefined) lines.push(`+ ${right}`);
+  }
+
+  return lines.join("\n");
+}
+
+function shouldKeepSourceContext(index: number, beforeLines: string[], afterLines: string[]) {
+  return beforeLines[index - 1] !== afterLines[index - 1]
+    || beforeLines[index + 1] !== afterLines[index + 1];
+}
+
+function normalizeGeneratedSourcePath(path: string) {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function sortedUniqueStrings(values: string[]) {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 function diffFilePath(hunk: Pick<AppIterationDiffHunk, "target" | "action">) {
@@ -2511,7 +3176,7 @@ function buildAppBuilderDraft(draft: AppDraft, context: AuthenticatedRouteContex
       steps: [
         planStep("Generate pages", `Create ${draft.pageMap.length} routed screens and shared navigation from the page map.`),
         planStep("Create data layer", `Provision ${draft.dataSchema.database} tables for ${draft.dataSchema.entities.map((entry) => entry.name).join(", ")}.`),
-        planStep("Document API stubs", `Review ${draft.apiRouteStubs.length} generated route contracts with validation and auth expectations before runtime implementation.`),
+        planStep("Review API contracts", `Review ${draft.apiRouteStubs.length} generated route contracts with validation and auth expectations before runtime execution.`),
         planStep("Run smoke build", "Render the generated preview and run page plus API contract smoke checks."),
       ],
       acceptanceChecks: draft.acceptanceChecks,
@@ -2538,16 +3203,26 @@ async function persistGeneratedAppDraft(
   const checkpointId = `gapp_ckpt_${stableHash(`${context.workspace.id}:${slug}:${timestamp}`)}`;
   const draftRecord = draft as unknown as Record<string, unknown>;
 
-  return mutateStoreAsync((data) => {
+  const record = await mutateStoreAsync((data) => {
     data.generatedApps ??= [];
     const existing = data.generatedApps.find((entry) => entry.workspaceId === context.workspace.id && entry.slug === slug);
     const previousCheckpointId = existing?.checkpointId;
+    const appId = existing?.id ?? stableGeneratedAppId(draft, context);
+    const runtimeArtifact = buildGeneratedAppRuntimeArtifact({
+      appId,
+      workspaceId: context.workspace.id,
+      checkpointId,
+      draft,
+      renderedAt: timestamp,
+    });
     const checkpoint = {
       id: checkpointId,
-      appId: existing?.id ?? `gapp_${stableHash(`${context.workspace.id}:${slug}`)}`,
+      appId,
       workspaceId: context.workspace.id,
       label: input.checkpointLabel ?? `${draft.app.name} ${input.status}`,
       draft: draftRecord,
+      runtimeArtifact,
+      sourceFiles: runtimeArtifact.files,
       previewUrl: input.previewUrl,
       buildStatus: input.buildStatus,
       smokeStatus: input.smokeStatus,
@@ -2555,8 +3230,9 @@ async function persistGeneratedAppDraft(
       previousCheckpointId,
       createdByUserId: context.user.id,
       createdAt: timestamp,
-    } satisfies NonNullable<GeneratedAppRecord["checkpoints"]>[number];
-    const record: GeneratedAppRecord = {
+    } satisfies GeneratedAppCheckpointWithRuntime;
+    const existingWithRuntime = existing as GeneratedAppRecordWithRuntime | undefined;
+    const record: GeneratedAppRecordWithRuntime = {
       id: checkpoint.appId,
       workspaceId: context.workspace.id,
       slug,
@@ -2567,13 +3243,15 @@ async function persistGeneratedAppDraft(
       status: input.status,
       draft: draftRecord,
       checkpointId,
+      runtimeArtifact,
+      sourceFiles: runtimeArtifact.files,
       previewUrl: input.previewUrl,
       buildStatus: input.buildStatus,
       smokeStatus: input.smokeStatus,
-      checkpoints: [...(existing?.checkpoints ?? []), checkpoint],
-      previewSnapshots: existing?.previewSnapshots ?? [],
-      createdByUserId: existing?.createdByUserId ?? context.user.id,
-      createdAt: existing?.createdAt ?? timestamp,
+      checkpoints: [...(existingWithRuntime?.checkpoints ?? []), checkpoint],
+      previewSnapshots: existingWithRuntime?.previewSnapshots ?? [],
+      createdByUserId: existingWithRuntime?.createdByUserId ?? context.user.id,
+      createdAt: existingWithRuntime?.createdAt ?? timestamp,
       updatedAt: timestamp,
     };
 
@@ -2599,6 +3277,52 @@ async function persistGeneratedAppDraft(
 
     return record;
   });
+  return record;
+}
+
+async function writeGeneratedAppWorkspace(
+  context: AuthenticatedRouteContext,
+  record: Pick<GeneratedAppRecordWithRuntime, "id" | "slug" | "name">,
+  checkpoint: Pick<GeneratedAppCheckpointWithRuntime, "id" | "label" | "createdAt">,
+  artifact: GeneratedAppRuntimeArtifactRecord,
+): Promise<GeneratedAppWorkspaceSummary> {
+  const result = await writeGeneratedAppRuntimeWorkspace({
+    workspaceSlug: context.workspace.slug || context.workspace.id,
+    appSlug: record.slug || record.id,
+    appId: record.id,
+    workspaceId: context.workspace.id,
+    checkpointId: checkpoint.id,
+    checkpointLabel: checkpoint.label,
+    checkpointCreatedAt: checkpoint.createdAt,
+    artifact,
+    generatedAppsRoot: process.env.TASKLOOM_GENERATED_APP_WORKSPACES_DIR,
+  });
+
+  return generatedAppWorkspaceSummary(context, record, artifact, result);
+}
+
+function generatedAppWorkspaceSummary(
+  context: AuthenticatedRouteContext,
+  record: Pick<GeneratedAppRecordWithRuntime, "id" | "slug" | "name">,
+  artifact: GeneratedAppRuntimeArtifactRecord,
+  result: Awaited<ReturnType<typeof writeGeneratedAppRuntimeWorkspace>>,
+): GeneratedAppWorkspaceSummary {
+  return {
+    id: context.workspace.id,
+    slug: context.workspace.slug,
+    path: result.paths.workspacePath,
+    appPath: dirname(result.paths.workspacePath),
+    checkpointPath: result.paths.workspacePath,
+    manifest: {
+      path: result.paths.manifestPath,
+      version: result.manifest.version,
+      fileCount: result.manifest.files.length,
+      totalBytes: result.manifest.files.reduce((total, file) => total + file.size, 0),
+      entrypoint: artifact.entrypoint,
+      renderedAt: artifact.renderedAt,
+      checkpointId: result.manifest.checkpoint.id,
+    },
+  };
 }
 
 function promptFromBody(prompt: string | undefined) {
@@ -2867,9 +3591,9 @@ function apiBasePathForDraftEntity(draft: AppBuilderDraftContract, entity: strin
     ?? `/api/app/generated/${draft.app.slug}/${plural}`;
 }
 
-function previewUrlForDraft(draft: AppBuilderDraftContract, context: AuthenticatedRouteContext) {
+function previewUrlForDraft(draft: AppBuilderDraftContract, context: AuthenticatedRouteContext, appId = draft.app.slug || stableAppId(draft.app.name)) {
   const readiness = buildAppPreviewReadiness({
-    appId: draft.app.slug || stableAppId(draft.app.name),
+    appId,
     workspaceId: context.workspace.id,
     preferredPath: draft.app.pages[0]?.route,
     pageMap: draft.app.pages.map((page) => ({

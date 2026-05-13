@@ -1,7 +1,16 @@
 {
   "name": "taskloom",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "license": "MIT",
+  "homepage": "https://packetloss404.github.io/taskloom/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/packetloss404/taskloom.git"
+  },
+  "bugs": {
+    "url": "https://github.com/packetloss404/taskloom/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.5.0"
@@ -61,16 +70,17 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
-    "@hono/node-server": "^1.13.8",
+    "@hono/node-server": "^2.0.2",
     "clsx": "^2.1.1",
-    "hono": "^4.9.2",
+    "hono": "^4.12.18",
     "lucide-react": "^0.542.0",
     "openai": "^6.34.0",
     "pg": "^8.20.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.8.2",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.3.1",
+    "tsx": "^4.20.5"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
@@ -82,7 +92,6 @@
     "concurrently": "^9.2.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
-    "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },

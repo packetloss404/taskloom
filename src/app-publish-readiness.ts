@@ -105,6 +105,7 @@ export interface AppPublishDockerComposeService {
   buildContext?: string;
   ports?: string[];
   envFile?: string;
+  environment?: Record<string, string>;
   volumes?: string[];
   dependsOn?: string[];
   healthcheck?: {
@@ -450,6 +451,12 @@ function buildArtifactManifest(
         description: "Built Vite assets for generated app pages.",
       },
       {
+        path: `${localPublishPath}/bundle`,
+        kind: "generated_bundle",
+        required: true,
+        description: "Concrete generated app bundle directory mounted by self-hosted publish.",
+      },
+      {
         path: `${localPublishPath}/app-manifest.json`,
         kind: "manifest",
         required: true,
@@ -561,6 +568,11 @@ function buildDockerComposeExport(
         buildContext: ".",
         ports: ["${PORT:-8484}:8484"],
         envFile: ".env.publish",
+        environment: {
+          TASKLOOM_APP_BUNDLE_PATH: `/app/${localPublishPath}/bundle`,
+          TASKLOOM_PUBLISH_MANIFEST_PATH: `/app/${localPublishPath}/publish-artifacts.json`,
+          TASKLOOM_PUBLISH_ROOT: `/app/${localPublishPath}`,
+        },
         volumes: [`${localPublishPath}:/app/${localPublishPath}:ro`],
         dependsOn: ["taskloom-db"],
         healthcheck: {
@@ -590,7 +602,8 @@ function buildDockerComposeExport(
     volumes: ["taskloom-db-data"],
     outline: [
       "Build taskloom-app from the repository root with Node 22 or newer.",
-      "Mount the generated publish bundle read-only into the app container.",
+      `Mount ${localPublishPath} read-only; the generated app bundle is expected at ${localPublishPath}/bundle.`,
+      `Set TASKLOOM_PUBLISH_MANIFEST_PATH to ${localPublishPath}/publish-artifacts.json inside the app container.`,
       "Expose PORT from the app service and route it through the hosting load balancer.",
       "Attach taskloom-db only when the selected TASKLOOM_STORE posture needs managed Postgres.",
       ...(withAgent ? ["Start taskloom-agent with the same read-only generated agent bundle metadata."] : []),

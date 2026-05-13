@@ -224,7 +224,7 @@ function buildBundleChecks(bundle: BuilderTemplateBetaBundle): GeneratedTestChec
       assertions: [
         `App template id remains ${bundle.appTemplateId}.`,
         "Repeating expansion with the same prompt returns identical app and agent bundle data.",
-        "CRUD route stubs cover create, read, update, and delete for generated entities.",
+        "CRUD route contracts cover create, read, update, and delete for generated entities.",
       ],
       cleanup: [
         "Reset in-memory draft mutations before comparing repeated expansions.",
@@ -238,7 +238,7 @@ function buildBundleChecks(bundle: BuilderTemplateBetaBundle): GeneratedTestChec
       title: `Check access policy for ${bundle.app.appName}`,
       assertions: [
         "Only routes listed as public are reachable without a session.",
-        "Private pages and API route stubs require an authenticated workspace user.",
+        "Private pages and generated API routes require an authenticated workspace user.",
         "Admin routes require an admin role in addition to authentication.",
       ],
       cleanup: [

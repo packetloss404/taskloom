@@ -1,6 +1,6 @@
 # Manual Test Plan
 
-End-to-end test plan run before cutting a release. Covers the builder loop, agent loop, workspace setup, providers, sandbox, operations, and the self-host backup round-trip.
+End-to-end test plan run before cutting a release. Covers the builder loop, agent loop, workspace setup, providers, sandbox, operations, self-host publish handoff, and the backup round-trip.
 
 Estimated time: 25-35 minutes for a full pass; about 10 minutes for the golden path.
 
@@ -40,25 +40,39 @@ npm run dev
 
 Open `http://localhost:7341/` in development, or `http://localhost:8484/` after `npm run build:web && npm start`.
 
+## First 10 Minutes: Self-Host Builder Smoke
+
+Use this as the short confidence pass when time is tight.
+
+1. Run `npm install && npm run dev`.
+2. Sign in at `http://localhost:7341` with `alpha@taskloom.local` / `demo12345`.
+3. Open `/builder`, choose **Build an app**, and submit `Build a lightweight CRM for renewal tracking`.
+4. Confirm the draft shows generated source: page routes, API routes, data model, acceptance checks, and open questions.
+5. Approve the draft. Confirm the **Generated source** tab lists source files and a workspace path under `data/generated-apps/<workspace>/<app>/workspace`.
+6. Open the preview route and confirm it serves `/api/app/generated-apps/:appId/preview`, including nested generated files such as `src/App.tsx`.
+7. Open **Publish handoff**. Confirm it shows local package/runtime details, artifact paths, workspace manifest, health/smoke expectations, and next actions. It must not claim a cloud deployment unless a validated handoff URL and publish history entry exist.
+8. Optional single-port serve: run `npm run build:web && npm start`, then open `http://localhost:8484`.
+
 ## Golden Path: Build An App
 
-Sign in → `/builder` → describe an app → preview → iterate → publish.
+Sign in -> `/builder` -> describe an app -> saved local preview -> iterate -> publish handoff.
 
 1. From the unauthenticated sign-in entry, submit `alpha@taskloom.local` / `demo12345`.
 2. Confirm you land on `/builder`. The Build mode toggle should show **Build an app** selected.
 3. Type a prompt such as `Build a lightweight CRM for renewal tracking`, then click the primary generate action.
 4. Confirm a draft renders before any mutation. It should show app name, summary, plan steps, page map, data model, acceptance checks, and warnings/open questions when relevant.
-5. Approve the draft. Confirm a new app and checkpoint are created and that a preview path appears.
+5. Approve the draft. Confirm a new app and checkpoint are created and that a local preview path appears.
 6. Open the preview link. You should land at `/builder/preview/<workspaceId>/<appId>/...` and see the generated routes load.
 7. Submit a refinement prompt such as `Add an inline notes field to Account`. Confirm a dry-run change set is shown before mutation, including affected artifacts, route/privacy changes, acceptance checks, and rollback target.
 8. Apply the change. Verify a new checkpoint is recorded and that the previous checkpoint is still listed in builder history.
 9. Restore a previous non-current checkpoint from the history panel. Confirm the current pointer, preview state, and build/smoke metadata update.
-10. Open the publish area. Walk through publish readiness; confirm missing provider keys, webhook secrets, or base URLs are named by env key without exposing values, and that publish remains private until required checks pass and the user explicitly approves public visibility.
+10. Open the publish handoff area. Walk through readiness; confirm missing provider keys, webhook secrets, or base URLs are named by env key without exposing values, and that handoff remains private until required checks pass and the user explicitly approves public visibility.
 
 Expected results:
 
 - All builder calls hit `POST /api/app/builder/app-draft`, `POST /api/app/builder/app-draft/apply`, and the iteration / rollback endpoints with no console errors.
 - Build/smoke status is visible at every stage, even when status is `not_run`, `blocked`, or `failed`.
+- UI copy distinguishes generated source files, saved local preview, and publish handoff. It must not say the app is fully deployed unless a real URL/runtime artifact is present in publish state.
 - No webhook tokens, API keys, or provider secrets are rendered in full.
 
 ## Agent Path: Build An Agent

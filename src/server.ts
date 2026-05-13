@@ -407,6 +407,10 @@ scheduler.register({
     return handleAlertsDeliverJob(job.payload as unknown as AlertsDeliverJobPayload);
   },
 });
+app.use("/data/artifacts/*", async (c, next) => {
+  if (!artifactServingEnabled()) return c.text("not found", 404);
+  await next();
+});
 app.use("/data/artifacts/*", serveStatic({ root: "./" }));
 
 if (existsSync("./web/dist/index.html")) {
@@ -445,6 +449,13 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   });
 }
 
+export function artifactServingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const configured = env.TASKLOOM_ARTIFACT_SERVING_ENABLED;
+  if (isEnvTruthy(configured)) return true;
+  if (isEnvFalsey(configured)) return false;
+  return env.NODE_ENV !== "production";
+}
+
 function isExecutedDirectly(): boolean {
   const entrypoint = process.argv[1];
   return entrypoint ? resolve(fileURLToPath(import.meta.url)) === resolve(entrypoint) : false;
@@ -468,4 +479,14 @@ async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
   } catch {
     throw Object.assign(new Error("request body must be valid JSON"), { status: 400 });
   }
+}
+
+function isEnvTruthy(value: string | undefined): boolean {
+  if (!value) return false;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function isEnvFalsey(value: string | undefined): boolean {
+  if (!value) return false;
+  return ["0", "false", "no", "off"].includes(value.toLowerCase());
 }

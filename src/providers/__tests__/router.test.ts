@@ -106,6 +106,37 @@ test("model override on call uses the supplied model when non-empty", async () =
   assert.equal(result.model, "stub-large");
 });
 
+test("provider override routes calls through the selected provider and model", async () => {
+  const router = new ProviderRouter();
+  let seenModel = "";
+  const fakeOpenAI: LLMProvider = {
+    name: "openai",
+    async call(opts): Promise<ProviderCallResult> {
+      seenModel = opts.model;
+      return {
+        content: "openai response",
+        finishReason: "stop",
+        usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 },
+        model: opts.model,
+        providerName: "openai",
+      };
+    },
+    async *stream(): AsyncIterable<ProviderStreamChunk> {
+      yield { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } };
+    },
+    async models() {
+      return ["gpt-agent"];
+    },
+  };
+  router.register("openai", fakeOpenAI);
+
+  const result = await router.call({ ...callOpts({ routeKey: "agent.reasoning" }), provider: "openai", model: "gpt-agent" });
+
+  assert.equal(result.providerName, "openai");
+  assert.equal(result.model, "gpt-agent");
+  assert.equal(seenModel, "gpt-agent");
+});
+
 test("setRoute overrides a route in the table", () => {
   const router = new ProviderRouter();
   router.setRoute("workflow.draft", { provider: "ollama", model: "llama3.2" });

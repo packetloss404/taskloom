@@ -19,6 +19,14 @@ test("builder publish dashboard is deterministic and composes preview and produc
     },
     validation: {
       build: { phase: "passed" as const },
+      artifacts: {
+        expectedArtifacts: ["web/dist", "data/published-apps/ops-team/release-desk/bundle"],
+        manifestPath: "data/published-apps/ops-team/release-desk/publish-artifacts.json",
+        artifacts: [
+          { path: "web/dist", kind: "build_output" as const, source: "build" as const },
+          { path: "data/published-apps/ops-team/release-desk/bundle", kind: "generated_bundle" as const, source: "generated_draft" as const, bytes: 4096 },
+        ],
+      },
       health: {
         live: { statusCode: 200, bodyStatus: "live" },
         ready: { statusCode: 200, bodyStatus: "ready" },

@@ -24,6 +24,7 @@ interface MockDriverOptions {
    *  chunks/exit asynchronously. */
   behavior: (handle: MockHandleInternal, spec: SandboxStartSpec) => void;
   available?: boolean;
+  id?: SandboxDriver["id"];
 }
 
 function createMockDriver(opts: MockDriverOptions): SandboxDriver & {
@@ -35,7 +36,7 @@ function createMockDriver(opts: MockDriverOptions): SandboxDriver & {
   const startedSpecs: SandboxStartSpec[] = [];
 
   const driver: SandboxDriver & { cancelCalled: number; startedSpecs: SandboxStartSpec[] } = {
-    id: "native",
+    id: opts.id ?? "native",
     cancelCalled: 0,
     startedSpecs,
     async available() {
@@ -199,6 +200,52 @@ test("sandbox service: status reflects native driver insecure note", async () =>
   assert.equal(status.driver, "native");
   assert.equal(status.available, true);
   assert.match(status.note ?? "", /no isolation/i);
+});
+
+test("sandbox service: blocks native driver in production by default", async () => {
+  const store = createInMemoryStore();
+  const driver = createMockDriver({ behavior: () => {} });
+  const service = new SandboxService({
+    store,
+    dockerDriver: driver,
+    nativeDriver: driver,
+    forcedDriver: "native",
+    env: { NODE_ENV: "production" },
+  });
+
+  await assert.rejects(() => service.getStatus(), /native driver is blocked/);
+});
+
+test("sandbox service: blocks auto fallback to native in production when Docker is unavailable", async () => {
+  const store = createInMemoryStore();
+  const dockerDriver = createMockDriver({ behavior: () => {}, available: false, id: "docker" });
+  const nativeDriver = createMockDriver({ behavior: () => {} });
+  const service = new SandboxService({
+    store,
+    dockerDriver,
+    nativeDriver,
+    env: { NODE_ENV: "production", TASKLOOM_SANDBOX_DRIVER: "auto" },
+  });
+
+  await assert.rejects(() => service.getStatus(), /native driver is blocked/);
+});
+
+test("sandbox service: allows explicit insecure native opt-in in production", async () => {
+  const store = createInMemoryStore();
+  const driver = createMockDriver({ behavior: () => {} });
+  const service = new SandboxService({
+    store,
+    dockerDriver: driver,
+    nativeDriver: driver,
+    forcedDriver: "native",
+    env: {
+      NODE_ENV: "production",
+      TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX: "true",
+    },
+  });
+
+  const status = await service.getStatus();
+  assert.equal(status.driver, "native");
 });
 
 test("sandbox service: runSmokeBatch aggregates pass when all items succeed", async () => {

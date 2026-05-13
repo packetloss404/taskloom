@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type AppDraftTemplateId =
   | "crm"
   | "booking"
@@ -111,6 +113,31 @@ export type AuthDraft = {
   privateRoutes: string[];
   roleRoutes: Array<{ role: "admin"; routes: string[]; reason: string }>;
   decisions: string[];
+};
+
+export type GeneratedAppSourceFileKind =
+  | "manifest"
+  | "config"
+  | "source"
+  | "route-data"
+  | "api"
+  | "seed-data"
+  | "documentation";
+
+export type GeneratedAppSourceFile = {
+  path: string;
+  kind: GeneratedAppSourceFileKind;
+  contents: string;
+  sizeBytes: number;
+  checksum: string;
+};
+
+export type GeneratedAppSourceArtifactBundle = {
+  appName: string;
+  appSlug: string;
+  templateId: AppDraftTemplateId;
+  entrypoint: string;
+  files: GeneratedAppSourceFile[];
 };
 
 type TemplateDefinition = {
@@ -621,7 +648,7 @@ export function generateAppDraftFromPrompt(prompt: string): AppDraft {
       `${appName} uses the ${template.summaryNoun} heuristic selected from the prompt.`,
       ...template.acceptanceChecks,
       ...integrationMetadata.requested.map((integration) => `${integration.label} setup guidance references ${integration.envVars.join(", ")} without blocking unrelated app features.`),
-      "API route stubs return validation errors for missing required fields.",
+      "Generated API routes return validation errors for missing required fields.",
       "Generated seed data can render every primary page without empty states.",
     ],
   };
@@ -629,6 +656,62 @@ export function generateAppDraftFromPrompt(prompt: string): AppDraft {
 
 export function listAppDraftTemplateIds(): AppDraftTemplateId[] {
   return TEMPLATE_DEFINITIONS.map((entry) => entry.id);
+}
+
+export function generateAppSourceArtifactBundle(draft: AppDraft): GeneratedAppSourceArtifactBundle {
+  const slug = appSlug(draft.appName);
+  const pages = buildGeneratedPageData(draft);
+  const apiRoutes = draft.apiRouteStubs.map((route) => ({
+    method: route.method,
+    path: route.path,
+    access: route.access,
+    authRequired: route.access !== "public",
+    requiredRole: route.access === "admin" ? ("admin" as const) : undefined,
+    purpose: route.purpose,
+    requestBody: route.requestBody,
+    responseShape: route.responseShape,
+  }));
+  const dataContracts = {
+    database: draft.dataSchema.database,
+    entities: draft.dataSchema.entities.map((entityDraft) => ({
+      name: entityDraft.name,
+      primaryKey: entityDraft.primaryKey,
+      requiredFields: requiredFieldNames(entityDraft),
+      editableFields: editableFieldNames(entityDraft),
+      fields: entityDraft.fields,
+      indexes: entityDraft.indexes,
+      relations: entityDraft.relations,
+    })),
+    notes: draft.dataSchema.notes,
+  };
+  const routeSummary = {
+    publicRoutes: draft.auth.publicRoutes,
+    privateRoutes: draft.auth.privateRoutes,
+    adminRoutes: draft.auth.roleRoutes.flatMap((entry) => entry.routes),
+    decisions: draft.auth.decisions.map(generatedArtifactCopy),
+  };
+
+  const files = [
+    sourceFile("package.json", "manifest", renderGeneratedPackageJson(slug)),
+    sourceFile("index.html", "config", renderGeneratedIndexHtml(draft.appName)),
+    sourceFile("tsconfig.json", "config", renderGeneratedTsConfig()),
+    sourceFile("vite.config.ts", "config", renderGeneratedViteConfig()),
+    sourceFile("src/main.tsx", "source", renderGeneratedMainTsx()),
+    sourceFile("src/App.tsx", "source", renderGeneratedAppTsx(draft, pages)),
+    sourceFile("src/styles.css", "source", renderGeneratedStylesCss()),
+    sourceFile("src/routes/page-data.ts", "route-data", renderGeneratedPageDataTs(pages, routeSummary)),
+    sourceFile("src/api/generated-api.ts", "api", renderGeneratedApiTs(apiRoutes, dataContracts)),
+    sourceFile("src/data/seed-data.json", "seed-data", JSON.stringify(draft.seedData, null, 2)),
+    sourceFile("README.md", "documentation", renderGeneratedReadme(draft, pages, apiRoutes)),
+  ];
+
+  return {
+    appName: draft.appName,
+    appSlug: slug,
+    templateId: draft.templateId,
+    entrypoint: "src/App.tsx",
+    files,
+  };
 }
 
 export function detectPhase71Integrations(prompt: string): Phase71IntegrationDraft[] {
@@ -835,10 +918,590 @@ function buildAuth(pages: PageDraft[]): AuthDraft {
       : [],
     decisions: [
       "Only explicitly public pages can be viewed without a session.",
-      "Private API stubs require an authenticated workspace user.",
+      "Private API routes require an authenticated workspace user.",
       "Admin routes require an admin role in addition to authentication.",
     ],
   };
+}
+
+function buildGeneratedPageData(draft: AppDraft) {
+  return draft.pageMap.map((pageDraft) => ({
+    route: pageDraft.path,
+    name: pageDraft.name,
+    access: pageDraft.access,
+    purpose: pageDraft.purpose,
+    primaryEntity: pageDraft.primaryEntity,
+    actions: pageDraft.actions,
+    components: draft.components
+      .filter((componentDraft) => componentDraft.usedOn.includes(pageDraft.path))
+      .map((componentDraft) => componentDraft.name),
+  }));
+}
+
+function sourceFile(path: string, kind: GeneratedAppSourceFileKind, contents: string): GeneratedAppSourceFile {
+  const normalized = normalizeGeneratedFileContents(contents);
+  return {
+    path,
+    kind,
+    contents: normalized,
+    sizeBytes: Buffer.byteLength(normalized, "utf8"),
+    checksum: createHash("sha256").update(normalized).digest("hex"),
+  };
+}
+
+function normalizeGeneratedFileContents(contents: string): string {
+  return `${contents.replace(/\r\n/g, "\n").replace(/\s+$/g, "")}\n`;
+}
+
+function renderGeneratedPackageJson(slug: string): string {
+  return JSON.stringify({
+    name: slug,
+    version: "0.1.0",
+    private: true,
+    type: "module",
+    scripts: {
+      dev: "vite",
+      build: "vite build",
+      preview: "vite preview",
+    },
+    dependencies: {
+      "@vitejs/plugin-react": "^5.0.2",
+      vite: "^7.1.3",
+      typescript: "^5.9.2",
+      react: "^19.1.1",
+      "react-dom": "^19.1.1",
+    },
+    devDependencies: {},
+  }, null, 2);
+}
+
+function renderGeneratedIndexHtml(appName: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtml(appName)}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>`;
+}
+
+function renderGeneratedTsConfig(): string {
+  return JSON.stringify({
+    compilerOptions: {
+      target: "ES2022",
+      useDefineForClassFields: true,
+      lib: ["DOM", "DOM.Iterable", "ES2022"],
+      allowJs: false,
+      skipLibCheck: true,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
+      strict: true,
+      forceConsistentCasingInFileNames: true,
+      module: "ESNext",
+      moduleResolution: "Bundler",
+      resolveJsonModule: true,
+      isolatedModules: true,
+      noEmit: true,
+      jsx: "react-jsx",
+    },
+    include: ["src"],
+    references: [],
+  }, null, 2);
+}
+
+function renderGeneratedViteConfig(): string {
+  return `import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+});`;
+}
+
+function renderGeneratedMainTsx(): string {
+  return `import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);`;
+}
+
+function renderGeneratedAppTsx(
+  draft: AppDraft,
+  pages: ReturnType<typeof buildGeneratedPageData>,
+): string {
+  const primaryEntity = draft.dataSchema.entities[0]?.name ?? "record";
+  const appName = JSON.stringify(draft.appName);
+  const summary = JSON.stringify(draft.summary);
+  const primaryEntityLiteral = JSON.stringify(primaryEntity);
+  const pageCount = pages.length;
+
+  return `import { apiRoutes, dataContracts } from "./api/generated-api";
+import seedData from "./data/seed-data.json";
+import { pages, routeAccess } from "./routes/page-data";
+import "./styles.css";
+
+type SeedData = Record<string, Array<Record<string, string | number | boolean | null>>>;
+
+const appName = ${appName};
+const summary = ${summary};
+const primaryEntity = ${primaryEntityLiteral};
+const typedSeedData = seedData as SeedData;
+
+export default function App() {
+  const firstRecords = Object.entries(typedSeedData).map(([entity, records]) => ({
+    entity,
+    count: records.length,
+    sample: records[0],
+  }));
+
+  return (
+    <main className="app-shell">
+      <header className="hero">
+        <div>
+          <p className="eyebrow">Generated Taskloom app</p>
+          <h1>{appName}</h1>
+          <p>{summary}</p>
+        </div>
+        <dl className="hero-stats" aria-label="App summary">
+          <div>
+            <dt>Pages</dt>
+            <dd>${pageCount}</dd>
+          </div>
+          <div>
+            <dt>API routes</dt>
+            <dd>{apiRoutes.length}</dd>
+          </div>
+          <div>
+            <dt>Primary data</dt>
+            <dd>{primaryEntity}</dd>
+          </div>
+        </dl>
+      </header>
+
+      <section className="layout-grid" aria-label="Generated app workspace">
+        <nav className="panel route-nav" aria-label="Routes">
+          <h2>Pages</h2>
+          {pages.map((page) => (
+            <a key={page.route} href={page.route}>
+              <span>{page.name}</span>
+              <small>{page.route}</small>
+            </a>
+          ))}
+        </nav>
+
+        <section className="panel page-list">
+          <h2>Route Plan</h2>
+          <div className="cards">
+            {pages.map((page) => (
+              <article key={page.route} className="page-card">
+                <div>
+                  <p className="access">{page.access}</p>
+                  <h3>{page.name}</h3>
+                </div>
+                <p>{page.purpose}</p>
+                <ul>
+                  {page.actions.map((action) => (
+                    <li key={action}>{action}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <aside className="panel data-panel">
+          <h2>Data Contracts</h2>
+          {dataContracts.entities.map((entity) => (
+            <article key={entity.name}>
+              <h3>{entity.name}</h3>
+              <p>{entity.fields.length} fields, required: {entity.requiredFields.join(", ") || "none"}</p>
+            </article>
+          ))}
+
+          <h2>Seed Data</h2>
+          {firstRecords.map((record) => (
+            <article key={record.entity}>
+              <h3>{record.entity}</h3>
+              <p>{record.count} records ready for local rendering.</p>
+            </article>
+          ))}
+        </aside>
+      </section>
+
+      <section className="panel api-panel">
+        <h2>API Surface</h2>
+        <div className="api-grid">
+          {apiRoutes.map((route) => (
+            <article key={\`\${route.method} \${route.path}\`}>
+              <strong>{route.method}</strong>
+              <code>{route.path}</code>
+              <span>{route.authRequired ? route.requiredRole ?? "private" : "public"}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <footer>
+        Route access policy: {routeAccess.decisions.join(" ")}
+      </footer>
+    </main>
+  );
+}`;
+}
+
+function renderGeneratedStylesCss(): string {
+  return `:root {
+  color: #172033;
+  background: #f4f7f9;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.hero {
+  align-items: end;
+  background: #ffffff;
+  border: 1px solid #d8e0e7;
+  border-radius: 8px;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 28px;
+}
+
+.eyebrow,
+.access {
+  color: #406176;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: 34px;
+  line-height: 1.1;
+  margin-bottom: 12px;
+}
+
+.hero-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(88px, 1fr));
+  margin: 0;
+}
+
+.hero-stats div,
+.panel {
+  background: #ffffff;
+  border: 1px solid #d8e0e7;
+  border-radius: 8px;
+}
+
+.hero-stats div {
+  padding: 14px;
+}
+
+dt {
+  color: #5f7180;
+  font-size: 12px;
+}
+
+dd {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 4px 0 0;
+}
+
+.layout-grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 220px minmax(0, 1fr) 320px;
+  margin-top: 20px;
+}
+
+.panel {
+  padding: 20px;
+}
+
+.route-nav {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+}
+
+.route-nav a {
+  border: 1px solid #e2e8ee;
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+small,
+code {
+  color: #607487;
+}
+
+.cards,
+.api-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.page-card {
+  border: 1px solid #e2e8ee;
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.page-card ul {
+  margin-bottom: 0;
+  padding-left: 20px;
+}
+
+.data-panel article {
+  border-top: 1px solid #e2e8ee;
+  padding-top: 12px;
+}
+
+.api-panel {
+  margin-top: 20px;
+}
+
+.api-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.api-grid article {
+  align-items: center;
+  border: 1px solid #e2e8ee;
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  padding: 12px;
+}
+
+footer {
+  color: #607487;
+  margin-top: 20px;
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    padding: 18px;
+  }
+
+  .hero,
+  .layout-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-stats {
+    grid-template-columns: 1fr;
+  }
+}`;
+}
+
+function renderGeneratedPageDataTs(
+  pages: ReturnType<typeof buildGeneratedPageData>,
+  routeSummary: {
+    publicRoutes: string[];
+    privateRoutes: string[];
+    adminRoutes: string[];
+    decisions: string[];
+  },
+): string {
+  return `export type GeneratedPageAccess = "public" | "private" | "admin";
+
+export type GeneratedPage = {
+  route: string;
+  name: string;
+  access: GeneratedPageAccess;
+  purpose: string;
+  primaryEntity?: string;
+  actions: string[];
+  components: string[];
+};
+
+export const pages: GeneratedPage[] = ${JSON.stringify(pages, null, 2)};
+
+export const routeAccess = ${JSON.stringify(routeSummary, null, 2)};`;
+}
+
+function renderGeneratedApiTs(
+  apiRoutes: Array<{
+    method: ApiRouteStub["method"];
+    path: string;
+    access: RouteAccess;
+    authRequired: boolean;
+    requiredRole?: "admin";
+    purpose: string;
+    requestBody?: string;
+    responseShape: string;
+  }>,
+  dataContracts: {
+    database: DataSchemaDraft["database"];
+    entities: Array<{
+      name: string;
+      primaryKey: string;
+      requiredFields: string[];
+      editableFields: string[];
+      fields: FieldSchemaDraft[];
+      indexes: string[];
+      relations: string[];
+    }>;
+    notes: string[];
+  },
+): string {
+  return `import seedData from "../data/seed-data.json";
+
+export type ApiMethod = "GET" | "POST" | "PATCH" | "DELETE";
+export type RouteAccess = "public" | "private" | "admin";
+
+export type GeneratedApiRoute = {
+  method: ApiMethod;
+  path: string;
+  access: RouteAccess;
+  authRequired: boolean;
+  requiredRole?: "admin";
+  purpose: string;
+  requestBody?: string;
+  responseShape: string;
+};
+
+export const apiRoutes: GeneratedApiRoute[] = ${JSON.stringify(apiRoutes, null, 2)};
+
+export const dataContracts = ${JSON.stringify(dataContracts, null, 2)};
+
+type SeedData = Record<string, Array<Record<string, string | number | boolean | null>>>;
+type ApiRequest = {
+  method: ApiMethod;
+  path: string;
+  body?: Record<string, unknown>;
+};
+
+const records = seedData as SeedData;
+
+export async function handleGeneratedApiRequest(request: ApiRequest) {
+  const route = apiRoutes.find((candidate) => (
+    candidate.method === request.method && routeMatches(candidate.path, request.path)
+  ));
+
+  if (!route) {
+    return { status: 404, body: { error: "No generated API route matches this request." } };
+  }
+
+  const entityName = entityFromRoute(route.path);
+  const entityRecords = entityName ? records[entityName] ?? [] : [];
+
+  if (request.method === "GET") {
+    return { status: 200, body: route.path.includes("/:id") ? entityRecords[0] ?? null : entityRecords };
+  }
+
+  const contract = dataContracts.entities.find((entity) => entity.name === entityName);
+  const missingFields = contract
+    ? contract.requiredFields.filter((field) => request.body?.[field] === undefined || request.body?.[field] === "")
+    : [];
+
+  if (missingFields.length > 0) {
+    return { status: 400, body: { error: "Missing required fields.", missingFields } };
+  }
+
+  return {
+    status: request.method === "POST" ? 201 : 200,
+    body: {
+      ok: true,
+      route: route.path,
+      entity: entityName,
+      received: request.body ?? {},
+    },
+  };
+}
+
+function routeMatches(routePattern: string, requestPath: string) {
+  const expression = new RegExp(\`^\${routePattern.replace(/:[^/]+/g, "[^/]+")}$\`);
+  return expression.test(requestPath);
+}
+
+function entityFromRoute(path: string) {
+  const segment = path.split("/").filter(Boolean).at(-1) === ":id"
+    ? path.split("/").filter(Boolean).at(-2)
+    : path.split("/").filter(Boolean).at(-1);
+  if (!segment || segment === "session" || segment === "setup" || segment === "actions") return undefined;
+  const normalized = segment.replace(/-/g, "").replace(/s$/, "");
+  return dataContracts.entities.find((entity) => entity.name.toLowerCase() === normalized.toLowerCase())?.name;
+}`;
+}
+
+function renderGeneratedReadme(
+  draft: AppDraft,
+  pages: ReturnType<typeof buildGeneratedPageData>,
+  apiRoutes: Array<{ method: ApiRouteStub["method"]; path: string; access: RouteAccess; responseShape: string }>,
+): string {
+  const pageLines = pages.map((pageDraft) => `- ${pageDraft.name} (${pageDraft.route}) - ${pageDraft.access}: ${pageDraft.purpose}`);
+  const apiLines = apiRoutes.map((route) => `- ${route.method} ${route.path} - ${route.access}, returns ${route.responseShape}`);
+  const dataLines = draft.dataSchema.entities.map((entityDraft) => `- ${entityDraft.name}: ${entityDraft.fields.map((fieldDraft) => fieldDraft.name).join(", ")}`);
+
+  return `# ${draft.appName}
+
+${draft.summary}
+
+## Run
+
+\`\`\`bash
+npm install
+npm run dev
+\`\`\`
+
+## Pages
+
+${pageLines.join("\n")}
+
+## API
+
+${apiLines.join("\n")}
+
+## Data
+
+${dataLines.join("\n")}
+
+Seed records live in \`src/data/seed-data.json\` and are loaded by the UI and API handler.
+
+## Acceptance Checks
+
+${draft.acceptanceChecks.map((check) => `- ${generatedArtifactCopy(check)}`).join("\n")}`;
 }
 
 function page(
@@ -947,4 +1610,20 @@ function titleCase(value: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function generatedArtifactCopy(value: string): string {
+  return value
+    .replace(/\bAPI route stubs\b/gi, "API routes")
+    .replace(/\broute stubs\b/gi, "routes")
+    .replace(/\bstubs\b/gi, "routes")
+    .replace(/\bstub\b/gi, "route");
 }

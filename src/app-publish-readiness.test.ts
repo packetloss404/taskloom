@@ -110,13 +110,15 @@ test("app publish readiness includes publish artifact manifest and docker compos
   assert.equal(readiness.publishArtifactManifest.fileName, "publish-artifacts.json");
   assert.equal(readiness.publishArtifactManifest.packageId, "beta/ops-board/app");
   assert.ok(readiness.publishArtifactManifest.entries.some((entry) => entry.path === "web/dist"));
+  assert.ok(readiness.publishArtifactManifest.entries.some((entry) => entry.path === "data/published-apps/beta/ops-board/bundle" && entry.kind === "generated_bundle"));
   assert.ok(readiness.publishArtifactManifest.entries.some((entry) => entry.path.endsWith("/runtime-config.json")));
   assert.equal(readiness.dockerComposeExport.fileName, "docker-compose.publish.yml");
   assert.equal(readiness.dockerComposeExport.projectName, "taskloom-beta-ops-board");
   assert.deepEqual(readiness.dockerComposeExport.networks, ["taskloom-publish"]);
   assert.ok(readiness.dockerComposeExport.services.some((service) => service.name === "taskloom-app" && service.healthcheck));
+  assert.equal(readiness.dockerComposeExport.services.find((service) => service.name === "taskloom-app")?.environment?.TASKLOOM_APP_BUNDLE_PATH, "/app/data/published-apps/beta/ops-board/bundle");
   assert.ok(readiness.dockerComposeExport.services.some((service) => service.name === "taskloom-db"));
-  assert.ok(readiness.dockerComposeExport.outline.some((step) => step.includes("read-only")));
+  assert.ok(readiness.dockerComposeExport.outline.some((step) => step.includes("data/published-apps/beta/ops-board/bundle")));
 });
 
 test("app publish readiness includes lane 1 checklist assumptions and publish history", () => {

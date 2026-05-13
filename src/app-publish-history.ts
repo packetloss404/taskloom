@@ -25,6 +25,11 @@ export interface GeneratedAppPublishRecordInput extends AppPublishReadinessInput
   createdAt?: string;
 }
 
+export interface GeneratedAppPublishRuntimeRouteInput {
+  appId: string;
+  checkpointId?: string;
+}
+
 export interface GeneratedAppPublishRollbackCommandInput {
   current: GeneratedAppPublishRecord;
   target: GeneratedAppPublishRecord;
@@ -66,12 +71,13 @@ export function buildGeneratedAppPublishRecord(input: GeneratedAppPublishRecordI
     appSlug: readiness.draftSlug,
     workspaceSlug: readiness.workspaceSlug,
     localPublishPath: readiness.localPublishPath,
-    publicUrl: readiness.urlHandoff.publicUrl,
-    privateUrl: readiness.urlHandoff.privateUrl,
+    publicUrl: generatedAppPublishUrlForBase(readiness.urlHandoff.publicUrl, input),
+    privateUrl: generatedAppPublishUrlForBase(readiness.urlHandoff.privateUrl, input),
+    manifestPath: `${readiness.localPublishPath}/${readiness.publishArtifactManifest.fileName}`,
+    bundlePath: `${readiness.localPublishPath}/bundle`,
   });
   const artifactPaths = uniqueSorted([
     ...readiness.packaging.artifactPaths,
-    `${readiness.localPublishPath}/publish-manifest.json`,
     `${readiness.localPublishPath}/${dockerComposeExport.fileName}`,
   ]);
   const status: GeneratedAppPublishStatus = publishReady(input.buildStatus, input.smokeStatus) ? "published" : "failed";
@@ -84,18 +90,23 @@ export function buildGeneratedAppPublishRecord(input: GeneratedAppPublishRecordI
     visibility: readiness.urlHandoff.visibility,
     versionLabel,
     localPublishPath: readiness.localPublishPath,
-    publicUrl: readiness.urlHandoff.publicUrl,
-    privateUrl: readiness.urlHandoff.privateUrl,
+    workspacePath: readiness.localPublishPath,
+    publicUrl: dockerComposeExport.environment.TASKLOOM_PUBLIC_APP_BASE_URL,
+    privateUrl: dockerComposeExport.environment.TASKLOOM_PRIVATE_APP_BASE_URL,
     previewUrl: cleanString(input.previewUrl) || undefined,
     buildStatus: cleanString(input.buildStatus) || undefined,
     smokeStatus: cleanString(input.smokeStatus) || undefined,
     dockerComposeExport,
+    artifactManifest: readiness.publishArtifactManifest,
+    manifest: readiness.publishArtifactManifest,
     artifactPaths,
     logs: publishLogs({
       createdAt,
       visibility: readiness.urlHandoff.visibility,
       localPublishPath: readiness.localPublishPath,
       dockerComposeFileName: dockerComposeExport.fileName,
+      manifestPath: dockerComposeExport.manifestPath,
+      bundlePath: dockerComposeExport.bundlePath,
       buildStatus: input.buildStatus,
       smokeStatus: input.smokeStatus,
       previousPublishId: input.previousPublish?.id,
@@ -118,21 +129,53 @@ export function buildGeneratedAppPublishRecord(input: GeneratedAppPublishRecordI
   return publish;
 }
 
+export function generatedAppPublishRuntimePath(input: GeneratedAppPublishRuntimeRouteInput): string {
+  const checkpointId = cleanString(input.checkpointId);
+  const path = `/api/app/generated-apps/${encodeURIComponent(cleanString(input.appId) || "generated-app")}/preview`;
+  return checkpointId ? `${path}?checkpointId=${encodeURIComponent(checkpointId)}` : path;
+}
+
+export function generatedAppPublishUrlForBase(
+  url: string,
+  input: GeneratedAppPublishRuntimeRouteInput,
+): string {
+  const parsed = parseUrl(url);
+  if (!parsed || !isTaskloomRuntimeHost(parsed)) return url;
+  parsed.pathname = generatedAppPublishRuntimePath(input).split("?")[0];
+  parsed.search = cleanString(input.checkpointId) ? `?checkpointId=${encodeURIComponent(cleanString(input.checkpointId))}` : "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
 export function buildDockerComposeExport(input: {
   appSlug: string;
   workspaceSlug: string;
   localPublishPath: string;
   publicUrl: string;
   privateUrl: string;
+  manifestPath?: string;
+  bundlePath?: string;
 }): GeneratedAppDockerComposeExportPayload {
+  const manifestPath = normalizePath(input.manifestPath || `${input.localPublishPath}/publish-artifacts.json`);
+  const bundlePath = normalizePath(input.bundlePath || `${input.localPublishPath}/bundle`);
+  const containerPublishPath = `/app/data/published-apps/${input.workspaceSlug}/${input.appSlug}`;
   const environment = {
     NODE_ENV: "production",
     PORT: "8484",
     TASKLOOM_STORE: "sqlite",
+    TASKLOOM_PUBLISH_ROOT: containerPublishPath,
+    TASKLOOM_APP_BUNDLE_PATH: `${containerPublishPath}/bundle`,
+    TASKLOOM_PUBLISH_MANIFEST_PATH: `${containerPublishPath}/publish-artifacts.json`,
     TASKLOOM_PUBLIC_APP_BASE_URL: input.publicUrl,
     TASKLOOM_PRIVATE_APP_BASE_URL: input.privateUrl,
   };
   const volume = `${input.localPublishPath}:/app/data/published-apps/${input.workspaceSlug}/${input.appSlug}:ro`;
+  const instructions = [
+    `Export the generated app bundle at ${bundlePath}.`,
+    `Export the publish artifact manifest at ${manifestPath}.`,
+    `Mount ${input.localPublishPath} read-only so TASKLOOM_APP_BUNDLE_PATH resolves inside the taskloom-app container.`,
+    "Run docker compose with this file from the repository root after npm dependencies are installed or the image is built.",
+  ];
   const yaml = [
     'version: "3.9"',
     "services:",
@@ -171,6 +214,9 @@ export function buildDockerComposeExport(input: {
     services: ["taskloom-app", "taskloom-db"],
     environment,
     volumes: [volume, "taskloom-db-data:/var/lib/postgresql/data"],
+    bundlePath,
+    manifestPath,
+    instructions,
     yaml,
   };
 }
@@ -255,6 +301,8 @@ function publishLogs(input: {
   visibility: GeneratedAppPublishVisibility;
   localPublishPath: string;
   dockerComposeFileName: string;
+  manifestPath: string;
+  bundlePath: string;
   buildStatus?: string;
   smokeStatus?: string;
   previousPublishId?: string;
@@ -271,12 +319,12 @@ function publishLogs(input: {
     {
       at: input.createdAt,
       level: "info",
-      message: `Prepared ${input.dockerComposeFileName} for ${input.visibility} self-hosted handoff.`,
+      message: `Prepared ${input.dockerComposeFileName} for ${input.visibility} self-hosted handoff using bundle ${input.bundlePath}.`,
     },
     {
       at: input.createdAt,
       level: "info",
-      message: `Published metadata to ${input.localPublishPath}.`,
+      message: `Published artifact manifest ${input.manifestPath} to ${input.localPublishPath}.`,
     },
     ...(input.previousPublishId ? [{
       at: input.createdAt,
@@ -300,6 +348,27 @@ function uniqueSorted(values: string[]): string[] {
 
 function stableStatus(value: string | undefined): string {
   return cleanString(value).toLowerCase().replace(/\s+/g, "_");
+}
+
+function parseUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function isTaskloomRuntimeHost(url: URL): boolean {
+  const hostname = url.hostname.toLowerCase();
+  return hostname === "localhost"
+    || hostname === "127.0.0.1"
+    || hostname === "[::1]"
+    || hostname === "::1"
+    || hostname.endsWith(".localhost");
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/g, "") || ".";
 }
 
 function normalizeTimestamp(value: string | undefined): string {

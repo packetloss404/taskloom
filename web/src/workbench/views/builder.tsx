@@ -17,7 +17,9 @@ import type {
   AppBuilderIterationTarget,
   AppBuilderPageDraft,
   AppBuilderPublishState,
+  AppBuilderSourceFileSummary,
   AppBuilderSmokeBuildStatus,
+  AppBuilderWorkspaceSummary,
   BuilderModelPresetId,
 } from "@/lib/types";
 
@@ -61,6 +63,8 @@ interface BuilderState {
   previewUrl: string | null;
   smoke: AppBuilderSmokeBuildStatus | null;
   iteration: AppBuilderIterationResult | null;
+  sourceFiles: AppBuilderSourceFileSummary[];
+  workspace: AppBuilderWorkspaceSummary | null;
 }
 
 type IterationTargetOption = AppBuilderIterationTarget & { group: string };
@@ -81,13 +85,25 @@ const SAMPLE_PROMPTS: Array<{ id: string; kind: BuilderKind; label: string; icon
   { id: "report", kind: "agent", label: "Scheduled report", icon: "history", desc: "Daily ops digest", prompt: "Build an agent that monitors support tickets daily, summarizes urgent escalations, and reports outcomes to operators." },
 ];
 
-function getPreviewNavigationTarget(previewUrl: string | null, appId: string | null) {
+export const BUILDER_EMPTY_STATE_COPY =
+  "Describe an internal app or agent. Taskloom prepares generated source, saves a live local preview, and creates a self-host publish handoff after validation.";
+
+export function getPreviewNavigationTarget(previewUrl: string | null, appId: string | null) {
   const cleanPreviewUrl = previewUrl?.trim();
   if (cleanPreviewUrl) {
     if (/^https?:\/\//i.test(cleanPreviewUrl) || cleanPreviewUrl.startsWith("/")) return cleanPreviewUrl;
     return `/${cleanPreviewUrl}`;
   }
   return appId ? `/builder/preview/workspace/${encodeURIComponent(appId)}` : null;
+}
+
+export function publishReadinessHeading(state: Pick<AppBuilderPublishState, "canPublish" | "publishedUrl"> | null): string {
+  if (!state) return "Loading publish handoff";
+  return state.canPublish ? "Ready for local publish handoff" : "Publish handoff blocked";
+}
+
+export function publishPrimaryActionLabel(working: boolean): string {
+  return working ? " Creating publish record..." : " Create publish record";
 }
 
 function stableTargetKey(value: string): string {
@@ -201,7 +217,7 @@ export function BuilderView() {
   const [publishState, setPublishState] = useState<AppBuilderPublishState | null>(null);
 
   const [state, setState] = useState<BuilderState>({
-    draft: null, appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null,
+    draft: null, appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null, sourceFiles: [], workspace: null,
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composerPreset, setComposerPreset] = useState<BuilderModelPresetId>("smart");
@@ -271,6 +287,8 @@ export function BuilderView() {
             previewUrl: null,
             smoke: null,
             iteration: null,
+            sourceFiles: [],
+            workspace: null,
           });
           setCheckpoints([]);
           setPublishState(null);
@@ -307,6 +325,8 @@ export function BuilderView() {
         previewUrl: result.previewUrl ?? result.app?.previewUrl ?? null,
         smoke: result.smoke ?? result.smokeBuild ?? null,
         iteration: null,
+        sourceFiles: result.sourceFiles ?? result.artifact?.files ?? [],
+        workspace: result.workspace ?? null,
       });
       setMode("applied");
       setTab("preview");
@@ -407,6 +427,8 @@ export function BuilderView() {
         previewUrl: result.preview?.previewUrl ?? result.previewUrl ?? result.app?.previewUrl ?? prev.previewUrl,
         smoke: result.smoke ?? prev.smoke,
         iteration: null,
+        sourceFiles: result.sourceFiles ?? result.diff?.sourceFiles ?? result.diff?.artifact?.files ?? prev.sourceFiles,
+        workspace: result.workspace ?? prev.workspace,
       }));
       setIterPrompt("");
       pushSystemStatus("Diff applied. Preview refreshed.", "ok");
@@ -433,6 +455,8 @@ export function BuilderView() {
         previewUrl: result.preview?.url ?? result.app?.previewUrl ?? prev.previewUrl,
         smoke: result.smoke ?? prev.smoke,
         iteration: null,
+        sourceFiles: prev.sourceFiles,
+        workspace: prev.workspace,
       }));
       setSelectedElement(null);
       setInspectMode(false);
@@ -470,6 +494,8 @@ export function BuilderView() {
         previewUrl: result.app.previewUrl ?? null,
         smoke: result.smoke ?? null,
         iteration: null,
+        sourceFiles: [],
+        workspace: null,
       });
       setMessages([]);
       setSelectedElement(null);
@@ -561,11 +587,11 @@ export function BuilderView() {
           <>
             {previewTarget && (
               <button className="top-btn" onClick={() => openPreviewTarget(previewTarget, navigate)}>
-                <I.eye size={13}/> Preview
+                <I.eye size={13}/> Saved preview
               </button>
             )}
             <button className="top-btn" onClick={() => setTab("checkpoints")}><I.history size={13}/> Checkpoints</button>
-            {state.appId && <button className="top-btn" onClick={() => setTab("publish")}><I.rocket size={13}/> Publish</button>}
+            {state.appId && <button className="top-btn" onClick={() => setTab("publish")}><I.rocket size={13}/> Publish handoff</button>}
           </>
         }
       />
@@ -577,8 +603,7 @@ export function BuilderView() {
               What do you want to <span className="serif" style={{ color: "var(--green)", fontWeight: 400 }}>weave</span> today?
             </h1>
             <p className="muted" style={{ maxWidth: 560, margin: "0 auto", fontSize: 14.5 }}>
-              Describe an internal app. Taskloom plans, generates, previews,
-              and publishes it to your self-hosted workspace.
+              {BUILDER_EMPTY_STATE_COPY}
             </p>
           </div>
 
@@ -701,7 +726,7 @@ export function BuilderView() {
                 </div>
               </div>
               {state.appId
-                ? <span className="pill good" style={{ flexShrink: 0 }}><span className="dot"></span>built</span>
+                ? <span className="pill good" style={{ flexShrink: 0 }}><span className="dot"></span>saved preview</span>
                 : <span className="pill warn" style={{ flexShrink: 0 }}><span className="dot"></span>draft</span>}
             </div>
 
@@ -718,7 +743,7 @@ export function BuilderView() {
               {!state.appId && mode === "drafted" && state.draft && (
                 <div className="card" style={{ padding: 14, marginLeft: 30, background: "var(--bg-elev)", borderColor: "var(--green-deep)" }}>
                   <div className="kicker" style={{ marginBottom: 6, color: "var(--green)" }}>READY TO APPROVE</div>
-                  <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Approving applies the draft, runs build + smoke, and creates a checkpoint.</p>
+                  <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Approving saves generated source metadata, runs build + smoke checks, and creates a checkpoint.</p>
                   <button className="btn btn-primary" disabled={working} onClick={() => { void approve(); }}>
                     {working ? <span className="spin"><I.refresh size={13}/></span> : <I.check size={13}/>}
                     {working ? " Applying…" : " Approve & apply"}
@@ -819,13 +844,13 @@ export function BuilderView() {
           <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div className="tabbar">
               {([
-                { id: "preview", label: "Preview", icon: "eye" as IconKey },
-                { id: "files", label: "Files", icon: "code" as IconKey, count: state.iteration?.files.length ?? 0 },
+                { id: "preview", label: "Local preview", icon: "eye" as IconKey },
+                { id: "files", label: "Generated source", icon: "code" as IconKey, count: state.iteration?.files.length ?? 0 },
                 { id: "smoke", label: "Smoke / Build", icon: "shield" as IconKey },
                 { id: "logs", label: "Logs", icon: "activity" as IconKey, count: state.iteration?.logs.length ?? 0 },
                 { id: "sandbox", label: "Sandbox", icon: "cpu" as IconKey },
                 { id: "checkpoints", label: "Checkpoints", icon: "history" as IconKey, count: checkpoints.length },
-                { id: "publish", label: "Publish", icon: "rocket" as IconKey },
+                { id: "publish", label: "Publish handoff", icon: "rocket" as IconKey },
               ] as const).map(t => {
                 const Ico = I[t.icon];
                 return (
@@ -851,7 +876,7 @@ export function BuilderView() {
                   selectedSelector={selectedElement?.selector ?? null}
                 />
               )}
-              {tab === "files" && <FilesTab draft={draft} iteration={state.iteration}/>}
+              {tab === "files" && <FilesTab draft={draft} iteration={state.iteration} sourceFiles={state.sourceFiles} workspace={state.workspace}/>}
               {tab === "smoke" && <SmokeTab smoke={state.smoke ?? draft.smokeBuildStatus}/>}
               {tab === "logs" && <LogsTab iteration={state.iteration}/>}
               {tab === "sandbox" && <SandboxBuilderTab appId={state.appId}/>}
@@ -1264,15 +1289,53 @@ function DataCard({ entity }: { entity: AppBuilderDataEntity }) {
   );
 }
 
-function FilesTab({ draft, iteration }: { draft: AppBuilderDraft; iteration: AppBuilderIterationResult | null }) {
+function FilesTab({
+  draft,
+  iteration,
+  sourceFiles,
+  workspace,
+}: {
+  draft: AppBuilderDraft;
+  iteration: AppBuilderIterationResult | null;
+  sourceFiles: AppBuilderSourceFileSummary[];
+  workspace: AppBuilderWorkspaceSummary | null;
+}) {
   const files = useMemo<AppBuilderIterationDiffFile[]>(() => iteration?.files ?? [], [iteration]);
   const [selected, setSelected] = useState<number>(0);
   if (files.length === 0) {
     return (
       <div style={{ padding: 22 }}>
-        <div className="card muted" style={{ padding: 22, textAlign: "center" }}>
-          No files in current diff. Iterate to generate file changes.
-          <div className="mono muted" style={{ fontSize: 11, marginTop: 8 }}>App skeleton: {draft.app.pages.length} pages · {draft.app.apiRoutes.length} routes</div>
+        <div className="card" style={{ padding: 18 }}>
+          <div className="kicker" style={{ marginBottom: 8 }}>GENERATED WORKSPACE</div>
+          <h2 className="h2" style={{ marginBottom: 6 }}>Saved source bundle</h2>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>
+            No pending diff. The current checkpoint has {sourceFiles.length || "no"} generated source file{sourceFiles.length === 1 ? "" : "s"}.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 8, fontSize: 12.5, marginBottom: 14 }}>
+            <span className="muted">Workspace</span>
+            <span className="mono" style={{ color: "var(--silver-200)", overflowWrap: "anywhere" }}>{workspace?.checkpointPath ?? "not written yet"}</span>
+            <span className="muted">Manifest</span>
+            <span className="mono" style={{ color: "var(--silver-200)", overflowWrap: "anywhere" }}>{workspace?.manifest.path ?? "pending"}</span>
+            <span className="muted">App skeleton</span>
+            <span className="mono" style={{ color: "var(--silver-200)" }}>{draft.app.pages.length} pages · {draft.app.apiRoutes.length} routes</span>
+          </div>
+          {sourceFiles.length > 0 && (
+            <div className="card" style={{ overflow: "hidden" }}>
+              <table className="tbl">
+                <thead><tr><th>Path</th><th>Role</th><th>Size</th><th>SHA</th></tr></thead>
+                <tbody>
+                  {sourceFiles.slice(0, 14).map((file) => (
+                    <tr key={file.path}>
+                      <td className="mono" style={{ fontSize: 11.5 }}>{file.path}</td>
+                      <td><span className="pill muted">{file.role}</span></td>
+                      <td className="mono muted" style={{ fontSize: 11.5 }}>{file.size}</td>
+                      <td className="mono muted" style={{ fontSize: 11.5 }}>{file.sha256.slice(0, 10)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1433,31 +1496,48 @@ function PublishTab({
   if (!canPublish) {
     return (
       <div style={{ padding: 22 }}>
-        <div className="card muted" style={{ padding: 22, textAlign: "center" }}>Approve the draft first — publishing requires a saved app.</div>
+        <div className="card muted" style={{ padding: 22, textAlign: "center" }}>Approve the draft first — publish handoff requires a saved preview and checkpoint.</div>
       </div>
     );
   }
   if (!state) {
     return <div style={{ padding: 22 }} className="muted">Loading publish state…</div>;
   }
+  const readiness = state.readiness;
+  const handoffUrl = state.publishedUrl ?? readiness.urlHandoff.privateUrl;
   return (
     <div style={{ padding: 22, maxWidth: 900 }}>
-      <div className="kicker">PUBLISH · STATUS: {state.status.toUpperCase()}</div>
+      <div className="kicker">PUBLISH HANDOFF · STATUS: {state.status.toUpperCase()}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 4, marginBottom: 14 }}>
-        <h2 className="h2">{state.canPublish ? "Ready to publish" : "Not ready"}</h2>
-        {state.publishedUrl && <a href={state.publishedUrl} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12, color: "var(--green)", textDecoration: "underline" }}>{state.publishedUrl}</a>}
+        <h2 className="h2">{publishReadinessHeading(state)}</h2>
+        {handoffUrl && <a href={handoffUrl} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12, color: "var(--green)", textDecoration: "underline" }}>{handoffUrl}</a>}
       </div>
+      <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.6, maxWidth: 720, marginBottom: 14 }}>
+        This panel records the local publish package, validation checks, and URL handoff. It does not start a separate cloud runtime.
+      </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <button className="btn btn-primary" disabled={!state.canPublish || working} onClick={onPublish}>
           {working ? <span className="spin"><I.refresh size={13}/></span> : <I.rocket size={13}/>}
-          {working ? " Publishing…" : " Publish now"}
+          {publishPrimaryActionLabel(working)}
         </button>
         {state.rollbackActions.map((action) => (
           <button key={action.id} className="btn btn-sm" disabled={action.disabled || working || !action.publishId} onClick={() => onRollback(action)}>
             <I.history size={11}/> {action.label}
           </button>
         ))}
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <div className="kicker" style={{ marginBottom: 8 }}>LOCAL PACKAGE</div>
+        <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 8, fontSize: 12.5 }}>
+          <span className="muted">Runtime</span>
+          <span className="mono" style={{ color: "var(--silver-200)" }}>{readiness.packaging.runtime}</span>
+          <span className="muted">Bundle path</span>
+          <span className="mono" style={{ color: "var(--silver-200)" }}>{readiness.localPublishPath}</span>
+          <span className="muted">Artifacts</span>
+          <span className="mono" style={{ color: "var(--silver-200)" }}>{readiness.packaging.artifactPaths.join(", ")}</span>
+        </div>
       </div>
 
       {state.nextActions.length > 0 && (
@@ -1472,7 +1552,7 @@ function PublishTab({
           <div className="kicker" style={{ marginBottom: 8 }}>HISTORY · {state.history.length}</div>
           <div className="card" style={{ overflow: "hidden" }}>
             <table className="tbl">
-              <thead><tr><th>ID</th><th>Status</th><th>Actor</th><th>Published</th><th>URL</th></tr></thead>
+              <thead><tr><th>ID</th><th>Status</th><th>Actor</th><th>Recorded</th><th>Handoff URL</th></tr></thead>
               <tbody>
                 {state.history.map((h) => (
                   <tr key={h.id}>
