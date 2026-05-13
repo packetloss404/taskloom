@@ -15,6 +15,13 @@ Taskloom is an OSS, self-hosted workbench for building internal apps and agents 
 - **Source:** https://github.com/packetloss404/taskloom
 - **License:** MIT
 
+## Project docs
+
+- [CHANGELOG.md](CHANGELOG.md) records notable product and platform changes.
+- [BACKLOG.md](BACKLOG.md) tracks the remaining builder-first work needed before Taskloom can credibly present itself as an open-source alternative to hosted app/agent builders.
+- [dev/TESTING.md](dev/TESTING.md) covers local verification and release checks.
+- [dev/roadmap.md](dev/roadmap.md) captures the broader roadmap after the MVP path is reliable.
+
 ## Why Taskloom
 
 Most prompt-to-app builders are hosted SaaS that own your data, your runtime, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, or behind your VPN. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, and audit included.
@@ -197,7 +204,7 @@ npm run db:seed
 
 Taskloom is in active development. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
 
-For the current roadmap and sprint plan, see the [project website](https://packetloss404.github.io/taskloom/) and the [GitHub Issues](https://github.com/packetloss404/taskloom/issues) tab.
+For current product changes, see [CHANGELOG.md](CHANGELOG.md). For the remaining MVP and post-MVP work, see [BACKLOG.md](BACKLOG.md), the [project website](https://packetloss404.github.io/taskloom/), and the [GitHub Issues](https://github.com/packetloss404/taskloom/issues) tab.
 
 ## Contributing
 
