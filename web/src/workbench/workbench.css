@@ -300,8 +300,7 @@
 .wb-root.wb-root.wb-root .kicker {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.01em;
   color: var(--silver-400);
 }
 
