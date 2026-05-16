@@ -1,6 +1,5 @@
 import { Link, useParams } from "react-router-dom";
 import { I, type IconKey } from "../icons";
-import { Topbar } from "../Shell";
 import { api } from "@/lib/api";
 import { useApiData } from "../useApiData";
 
@@ -29,10 +28,11 @@ export function AppPreviewView() {
 
   return (
     <>
-      <Topbar
-        crumbs={["__WS__", "Builder", appName, "Preview"]}
-        actions={<Link to="/builder" className="top-btn"><I.code size={13}/> Back to builder</Link>}
-      />
+      <header className="flex items-center justify-between px-4 h-10 border-b border-line text-sm">
+        <a href="/builder" className="text-silver-500 hover:text-silver-50">← Back</a>
+        <span className="text-silver-300">{appName}</span>
+        <span className="w-12" />
+      </header>
       <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <div className="kicker">SAVED LOCAL PREVIEW</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 0.85fr", gap: 28, marginTop: 18 }}>
