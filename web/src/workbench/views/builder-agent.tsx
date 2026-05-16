@@ -482,7 +482,7 @@ function FirstRunPanel({ run, agent }: { run: AgentRunRecord | null; agent: Agen
       )}
       {run.toolCalls && run.toolCalls.length > 0 && (
         <details style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
-          <summary className="kicker" style={{ cursor: "pointer" }}>Tool calls - {run.toolCalls.length}</summary>
+          <summary className="kicker" style={{ cursor: "pointer" }}>Actions taken - {run.toolCalls.length}</summary>
           <pre className="mono" style={{ marginTop: 8, padding: 10, fontSize: 10.5, lineHeight: 1.5, background: "var(--ink)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--silver-200)", overflow: "auto" }}>{safeJson(run.toolCalls)}</pre>
         </details>
       )}
