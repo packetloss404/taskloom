@@ -53,6 +53,16 @@ function newId(): string {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function formatRelative(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
 type Mode = "empty" | "drafting" | "drafted" | "applying" | "applied" | "iterating";
 type BuilderKind = "app" | "agent";
 
@@ -822,7 +832,7 @@ export function BuilderView() {
               {tab === "files" && <FilesTab draft={draft} iteration={state.iteration} sourceFiles={state.sourceFiles} workspace={state.workspace}/>}
               {tab === "smoke" && <SmokeTab smoke={state.smoke ?? draft.smokeBuildStatus}/>}
               {tab === "logs" && <LogsTab iteration={state.iteration}/>}
-              {tab === "sandbox" && <SandboxBuilderTab appId={state.appId}/>}
+              {tab === "sandbox" && <SandboxBuilderTab appId={state.appId} appName={state.draft?.app?.name ?? "App"}/>}
               {tab === "checkpoints" && <CheckpointsTab checkpoints={checkpoints} currentId={state.checkpointId} onRollback={(id) => { void rollback(id); }} onBranch={(id) => { void branch(id); }} working={working}/>}
               {tab === "publish" && <PublishTab state={publishState} canPublish={!!state.appId} onPublish={() => { void publish(); }} onRollback={(action) => { void rollbackPublish(action); }} working={working}/>}
             </div>
@@ -996,7 +1006,7 @@ function IterationCard({ iteration, onApply, working }: { iteration: AppBuilderI
     <div className="card" style={{ marginLeft: 30, overflow: "hidden" }}>
       <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
         <I.branch size={13} style={{ color: "var(--green)" }}/>
-        <div className="mono" style={{ fontSize: 11.5, color: "var(--silver-200)" }}>{iteration.id.slice(0, 12)} · {iteration.files.length} file{iteration.files.length === 1 ? "" : "s"}</div>
+        <div style={{ fontSize: 11.5, color: "var(--silver-200)" }}>Latest change · {iteration.files.length} file{iteration.files.length === 1 ? "" : "s"}</div>
         <span className={`pill ${iteration.status === "applied" ? "good" : iteration.status === "blocked" ? "danger" : "warn"}`} style={{ marginLeft: "auto" }}>
           <span className="dot"></span>{iteration.status}
         </span>
@@ -1407,7 +1417,11 @@ function CheckpointsTab({
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: isCurrent ? "var(--green)" : "var(--silver-500)", boxShadow: isCurrent ? "0 0 8px var(--green)" : "none" }}></div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{c.label}</div>
-                <div className="mono muted" style={{ fontSize: 11 }}>{c.id.slice(0, 16)}{c.previousCheckpointId ? ` · ← ${c.previousCheckpointId.slice(0, 12)}` : ""} · {c.source}</div>
+                <div className="muted" style={{ fontSize: 11 }}>Save #{i + 1} · {formatRelative(c.createdAt)} · {c.source}</div>
+                <details style={{ marginTop: 4 }}>
+                  <summary className="muted" style={{ fontSize: 11, cursor: "pointer" }}>Details</summary>
+                  <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{c.id}{c.previousCheckpointId ? ` · ← ${c.previousCheckpointId}` : ""}</div>
+                </details>
               </div>
               <span className="mono muted" style={{ fontSize: 11 }}>{new Date(c.createdAt).toLocaleString()}</span>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1495,11 +1509,16 @@ function PublishTab({
           <div className="kicker" style={{ marginBottom: 8 }}>HISTORY · {state.history.length}</div>
           <div className="card" style={{ overflow: "hidden" }}>
             <table className="tbl">
-              <thead><tr><th>ID</th><th>Status</th><th>Actor</th><th>Recorded</th><th>Handoff URL</th></tr></thead>
+              <thead><tr><th>Publish</th><th>Status</th><th>Actor</th><th>Recorded</th><th>Handoff URL</th></tr></thead>
               <tbody>
-                {state.history.map((h) => (
+                {state.history.map((h, i) => (
                   <tr key={h.id}>
-                    <td className="mono" style={{ fontSize: 11.5 }}>{h.id.slice(0, 16)}</td>
+                    <td style={{ fontSize: 11.5 }}>
+                      <details>
+                        <summary style={{ cursor: "pointer" }}>Publish #{i + 1} · {h.publishedAt ? formatRelative(h.publishedAt) : "—"}</summary>
+                        <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{h.id}</div>
+                      </details>
+                    </td>
                     <td><span className={`pill ${h.status === "published" ? "good" : h.status === "rolled_back" ? "warn" : "muted"}`}><span className="dot"></span>{h.status}</span></td>
                     <td className="mono" style={{ fontSize: 11.5 }}>{h.actor ?? "—"}</td>
                     <td className="mono muted" style={{ fontSize: 11.5 }}>{h.publishedAt ? new Date(h.publishedAt).toLocaleString() : "—"}</td>
@@ -1515,7 +1534,7 @@ function PublishTab({
   );
 }
 
-function SandboxBuilderTab({ appId }: { appId: string | null }) {
+function SandboxBuilderTab({ appId, appName }: { appId: string | null; appName: string }) {
   const execs = useApiData(
     () => (appId ? api.listSandboxExecs({ appId, limit: 50 }) : Promise.resolve([])),
     [appId],
@@ -1537,7 +1556,7 @@ function SandboxBuilderTab({ appId }: { appId: string | null }) {
   return (
     <div style={{ padding: 18 }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 12, gap: 8 }}>
-        <div className="kicker">SANDBOX EXECUTIONS · APP {appId.slice(0, 12)}</div>
+        <div className="kicker">SANDBOX EXECUTIONS · {appName}</div>
         <button className="btn btn-sm" style={{ marginLeft: "auto" }} onClick={() => void execs.refresh()}>
           <I.refresh size={11}/> Refresh
         </button>
