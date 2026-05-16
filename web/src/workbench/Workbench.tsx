@@ -8,10 +8,8 @@ import { CommandPaletteProvider } from "./CommandPalette";
 import { AgentEditorView } from "./views/agent-editor";
 import { RunDeepView } from "./views/run-deep";
 import { RunDetailView } from "./views/run-detail";
-import { AppPreviewView } from "./views/app-preview";
 import { useApiData } from "./useApiData";
 import { DashboardView } from "./views/dashboard";
-import { BuilderView } from "./views/builder";
 import { AgentsView } from "./views/agents";
 import { WorkflowsView } from "./views/workflows";
 import { RunsView } from "./views/runs";
@@ -85,8 +83,6 @@ function WorkbenchInner() {
           <Routes>
             <Route index element={<Navigate to="builder" replace />} />
             <Route path="dashboard" element={<DashboardView />} />
-            <Route path="builder" element={<BuilderView />} />
-            <Route path="builder/preview/:workspaceId/:appId/*" element={<AppPreviewView />} />
             <Route path="agents" element={<AgentsView />} />
             <Route path="agents/new" element={<AgentEditorView />} />
             <Route path="agents/:id" element={<AgentEditorView />} />

@@ -61,6 +61,14 @@
 
 .wb-root.wb-root.wb-root .shell { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
 
+.wb-root.wb-root.wb-root .builder-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .wb-root.wb-root.wb-root .sidebar {
   background: linear-gradient(180deg, #131618 0%, #0E1112 100%);
   border-right: 1px solid var(--line);
