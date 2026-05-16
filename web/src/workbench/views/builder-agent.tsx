@@ -254,7 +254,7 @@ function DraftPlan({ draft }: { draft: AgentBuilderDraft }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <I.flow size={14} style={{ color: "var(--green)" }}/>
         <div>
-          <div className="kicker">Plan - {draft.plan.steps.length} step{draft.plan.steps.length === 1 ? "" : "s"}</div>
+          <div className="kicker">Plan · {draft.plan.steps.length} step{draft.plan.steps.length === 1 ? "" : "s"}</div>
           <div style={{ fontSize: 13.5, color: "var(--silver-100)", marginTop: 2 }}>{draft.plan.title}</div>
         </div>
       </div>
