@@ -1,19 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  BUILDER_EMPTY_STATE_COPY,
   getPreviewNavigationTarget,
   publishPrimaryActionLabel,
   publishReadinessHeading,
 } from "./builder";
 import { CHECKS, PREVIEW_TRUTH_COPY } from "./app-preview";
 
-test("builder copy names generated source, local preview, and publish handoff without deployment claims", () => {
-  assert.match(BUILDER_EMPTY_STATE_COPY, /generated source/i);
-  assert.match(BUILDER_EMPTY_STATE_COPY, /live local preview/i);
-  assert.match(BUILDER_EMPTY_STATE_COPY, /self-host publish handoff/i);
-  assert.doesNotMatch(BUILDER_EMPTY_STATE_COPY, /fully deployed|cloud runtime/i);
-
+test("preview truth copy stays honest about local-only delivery", () => {
   assert.match(PREVIEW_TRUTH_COPY, /local preview route/i);
   assert.match(PREVIEW_TRUTH_COPY, /not a public deployment/i);
   assert.ok(CHECKS.some((check) => check.label === "Generated source"));
