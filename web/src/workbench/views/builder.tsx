@@ -71,23 +71,6 @@ type IterationTargetOption = AppBuilderIterationTarget & { group: string };
 type PublishRollbackAction = AppBuilderPublishState["rollbackActions"][number];
 type PublishRollbackBody = NonNullable<Parameters<typeof api.rollbackBuilderPublish>[1]> & { targetPublishId?: string };
 
-const BUILD_MODES: Array<{ id: BuilderKind; label: string; icon: IconKey; desc: string }> = [
-  { id: "app", label: "Build an app", icon: "layout", desc: "Pages · data · routes" },
-  { id: "agent", label: "Build an agent", icon: "bot", desc: "Tools · schedule · webhook" },
-];
-
-const SAMPLE_PROMPTS: Array<{ id: string; kind: BuilderKind; label: string; icon: IconKey; desc: string; prompt: string }> = [
-  { id: "crm", kind: "app", label: "Lightweight CRM", icon: "users", desc: "Track companies, contacts, deals", prompt: "Build a lightweight CRM app for account managers to track companies, contacts, opportunities, and renewal risk." },
-  { id: "portal", kind: "app", label: "Customer portal", icon: "globe", desc: "Self-serve requests + docs", prompt: "Build a customer portal where customers can manage profile details, open requests, and upload documents." },
-  { id: "tracker", kind: "app", label: "Task tracker", icon: "flow", desc: "Projects · tasks · review queue", prompt: "Create a task tracker app with projects, tasks, assignees, statuses, due dates, and a simple review queue." },
-  { id: "triage", kind: "agent", label: "Support triage", icon: "inbox", desc: "Webhook incident triage", prompt: "Create a webhook agent to triage customer incidents, open blockers for critical risks, and post a summary to Slack." },
-  { id: "leads", kind: "agent", label: "Lead enrichment", icon: "sparkle", desc: "Daily research + summary", prompt: "Build an agent that reviews new leads daily, researches each company website, and writes a sales-ready summary." },
-  { id: "report", kind: "agent", label: "Scheduled report", icon: "history", desc: "Daily ops digest", prompt: "Build an agent that monitors support tickets daily, summarizes urgent escalations, and reports outcomes to operators." },
-];
-
-export const BUILDER_EMPTY_STATE_COPY =
-  "Describe an internal app or agent. Taskloom prepares generated source, saves a live local preview, and creates a self-host publish handoff after validation.";
-
 export function getPreviewNavigationTarget(previewUrl: string | null, appId: string | null) {
   const cleanPreviewUrl = previewUrl?.trim();
   if (cleanPreviewUrl) {
@@ -581,137 +564,97 @@ export function BuilderView() {
 
   return (
     <>
-      <Topbar
-        crumbs={["__WS__", "Builder", draft?.app.name ?? "Untitled"]}
-        actions={
-          <>
-            {previewTarget && (
-              <button className="top-btn" onClick={() => openPreviewTarget(previewTarget, navigate)}>
-                <I.eye size={13}/> Saved preview
-              </button>
-            )}
-            <button className="top-btn" onClick={() => setTab("checkpoints")}><I.history size={13}/> Checkpoints</button>
-            {state.appId && <button className="top-btn" onClick={() => setTab("publish")}><I.rocket size={13}/> Publish handoff</button>}
-          </>
-        }
-      />
+      <header className="flex items-center justify-between px-4 h-10 border-b border-line text-sm">
+        <div className="flex items-center gap-2">
+          {state.appId && (
+            <a href="/" className="text-silver-400 hover:text-silver-50" aria-label="Back">
+              ‹
+            </a>
+          )}
+          <span className="text-silver-50">{state.draft?.app.name ?? "New build"}</span>
+        </div>
+        <span className="text-silver-400">⋯</span>
+      </header>
 
       {mode === "empty" && (
-        <div style={{ padding: "44px 32px 60px", maxWidth: 1180, margin: "0 auto" }}>
-          <div style={{ textAlign: "center", marginBottom: 28 }}>
-            <h1 className="h1" style={{ fontSize: 42, fontWeight: 400, marginBottom: 8 }}>
-              What do you want to <span className="serif" style={{ color: "var(--green)", fontWeight: 400 }}>weave</span> today?
-            </h1>
-            <p className="muted" style={{ maxWidth: 560, margin: "0 auto", fontSize: 14.5 }}>
-              {BUILDER_EMPTY_STATE_COPY}
-            </p>
-          </div>
+        <div className="flex flex-col items-center justify-center min-h-[calc(100vh-40px)] px-6">
+          <h1 className="text-[28px] font-medium text-silver-50 mb-6">What do you want to build today?</h1>
 
-          <div className="card" style={{ padding: 4, position: "relative", boxShadow: "0 0 0 1px var(--line), 0 30px 80px -40px rgba(184,242,92,0.15)" }}>
-            <div style={{ display: "flex", alignItems: "center", padding: "10px 14px 0", gap: 4, flexWrap: "wrap" }}>
-              {BUILD_MODES.map((m) => {
-                const Ico = I[m.icon];
-                const active = builderKind === m.id;
-                return (
-                  <button key={m.id} onClick={() => setBuilderKind(m.id)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "8px 14px",
-                      background: active ? "var(--bg-elev)" : "transparent",
-                      borderTop: `1px solid ${active ? "var(--line-2)" : "transparent"}`,
-                      borderRight: `1px solid ${active ? "var(--line-2)" : "transparent"}`,
-                      borderLeft: `1px solid ${active ? "var(--line-2)" : "transparent"}`,
-                      borderBottom: "none",
-                      borderRadius: "8px 8px 0 0",
-                      color: active ? "var(--silver-50)" : "var(--silver-400)",
-                      fontSize: 13, fontWeight: 500,
-                    }}>
-                    <Ico size={14} />
-                    {m.label}
-                    <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-500)", textTransform: "uppercase", letterSpacing: 0 }}>{m.desc}</span>
-                  </button>
-                );
-              })}
+          <div className="mx-auto w-full max-w-[720px] rounded-2xl border border-line bg-panel/60 backdrop-blur-sm focus-within:border-green-deep/60 transition">
+            <textarea
+              placeholder="Describe what you want to build..."
+              className="w-full resize-none bg-transparent px-5 pt-5 pb-2 text-[16px] leading-relaxed placeholder:text-silver-500 focus:outline-none min-h-[112px]"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+            />
+            <div className="flex items-center justify-between px-3 pb-3">
+              {/* TODO Phase 2: kind + preset popover */}
+              <button
+                type="button"
+                className="text-silver-400 hover:text-silver-50 px-2 py-1"
+                aria-label="Build options"
+              >
+                ⚙
+              </button>
+              <button className="btn-primary btn" disabled={!prompt.trim() || working} onClick={() => { void generate(); }}>
+                {working ? <><span className="spin"><I.refresh size={13}/></span> Generating</> : <><I.arrowUp size={13}/> Build</>}
+              </button>
             </div>
-
-            {builderKind === "app" ? (
-              <div style={{ padding: "14px 18px 16px", borderTop: "1px solid var(--line)" }}>
-                <textarea
-                  className="field"
-                  placeholder="e.g. A lightweight CRM for account managers to track companies, contacts, and renewal risk..."
-                  style={{ background: "transparent", border: "none", padding: 0, fontSize: 16, minHeight: 80, color: "var(--silver-50)" }}
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                />
-
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-                  {PRESET_OPTIONS.map((p) => {
-                    const active = composerPreset === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() => setComposerPreset(p.id)}
-                        title={p.hint}
-                        style={{
-                          padding: "3px 9px",
-                          borderRadius: 999,
-                          border: `1px solid ${active ? "var(--green-deep)" : "var(--line-2)"}`,
-                          background: active ? "rgba(184,242,92,0.08)" : "transparent",
-                          color: active ? "var(--green)" : "var(--silver-300)",
-                          fontFamily: "var(--font-mono)",
-                          fontSize: 10.5,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.08em",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {p.label}
-                      </button>
-                    );
-                  })}
-                  <div style={{ flex: 1 }}></div>
-                  <span className="mono" style={{ fontSize: 11, color: "var(--silver-500)" }}>{prompt.length} chars</span>
-                  <button className="btn-primary btn" disabled={!prompt.trim() || working} onClick={() => { void generate(); }}>
-                    {working ? <><span className="spin"><I.refresh size={13}/></span> Generating</> : <><I.arrowUp size={13}/> Build</>}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <AgentBuilderPanel initialPrompt={prompt} embedded />
-            )}
           </div>
 
-          {error && <div className="card" style={{ padding: "10px 14px", marginTop: 14, borderColor: "rgba(242,107,92,0.3)", color: "var(--danger)" }}><span className="mono" style={{ fontSize: 11.5 }}>ERR · {error}</span></div>}
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginTop: 16 }}>
-            {SAMPLE_PROMPTS.map((sample) => {
-              const Ico = I[sample.icon];
-              return (
-                <button key={sample.id} onClick={() => { setBuilderKind(sample.kind); setPrompt(sample.prompt); }}
-                  style={{
-                    textAlign: "left", padding: "12px 14px",
-                    background: "var(--panel)", border: "1px solid var(--line)",
-                    borderRadius: 8, color: "var(--silver-100)",
-                    display: "flex", alignItems: "center", gap: 10,
-                    minWidth: 0,
-                  }}>
-                  <div style={{
-                    width: 30, height: 30, borderRadius: 8,
-                    background: "var(--bg-elev)", border: "1px solid var(--line)",
-                    display: "grid", placeItems: "center", color: "var(--green)", flexShrink: 0,
-                  }}>
-                    <Ico size={14}/>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{sample.label}</div>
-                    <div className="muted" style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sample.desc}</div>
-                  </div>
-                  <span className="pill muted" style={{ marginLeft: "auto", flexShrink: 0 }}>{sample.kind}</span>
-                </button>
-              );
-            })}
+          <div className="mt-4 grid grid-cols-2 gap-2 max-w-[720px] mx-auto w-full">
+            <button
+              type="button"
+              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
+              onClick={() => {
+                setBuilderKind("app");
+                setPrompt("Build a lightweight CRM for account managers to track companies, contacts, opportunities, and renewal risk.");
+              }}
+            >
+              Lightweight CRM
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
+              onClick={() => {
+                setBuilderKind("app");
+                setPrompt("Build a customer portal where customers can manage profile details, open requests, and upload documents.");
+              }}
+            >
+              Customer portal
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
+              onClick={() => {
+                setBuilderKind("agent");
+                setPrompt("Build an agent that posts a daily standup digest summarising the team's overnight progress and today's plan.");
+              }}
+            >
+              Standup digest agent
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
+              onClick={() => {
+                setBuilderKind("agent");
+                setPrompt("Create a webhook agent to triage customer incidents, open blockers for critical risks, and post a summary to Slack.");
+              }}
+            >
+              Support triage agent
+            </button>
           </div>
+
+          {error && (
+            <div className="card max-w-[720px] mx-auto w-full" style={{ padding: "10px 14px", marginTop: 14, borderColor: "rgba(242,107,92,0.3)", color: "var(--danger)" }}>
+              <span className="mono" style={{ fontSize: 11.5 }}>ERR · {error}</span>
+            </div>
+          )}
         </div>
+      )}
+
+      {builderKind === "agent" && mode !== "empty" && (
+        <AgentBuilderPanel initialPrompt={prompt} embedded />
       )}
 
       {(mode === "drafted" || mode === "applying" || mode === "applied" || mode === "iterating") && draft && (
