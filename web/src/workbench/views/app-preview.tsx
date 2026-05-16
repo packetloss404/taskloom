@@ -34,7 +34,7 @@ export function AppPreviewView() {
         <span className="w-12" />
       </header>
       <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">SAVED LOCAL PREVIEW</div>
+        <div className="kicker">Saved local preview</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 0.85fr", gap: 28, marginTop: 18 }}>
           <div>
             <p className="kicker" style={{ color: "var(--silver-500)" }}>{workspaceId}</p>

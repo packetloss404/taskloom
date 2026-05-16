@@ -695,7 +695,7 @@ export function BuilderView() {
 
               {!state.appId && mode === "drafted" && state.draft && (
                 <div className="card" style={{ padding: 14, marginLeft: 30, background: "var(--bg-elev)", borderColor: "var(--green-deep)" }}>
-                  <div className="kicker" style={{ marginBottom: 6, color: "var(--green)" }}>READY TO APPROVE</div>
+                  <div className="kicker" style={{ marginBottom: 6, color: "var(--green)" }}>Ready to approve</div>
                   <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Approving saves generated source metadata, runs build + smoke checks, and creates a checkpoint.</p>
                   <button className="btn btn-primary" disabled={working} onClick={() => { void approve(); }}>
                     {working ? <span className="spin"><I.refresh size={13}/></span> : <I.check size={13}/>}
@@ -969,7 +969,7 @@ function PlanCard({ draft }: { draft: AppBuilderDraft }) {
     <div className="card" style={{ padding: 14, marginLeft: 30 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <I.flow size={14} style={{ color: "var(--green)" }}/>
-        <div className="kicker">PLAN · {draft.plan.steps.length} STEP{draft.plan.steps.length === 1 ? "" : "S"}</div>
+        <div className="kicker">Plan · {draft.plan.steps.length} step{draft.plan.steps.length === 1 ? "" : "s"}</div>
       </div>
       <div style={{ fontSize: 13.5, color: "var(--silver-100)", marginBottom: 8 }}>{draft.plan.title}</div>
       {draft.plan.steps.map((step, i) => (
@@ -983,7 +983,7 @@ function PlanCard({ draft }: { draft: AppBuilderDraft }) {
       ))}
       {draft.plan.acceptanceChecks.length > 0 && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-          <div className="kicker" style={{ marginBottom: 4 }}>ACCEPTANCE</div>
+          <div className="kicker" style={{ marginBottom: 4 }}>Acceptance</div>
           {draft.plan.acceptanceChecks.map((c, i) => (
             <div key={i} style={{ fontSize: 12, color: "var(--silver-300)", padding: "2px 0" }}>· {c}</div>
           ))}
@@ -991,7 +991,7 @@ function PlanCard({ draft }: { draft: AppBuilderDraft }) {
       )}
       {draft.plan.openQuestions.length > 0 && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-          <div className="kicker" style={{ marginBottom: 4 }}>OPEN QUESTIONS</div>
+          <div className="kicker" style={{ marginBottom: 4 }}>Open questions</div>
           {draft.plan.openQuestions.map((q, i) => (
             <div key={i} style={{ fontSize: 12, color: "var(--warn)", padding: "2px 0" }}>? {q}</div>
           ))}
@@ -1170,16 +1170,16 @@ function PreviewTab({
         </div>
       ) : (
         <div className="card grid-bg" style={{ height: "100%", overflow: "hidden", padding: 24 }}>
-          <div className="kicker" style={{ marginBottom: 8 }}>PREVIEW · NOT YET LIVE</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>Preview · not yet live</div>
           <h2 className="h2" style={{ fontSize: 22, marginBottom: 6 }}>{draft.app.name}</h2>
           <p className="muted" style={{ fontSize: 13, maxWidth: 640, marginBottom: 20 }}>{draft.app.description}</p>
 
-          <div className="kicker" style={{ marginBottom: 8 }}>PAGES · {draft.app.pages.length}</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>Pages · {draft.app.pages.length}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 20 }}>
             {draft.app.pages.map((p, i) => <PageCard key={i} page={p}/>)}
           </div>
 
-          <div className="kicker" style={{ marginBottom: 8 }}>API ROUTES · {draft.app.apiRoutes.length}</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>API routes · {draft.app.apiRoutes.length}</div>
           <div className="card" style={{ overflow: "hidden", marginBottom: 20 }}>
             <table className="tbl">
               <thead><tr><th>Method</th><th>Path</th><th>Access</th><th>Purpose</th></tr></thead>
@@ -1189,7 +1189,7 @@ function PreviewTab({
             </table>
           </div>
 
-          <div className="kicker" style={{ marginBottom: 8 }}>DATA · {draft.app.dataSchema.length} ENTIT{draft.app.dataSchema.length === 1 ? "Y" : "IES"}</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>Data · {draft.app.dataSchema.length} entit{draft.app.dataSchema.length === 1 ? "y" : "ies"}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
             {draft.app.dataSchema.map((e, i) => <DataCard key={i} entity={e}/>)}
           </div>
@@ -1259,7 +1259,7 @@ function FilesTab({
     return (
       <div style={{ padding: 22 }}>
         <div className="card" style={{ padding: 18 }}>
-          <div className="kicker" style={{ marginBottom: 8 }}>GENERATED WORKSPACE</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>Generated workspace</div>
           <h2 className="h2" style={{ marginBottom: 6 }}>Saved source bundle</h2>
           <p className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>
             No pending diff. The current checkpoint has {sourceFiles.length || "no"} generated source file{sourceFiles.length === 1 ? "" : "s"}.
@@ -1337,7 +1337,7 @@ function SmokeTab({ smoke }: { smoke: AppBuilderSmokeBuildStatus | null }) {
   }
   return (
     <div style={{ padding: 22, maxWidth: 800 }}>
-      <div className="kicker">SMOKE / BUILD STATUS</div>
+      <div className="kicker">Quality checks</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 4, marginBottom: 14 }}>
         <h2 className="h2">{smoke.message}</h2>
         <span className={`pill ${smoke.status === "pass" ? "good" : smoke.status === "fail" ? "danger" : "warn"}`}><span className="dot"></span>{smoke.status}</span>
@@ -1345,7 +1345,7 @@ function SmokeTab({ smoke }: { smoke: AppBuilderSmokeBuildStatus | null }) {
 
       {smoke.blockers.length > 0 && (
         <div className="card" style={{ padding: 12, marginBottom: 14, borderColor: "rgba(242,107,92,0.3)", background: "rgba(242,107,92,0.06)" }}>
-          <div className="kicker" style={{ marginBottom: 6, color: "var(--danger)" }}>BLOCKERS · {smoke.blockers.length}</div>
+          <div className="kicker" style={{ marginBottom: 6, color: "var(--danger)" }}>Blockers · {smoke.blockers.length}</div>
           {smoke.blockers.map((b, i) => <div key={i} className="mono" style={{ fontSize: 11.5, color: "var(--danger)" }}>· {b}</div>)}
         </div>
       )}
@@ -1406,7 +1406,7 @@ function CheckpointsTab({
 }) {
   return (
     <div style={{ padding: 22, maxWidth: 880 }}>
-      <div className="kicker">CHECKPOINTS · {checkpoints.length} TOTAL</div>
+      <div className="kicker">Checkpoints · {checkpoints.length} total</div>
       <h2 className="h2" style={{ marginBottom: 14 }}>History</h2>
       {checkpoints.length === 0 && <div className="card muted" style={{ padding: 22, textAlign: "center" }}>No checkpoints yet. Approving the draft creates the first one.</div>}
       <div className="card" style={{ overflow: "hidden" }}>
@@ -1464,7 +1464,7 @@ function PublishTab({
   const handoffUrl = state.publishedUrl ?? readiness.urlHandoff.privateUrl;
   return (
     <div style={{ padding: 22, maxWidth: 900 }}>
-      <div className="kicker">PUBLISH HANDOFF · STATUS: {state.status.toUpperCase()}</div>
+      <div className="kicker">Publish · {state.status}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 4, marginBottom: 14 }}>
         <h2 className="h2">{publishReadinessHeading(state)}</h2>
         {handoffUrl && <a href={handoffUrl} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12, color: "var(--green)", textDecoration: "underline" }}>{handoffUrl}</a>}
@@ -1486,7 +1486,7 @@ function PublishTab({
       </div>
 
       <div className="card" style={{ padding: 14, marginBottom: 14 }}>
-        <div className="kicker" style={{ marginBottom: 8 }}>LOCAL PACKAGE</div>
+        <div className="kicker" style={{ marginBottom: 8 }}>Local package</div>
         <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 8, fontSize: 12.5 }}>
           <span className="muted">Runtime</span>
           <span className="mono" style={{ color: "var(--silver-200)" }}>{readiness.packaging.runtime}</span>
@@ -1499,14 +1499,14 @@ function PublishTab({
 
       {state.nextActions.length > 0 && (
         <div className="card" style={{ padding: 14, marginBottom: 14 }}>
-          <div className="kicker" style={{ marginBottom: 6 }}>NEXT ACTIONS</div>
+          <div className="kicker" style={{ marginBottom: 6 }}>Next actions</div>
           {state.nextActions.map((a, i) => <div key={i} style={{ fontSize: 12.5, color: "var(--silver-300)", padding: "2px 0" }}>· {a}</div>)}
         </div>
       )}
 
       {state.history.length > 0 && (
         <div>
-          <div className="kicker" style={{ marginBottom: 8 }}>HISTORY · {state.history.length}</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>History · {state.history.length}</div>
           <div className="card" style={{ overflow: "hidden" }}>
             <table className="tbl">
               <thead><tr><th>Publish</th><th>Status</th><th>Actor</th><th>Recorded</th><th>Handoff URL</th></tr></thead>
@@ -1556,7 +1556,7 @@ function SandboxBuilderTab({ appId, appName }: { appId: string | null; appName: 
   return (
     <div style={{ padding: 18 }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 12, gap: 8 }}>
-        <div className="kicker">SANDBOX EXECUTIONS · {appName}</div>
+        <div className="kicker">Sandbox runs · {appName}</div>
         <button className="btn btn-sm" style={{ marginLeft: "auto" }} onClick={() => void execs.refresh()}>
           <I.refresh size={11}/> Refresh
         </button>

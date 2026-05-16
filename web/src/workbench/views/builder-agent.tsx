@@ -110,7 +110,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
               <I.bot size={16}/>
             </div>
             <div style={{ minWidth: 0 }}>
-              <div className="kicker">AGENT BUILDER</div>
+              <div className="kicker">Agent builder</div>
               <h1 className="h1" style={{ fontSize: 24, marginTop: 3 }}>Describe the agent you want to build.</h1>
             </div>
             {savedAgent && (
@@ -124,7 +124,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
 
       <div style={{ padding: embedded ? "14px 18px 16px" : "22px 28px", borderTop: embedded ? "1px solid var(--line)" : undefined, display: "grid", gridTemplateColumns: draft ? "minmax(340px, 440px) minmax(0, 1fr)" : "minmax(0, 760px)", gap: 18, alignItems: "start", justifyContent: draft ? "stretch" : "center" }}>
         <section className="card" style={{ padding: 14 }}>
-          <div className="kicker" style={{ marginBottom: 8 }}>PROMPT</div>
+          <div className="kicker" style={{ marginBottom: 8 }}>Prompt</div>
           <textarea
             className="field"
             style={{ minHeight: 118, background: "transparent", resize: "vertical" }}
@@ -254,7 +254,7 @@ function DraftPlan({ draft }: { draft: AgentBuilderDraft }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <I.flow size={14} style={{ color: "var(--green)" }}/>
         <div>
-          <div className="kicker">PLAN - {draft.plan.steps.length} STEP{draft.plan.steps.length === 1 ? "" : "S"}</div>
+          <div className="kicker">Plan - {draft.plan.steps.length} step{draft.plan.steps.length === 1 ? "" : "s"}</div>
           <div style={{ fontSize: 13.5, color: "var(--silver-100)", marginTop: 2 }}>{draft.plan.title}</div>
         </div>
       </div>
@@ -283,7 +283,7 @@ function AgentConfiguration({ draft }: { draft: AgentBuilderDraft }) {
   const tools = draftToolNames(draft);
   return (
     <div className="card" style={{ padding: 16 }}>
-      <div className="kicker" style={{ marginBottom: 10 }}>AGENT CONFIGURATION</div>
+      <div className="kicker" style={{ marginBottom: 10 }}>Agent configuration</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <ConfigLine label="Description" value={draft.agent.description || "No description generated."}/>
         <ConfigLine label="Trigger" value={draft.agent.triggerKind ?? "manual"}/>
@@ -326,7 +326,7 @@ function SampleInputs({ draft, sampleInputs, issues, onUpdate }: { draft: AgentB
   return (
     <div className="card" style={{ padding: 16 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-        <div className="kicker">SAMPLE INPUTS</div>
+        <div className="kicker">Sample inputs</div>
         <span className="mono muted" style={{ fontSize: 10.5 }}>{Object.keys(sampleInputs).length} field{Object.keys(sampleInputs).length === 1 ? "" : "s"}</span>
       </div>
       {schema.length === 0 && looseKeys.length === 0 ? (
@@ -397,7 +397,7 @@ function ApproveCard({ draft, working, savedAgent, runPreview, sampleInputIssues
     <div className="card" style={{ padding: 16, borderColor: savedAgent ? "var(--green-deep)" : "var(--line)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div>
-          <div className="kicker" style={{ color: savedAgent ? "var(--green)" : "var(--silver-300)" }}>{savedAgent ? "SAVED" : "READY TO APPROVE"}</div>
+          <div className="kicker" style={{ color: savedAgent ? "var(--green)" : "var(--silver-300)" }}>{savedAgent ? "Saved" : "Ready to approve"}</div>
           <p className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
             {savedAgent ? "The draft is now a saved agent. Open the editor to adjust tools, schedule, webhook, or playbook details." : "Approving saves the generated agent as active. The optional first run uses the generated sample inputs above."}
           </p>
@@ -428,7 +428,7 @@ function FirstRunPanel({ run, agent }: { run: AgentRunRecord | null; agent: Agen
   if (!run) {
     return (
       <div className="card" style={{ padding: 16 }}>
-        <div className="kicker">FIRST RUN</div>
+        <div className="kicker">First run</div>
         <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
           {agent ? "No preview run was requested. The saved agent can be run from its editor." : "Save the draft to run a preview."}
         </p>
@@ -439,7 +439,7 @@ function FirstRunPanel({ run, agent }: { run: AgentRunRecord | null; agent: Agen
     <div className="card" style={{ padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <I.activity size={14} style={{ color: "var(--green)" }}/>
-        <div className="kicker">FIRST RUN</div>
+        <div className="kicker">First run</div>
         <span className={`pill ${runStatusTone(run)}`} style={{ marginLeft: "auto" }}><span className="dot"></span>{run.status}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
