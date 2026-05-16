@@ -53,7 +53,10 @@ export function AppPreviewView() {
             {currentCheckpoint && (
               <div className="card" style={{ padding: 14 }}>
                 <p className="kicker" style={{ marginBottom: 4 }}>Current checkpoint</p>
-                <p className="mono" style={{ fontSize: 12, color: "var(--silver-200)" }}>{currentCheckpoint.id}</p>
+                <details>
+                  <summary style={{ fontSize: 12, color: "var(--silver-200)", cursor: "pointer" }}>Active save · {formatRelative(currentCheckpoint.createdAt)}</summary>
+                  <p className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{currentCheckpoint.id}</p>
+                </details>
                 <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>{currentCheckpoint.label}</p>
               </div>
             )}
@@ -84,4 +87,14 @@ export function AppPreviewView() {
 
 function titleFromSlug(slug: string) {
   return slug.split("-").filter(Boolean).map((w) => w[0]?.toUpperCase() + w.slice(1)).join(" ") || "Generated App";
+}
+
+function formatRelative(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
 }
