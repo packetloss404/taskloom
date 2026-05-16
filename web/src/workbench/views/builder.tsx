@@ -103,7 +103,7 @@ export function publishReadinessHeading(state: Pick<AppBuilderPublishState, "can
 }
 
 export function publishPrimaryActionLabel(working: boolean): string {
-  return working ? " Creating publish record..." : " Create publish record";
+  return working ? " Publishing..." : " Publish";
 }
 
 function stableTargetKey(value: string): string {
@@ -469,7 +469,7 @@ export function BuilderView() {
         const ps = await api.getBuilderPublishState({ appId: nextAppId, checkpointId: result.checkpoint?.id });
         setPublishState(ps);
       } catch { /* ignore */ }
-      pushSystemStatus(result.preview?.message ?? "Checkpoint restored.", "ok");
+      pushSystemStatus(result.preview?.message ?? "Save restored.", "ok");
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
@@ -746,7 +746,7 @@ export function BuilderView() {
                   <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Approving saves generated source metadata, runs build + smoke checks, and creates a checkpoint.</p>
                   <button className="btn btn-primary" disabled={working} onClick={() => { void approve(); }}>
                     {working ? <span className="spin"><I.refresh size={13}/></span> : <I.check size={13}/>}
-                    {working ? " Applying…" : " Approve & apply"}
+                    {working ? " Applying…" : " Approve"}
                   </button>
                 </div>
               )}
@@ -845,12 +845,12 @@ export function BuilderView() {
             <div className="tabbar">
               {([
                 { id: "preview", label: "Local preview", icon: "eye" as IconKey },
-                { id: "files", label: "Generated source", icon: "code" as IconKey, count: state.iteration?.files.length ?? 0 },
-                { id: "smoke", label: "Smoke / Build", icon: "shield" as IconKey },
-                { id: "logs", label: "Logs", icon: "activity" as IconKey, count: state.iteration?.logs.length ?? 0 },
-                { id: "sandbox", label: "Sandbox", icon: "cpu" as IconKey },
-                { id: "checkpoints", label: "Checkpoints", icon: "history" as IconKey, count: checkpoints.length },
-                { id: "publish", label: "Publish handoff", icon: "rocket" as IconKey },
+                { id: "files", label: "Source", icon: "code" as IconKey, count: state.iteration?.files.length ?? 0 },
+                { id: "smoke", label: "Quality", icon: "shield" as IconKey },
+                { id: "logs", label: "Activity", icon: "activity" as IconKey, count: state.iteration?.logs.length ?? 0 },
+                { id: "sandbox", label: "Runs", icon: "cpu" as IconKey },
+                { id: "checkpoints", label: "Saves", icon: "history" as IconKey, count: checkpoints.length },
+                { id: "publish", label: "Publish", icon: "rocket" as IconKey },
               ] as const).map(t => {
                 const Ico = I[t.icon];
                 return (
@@ -1073,7 +1073,7 @@ function IterationCard({ iteration, onApply, working }: { iteration: AppBuilderI
         <div style={{ padding: "10px 14px", borderTop: "1px solid var(--line)" }}>
           <button className="btn btn-primary btn-sm" disabled={working} onClick={onApply}>
             {working ? <span className="spin"><I.refresh size={11}/></span> : <I.check size={11}/>}
-            {working ? " Applying…" : " Apply diff"}
+            {working ? " Applying…" : " Apply changes"}
           </button>
         </div>
       )}

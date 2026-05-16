@@ -23,8 +23,8 @@ test("publish labels describe handoff records instead of hosted deploys", () => 
   assert.equal(publishReadinessHeading(null), "Loading publish handoff");
   assert.equal(publishReadinessHeading({ canPublish: false }), "Publish handoff blocked");
   assert.equal(publishReadinessHeading({ canPublish: true, publishedUrl: "http://localhost:8484/app/alpha/crm" }), "Ready for local publish handoff");
-  assert.equal(publishPrimaryActionLabel(false), " Create publish record");
-  assert.equal(publishPrimaryActionLabel(true), " Creating publish record...");
+  assert.equal(publishPrimaryActionLabel(false), " Publish");
+  assert.equal(publishPrimaryActionLabel(true), " Publishing...");
 });
 
 test("preview navigation stays local unless backend provides an absolute URL", () => {
