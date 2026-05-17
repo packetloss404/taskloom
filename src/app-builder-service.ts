@@ -14,6 +14,9 @@ import {
   APP_BUILDER_TOOL_NAME,
 } from "./app-builder-llm-prompts.js";
 import type { ModelRoutingPresetId } from "./model-routing-presets.js";
+import { authorAppViaLLM, type GeneratedFile } from "./codegen/llm-author.js";
+import { validateFileTree } from "./codegen/validate.js";
+import { deriveDraftFromFiles } from "./codegen/derived-draft.js";
 
 export type AppDraftTemplateId =
   | "crm"
@@ -904,18 +907,109 @@ export async function generateAppDraftViaLLM(
 }
 
 /**
+ * Result of the high-level draft generation entry point. The `source` field is
+ * the discriminator:
+ *   - `"template"` — fell back to the deterministic template generator.
+ *   - `"llm"` — the structured tool-call path returned a draft.
+ *   - `"llm-filetree"` — the opt-in Track B file-tree path returned a tree;
+ *     the `files` array is the canonical source and `draft` is a derived view.
+ *
+ * Callers that only care about the AppDraft can keep ignoring `files`. The
+ * Files / Smoke / publish surfaces that *do* care can switch on `source` to
+ * decide whether to render the file tree directly.
+ */
+export type GenerateAppDraftResult = {
+  draft: AppDraft;
+  source: "llm" | "template" | "llm-filetree";
+  files?: GeneratedFile[];
+  /**
+   * Populated when the opt-in Track B path ran and the build validator found
+   * errors. Undefined otherwise. UI surfaces can render these inline so the
+   * user can decide whether to ship or regenerate.
+   */
+  validationErrors?: string[];
+};
+
+/**
  * High-level entry point used by the streaming route: prefer the LLM path,
  * but always return a valid AppDraft by falling back to the deterministic
  * template generator when no key is configured or the LLM call fails.
+ *
+ * When `TASKLOOM_FILETREE_CODEGEN=1` is set, the new Track B file-tree
+ * orchestrator is tried first. If it returns null (BYOK provider not
+ * configured, model declined the task, etc.) we fall through to the existing
+ * structured-tool path so existing tests and keyless installs keep working
+ * exactly as before.
  */
 export async function generateAppDraftWithLLM(
   prompt: string,
   options: AppDraftLLMOptions = {},
   emit?: AppDraftEmit,
-): Promise<{ draft: AppDraft; source: "llm" | "template" }> {
+): Promise<GenerateAppDraftResult> {
+  if (process.env.TASKLOOM_FILETREE_CODEGEN === "1") {
+    const filetree = await tryFileTreeCodegen(prompt, options, emit);
+    if (filetree) return filetree;
+    // Orchestrator returned null — fall through to existing paths.
+  }
   const llm = await generateAppDraftViaLLM(prompt, options, emit);
   if (llm) return { draft: llm, source: "llm" };
   return { draft: generateAppDraftFromPrompt(prompt), source: "template" };
+}
+
+/**
+ * Opt-in Track B path: ask the file-tree orchestrator to author a generated
+ * app as a list of files, run the build validator, then project the file
+ * tree into an AppDraft so all downstream consumers keep working.
+ *
+ * Returns null when the orchestrator declined (no BYOK key, model gave up,
+ * etc.) so the caller can fall through to the existing template path.
+ *
+ * Note: this code path's runtime behaviour depends on the real B1 / B2 / B3
+ * modules under `src/codegen/`. Until those land, the local stubs make this
+ * path inert (orchestrator returns null) — so wiring it up here is safe.
+ */
+async function tryFileTreeCodegen(
+  prompt: string,
+  options: AppDraftLLMOptions,
+  emit?: AppDraftEmit,
+): Promise<GenerateAppDraftResult | null> {
+  try {
+    const workspaceId = options.workspaceId ?? "";
+    const authorOptions: { preset?: ModelRoutingPresetId; workspaceId: string; signal?: AbortSignal } = { workspaceId };
+    if (options.preset) authorOptions.preset = options.preset;
+    if (options.signal) authorOptions.signal = options.signal;
+    const noopEmit = (_: string) => {};
+    const result = await authorAppViaLLM(prompt, authorOptions, emit ?? noopEmit);
+    if (!result) return null;
+
+    const validateOptions: { signal?: AbortSignal } = {};
+    if (options.signal) validateOptions.signal = options.signal;
+    const validation = await validateFileTree(result.files, validateOptions);
+
+    // 1-retry policy: surface errors and let the caller decide. There is no
+    // auto-fix loop in this skeleton — the LLM may have produced a tree that
+    // does not compile, and we want the UI to show that rather than silently
+    // ship something broken.
+    if (!validation.ok && validation.source === "real") {
+      console.warn(
+        `[codegen] file-tree validation failed: ${validation.errors.length} error(s) in ${validation.durationMs}ms`,
+      );
+    }
+
+    const draft = deriveDraftFromFiles(result.files, prompt, result.summary);
+    const out: GenerateAppDraftResult = {
+      draft,
+      source: "llm-filetree",
+      files: result.files,
+    };
+    if (!validation.ok && validation.source === "real" && validation.errors.length > 0) {
+      out.validationErrors = validation.errors.map((e) => `${e.file}${e.line ? `:${e.line}` : ""}: ${e.message}`);
+    }
+    return out;
+  } catch (error) {
+    console.warn(`[codegen] file-tree path failed: ${(error as Error).message}`);
+    return null;
+  }
 }
 
 // --- Coercion of the streamed tool input into a strict AppDraft -------------
