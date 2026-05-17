@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils";
-import { appRoutes } from "./app-routes";
+import { appRoutes, setHostInfoSourcesForTests } from "./app-routes";
 import { login } from "./taskloom-services";
 import {
   clearStoreCacheForTests,
@@ -1883,4 +1883,60 @@ test("builder app-iteration/stream emits step events, a diff event, and done", a
     if (previous === undefined) delete process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
     else process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = previous;
   }
+});
+
+test("host-info route requires authentication and reports LAN ips for share affordance", async (t) => {
+  resetStoreForTests();
+  const app = createTestApp();
+
+  const unauth = await app.request("/api/app/host-info");
+  assert.equal(unauth.status, 401);
+  assert.deepEqual(await unauth.json(), { error: "authentication required" });
+
+  const restore = setHostInfoSourcesForTests({
+    networkInterfaces: () => ({
+      lo: [
+        { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" },
+      ],
+      en0: [
+        { address: "192.168.4.21", netmask: "255.255.255.0", family: "IPv4", mac: "aa:bb:cc:dd:ee:ff", internal: false, cidr: "192.168.4.21/24" },
+        { address: "fe80::1", netmask: "ffff:ffff:ffff:ffff::", family: "IPv6", mac: "aa:bb:cc:dd:ee:ff", internal: false, cidr: "fe80::1/64", scopeid: 4 },
+      ],
+      eth1: [
+        { address: "10.0.0.7", netmask: "255.255.255.0", family: "IPv4", mac: "11:22:33:44:55:66", internal: false, cidr: "10.0.0.7/24" },
+      ],
+    }),
+    resolvePort: () => 9090,
+  });
+  t.after(() => restore());
+
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const response = await app.request("/api/app/host-info", { headers: authHeaders(alpha.cookieValue) });
+  const body = await response.json() as { lanIps: string[]; port: number };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.port, 9090);
+  assert.deepEqual(body.lanIps, ["192.168.4.21", "10.0.0.7"]);
+});
+
+test("host-info route returns empty lanIps when no external IPv4 interfaces are present", async (t) => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const restore = setHostInfoSourcesForTests({
+    networkInterfaces: () => ({
+      lo: [
+        { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" },
+      ],
+    }),
+    resolvePort: () => 8484,
+  });
+  t.after(() => restore());
+
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const response = await app.request("/api/app/host-info", { headers: authHeaders(alpha.cookieValue) });
+  const body = await response.json() as { lanIps: string[]; port: number };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.port, 8484);
+  assert.deepEqual(body.lanIps, []);
 });

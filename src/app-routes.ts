@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { networkInterfaces as defaultNetworkInterfaces } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import { applyCsrfCookie, clearCsrfCookie, rejectCrossOriginPrivateMutation } from "./route-security.js";
@@ -219,6 +220,61 @@ appRoutes.get("/app/activity/:id", async (c) => {
     const context = await requireAuthenticatedContextAsync(c);
     await requireWorkspacePermission(context, "viewWorkspace");
     return c.json(await getWorkspaceActivityDetailAsync(context, c.req.param("id")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+type HostInfoSources = {
+  networkInterfaces: typeof defaultNetworkInterfaces;
+  resolvePort: () => number;
+};
+
+const DEFAULT_HOST_INFO_SOURCES: HostInfoSources = {
+  networkInterfaces: defaultNetworkInterfaces,
+  resolvePort: () => {
+    const raw = process.env.PORT;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 8484;
+  },
+};
+
+let hostInfoSources: HostInfoSources = DEFAULT_HOST_INFO_SOURCES;
+
+export function setHostInfoSourcesForTests(overrides: Partial<HostInfoSources> | null): () => void {
+  const previous = hostInfoSources;
+  hostInfoSources = overrides ? { ...DEFAULT_HOST_INFO_SOURCES, ...overrides } : DEFAULT_HOST_INFO_SOURCES;
+  return () => {
+    hostInfoSources = previous;
+  };
+}
+
+export function buildHostInfoPayload(sources: HostInfoSources = hostInfoSources): { lanIps: string[]; port: number } {
+  const lanIps: string[] = [];
+  let interfaces: ReturnType<typeof defaultNetworkInterfaces> = {};
+  try {
+    interfaces = sources.networkInterfaces() ?? {};
+  } catch {
+    interfaces = {};
+  }
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) continue;
+    for (const entry of entries) {
+      if (entry.family !== "IPv4") continue;
+      if (entry.internal) continue;
+      if (!entry.address) continue;
+      lanIps.push(entry.address);
+    }
+  }
+  return { lanIps, port: sources.resolvePort() };
+}
+
+appRoutes.get("/app/host-info", async (c) => {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "viewWorkspace");
+    void context;
+    return c.json(buildHostInfoPayload());
   } catch (error) {
     return errorResponse(c, error);
   }
