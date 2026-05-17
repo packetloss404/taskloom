@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
 import { AgentBuilderPanel } from "./builder-agent";
+import { ProviderBanner } from "./builder-provider-banner";
 import type {
   AppBuilderApproveResult,
   AppBuilderApiRoute,
@@ -651,6 +652,7 @@ export function BuilderView() {
 
       {mode === "empty" && (
         <div className="flex flex-col items-center justify-center min-h-[calc(100vh-40px)] px-6">
+          <ProviderBanner />
           <h1 className="text-[28px] font-medium text-silver-50 mb-6">What do you want to build today?</h1>
 
           <div className="mx-auto w-full max-w-[720px] rounded-2xl border border-line bg-panel/60 backdrop-blur-sm focus-within:border-green-deep/60 transition">
