@@ -13,10 +13,28 @@ if [ ! -d node_modules ]; then
 fi
 
 if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . .env
-  set +a
+  # Safe .env parser: never source the file (which would shell-execute any
+  # $(...) or backticks in values). Match the PowerShell launcher's behavior:
+  # parse line by line, strip surrounding quotes, ignore comments and blanks.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    if [[ "$line" != *=* ]]; then
+      continue
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    # Trim whitespace around key
+    key="$(echo "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    # Strip matched surrounding single or double quotes from value
+    if [[ "$value" == \"*\" ]] || [[ "$value" == \'*\' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    if [[ -n "$key" ]]; then
+      export "$key=$value"
+    fi
+  done < .env
 fi
 
 node scripts/preflight.mjs

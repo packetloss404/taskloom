@@ -1171,7 +1171,7 @@ function ThreadMessage({
           {streaming && <span className="mono" style={{ color: "var(--green)" }}>· thinking</span>}
           {hasAnyHoverAction && (
             <div
-              className="opacity-0 group-hover:opacity-100 transition"
+              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition"
               style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}
             >
               {canTrySmarter && (
@@ -1355,6 +1355,8 @@ function FriendlyErrorCard({ raw }: { raw: string }) {
   return (
     <div
       className="card"
+      role="alert"
+      aria-live="polite"
       style={{
         marginLeft: 30,
         padding: 12,
@@ -1796,7 +1798,7 @@ function SharePopover({ appId }: { appId: string | null }) {
           {lanUrl ? (
             <ShareOptionButton
               label="Copy link for your network"
-              hint={`Anyone on ${firstLanIp} can open it`}
+              hint={`http://${firstLanIp} · viewers need workspace access (full multi-device sharing is coming with hosted Taskloom)`}
               copied={copiedKey === "lan"}
               onClick={() => { void copy(lanUrl, "lan"); }}
             />
@@ -1856,7 +1858,7 @@ function ShareOptionButton({
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 500 }}>{label}</span>
         {copied && (
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--green)" }}>Copied!</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--green)", background: "rgba(184,242,92,0.18)", padding: "2px 8px", borderRadius: 12 }}>✓ Copied</span>
         )}
       </div>
       {hint && <span className="muted" style={{ fontSize: 10.5 }}>{hint}</span>}

@@ -2133,16 +2133,47 @@ function wantsGeneratedAppPreviewReadiness(c: Context) {
   return accept.includes("application/json") && !accept.includes("text/html");
 }
 
+// Import map injected into generated-app HTML so the browser can resolve
+// the bare `react`, `react-dom`, and `react/jsx-runtime` specifiers that
+// esbuild's automatic JSX runtime emits. Without this, the iframe throws
+// "Failed to resolve module specifier 'react/jsx-runtime'" and the preview
+// renders as broken/unstyled. A future Phase 3 will replace this with a
+// proper Vite build cached per checkpoint that ships its own bundle.
+const PREVIEW_IMPORT_MAP = `<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react/": "https://esm.sh/react@19.0.0/",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/": "https://esm.sh/react-dom@19.0.0/",
+    "react/jsx-runtime": "https://esm.sh/react@19.0.0/jsx-runtime"
+  }
+}
+</script>`;
+
 // Transform .tsx/.ts files to executable JS at preview-serve time. The generated
 // app's index.html loads /src/main.tsx as a module script; browsers reject the
 // raw TS source (text/typescript MIME) so we transpile via esbuild on each request.
-// This is the unbundled-preview path. A future Phase 3 will replace this with a
-// proper Vite build cached per checkpoint.
+// HTML files get an importmap injected so the transformed JS can resolve bare
+// react/react-dom imports against an ESM CDN.
 async function transformPreviewFile(
   path: string,
   content: string,
   contentType: string,
 ): Promise<{ content: string; contentType: string }> {
+  if (/\.html?$/.test(path)) {
+    // Inject the importmap right after the opening <head> tag so it resolves
+    // before any module script loads. If there is no <head>, prepend before <html>.
+    let injected = content;
+    if (/<head\b[^>]*>/i.test(injected)) {
+      injected = injected.replace(/<head\b[^>]*>/i, (m) => `${m}\n${PREVIEW_IMPORT_MAP}`);
+    } else if (/<html\b[^>]*>/i.test(injected)) {
+      injected = injected.replace(/<html\b[^>]*>/i, (m) => `${m}\n<head>${PREVIEW_IMPORT_MAP}</head>`);
+    } else {
+      injected = `${PREVIEW_IMPORT_MAP}\n${injected}`;
+    }
+    return { content: injected, contentType };
+  }
   const isTs = /\.tsx?$/.test(path);
   if (!isTs) return { content, contentType };
   try {
