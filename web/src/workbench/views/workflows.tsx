@@ -16,7 +16,7 @@ export function WorkflowsView() {
 
   return (
     <>
-      <div className="tabbar">
+      <div role="tablist" aria-label="Workflow sections" className="wf-subtabs">
         {([
           { id: "brief", label: "Brief" },
           { id: "requirements", label: "Requirements", count: requirements.data?.length },
@@ -25,13 +25,20 @@ export function WorkflowsView() {
           { id: "validation", label: "Validation", count: validation.data?.length },
           { id: "release", label: "Release" },
         ] as const).map(t => (
-          <div key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id as WfTab)}>
-            {t.label}{"count" in t && t.count !== undefined && <span className="mono muted" style={{ fontSize: 10.5, marginLeft: 6 }}>{t.count}</span>}
-          </div>
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            type="button"
+            className={`wf-subtab ${tab === t.id ? "active" : ""}`}
+            onClick={() => setTab(t.id as WfTab)}
+          >
+            {t.label}{"count" in t && t.count !== undefined && <span className="wf-subtab-count">{t.count}</span>}
+          </button>
         ))}
       </div>
 
-      <div style={{ padding: "26px 28px", maxWidth: 1100 }}>
+      <div style={{ padding: "20px 28px 26px", maxWidth: 1100 }}>
         {tab === "brief" && <BriefView/>}
         {tab === "requirements" && <RequirementsView data={requirements.data} loading={requirements.loading}/>}
         {tab === "plan" && <PlanView data={planItems.data} loading={planItems.loading}/>}
@@ -59,7 +66,7 @@ function BriefView() {
   return (
     <div>
       <div className="kicker">BRIEF</div>
-      <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 18 }}>{data?.summary ? data.summary.slice(0, 80) : "Workflow brief"}</h1>
+      <h2 className="h2" style={{ fontSize: 22, marginTop: 4, marginBottom: 18 }}>{data?.summary ? data.summary.slice(0, 80) : "Workflow brief"}</h2>
       {brief.loading && <div className="muted">Loading…</div>}
       {!brief.loading && !data && <div className="card muted" style={{ padding: 22 }}>No workflow brief saved yet. Generate one from a prompt to populate this view.</div>}
       {data && (
@@ -97,7 +104,7 @@ function RequirementsView({ data, loading }: { data: ReadonlyArray<{ id: string;
   const list = data ?? [];
   return (
     <div>
-      <h1 className="h1" style={{ fontSize: 24, marginBottom: 14 }}>Requirements</h1>
+      <h2 className="h2" style={{ fontSize: 20, marginBottom: 14 }}>Requirements</h2>
       {loading && <div className="muted">Loading…</div>}
       <div className="card" style={{ overflow: "hidden" }}>
         <table className="tbl">
@@ -127,7 +134,7 @@ function PlanView({ data, loading }: { data: ReadonlyArray<{ id: string; title: 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", marginBottom: 14 }}>
-        <h1 className="h1" style={{ fontSize: 24 }}>Plan</h1>
+        <h2 className="h2" style={{ fontSize: 20 }}>Plan</h2>
         <span className="muted" style={{ marginLeft: 10, fontSize: 13 }}>{done} done · {inProg} in progress · {todo} todo</span>
         <button className="btn btn-sm" style={{ marginLeft: "auto" }}><I.sparkle size={11}/> Plan mode</button>
       </div>
@@ -162,7 +169,7 @@ function BlockersView({
   const qList = questions ?? [];
   return (
     <div>
-      <h1 className="h1" style={{ fontSize: 24, marginBottom: 14 }}>Blockers · Open questions</h1>
+      <h2 className="h2" style={{ fontSize: 20, marginBottom: 14 }}>Blockers · Open questions</h2>
       {loading && <div className="muted">Loading…</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div>
@@ -202,7 +209,7 @@ function ValidationView({ data, loading }: { data: ReadonlyArray<{ id: string; t
   const list = data ?? [];
   return (
     <div>
-      <h1 className="h1" style={{ fontSize: 24, marginBottom: 14 }}>Validation evidence</h1>
+      <h2 className="h2" style={{ fontSize: 20, marginBottom: 14 }}>Validation evidence</h2>
       {loading && <div className="muted">Loading…</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
         {list.map(v => (
@@ -226,7 +233,7 @@ function ReleaseView() {
   const r = release.data;
   return (
     <div>
-      <h1 className="h1" style={{ fontSize: 24, marginBottom: 14 }}>Release readiness</h1>
+      <h2 className="h2" style={{ fontSize: 20, marginBottom: 14 }}>Release readiness</h2>
       {release.loading && <div className="muted">Loading…</div>}
       {r && (
         <div className="card" style={{ padding: 22, marginBottom: 16 }}>
