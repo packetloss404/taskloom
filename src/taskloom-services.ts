@@ -1697,7 +1697,7 @@ function resolveAgentExecutionTarget(
 }
 
 function providerNameForKind(kind: ProviderKind): ProviderName | null {
-  if (kind === "openai" || kind === "anthropic" || kind === "minimax" || kind === "ollama") return kind;
+  if (kind === "openai" || kind === "anthropic" || kind === "minimax" || kind === "ollama" || kind === "gemini") return kind;
   return null;
 }
 
