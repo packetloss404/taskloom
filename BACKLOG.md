@@ -25,6 +25,14 @@ These items are complete and shipped to `main`. They are kept here for traceabil
 - **Fork B positioning docs.** `CLOUD.md` inventories hosted-only capabilities; `docs/SELF_HOST.md` is the canonical setup guide; README reframed as self-host first.
 - **Generated app generator quality.** sql.js persistence (note: from a jsdelivr CDN — known issue, scheduled for replacement in Phase 3 Track C), realistic seed data, typed form controls, no Taskloom eyebrow.
 - **OSS launch basics.** MIT license, security policy, `.env.example`, Dockerfile, Docker Compose starter, production startup hardening.
+- **File-tree codegen orchestrator (Phase 3 Track B).** Plan-then-write loop drives the LLM through `write_file(path, content)` tool calls; lives in `src/codegen/llm-author.ts` with system prompts in `src/codegen/prompts.ts`.
+- **File-tree codegen as the default path.** Runs by default when a BYOK provider key is configured; opt-out via `TASKLOOM_LEGACY_TEMPLATES=1`. The previous `TASKLOOM_FILETREE_CODEGEN=1` opt-in flag is preserved as a no-op.
+- **Hardened path validator.** Windows-aware checks (NTFS ADS, reserved device names, UNC paths, trailing dots, case collision) in `src/codegen/path-validator.ts`. 10 rules, 25 tests.
+- **`AppDraft` projection over a file tree.** `src/codegen/derived-draft.ts` reads `package.json`, `src/pages/*`, `src/api/*`, and `src/data/*` / `src/schema/*` so the Files tab, Smoke tab, and publish flow keep working unchanged.
+- **File-tree iteration parity.** `src/app-iteration-service.ts` re-runs the orchestrator on an iteration-shaped prompt for file-tree drafts and diffs the new tree against the prior one. Falls back to the regex pipeline for legacy-template drafts.
+- **Chunked planning for large apps.** Plans with more than 10 files are batched across multiple LLM rounds (chunks of up to 8 files each) with early-stop when a chunk returns nothing.
+- **Vite-build validation alongside tsc.** `src/codegen/validate.ts` runs `tsc --noEmit` and then `vite build`; diagnostics are tagged with `phase: "typecheck" | "build"`. Both phases are gated on `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`.
+- **Inline error UX in the Builder chat thread.** Validation errors from the file-tree path render inline as a warn-toned card with a "Fix these errors" button that triggers an iteration using the errors as the prompt.
 
 ## Still planned
 
@@ -39,12 +47,13 @@ The router, preset resolver, and six adapters are shipped (see "Done in this pas
 - One-shot retry-with-correction loop for malformed tool_use input.
 - Vault-storage support for Gemini and OpenRouter keys (today they are env-only; see the `VAULT_PROVIDERS` guard in `src/providers/bootstrap.ts`).
 
-### File-tree as source of truth (Phase 3 Track B)
+### File-tree as source of truth (Phase 3 Track B) — remaining work
 
-- Replace the `chooseTemplate` / `TEMPLATE_DEFINITIONS` / `render*` template prison with an LLM that authors the actual file tree via `write_file(path, content)` tool calls. Plan-first, write-second, single-retry on validation failure.
-- Make `AppBuilderDraft` a derived view computed from the file tree instead of a parallel data model.
-- Streaming per-file progress in the Files tab as the tree lands.
-- Hardened path validator: realpath + symlink defense + Windows-specific checks (NTFS ADS, reserved device names, case collision, UNC, trailing dots).
+The orchestrator, default-on flip, path validator, derived-draft projection, iteration parity, chunked planning, vite-build validation, and inline error UX are shipped (see "Done in this pass"). What remains:
+
+- Multi-round auto-fix loop on broken TypeScript. The validator currently runs once; errors surface to chat via the new "Fix these errors" button and iteration is user-driven.
+- Iteration on legacy-template drafts (drafts where `source === "template"` or `source === "llm"`) still uses the regex pipeline. Only file-tree drafts get the new iteration path.
+- Streaming per-file progress in the Files tab as the tree lands. Today the Files tab updates after the write phase finishes rather than file-by-file.
 
 ### Real persistence + per-app runtime (Phase 3 Track C)
 

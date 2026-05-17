@@ -1,31 +1,47 @@
-# File-tree codegen (Track B skeleton)
+# File-tree codegen (Track B)
 
-This is the **skeleton** of Track B from `docs/PHASE3_SCOPE.md`: the path
-that makes the LLM-authored file tree the canonical source of truth for a
-generated app, instead of the deterministic template draft.
+File-tree codegen is the default path for app generation when a BYOK
+provider key is configured. The LLM authors the actual file tree via
+`write_file(path, content)` tool calls; the structured `AppDraft` shape
+(pages, apiRoutes, dataSchema) is computed as a derived view over that
+tree. The legacy template path runs only when no key is configured or
+when `TASKLOOM_LEGACY_TEMPLATES=1` is set.
 
-The template path has **not** been deleted. This is opt-in only. Existing
-keyless installs and existing tests are unchanged.
+## How it works
 
-## What the feature flag does
+When `generateAppDraftWithLLM` is asked to author an app, the flow is:
 
-When `TASKLOOM_FILETREE_CODEGEN=1` is set, `generateAppDraftWithLLM` tries
-a new code path *before* falling through to today's structured-tool path:
+1. **Pick the path.** If `TASKLOOM_LEGACY_TEMPLATES=1` is set, skip
+   straight to the legacy template path. Otherwise try the file-tree
+   path first.
+2. **Plan then write.** `authorAppViaLLM(prompt, ...)` runs the plan
+   phase, which asks the model for a file list and a one-line summary
+   per file. The write phase then drives `write_file` tool calls
+   against that plan. For plans of 10 files or fewer the writes happen
+   in a single round; for larger plans the orchestrator batches writes
+   into chunks of up to 8 files across multiple LLM rounds, with an
+   early-stop when a round returns nothing.
+3. **Validate.** `validateFileTree(files, ...)` runs `tsc --noEmit`
+   first, then `vite build`. Diagnostics are tagged with
+   `phase: "typecheck" | "build"`. When tsc fails the build step is
+   skipped (typecheck errors will dominate, and the build would just
+   re-report them). Both phases are gated on
+   `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`; with the gate off the validator
+   returns `{ ok: true, source: "skipped" }`.
+4. **Project to `AppDraft`.** `deriveDraftFromFiles(files, prompt,
+   summary)` walks the tree (`package.json` for the app name,
+   `src/pages/*` for pages, `src/api/*` for API routes,
+   `src/data/*` / `src/schema/*` for the schema) and produces an
+   `AppDraft` view. The Files tab, Smoke tab, and publish flow consume
+   the projection; the original `files` array is returned alongside it
+   for surfaces that want the raw tree.
+5. **Surface errors.** When validation fails the result still carries
+   the file tree and the validation errors. The Builder chat thread
+   renders the errors inline as a warn-toned card with a "Fix these
+   errors" button; the user can click through to trigger an iteration
+   with the errors as the prompt.
 
-1. Call `authorAppViaLLM(prompt, ...)` — the Track B orchestrator (B1).
-   It streams a plan → write pass through the configured BYOK provider
-   and returns `{ files, summary, source }`. On any failure it returns
-   `null` and we fall through to the existing paths.
-2. Call `validateFileTree(files, ...)` — the Track B build validator (B3).
-   It runs a sandboxed build / typecheck pass. With
-   `TASKLOOM_SANDBOX_SMOKE_ENABLED=1` it does real work; otherwise it
-   short-circuits with `{ ok: true, source: "skipped" }`.
-3. Project the file tree into an `AppDraft` via
-   `deriveDraftFromFiles(files, prompt, summary)` so the Files tab, Smoke
-   tab, and publish flow keep working without changes. The original `files`
-   array is returned alongside the derived draft for surfaces that want it.
-
-The result shape is `GenerateAppDraftResult`:
+The result shape is:
 
 ```ts
 type GenerateAppDraftResult = {
@@ -36,66 +52,81 @@ type GenerateAppDraftResult = {
 };
 ```
 
-`source === "llm-filetree"` is the discriminator that means *the file tree
-is canonical, the draft is a derived view*.
+`source === "llm-filetree"` is the discriminator that means *the file
+tree is canonical, the draft is a derived view*.
 
-## How to enable
+### Iteration parity
 
-```bash
-# Required: turn on the opt-in code path.
-export TASKLOOM_FILETREE_CODEGEN=1
+`src/app-iteration-service.ts` mirrors the same split. When the draft
+being iterated on was generated via the file-tree path
+(`source === "llm-filetree"`) and the file tree is available, the
+iteration service re-runs `authorAppViaLLM` on an iteration-shaped
+prompt that includes the prior tree as context, then diffs the new
+tree against the prior one and reports added / modified / deleted
+files. Legacy-template drafts (`source === "template"` or
+`source === "llm"`) continue to flow through the regex iteration
+pipeline.
 
-# Required: a BYOK provider key. Without one, the orchestrator returns
-# null and the request falls through to the existing template path.
-export ANTHROPIC_API_KEY=sk-ant-...
-# (or any of the supported BYOK providers — see src/providers/.)
+## Environment variables
 
-# Optional: turn on real build validation. Without this, the validator
-# short-circuits with `{ ok: true, source: "skipped" }`.
-export TASKLOOM_SANDBOX_SMOKE_ENABLED=1
-```
+- **`TASKLOOM_LEGACY_TEMPLATES=1`** (new) — forces the legacy template
+  path, skipping the file-tree orchestrator entirely. Use this when an
+  install needs the old behaviour while keeping its BYOK key
+  configured.
+- **`TASKLOOM_FILETREE_CODEGEN=1`** (legacy no-op) — preserved for
+  back-compat. File-tree codegen is now the default, so this flag has
+  no effect; installs that already set it can leave it in place.
+- **`TASKLOOM_SANDBOX_SMOKE_ENABLED=1`** — gates both validation
+  phases. With the gate on, the validator runs `tsc --noEmit` and then
+  `vite build` in the sandbox. With the gate off, the validator
+  short-circuits with `{ ok: true, source: "skipped" }`.
+- **BYOK key envs** — file-tree codegen requires a configured provider
+  key. Any one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+  `GOOGLE_API_KEY` / `GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
+  `MINIMAX_API_KEY`, or a configured local LLM (`LOCAL_LLM_BASE_URL`
+  plus the related `LOCAL_LLM_*` envs, or `OLLAMA_BASE_URL` as the
+  legacy synonym) will satisfy the gate. See the [README](../README.md)
+  and [docs/SELF_HOST.md](SELF_HOST.md) for the full provider matrix.
 
-Then trigger app generation the usual way (chat, `POST /app/builder/...`,
-etc.). The response shape gains a `files` array and a
-`source: "llm-filetree"` discriminator when the new path runs.
+## What still doesn't work
 
-## Known limits
-
-This is deliberately a thin slice. The honest list:
-
-- **Opt-in only.** Default behaviour is unchanged. The template path is the
-  source of truth for every install that does not set the flag.
-- **Requires a BYOK provider.** No BYOK key configured → orchestrator
-  returns null → we fall through to the structured-tool / template path.
-  No keyless mode.
-- **Validation is best-effort.** With `TASKLOOM_SANDBOX_SMOKE_ENABLED`
-  unset, the validator reports `{ ok: true, source: "skipped" }`. With it
-  set, errors are *surfaced* (via `validationErrors`) but there is no
-  auto-fix loop — at most one retry by the orchestrator, then we hand the
-  errors back to the caller and let them decide.
-- **Iteration is still template-only.** `src/app-iteration-service.ts` has
-  not been touched. The "edit the running app" path still mutates the
-  structured draft, not the file tree. Round 2 of Track B is what wires
-  iteration through to the file tree.
-- **The derived draft is a forgiving heuristic, not a parser.** It reads
-  `package.json` for the app name, walks `src/pages/*` for pages,
-  `src/api/*` for API routes, and `src/data/*` / `src/schema/*` for the
-  data schema. When the heuristics find nothing it returns a minimal
-  valid draft rather than throwing. Quality is intentionally less
-  important than not breaking downstream consumers; the *file tree* is
-  the canonical artefact for those surfaces that can consume it.
-- **No template-prison eviction yet.** The whole point of Track B is to
-  eventually delete `coerceLLMResultToAppDraft` and the structured-tool
-  prompts. That deletion is **not** part of this skeleton — it is the
-  reward for landing the rest of Track B.
+- **No multi-round auto-fix.** The validator runs once. If
+  `tsc --noEmit` or `vite build` fails, the errors surface to the
+  Builder chat thread for the user to act on. Pressing "Fix these
+  errors" triggers a normal iteration with the errors as the prompt;
+  there is no automatic repair loop chained inside the orchestrator.
+- **Iteration on legacy-template drafts still uses the regex
+  pipeline.** Drafts where `source === "template"` or `source === "llm"`
+  do not get the new file-tree iteration path. Only `"llm-filetree"`
+  drafts re-run the orchestrator.
+- **The derived-draft projection is a forgiving heuristic.** It walks
+  the tree with a small set of conventions (`src/pages/*`,
+  `src/api/*`, `src/data/*` / `src/schema/*`, `package.json` for the
+  app name) and returns a minimal valid draft when those conventions
+  miss. Some fields may not round-trip perfectly between the file tree
+  and the projection.
 
 ## Where the pieces live
 
-- `src/codegen/llm-author.ts` — B1 orchestrator (`authorAppViaLLM`).
-- `src/codegen/prompts.ts` — B2 system + per-phase user prompts.
-- `src/codegen/path-validator.ts` — B2 workspace-relative path defense.
-- `src/codegen/validate.ts` — B3 sandboxed build validator.
-- `src/codegen/derived-draft.ts` — the `AppDraft` projection over a file
-  tree. *Owned by this module; not replaced by parallel agents.*
-- `src/app-builder-service.ts` — the integration site
-  (`generateAppDraftWithLLM` → `tryFileTreeCodegen`).
+- `src/codegen/llm-author.ts` — plan-then-write orchestrator
+  (`authorAppViaLLM`). Handles the chunked write loop for larger
+  plans.
+- `src/codegen/prompts.ts` — system + per-phase user prompts (plan,
+  write, iterate).
+- `src/codegen/path-validator.ts` — workspace-relative path defense
+  with Windows-aware checks (NTFS ADS, reserved device names, UNC,
+  trailing dots, case collision). 10 rules, 25 tests.
+- `src/codegen/validate.ts` — sandboxed build validator. Runs
+  `tsc --noEmit` then `vite build`; errors carry a
+  `phase: "typecheck" | "build"` tag.
+- `src/codegen/derived-draft.ts` — `AppDraft` projection over a file
+  tree.
+- `src/app-builder-service.ts` — integration site for initial drafts
+  (`generateAppDraftWithLLM` → `tryFileTreeCodegen`). Owns the default-
+  on flip and the `TASKLOOM_LEGACY_TEMPLATES` opt-out.
+- `src/app-iteration-service.ts` — integration site for iteration.
+  Routes file-tree drafts through the orchestrator and template-shaped
+  drafts through the existing regex pipeline.
+- `web/src/workbench/views/builder.tsx` (and related Builder chat
+  components) — renders the inline validation-error card with the
+  "Fix these errors" button.
