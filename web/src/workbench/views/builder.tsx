@@ -1011,26 +1011,6 @@ function ThreadMessageBody({
   return null;
 }
 
-function ChatBubble({ role, text }: { role: "user" | "assistant"; text: string }) {
-  const isUser = role === "user";
-  return (
-    <div style={{ display: "flex", gap: 8 }}>
-      <div style={{
-        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
-        background: isUser ? "linear-gradient(135deg, #3F4549, #1E2225)" : "linear-gradient(135deg, var(--green) 0%, var(--green-deep) 100%)",
-        display: "grid", placeItems: "center",
-        color: isUser ? "var(--silver-100)" : "#0E1A02", fontSize: 10, fontWeight: 700,
-      }}>{isUser ? "U" : "TL"}</div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="kicker" style={{ fontSize: 9.5, marginBottom: 2 }}>
-          {isUser ? "You" : "Taskloom"}
-        </div>
-        <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--silver-100)" }}>{text}</div>
-      </div>
-    </div>
-  );
-}
-
 function PlanCard({ draft }: { draft: AppBuilderDraft }) {
   return (
     <div className="card" style={{ padding: 14, marginLeft: 30 }}>
