@@ -1368,9 +1368,15 @@ export async function applyAppIterationViaFileTree(
     validation = {
       ok: false,
       source: "real",
-      errors: [{ file: "<validator>", message: (error as Error).message, severity: "error" }],
+      errors: [{
+        file: "<validator>",
+        message: (error as Error).message,
+        severity: "error",
+        phase: "typecheck",
+      }],
       warnings: [],
       durationMs: 0,
+      phases: { typecheck: "failed", build: "skipped" },
     };
   }
 

@@ -134,6 +134,7 @@ const VALID_OK: ValidationResult = {
   errors: [],
   warnings: [],
   durationMs: 0,
+  phases: { typecheck: "skipped", build: "skipped" },
 };
 
 test("applyAppIterationViaFileTree: happy path diffs old vs new tree", async () => {
@@ -191,11 +192,12 @@ test("applyAppIterationViaFileTree: validation errors propagate", async () => {
     ok: false,
     source: "real",
     errors: [
-      { file: "src/App.tsx", line: 3, message: "Cannot find name 'foo'.", severity: "error" },
-      { file: "<tsconfig>", message: "missing include", severity: "error" },
+      { file: "src/App.tsx", line: 3, message: "Cannot find name 'foo'.", severity: "error", phase: "typecheck" },
+      { file: "<tsconfig>", message: "missing include", severity: "error", phase: "typecheck" },
     ],
     warnings: [],
     durationMs: 42,
+    phases: { typecheck: "failed", build: "skipped" },
   };
 
   const out = await applyAppIterationViaFileTree(
