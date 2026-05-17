@@ -213,16 +213,26 @@ const TEMPLATE_DEFINITIONS: TemplateDefinition[] = [
     ],
     seeds: {
       account: [
-        { id: "acc_001", name: "Northstar Labs", industry: "Software", ownerId: "user_admin", status: "active", createdAt: "2026-01-05T09:00:00Z" },
+        { id: "acc_001", name: "Northwind Industries", industry: "Manufacturing", ownerId: "user_admin", status: "active", createdAt: "2026-01-05T09:00:00Z" },
         { id: "acc_002", name: "Bluebird Health", industry: "Healthcare", ownerId: "user_admin", status: "prospect", createdAt: "2026-01-11T10:30:00Z" },
+        { id: "acc_003", name: "Acme Robotics", industry: "Manufacturing", ownerId: "user_admin", status: "active", createdAt: "2026-02-02T08:15:00Z" },
+        { id: "acc_004", name: "Cascade Logistics", industry: "Logistics", ownerId: "user_admin", status: "churn_risk", createdAt: "2025-11-19T16:42:00Z" },
+        { id: "acc_005", name: "Helix Biosciences", industry: "Biotech", ownerId: "user_admin", status: "prospect", createdAt: "2026-02-28T11:05:00Z" },
+        { id: "acc_006", name: "Summit Financial Group", industry: "Financial Services", ownerId: "user_admin", status: "active", createdAt: "2026-03-14T14:30:00Z" },
       ],
       lead: [
-        { id: "lead_001", name: "Morgan Lee", email: "morgan@example.com", source: "web", score: 82, status: "qualified" },
-        { id: "lead_002", name: "Ari Patel", email: "ari@example.com", source: "referral", score: 64, status: "new" },
+        { id: "lead_001", name: "Morgan Lee", email: "morgan.lee@northwind.example", source: "Inbound", score: 82, status: "qualified" },
+        { id: "lead_002", name: "Ari Patel", email: "ari.patel@helix.example", source: "Referral", score: 64, status: "new" },
+        { id: "lead_003", name: "Sasha Kim", email: "sasha.kim@summit.example", source: "Event", score: 71, status: "qualified" },
+        { id: "lead_004", name: "Devon Rivers", email: "devon@cascadelogistics.example", source: "Outbound", score: 48, status: "new" },
+        { id: "lead_005", name: "Priya Shah", email: "priya@acmerobotics.example", source: "Partner", score: 91, status: "converted" },
       ],
       deal: [
-        { id: "deal_001", accountId: "acc_001", title: "Team expansion", stage: "proposal", value: 24000, closeDate: "2026-06-15" },
-        { id: "deal_002", accountId: "acc_002", title: "Pilot rollout", stage: "discovery", value: 9000, closeDate: "2026-07-01" },
+        { id: "deal_001", accountId: "acc_001", title: "Northwind annual renewal", stage: "negotiation", value: 84000, closeDate: "2026-06-15" },
+        { id: "deal_002", accountId: "acc_002", title: "Bluebird pilot rollout", stage: "discovery", value: 12000, closeDate: "2026-07-01" },
+        { id: "deal_003", accountId: "acc_003", title: "Acme robotics expansion", stage: "proposal", value: 42500, closeDate: "2026-06-28" },
+        { id: "deal_004", accountId: "acc_004", title: "Cascade contract renewal", stage: "negotiation", value: 31000, closeDate: "2026-05-30" },
+        { id: "deal_005", accountId: "acc_006", title: "Summit advisory engagement", stage: "won", value: 56000, closeDate: "2026-04-22" },
       ],
     },
     acceptanceChecks: [
@@ -282,13 +292,22 @@ const TEMPLATE_DEFINITIONS: TemplateDefinition[] = [
       service: [
         { id: "svc_001", name: "Discovery call", durationMinutes: 30, price: 0, active: true },
         { id: "svc_002", name: "Implementation consult", durationMinutes: 60, price: 150, active: true },
+        { id: "svc_003", name: "Quarterly business review", durationMinutes: 45, price: 0, active: true },
+        { id: "svc_004", name: "Onboarding workshop", durationMinutes: 90, price: 400, active: true },
+        { id: "svc_005", name: "Technical deep dive", durationMinutes: 60, price: 250, active: true },
       ],
       provider: [
-        { id: "pro_001", name: "Jamie Rivera", email: "jamie@example.com", timezone: "America/Chicago", active: true },
-        { id: "pro_002", name: "Sam Chen", email: "sam@example.com", timezone: "America/Chicago", active: true },
+        { id: "pro_001", name: "Jamie Rivera", email: "jamie.rivera@booking.example", timezone: "America/Chicago", active: true },
+        { id: "pro_002", name: "Sam Chen", email: "sam.chen@booking.example", timezone: "America/Los_Angeles", active: true },
+        { id: "pro_003", name: "Avery Johnson", email: "avery.johnson@booking.example", timezone: "America/New_York", active: true },
+        { id: "pro_004", name: "Reese Okonkwo", email: "reese.okonkwo@booking.example", timezone: "Europe/London", active: false },
       ],
       appointment: [
-        { id: "apt_001", serviceId: "svc_001", providerId: "pro_001", customerName: "Taylor Quinn", customerEmail: "taylor@example.com", startsAt: "2026-05-12T15:00:00Z", status: "confirmed" },
+        { id: "apt_001", serviceId: "svc_001", providerId: "pro_001", customerName: "Taylor Quinn", customerEmail: "taylor.quinn@northwind.example", startsAt: "2026-05-19T15:00:00Z", status: "confirmed" },
+        { id: "apt_002", serviceId: "svc_004", providerId: "pro_002", customerName: "Hannah Brooks", customerEmail: "hannah.brooks@helix.example", startsAt: "2026-05-20T17:30:00Z", status: "pending" },
+        { id: "apt_003", serviceId: "svc_002", providerId: "pro_003", customerName: "Liam Carter", customerEmail: "liam.carter@summit.example", startsAt: "2026-05-21T13:00:00Z", status: "confirmed" },
+        { id: "apt_004", serviceId: "svc_005", providerId: "pro_001", customerName: "Nina Alvarez", customerEmail: "nina.alvarez@cascade.example", startsAt: "2026-05-22T19:00:00Z", status: "confirmed" },
+        { id: "apt_005", serviceId: "svc_003", providerId: "pro_002", customerName: "Owen Park", customerEmail: "owen.park@acmerobotics.example", startsAt: "2026-05-15T16:00:00Z", status: "completed" },
       ],
     },
     acceptanceChecks: [
@@ -347,14 +366,24 @@ const TEMPLATE_DEFINITIONS: TemplateDefinition[] = [
     ],
     seeds: {
       metricSnapshot: [
-        { id: "met_001", metricKey: "activation_rate", label: "Activation rate", value: 72, target: 80, capturedAt: "2026-05-01T12:00:00Z" },
-        { id: "met_002", metricKey: "sla_risk", label: "SLA risk", value: 6, target: 3, capturedAt: "2026-05-01T12:00:00Z" },
+        { id: "met_001", metricKey: "activation_rate", label: "Activation rate", value: 72, target: 80, capturedAt: "2026-05-15T12:00:00Z" },
+        { id: "met_002", metricKey: "sla_risk", label: "SLA risk index", value: 6, target: 3, capturedAt: "2026-05-15T12:00:00Z" },
+        { id: "met_003", metricKey: "support_csat", label: "Support CSAT", value: 4.6, target: 4.5, capturedAt: "2026-05-15T12:00:00Z" },
+        { id: "met_004", metricKey: "mrr", label: "Monthly recurring revenue", value: 184500, target: 200000, capturedAt: "2026-05-15T12:00:00Z" },
+        { id: "met_005", metricKey: "p95_latency_ms", label: "API p95 latency", value: 312, target: 250, capturedAt: "2026-05-15T12:00:00Z" },
+        { id: "met_006", metricKey: "uptime_pct", label: "Uptime", value: 99.94, target: 99.9, capturedAt: "2026-05-15T12:00:00Z" },
       ],
       alert: [
-        { id: "alrt_001", metricKey: "sla_risk", severity: "warning", status: "open", message: "SLA risk above target", createdAt: "2026-05-01T12:05:00Z" },
+        { id: "alrt_001", metricKey: "sla_risk", severity: "warning", status: "open", message: "SLA risk index above target for 3 consecutive days.", createdAt: "2026-05-13T08:05:00Z" },
+        { id: "alrt_002", metricKey: "p95_latency_ms", severity: "critical", status: "acknowledged", message: "API p95 latency exceeded 300ms during peak window.", createdAt: "2026-05-14T19:42:00Z" },
+        { id: "alrt_003", metricKey: "mrr", severity: "info", status: "open", message: "MRR pacing 8% below quarterly plan.", createdAt: "2026-05-15T06:00:00Z" },
+        { id: "alrt_004", metricKey: "uptime_pct", severity: "info", status: "resolved", message: "Brief uptime regression cleared after deploy rollback.", createdAt: "2026-05-12T22:11:00Z" },
       ],
       report: [
-        { id: "rep_001", name: "Weekly operations review", description: "Core operating metrics for leadership.", metricKeys: "activation_rate,sla_risk", ownerId: "user_admin", updatedAt: "2026-05-01T13:00:00Z" },
+        { id: "rep_001", name: "Weekly operations review", description: "Core operating metrics shared with leadership every Monday.", metricKeys: "activation_rate,sla_risk,support_csat", ownerId: "user_admin", updatedAt: "2026-05-15T13:00:00Z" },
+        { id: "rep_002", name: "Customer experience scorecard", description: "Support CSAT and SLA performance for the customer success team.", metricKeys: "support_csat,sla_risk", ownerId: "user_admin", updatedAt: "2026-05-10T16:30:00Z" },
+        { id: "rep_003", name: "Revenue pacing snapshot", description: "MRR trajectory against quarterly plan.", metricKeys: "mrr", ownerId: "user_admin", updatedAt: "2026-05-14T10:15:00Z" },
+        { id: "rep_004", name: "Reliability summary", description: "Uptime and latency posture for the platform team.", metricKeys: "uptime_pct,p95_latency_ms", ownerId: "user_admin", updatedAt: "2026-05-15T09:45:00Z" },
       ],
     },
     acceptanceChecks: [
@@ -412,14 +441,24 @@ const TEMPLATE_DEFINITIONS: TemplateDefinition[] = [
     ],
     seeds: {
       project: [
-        { id: "prj_001", name: "Launch checklist", status: "active", ownerId: "user_admin", createdAt: "2026-04-20T09:00:00Z" },
+        { id: "prj_001", name: "Q2 product launch", status: "active", ownerId: "user_admin", createdAt: "2026-04-20T09:00:00Z" },
+        { id: "prj_002", name: "Mobile app refresh", status: "active", ownerId: "user_pm", createdAt: "2026-03-10T11:00:00Z" },
+        { id: "prj_003", name: "Customer onboarding redesign", status: "paused", ownerId: "user_design", createdAt: "2026-02-04T15:00:00Z" },
+        { id: "prj_004", name: "Platform reliability hardening", status: "active", ownerId: "user_platform", createdAt: "2026-01-22T08:30:00Z" },
       ],
       task: [
-        { id: "tsk_001", projectId: "prj_001", title: "Confirm beta scope", description: "Lock the first release checklist.", status: "doing", priority: "high", assigneeId: "user_admin" },
-        { id: "tsk_002", projectId: "prj_001", title: "Draft onboarding notes", description: "Prepare customer-facing setup notes.", status: "todo", priority: "medium", assigneeId: "user_admin" },
+        { id: "tsk_001", projectId: "prj_001", title: "Lock launch scope with marketing", description: "Confirm the feature list, messaging, and rollout date with the marketing leads.", status: "doing", priority: "high", assigneeId: "user_admin" },
+        { id: "tsk_002", projectId: "prj_001", title: "Draft customer onboarding emails", description: "Write the welcome sequence and review with lifecycle.", status: "todo", priority: "medium", assigneeId: "user_pm" },
+        { id: "tsk_003", projectId: "prj_002", title: "Audit accessibility on the new flows", description: "Run axe and keyboard checks on the redesigned screens.", status: "doing", priority: "high", assigneeId: "user_design" },
+        { id: "tsk_004", projectId: "prj_002", title: "Wire up offline sync", description: "Resolve queued mutations when the device comes back online.", status: "blocked", priority: "high", assigneeId: "user_mobile" },
+        { id: "tsk_005", projectId: "prj_004", title: "Migrate metrics to Prometheus", description: "Move the legacy StatsD pipeline to Prometheus with backfilled history.", status: "todo", priority: "medium", assigneeId: "user_platform" },
+        { id: "tsk_006", projectId: "prj_004", title: "Document incident runbooks", description: "Refresh on-call runbooks for the top five paging alerts.", status: "done", priority: "low", assigneeId: "user_platform" },
       ],
       comment: [
-        { id: "cmt_001", taskId: "tsk_001", authorId: "user_admin", body: "Scope review is in progress.", createdAt: "2026-04-22T14:00:00Z" },
+        { id: "cmt_001", taskId: "tsk_001", authorId: "user_admin", body: "Scope locked at three core features; marketing is drafting the press hits.", createdAt: "2026-04-22T14:00:00Z" },
+        { id: "cmt_002", taskId: "tsk_003", authorId: "user_design", body: "Found two focus-trap regressions on the modal stack; opening sub-tasks.", createdAt: "2026-05-08T16:20:00Z" },
+        { id: "cmt_003", taskId: "tsk_004", authorId: "user_mobile", body: "Blocked on the conflict-resolution spec landing this week.", createdAt: "2026-05-11T10:45:00Z" },
+        { id: "cmt_004", taskId: "tsk_006", authorId: "user_platform", body: "Runbooks merged; archived the obsolete pager wiki.", createdAt: "2026-05-14T18:05:00Z" },
       ],
     },
     acceptanceChecks: [
@@ -477,13 +516,25 @@ const TEMPLATE_DEFINITIONS: TemplateDefinition[] = [
     ],
     seeds: {
       customer: [
-        { id: "cus_001", name: "Acme Support Co", primaryEmail: "admin@acme.example", status: "active", createdAt: "2026-03-18T09:00:00Z" },
+        { id: "cus_001", name: "Acme Robotics", primaryEmail: "ops@acmerobotics.example", status: "active", createdAt: "2026-03-18T09:00:00Z" },
+        { id: "cus_002", name: "Bluebird Health", primaryEmail: "portal@bluebirdhealth.example", status: "active", createdAt: "2026-02-22T11:15:00Z" },
+        { id: "cus_003", name: "Cascade Logistics", primaryEmail: "billing@cascadelogistics.example", status: "invited", createdAt: "2026-05-02T08:00:00Z" },
+        { id: "cus_004", name: "Summit Financial Group", primaryEmail: "ap@summit-fg.example", status: "active", createdAt: "2026-01-30T14:42:00Z" },
+        { id: "cus_005", name: "Helix Biosciences", primaryEmail: "accounts@helixbio.example", status: "disabled", createdAt: "2025-12-04T10:00:00Z" },
       ],
       request: [
-        { id: "req_001", customerId: "cus_001", category: "Support", subject: "Update billing contact", status: "open", createdAt: "2026-05-02T10:00:00Z" },
+        { id: "req_001", customerId: "cus_001", category: "Billing", subject: "Update billing contact and PO number", status: "open", createdAt: "2026-05-12T10:00:00Z" },
+        { id: "req_002", customerId: "cus_002", category: "Technical Support", subject: "SSO redirect loop after IdP rotation", status: "waiting", createdAt: "2026-05-13T14:30:00Z" },
+        { id: "req_003", customerId: "cus_004", category: "Feature Request", subject: "Export quarterly summary as PDF", status: "open", createdAt: "2026-05-14T09:15:00Z" },
+        { id: "req_004", customerId: "cus_001", category: "Account Change", subject: "Add three seats for the integrations team", status: "resolved", createdAt: "2026-05-08T16:05:00Z" },
+        { id: "req_005", customerId: "cus_003", category: "Onboarding", subject: "Schedule kickoff and grant portal access", status: "open", createdAt: "2026-05-15T11:00:00Z" },
       ],
       document: [
-        { id: "doc_001", customerId: "cus_001", title: "April invoice", kind: "invoice", url: "/files/april-invoice.pdf", visibleToCustomer: true },
+        { id: "doc_001", customerId: "cus_001", title: "April 2026 invoice", kind: "invoice", url: "/files/acme-april-2026-invoice.pdf", visibleToCustomer: true },
+        { id: "doc_002", customerId: "cus_002", title: "Master services agreement", kind: "contract", url: "/files/bluebird-msa-2026.pdf", visibleToCustomer: true },
+        { id: "doc_003", customerId: "cus_004", title: "Q1 2026 usage report", kind: "file", url: "/files/summit-q1-2026-usage.pdf", visibleToCustomer: true },
+        { id: "doc_004", customerId: "cus_001", title: "March 2026 invoice", kind: "invoice", url: "/files/acme-march-2026-invoice.pdf", visibleToCustomer: true },
+        { id: "doc_005", customerId: "cus_003", title: "Onboarding playbook", kind: "file", url: "/files/cascade-onboarding-playbook.pdf", visibleToCustomer: false },
       ],
     },
     acceptanceChecks: [
@@ -697,7 +748,7 @@ export function generateAppSourceArtifactBundle(draft: AppDraft): GeneratedAppSo
     sourceFile("tsconfig.json", "config", renderGeneratedTsConfig()),
     sourceFile("vite.config.ts", "config", renderGeneratedViteConfig()),
     sourceFile("src/main.tsx", "source", renderGeneratedMainTsx()),
-    sourceFile("src/App.tsx", "source", renderGeneratedAppTsx(draft, pages)),
+    sourceFile("src/App.tsx", "source", renderGeneratedAppTsx(draft, pages, slug)),
     sourceFile("src/styles.css", "source", renderGeneratedStylesCss()),
     sourceFile("src/routes/page-data.ts", "route-data", renderGeneratedPageDataTs(pages, routeSummary)),
     sourceFile("src/api/generated-api.ts", "api", renderGeneratedApiTs(apiRoutes, dataContracts)),
@@ -984,6 +1035,7 @@ function renderGeneratedIndexHtml(appName: string): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(appName)}</title>
+    <script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
   </head>
   <body>
     <div id="root"></div>
@@ -1040,37 +1092,555 @@ createRoot(document.getElementById("root")!).render(
 function renderGeneratedAppTsx(
   draft: AppDraft,
   pages: ReturnType<typeof buildGeneratedPageData>,
+  slug: string,
 ): string {
   const primaryEntity = draft.dataSchema.entities[0]?.name ?? "record";
   const appName = JSON.stringify(draft.appName);
   const summary = JSON.stringify(draft.summary);
   const primaryEntityLiteral = JSON.stringify(primaryEntity);
+  const appIdLiteral = JSON.stringify(slug);
   const pageCount = pages.length;
 
-  return `import { apiRoutes, dataContracts } from "./api/generated-api";
+  return `import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiRoutes, dataContracts } from "./api/generated-api";
 import seedData from "./data/seed-data.json";
 import { pages, routeAccess } from "./routes/page-data";
 import "./styles.css";
 
-type SeedData = Record<string, Array<Record<string, string | number | boolean | null>>>;
+type FieldType = "uuid" | "string" | "text" | "number" | "boolean" | "date" | "datetime" | "enum";
+type FieldDef = {
+  name: string;
+  type: FieldType;
+  required: boolean;
+  enumValues?: string[];
+  references?: string;
+};
+type EntityContract = {
+  name: string;
+  primaryKey: string;
+  requiredFields: string[];
+  editableFields: string[];
+  fields: FieldDef[];
+};
+type Record = { [key: string]: string | number | boolean | null };
+type SeedData = { [entity: string]: Record[] };
+type SqlValue = string | number | null;
+type SqlStatement = {
+  bind: (values: SqlValue[]) => void;
+  step: () => boolean;
+  getAsObject: () => { [column: string]: SqlValue };
+  free: () => void;
+  run: (values?: SqlValue[]) => void;
+};
+type SqlDatabase = {
+  run: (sql: string, params?: SqlValue[]) => void;
+  exec: (sql: string) => Array<{ columns: string[]; values: SqlValue[][] }>;
+  prepare: (sql: string) => SqlStatement;
+  export: () => Uint8Array;
+  close: () => void;
+};
+type SqlJsStatic = {
+  Database: new (data?: Uint8Array) => SqlDatabase;
+};
+type InitSqlJs = (config?: { locateFile?: (file: string) => string }) => Promise<SqlJsStatic>;
+declare global {
+  interface Window {
+    initSqlJs?: InitSqlJs;
+  }
+}
 
 const appName = ${appName};
 const summary = ${summary};
 const primaryEntity = ${primaryEntityLiteral};
+const appId = ${appIdLiteral};
+const storageKey = \`taskloom_app_\${appId}_db\`;
+const entities = dataContracts.entities as EntityContract[];
 const typedSeedData = seedData as SeedData;
 
+function sqlTypeForField(field: FieldDef): string {
+  if (field.type === "number") return "REAL";
+  if (field.type === "boolean") return "INTEGER";
+  if (field.type === "enum" && field.enumValues && field.enumValues.length > 0) {
+    const allowed = field.enumValues.map((value) => \`'\${value.replace(/'/g, "''")}'\`).join(", ");
+    return \`TEXT CHECK(\${quoteIdent(field.name)} IN (\${allowed}))\`;
+  }
+  return "TEXT";
+}
+
+function quoteIdent(name: string): string {
+  return \`"\${name.replace(/"/g, '""')}"\`;
+}
+
+function buildCreateTableSql(entity: EntityContract): string {
+  const columnDefs = entity.fields.map((field) => {
+    const parts: string[] = [quoteIdent(field.name), sqlTypeForField(field)];
+    if (field.name === entity.primaryKey) parts.push("PRIMARY KEY");
+    if (field.required && field.name !== entity.primaryKey) parts.push("NOT NULL");
+    return parts.join(" ");
+  });
+  return \`CREATE TABLE IF NOT EXISTS \${quoteIdent(entity.name)} (\${columnDefs.join(", ")});\`;
+}
+
+function toSqlValue(field: FieldDef, raw: Record[keyof Record]): SqlValue {
+  if (raw === null || raw === undefined) return null;
+  if (field.type === "boolean") return raw ? 1 : 0;
+  if (field.type === "number") {
+    const numeric = typeof raw === "number" ? raw : Number(raw);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  if (typeof raw === "boolean") return raw ? 1 : 0;
+  if (typeof raw === "number") return raw;
+  return String(raw);
+}
+
+function fromSqlValue(field: FieldDef, raw: SqlValue): Record[keyof Record] {
+  if (raw === null || raw === undefined) return null;
+  if (field.type === "boolean") return raw === 1 || raw === "1" || raw === "true";
+  if (field.type === "number") {
+    const numeric = typeof raw === "number" ? raw : Number(raw);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  return typeof raw === "number" ? raw : String(raw);
+}
+
+function insertRow(db: SqlDatabase, entity: EntityContract, row: Record): void {
+  const columns = entity.fields.map((field) => quoteIdent(field.name)).join(", ");
+  const placeholders = entity.fields.map(() => "?").join(", ");
+  const values = entity.fields.map((field) => toSqlValue(field, row[field.name] ?? null));
+  db.run(\`INSERT OR REPLACE INTO \${quoteIdent(entity.name)} (\${columns}) VALUES (\${placeholders});\`, values);
+}
+
+function selectAll(db: SqlDatabase, entity: EntityContract): Record[] {
+  const stmt = db.prepare(\`SELECT * FROM \${quoteIdent(entity.name)};\`);
+  const rows: Record[] = [];
+  try {
+    while (stmt.step()) {
+      const raw = stmt.getAsObject();
+      const row: Record = {};
+      entity.fields.forEach((field) => {
+        row[field.name] = fromSqlValue(field, raw[field.name] ?? null);
+      });
+      rows.push(row);
+    }
+  } finally {
+    stmt.free();
+  }
+  return rows;
+}
+
+function deleteRow(db: SqlDatabase, entity: EntityContract, id: SqlValue): void {
+  db.run(\`DELETE FROM \${quoteIdent(entity.name)} WHERE \${quoteIdent(entity.primaryKey)} = ?;\`, [id]);
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function persistDb(db: SqlDatabase): void {
+  try {
+    const data = db.export();
+    window.localStorage.setItem(storageKey, uint8ToBase64(data));
+  } catch (error) {
+    console.warn("Failed to persist generated app database:", error);
+  }
+}
+
+function seedDatabase(db: SqlDatabase): void {
+  entities.forEach((entity) => {
+    db.run(buildCreateTableSql(entity));
+  });
+  entities.forEach((entity) => {
+    const rows = typedSeedData[entity.name] ?? [];
+    rows.forEach((row) => insertRow(db, entity, row as Record));
+  });
+}
+
+async function loadSqlJs(): Promise<SqlJsStatic> {
+  if (typeof window === "undefined" || !window.initSqlJs) {
+    throw new Error("sql.js loader is not available on window.initSqlJs");
+  }
+  return window.initSqlJs({
+    locateFile: (file: string) => \`https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/\${file}\`,
+  });
+}
+
+type DbStatus = "loading" | "ready" | "error";
+
+type UseLocalDbResult = {
+  status: DbStatus;
+  error: string | null;
+  data: SeedData;
+  insert: (entityName: string, row: Record) => void;
+  remove: (entityName: string, id: string | number) => void;
+  reset: () => void;
+};
+
+function useLocalDb(): UseLocalDbResult {
+  const [db, setDb] = useState<SqlDatabase | null>(null);
+  const [status, setStatus] = useState<DbStatus>("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<SeedData>(() => {
+    const initial: SeedData = {};
+    entities.forEach((entity) => {
+      initial[entity.name] = (typedSeedData[entity.name] ?? []).map((row) => ({ ...row }));
+    });
+    return initial;
+  });
+
+  const refresh = useCallback((instance: SqlDatabase) => {
+    const next: SeedData = {};
+    entities.forEach((entity) => {
+      next[entity.name] = selectAll(instance, entity);
+    });
+    setData(next);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let instance: SqlDatabase | null = null;
+    (async () => {
+      try {
+        const SQL = await loadSqlJs();
+        let opened: SqlDatabase | null = null;
+        const stored = window.localStorage.getItem(storageKey);
+        if (stored) {
+          try {
+            opened = new SQL.Database(base64ToUint8(stored));
+            entities.forEach((entity) => opened?.run(buildCreateTableSql(entity)));
+          } catch (loadError) {
+            console.warn("Stored generated app database was corrupted; reseeding.", loadError);
+            opened = null;
+          }
+        }
+        if (!opened) {
+          opened = new SQL.Database();
+          seedDatabase(opened);
+          persistDb(opened);
+        }
+        if (cancelled) {
+          opened.close();
+          return;
+        }
+        instance = opened;
+        setDb(opened);
+        refresh(opened);
+        setStatus("ready");
+      } catch (loadError) {
+        if (cancelled) return;
+        console.error("Failed to initialize local SQLite database:", loadError);
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+        setStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (instance) instance.close();
+    };
+  }, [refresh]);
+
+  const insert = useCallback((entityName: string, row: Record) => {
+    if (!db) return;
+    const entity = entities.find((entry) => entry.name === entityName);
+    if (!entity) return;
+    insertRow(db, entity, row);
+    persistDb(db);
+    refresh(db);
+  }, [db, refresh]);
+
+  const remove = useCallback((entityName: string, id: string | number) => {
+    if (!db) return;
+    const entity = entities.find((entry) => entry.name === entityName);
+    if (!entity) return;
+    deleteRow(db, entity, id);
+    persistDb(db);
+    refresh(db);
+  }, [db, refresh]);
+
+  const reset = useCallback(() => {
+    if (!db) return;
+    entities.forEach((entity) => {
+      db.run(\`DELETE FROM \${quoteIdent(entity.name)};\`);
+    });
+    seedDatabase(db);
+    persistDb(db);
+    refresh(db);
+  }, [db, refresh]);
+
+  return { status, error, data, insert, remove, reset };
+}
+
+function generateRecordId(entityName: string): string {
+  const prefix = entityName.slice(0, 3).toLowerCase() || "row";
+  const random = Math.random().toString(36).slice(2, 8);
+  const stamp = Date.now().toString(36);
+  return \`\${prefix}_\${stamp}\${random}\`;
+}
+
+function emptyRowForEntity(entity: EntityContract): { [key: string]: string } {
+  const initial: { [key: string]: string } = {};
+  entity.fields.forEach((field) => {
+    if (field.name === entity.primaryKey) return;
+    if (field.type === "enum" && field.enumValues && field.enumValues.length > 0) {
+      initial[field.name] = field.enumValues[0] ?? "";
+    } else if (field.type === "boolean") {
+      initial[field.name] = "false";
+    } else {
+      initial[field.name] = "";
+    }
+  });
+  return initial;
+}
+
+function coerceFormValue(field: FieldDef, value: string): Record[keyof Record] {
+  if (value === "" && !field.required) return null;
+  if (field.type === "number") {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  if (field.type === "boolean") return value === "true";
+  return value;
+}
+
+function formatCellValue(value: Record[keyof Record]): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
+function EntityWorkbench({
+  entity,
+  rows,
+  onCreate,
+  onRemove,
+}: {
+  entity: EntityContract;
+  rows: Record[];
+  onCreate: (row: Record) => void;
+  onRemove: (id: string | number) => void;
+}) {
+  const editableFields = useMemo(
+    () => entity.fields.filter((field) => entity.editableFields.includes(field.name)),
+    [entity],
+  );
+  const [draft, setDraft] = useState<{ [key: string]: string }>(() => emptyRowForEntity(entity));
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleChange = (fieldName: string, value: string) => {
+    setDraft((current) => ({ ...current, [fieldName]: value }));
+  };
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setErrorMessage(null);
+    const missing = entity.requiredFields.filter((name) => {
+      if (name === entity.primaryKey) return false;
+      const value = draft[name];
+      return value === undefined || value === "";
+    });
+    if (missing.length > 0) {
+      setErrorMessage(\`Missing required fields: \${missing.join(", ")}\`);
+      return;
+    }
+    const row: Record = { [entity.primaryKey]: generateRecordId(entity.name) };
+    entity.fields.forEach((field) => {
+      if (field.name === entity.primaryKey) return;
+      if (Object.prototype.hasOwnProperty.call(draft, field.name)) {
+        row[field.name] = coerceFormValue(field, draft[field.name] ?? "");
+      }
+    });
+    onCreate(row);
+    setDraft(emptyRowForEntity(entity));
+  };
+
+  return (
+    <article className="entity-workbench">
+      <header>
+        <h3>{entity.name}</h3>
+        <span className="row-count">{rows.length} {rows.length === 1 ? "record" : "records"}</span>
+      </header>
+
+      <form onSubmit={handleSubmit} className="entity-form" aria-label={\`Create \${entity.name}\`}>
+        <div className="entity-form-grid">
+          {editableFields.map((field) => {
+            const inputId = \`field-\${entity.name}-\${field.name}\`;
+            const value = draft[field.name] ?? "";
+            if (field.type === "enum" && field.enumValues && field.enumValues.length > 0) {
+              return (
+                <label key={field.name} htmlFor={inputId}>
+                  <span>{field.name}{field.required ? " *" : ""}</span>
+                  <select
+                    id={inputId}
+                    value={value}
+                    onChange={(event) => handleChange(field.name, event.target.value)}
+                    required={field.required}
+                  >
+                    {field.enumValues.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </label>
+              );
+            }
+            if (field.type === "boolean") {
+              return (
+                <label key={field.name} htmlFor={inputId}>
+                  <span>{field.name}{field.required ? " *" : ""}</span>
+                  <select
+                    id={inputId}
+                    value={value}
+                    onChange={(event) => handleChange(field.name, event.target.value)}
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </label>
+              );
+            }
+            if (field.type === "text") {
+              return (
+                <label key={field.name} htmlFor={inputId} className="entity-form-wide">
+                  <span>{field.name}{field.required ? " *" : ""}</span>
+                  <textarea
+                    id={inputId}
+                    value={value}
+                    onChange={(event) => handleChange(field.name, event.target.value)}
+                    rows={3}
+                    required={field.required}
+                  />
+                </label>
+              );
+            }
+            if (field.type === "date") {
+              return (
+                <label key={field.name} htmlFor={inputId}>
+                  <span>{field.name}{field.required ? " *" : ""}</span>
+                  <input
+                    id={inputId}
+                    type="date"
+                    value={value}
+                    onChange={(event) => handleChange(field.name, event.target.value)}
+                    required={field.required}
+                  />
+                </label>
+              );
+            }
+            if (field.type === "datetime") {
+              return (
+                <label key={field.name} htmlFor={inputId}>
+                  <span>{field.name}{field.required ? " *" : ""}</span>
+                  <input
+                    id={inputId}
+                    type="datetime-local"
+                    value={value}
+                    onChange={(event) => handleChange(field.name, event.target.value)}
+                    required={field.required}
+                  />
+                </label>
+              );
+            }
+            if (field.type === "number") {
+              return (
+                <label key={field.name} htmlFor={inputId}>
+                  <span>{field.name}{field.required ? " *" : ""}</span>
+                  <input
+                    id={inputId}
+                    type="number"
+                    value={value}
+                    onChange={(event) => handleChange(field.name, event.target.value)}
+                    required={field.required}
+                  />
+                </label>
+              );
+            }
+            return (
+              <label key={field.name} htmlFor={inputId}>
+                <span>{field.name}{field.required ? " *" : ""}</span>
+                <input
+                  id={inputId}
+                  type="text"
+                  value={value}
+                  onChange={(event) => handleChange(field.name, event.target.value)}
+                  required={field.required}
+                />
+              </label>
+            );
+          })}
+        </div>
+        {errorMessage ? <p className="entity-form-error" role="alert">{errorMessage}</p> : null}
+        <div className="entity-form-actions">
+          <button type="submit">Save {entity.name}</button>
+        </div>
+      </form>
+
+      <div className="entity-table-wrap">
+        <table className="entity-table">
+          <thead>
+            <tr>
+              {entity.fields.map((field) => (
+                <th key={field.name}>{field.name}</th>
+              ))}
+              <th aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={entity.fields.length + 1} className="entity-table-empty">No records yet.</td>
+              </tr>
+            ) : (
+              rows.map((row, index) => {
+                const idValue = row[entity.primaryKey];
+                const rowKey = idValue !== null && idValue !== undefined ? String(idValue) : \`row-\${index}\`;
+                return (
+                  <tr key={rowKey}>
+                    {entity.fields.map((field) => (
+                      <td key={field.name}>{formatCellValue(row[field.name] ?? null)}</td>
+                    ))}
+                    <td>
+                      {idValue !== null && idValue !== undefined ? (
+                        <button
+                          type="button"
+                          className="entity-row-remove"
+                          onClick={() => onRemove(idValue as string | number)}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+
 export default function App() {
-  const firstRecords = Object.entries(typedSeedData).map(([entity, records]) => ({
-    entity,
-    count: records.length,
-    sample: records[0],
-  }));
+  const { status, error, data, insert, remove, reset } = useLocalDb();
+  const totalRecords = useMemo(
+    () => entities.reduce((sum, entity) => sum + (data[entity.name]?.length ?? 0), 0),
+    [data],
+  );
 
   return (
     <main className="app-shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">Generated Taskloom app</p>
           <h1>{appName}</h1>
           <p>{summary}</p>
         </div>
@@ -1123,21 +1693,43 @@ export default function App() {
 
         <aside className="panel data-panel">
           <h2>Data Contracts</h2>
-          {dataContracts.entities.map((entity) => (
+          {entities.map((entity) => (
             <article key={entity.name}>
               <h3>{entity.name}</h3>
               <p>{entity.fields.length} fields, required: {entity.requiredFields.join(", ") || "none"}</p>
             </article>
           ))}
 
-          <h2>Seed Data</h2>
-          {firstRecords.map((record) => (
-            <article key={record.entity}>
-              <h3>{record.entity}</h3>
-              <p>{record.count} records ready for local rendering.</p>
-            </article>
-          ))}
+          <h2>Local Database</h2>
+          <p className="db-status" data-status={status}>
+            {status === "loading" ? "Loading local SQLite database…"
+              : status === "ready" ? \`Persisted to localStorage. \${totalRecords} \${totalRecords === 1 ? "record" : "records"} on hand.\`
+              : \`Database error: \${error ?? "unknown"}\`}
+          </p>
+          {status === "ready" ? (
+            <button type="button" className="db-reset" onClick={reset}>
+              Reset to seed data
+            </button>
+          ) : null}
         </aside>
+      </section>
+
+      <section className="panel workbench-panel" aria-label="Entity workbench">
+        <h2>Workbench</h2>
+        <p className="workbench-hint">
+          Records persist to your browser via sql.js + localStorage. Refresh the page — your changes stay.
+        </p>
+        <div className="workbench-grid">
+          {entities.map((entity) => (
+            <EntityWorkbench
+              key={entity.name}
+              entity={entity}
+              rows={data[entity.name] ?? []}
+              onCreate={(row) => insert(entity.name, row)}
+              onRemove={(id) => remove(entity.name, id)}
+            />
+          ))}
+        </div>
       </section>
 
       <section className="panel api-panel">
@@ -1320,6 +1912,165 @@ footer {
   margin-top: 20px;
 }
 
+.workbench-panel {
+  margin-top: 20px;
+}
+
+.workbench-hint {
+  color: #5f7180;
+  margin-bottom: 16px;
+}
+
+.workbench-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.entity-workbench {
+  border: 1px solid #e2e8ee;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.entity-workbench header {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.entity-workbench header h3 {
+  margin: 0;
+  text-transform: capitalize;
+}
+
+.row-count {
+  color: #5f7180;
+  font-size: 12px;
+}
+
+.entity-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.entity-form-grid label {
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.entity-form-grid label.entity-form-wide {
+  grid-column: 1 / -1;
+}
+
+.entity-form-grid input,
+.entity-form-grid select,
+.entity-form-grid textarea {
+  background: #f7fafc;
+  border: 1px solid #d8e0e7;
+  border-radius: 6px;
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.entity-form-grid textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.entity-form-actions {
+  margin-top: 12px;
+}
+
+.entity-form-actions button {
+  background: #1f3a5f;
+  border: 0;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 8px 14px;
+}
+
+.entity-form-actions button:hover {
+  background: #294a78;
+}
+
+.entity-form-error {
+  color: #b3261e;
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+.entity-table-wrap {
+  margin-top: 14px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.entity-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  width: 100%;
+}
+
+.entity-table th,
+.entity-table td {
+  border-bottom: 1px solid #eef2f5;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.entity-table th {
+  background: #f7fafc;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  position: sticky;
+  text-transform: uppercase;
+  top: 0;
+}
+
+.entity-table-empty {
+  color: #5f7180;
+  font-style: italic;
+  text-align: center;
+}
+
+.entity-row-remove {
+  background: transparent;
+  border: 1px solid #d8e0e7;
+  border-radius: 6px;
+  color: #b3261e;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.entity-row-remove:hover {
+  background: #fdecea;
+}
+
+.db-status {
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.db-status[data-status="error"] {
+  color: #b3261e;
+}
+
+.db-reset {
+  background: #ffffff;
+  border: 1px solid #d8e0e7;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     padding: 18px;
@@ -1439,6 +2190,21 @@ export async function handleGeneratedApiRequest(request: ApiRequest) {
 
   if (missingFields.length > 0) {
     return { status: 400, body: { error: "Missing required fields.", missingFields } };
+  }
+
+  if (contract) {
+    const enumErrors: Array<{ field: string; allowed: string[] }> = [];
+    for (const field of contract.fields) {
+      if (field.type !== "enum" || !field.enumValues || field.enumValues.length === 0) continue;
+      const provided = request.body?.[field.name];
+      if (provided === undefined || provided === null || provided === "") continue;
+      if (!field.enumValues.includes(String(provided))) {
+        enumErrors.push({ field: field.name, allowed: field.enumValues });
+      }
+    }
+    if (enumErrors.length > 0) {
+      return { status: 400, body: { error: "Invalid enum values.", enumErrors } };
+    }
   }
 
   return {
