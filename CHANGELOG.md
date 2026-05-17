@@ -6,6 +6,25 @@ This project follows the spirit of [Keep a Changelog](https://keepachangelog.com
 
 ## [Unreleased]
 
+### 2026-05-17 — File-tree codegen filled out: iteration parity, chunked planning, vite-build validation, inline error UX, default-on
+
+This entry covers the second round of Track B work. The opt-in skeleton from the previous round is filled out: file-tree codegen now runs by default when a BYOK provider key is configured, iteration mirrors the new path, plans for larger apps are batched across multiple write rounds, the validator runs a real `vite build` alongside `tsc`, and validation errors surface inline in the Builder chat thread.
+
+#### Track B round 2
+
+- **Default path flipped.** File-tree codegen now runs by default when a BYOK provider key is present. No env flag required. The structured-tool / template path remains the fallback when no key is configured or the orchestrator returns null.
+- **New opt-out `TASKLOOM_LEGACY_TEMPLATES=1`.** Forces the legacy template path, skipping the file-tree codegen orchestrator entirely. The previous opt-in flag `TASKLOOM_FILETREE_CODEGEN=1` is preserved as a no-op for installs that already set it.
+- **Iteration parity.** `src/app-iteration-service.ts` gained a file-tree iteration path. When the draft being iterated on was generated via the file-tree path (`source === "llm-filetree"`) and the file tree is available, iteration re-runs the orchestrator on an iteration-shaped prompt and computes a diff (added / modified / deleted) against the prior tree. Falls back to the regex iteration pipeline when the draft is template-shaped.
+- **Chunked planning for large apps.** When the plan has more than 10 files, the orchestrator now batches `write_file` calls across multiple LLM rounds (chunks of up to 8 files each), with an early-stop when a chunk returns nothing. Small plans (10 files or fewer) keep the existing single-write-phase behaviour.
+- **Vite-build validation.** The validator now runs `vite build` after `tsc --noEmit`, with phase-tagged errors (`phase: "typecheck" | "build"`). When tsc fails, the build step is skipped. Both phases are gated on the existing `TASKLOOM_SANDBOX_SMOKE_ENABLED=1` env.
+- **Inline error UX.** When the file-tree path returns validation errors, the Builder chat thread now renders them inline as a warn-toned card with a "Fix these errors" button. The button triggers an iteration with the errors as the prompt.
+
+#### Known gaps
+
+- Multi-round auto-fix on broken TypeScript is not implemented. The validator runs once; errors surface to the user; iteration is the user's choice via the new "Fix these errors" button.
+- Iteration on legacy-template drafts still uses the regex pipeline — only file-tree drafts use the new iteration path.
+- The new vite-build step is still gated on `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`; with the gate off, the validator returns a skipped result.
+
 ### 2026-05-17 — Six-provider BYOK, remote-pointable local LLM, cleanup
 
 This entry covers the two rounds of provider work that landed after the builder-first refactor: the builder draft + iteration paths are now fully routed through `ProviderRouter` and accept six providers, and the local-LLM provider became remote-pointable so a separate GPU box can serve the workbench laptop.
