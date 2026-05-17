@@ -208,7 +208,6 @@ export function BuilderView() {
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composerPreset, setComposerPreset] = useState<BuilderModelPresetId>("smart");
-  const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const iterationTargetOptions = useMemo(() => buildIterationTargetOptions(state.draft), [state.draft]);

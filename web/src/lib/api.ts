@@ -155,6 +155,7 @@ function csrfTokenForRequest(init?: RequestInit) {
 
 export type BuilderStreamEvent =
   | { type: "step"; text: string }
+  | { type: "prose"; text: string }
   | { type: "draft"; draft: AppBuilderDraft }
   | { type: "diff"; iteration: AppBuilderIterationResult }
   | { type: "done" }

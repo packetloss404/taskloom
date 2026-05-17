@@ -23,11 +23,14 @@ import {
 } from "./app-preview-readiness.js";
 import {
   applyAppIterationToDraft,
+  applyAppIterationViaLLM,
   buildAppIterationPlan,
   type AppIterationAction,
   type AppIterationChangeRequest,
   type AppIterationDiffHunk,
+  type AppIterationLLMResult,
   type AppIterationPlan,
+  type AppIterationPresetId,
   type AppIterationTargetInput,
   type GeneratedAppDraftLike,
 } from "./app-iteration-service.js";
@@ -441,15 +444,15 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
       await emitStep(sse, "Reading the prompt");
       await chatStreamDelay();
       const prompt = promptFromBody(body.prompt);
-      // Fork B: prefer the LLM-backed generator when ANTHROPIC_API_KEY is
-      // configured, otherwise fall back to the deterministic template path.
-      // The `emit` callback forwards model prose token-by-token to the UI as
-      // SSE "delta" events so the chat bubble streams as the model thinks.
+      // Fork B: generateAppDraftWithLLM uses the Claude API when ANTHROPIC_API_KEY
+      // is configured, otherwise falls back to the deterministic template path.
+      // The emit callback forwards model prose token-by-token to the UI as SSE
+      // "prose" events so the chat bubble streams as the model thinks.
       const { draft, source } = await generateAppDraftWithLLM(
         prompt,
         { preset: body.preset },
         async (text) => {
-          await sse.writeSSE({ event: "delta", data: JSON.stringify({ type: "delta", text }) });
+          await sse.writeSSE({ event: "prose", data: JSON.stringify({ type: "prose", text }) });
         },
       );
       await emitStep(sse, source === "llm"
@@ -494,10 +497,12 @@ appRoutes.post("/app/builder/app-iteration/stream", async (c) => {
         await emitStep(sse, presetLabel);
         await chatStreamDelay();
       }
+      const useLLM = llmIsAvailable();
       const result = await runAppIterationCore(context, body, async (text) => {
+        if (useLLM) return; // suppress synthetic steps when prose stream is active
         await emitStep(sse, text);
         await chatStreamDelay();
-      });
+      }, useLLM ? async (chunk) => { await emitProse(sse, chunk); } : undefined);
       await sse.writeSSE({ event: "diff", data: JSON.stringify({ type: "diff", iteration: result }) });
       await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
     } catch (error) {
@@ -896,6 +901,7 @@ async function runAppIterationCore(
   context: Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>,
   body: AppIterationRouteRequest,
   onStep?: (text: string) => Promise<void> | void,
+  onProse?: (chunk: string) => Promise<void> | void,
 ): Promise<AppIterationRouteResult> {
   await onStep?.("Loading current draft");
   const prompt = promptFromBody(body.prompt);
@@ -903,11 +909,31 @@ async function runAppIterationCore(
   const iterationDraft = toGeneratedAppDraftLike(draft);
   const targetKind = body.target?.kind ?? "app";
   await onStep?.(`Scoping change to ${targetKind}`);
+  const targetForService = appIterationTargetForService(body.target);
+  const changeText = body.sourceError?.prompt ? `${prompt}\n\nSource error: ${body.sourceError.message}` : prompt;
+
+  // Try the real LLM first; fall back to the deterministic regex pipeline on failure.
+  let llmResult: AppIterationLLMResult | null = null;
+  try {
+    llmResult = await applyAppIterationViaLLM(
+      iterationDraft,
+      targetForService,
+      changeText,
+      {
+        workspaceId: context.workspace.id,
+        preset: body.preset as AppIterationPresetId | undefined,
+      },
+      onProse ? async (chunk) => { await onProse(chunk); } : undefined,
+    );
+  } catch {
+    llmResult = null;
+  }
+
   const request: AppIterationChangeRequest = {
     draftId: body.checkpointId ?? record?.checkpointId ?? body.appId,
     workspaceId: context.workspace.id,
-    target: appIterationTargetForService(body.target),
-    change: body.sourceError?.prompt ? `${prompt}\n\nSource error: ${body.sourceError.message}` : prompt,
+    target: targetForService,
+    change: changeText,
   };
   await onStep?.("Building plan");
   const plan = buildAppIterationPlan(iterationDraft, request);
@@ -987,12 +1013,14 @@ async function runAppIterationCore(
       ...tools.requests.map((request) => routeLog(request.ready ? "info" : "warn", request.rationale)),
       routeLog("info", `Generated ${sourceDiffFiles.length} source file diff${sourceDiffFiles.length === 1 ? "" : "s"} for the candidate runtime artifact.`),
       routeLog("info", comparison.summary),
+      ...(llmResult ? [routeLog("info", `LLM iteration via ${llmResult.model}: ${llmResult.changedSummary}`)] : []),
     ],
     snapshot,
     tools,
     sourceDiffFiles,
     sourceFiles: candidateArtifact.files,
     artifact: candidateArtifact,
+    llmResult,
   });
 }
 
@@ -2773,6 +2801,7 @@ function appIterationResponse(input: {
   sourceDiffFiles?: AppIterationDiffFile[];
   sourceFiles?: GeneratedAppSourceFileRecord[];
   artifact?: GeneratedAppRuntimeArtifactRecord;
+  llmResult?: AppIterationLLMResult | null;
 }): AppIterationRouteResult & { rollback: AppIterationPlan["rollbackCheckpoint"]; snapshot: unknown; tools: unknown } {
   const preview = derivePreviewRefreshState({
     appId: input.body.appId ?? stableGeneratedAppId(input.draft, input.context),
@@ -2798,15 +2827,26 @@ function appIterationResponse(input: {
     },
   });
 
+  const llmFiles: AppIterationDiffFile[] = (input.llmResult?.files ?? []).map((file) => ({
+    path: file.path,
+    changeType: file.changeType,
+    summary: file.summary,
+    diff: file.diff,
+  }));
+  const baseSummary = input.plan.diffHunks.map((hunk) => hunk.summary).join(" ")
+    || "No generated app changes available for this prompt.";
   return {
     id: `change_${stableHash(`${input.plan.rollbackCheckpoint.checkpointId}:${input.plan.request.requestedChange}`)}`,
     appId: input.body.appId,
     checkpointId: input.body.checkpointId,
     target: input.body.target ?? routeTargetFromPlan(input.plan),
     prompt: input.body.prompt ?? input.plan.request.requestedChange,
-    summary: input.plan.diffHunks.map((hunk) => hunk.summary).join(" ") || "No generated app changes available for this prompt.",
+    summary: input.llmResult?.changedSummary || baseSummary,
     status: input.status,
-    files: mergeIterationDiffFiles(input.plan.diffHunks.map(diffFileFromHunk), input.sourceDiffFiles ?? []),
+    files: mergeIterationDiffFiles(
+      mergeIterationDiffFiles(input.plan.diffHunks.map(diffFileFromHunk), llmFiles),
+      input.sourceDiffFiles ?? [],
+    ),
     sourceDiffFiles: input.sourceDiffFiles ?? [],
     sourceFiles: summarizeGeneratedAppSourceFiles(input.sourceFiles ?? []),
     artifact: {
@@ -3771,6 +3811,18 @@ const CHAT_STEP_DELAY_MS = Number(process.env.TASKLOOM_BUILDER_CHAT_STEP_MS ?? 1
 
 async function emitStep(sse: { writeSSE: (event: { event: string; data: string }) => Promise<void> }, text: string) {
   await sse.writeSSE({ event: "step", data: JSON.stringify({ type: "step", text }) });
+}
+
+async function emitProse(
+  sse: { writeSSE: (event: { event: string; data: string }) => Promise<void> },
+  text: string,
+) {
+  if (!text) return;
+  await sse.writeSSE({ event: "prose", data: JSON.stringify({ type: "prose", text }) });
+}
+
+function llmIsAvailable(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.trim().length > 0);
 }
 
 function chatStreamDelay(): Promise<void> {
