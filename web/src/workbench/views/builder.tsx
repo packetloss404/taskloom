@@ -29,11 +29,11 @@ interface SelectedElement {
   label: string;
 }
 
-const PRESET_OPTIONS: Array<{ id: BuilderModelPresetId; label: string; hint: string }> = [
-  { id: "fast", label: "Lightning", hint: "Low latency" },
-  { id: "smart", label: "Pro", hint: "Best quality" },
-  { id: "cheap", label: "Cheap", hint: "Cost-aware" },
-  { id: "local", label: "Local", hint: "Ollama-first" },
+const PRESET_OPTIONS: Array<{ id: BuilderModelPresetId; label: string; hint: string; friendly: string }> = [
+  { id: "fast", label: "Lightning", hint: "Low latency", friendly: "Fast and cheap. Best for simple drafts and quick iteration" },
+  { id: "smart", label: "Pro", hint: "Best quality", friendly: "Best quality. Uses the most capable model your provider offers" },
+  { id: "cheap", label: "Cheap", hint: "Cost-aware", friendly: "Lowest cost. Good for very small changes" },
+  { id: "local", label: "Local", hint: "Ollama-first", friendly: "Use your own local LLM (Ollama, vLLM, or LM Studio)" },
 ];
 
 type ChatBody =
@@ -671,6 +671,7 @@ export function BuilderView() {
                 data-tour="presets"
                 className="text-silver-400 hover:text-silver-50 px-2 py-1"
                 aria-label="Build options"
+                title="Coming in a future update: pick app vs agent and tweak the model preset"
               >
                 ⚙
               </button>
@@ -853,10 +854,10 @@ export function BuilderView() {
                   const active = composerPreset === p.id;
                   const resolution = providerStatus.data?.presets[p.id] ?? null;
                   const tooltip = resolution
-                    ? `${p.hint} — ${resolution.provider}/${resolution.model}${resolution.local ? " (local)" : ""}`
+                    ? `${p.friendly} — ${resolution.provider}/${resolution.model}${resolution.local ? " (local)" : ""}`
                     : providerStatus.loading
-                      ? `${p.hint} — resolving…`
-                      : `${p.hint} — no provider configured (template fallback)`;
+                      ? `${p.friendly} — resolving…`
+                      : `${p.friendly} — no provider configured (template fallback)`;
                   return (
                     <button
                       key={p.id}
@@ -897,18 +898,19 @@ export function BuilderView() {
           <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div className="tabbar">
               {([
-                { id: "preview", label: "Local preview", icon: "eye" as IconKey },
-                { id: "files", label: "Source", icon: "code" as IconKey, count: state.iteration?.files.length ?? 0 },
-                { id: "smoke", label: "Quality", icon: "shield" as IconKey },
-                { id: "logs", label: "Activity", icon: "activity" as IconKey, count: state.iteration?.logs.length ?? 0 },
-                { id: "sandbox", label: "Runs", icon: "cpu" as IconKey },
-                { id: "checkpoints", label: "Saves", icon: "history" as IconKey, count: checkpoints.length },
-                { id: "publish", label: "Publish", icon: "rocket" as IconKey },
+                { id: "preview", label: "Local preview", icon: "eye" as IconKey, title: "See your app running in a live iframe" },
+                { id: "files", label: "Source", icon: "code" as IconKey, count: state.iteration?.files.length ?? 0, title: "Browse the generated source files" },
+                { id: "smoke", label: "Quality", icon: "shield" as IconKey, title: "TypeScript and build checks for your generated code" },
+                { id: "logs", label: "Activity", icon: "activity" as IconKey, count: state.iteration?.logs.length ?? 0, title: "Streaming logs from the most recent iteration" },
+                { id: "sandbox", label: "Runs", icon: "cpu" as IconKey, title: "Sandbox execution history for this app" },
+                { id: "checkpoints", label: "Saves", icon: "history" as IconKey, count: checkpoints.length, title: "Every approved change is a save you can revert to" },
+                { id: "publish", label: "Publish", icon: "rocket" as IconKey, title: "Generate a Docker Compose bundle to deploy this app" },
               ] as const).map(t => {
                 const Ico = I[t.icon];
                 const tourId = t.id === "preview" ? "preview-tab" : t.id === "checkpoints" ? "checkpoints" : undefined;
                 return (
-                  <div key={t.id} data-tour={tourId} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+                  <div key={t.id} data-tour={tourId} className={`tab ${tab === t.id ? "active" : ""}`} title={t.title} onClick={() => setTab(t.id)}>
+
                     <Ico size={13} style={{ marginRight: 6, verticalAlign: "-2px" }}/>{t.label}
                     {"count" in t && t.count !== undefined && t.count > 0 && (
                       <span className="mono muted" style={{ fontSize: 10.5, marginLeft: 6 }}>· {t.count}</span>
