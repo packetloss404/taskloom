@@ -11,6 +11,7 @@ import type {
 import {
   authorAppViaLLM,
   isSafePath,
+  MAX_FILES_PER_WRITE_CHUNK,
   parsePlan,
   type ResolvedPrompts,
 } from "./llm-author.js";
@@ -347,6 +348,163 @@ test("authorAppViaLLM: retries once when the plan is unparseable, returns null a
     // Neither call included the write_file tool.
     assert.deepEqual(provider.calls[0]?.tools, []);
     assert.deepEqual(provider.calls[1]?.tools, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// authorAppViaLLM: chunked write phase for large plans (>10 files)
+// ---------------------------------------------------------------------------
+
+function makePlan(count: number): Array<{ path: string; purpose: string }> {
+  const out: Array<{ path: string; purpose: string }> = [];
+  for (let i = 0; i < count; i++) {
+    out.push({ path: `src/file${i + 1}.ts`, purpose: `purpose ${i + 1}` });
+  }
+  return out;
+}
+
+function writeCallsForPaths(paths: string[]): ScriptedTurn {
+  const chunks: ScriptedChunk[] = paths.map((p, idx) => ({
+    toolCall: {
+      id: `t-${p}-${idx}`,
+      name: "write_file",
+      input: { path: p, content: `// ${p}\n` },
+    },
+  }));
+  chunks.push({
+    done: true,
+    usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 },
+  });
+  return chunks;
+}
+
+test("authorAppViaLLM: 10-file plan uses single write round (no chunking)", async () => {
+  await withFakeAnthropicKey(async () => {
+    const plan = makePlan(10);
+    const provider = new MockProvider({
+      name: "anthropic",
+      turns: [
+        // Plan phase.
+        [
+          { delta: planJson(plan) },
+          { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } },
+        ],
+        // Single write round emitting all 10 files.
+        writeCallsForPaths(plan.map((p) => p.path)),
+      ],
+    });
+    const router = makeRouterWithProvider(provider);
+    const result = await authorAppViaLLM(
+      "build app",
+      { workspaceId: "w", preset: "fast", router, resolvePrompts: fixedPrompts },
+      () => {},
+    );
+    assert.ok(result);
+    assert.equal(result.files.length, 10);
+    // 1 plan call + 1 write call = 2 total.
+    assert.equal(provider.calls.length, 2);
+    // Sanity check that the constant is what the test assumes.
+    assert.equal(MAX_FILES_PER_WRITE_CHUNK, 8);
+    // The single write call carries the write_file tool.
+    assert.deepEqual(provider.calls[1]?.tools, ["write_file"]);
+    // Files preserve plan order.
+    for (let i = 0; i < 10; i++) {
+      assert.equal(result.files[i]?.path, plan[i]?.path);
+    }
+  });
+});
+
+test("authorAppViaLLM: 15-file plan chunks the write phase into two rounds (8 + 7)", async () => {
+  await withFakeAnthropicKey(async () => {
+    const plan = makePlan(15);
+    const firstChunkPaths = plan.slice(0, 8).map((p) => p.path);
+    const secondChunkPaths = plan.slice(8, 15).map((p) => p.path);
+    const provider = new MockProvider({
+      name: "anthropic",
+      turns: [
+        // Plan phase.
+        [
+          { delta: planJson(plan) },
+          { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } },
+        ],
+        // Write round 1: 8 files.
+        writeCallsForPaths(firstChunkPaths),
+        // Write round 2: 7 files.
+        writeCallsForPaths(secondChunkPaths),
+      ],
+    });
+    const router = makeRouterWithProvider(provider);
+    const result = await authorAppViaLLM(
+      "build big app",
+      { workspaceId: "w", preset: "fast", router, resolvePrompts: fixedPrompts },
+      () => {},
+    );
+    assert.ok(result);
+    assert.equal(result.files.length, 15);
+    // 1 plan call + 2 write calls = 3 total.
+    assert.equal(provider.calls.length, 3);
+    // Both write calls carried the write_file tool.
+    assert.deepEqual(provider.calls[1]?.tools, ["write_file"]);
+    assert.deepEqual(provider.calls[2]?.tools, ["write_file"]);
+    // Combined output preserves plan order.
+    for (let i = 0; i < 15; i++) {
+      assert.equal(result.files[i]?.path, plan[i]?.path);
+    }
+    // Round 1 user prompt mentions only the first chunk's paths.
+    const round1User = provider.calls[1]?.messages.find((m) => m.role === "user");
+    assert.ok(round1User);
+    const round1Text =
+      typeof round1User.content === "string"
+        ? round1User.content
+        : JSON.stringify(round1User.content);
+    for (const p of firstChunkPaths) {
+      assert.match(round1Text, new RegExp(p.replace(/\./g, "\\.")));
+    }
+    // And does NOT mention paths from the second chunk's exclusive set.
+    for (const p of secondChunkPaths) {
+      assert.ok(
+        !round1Text.includes(p),
+        `round 1 prompt should not mention chunk-2 path ${p}`,
+      );
+    }
+  });
+});
+
+test("authorAppViaLLM: chunked write stops early when a chunk emits zero files (partial result)", async () => {
+  await withFakeAnthropicKey(async () => {
+    const plan = makePlan(15);
+    const firstChunkPaths = plan.slice(0, 8).map((p) => p.path);
+    const provider = new MockProvider({
+      name: "anthropic",
+      turns: [
+        // Plan phase.
+        [
+          { delta: planJson(plan) },
+          { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } },
+        ],
+        // Write round 1: 8 files.
+        writeCallsForPaths(firstChunkPaths),
+        // Write round 2: prose only, no tool calls.
+        [
+          { delta: "I have nothing further." },
+          { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } },
+        ],
+      ],
+    });
+    const router = makeRouterWithProvider(provider);
+    const result = await authorAppViaLLM(
+      "build app",
+      { workspaceId: "w", preset: "fast", router, resolvePrompts: fixedPrompts },
+      () => {},
+    );
+    // Orchestrator returns the partial result it accumulated before bail-out.
+    assert.ok(result, "expected non-null result with partial files");
+    assert.equal(result.files.length, 8);
+    for (let i = 0; i < 8; i++) {
+      assert.equal(result.files[i]?.path, plan[i]?.path);
+    }
+    // Plan + 2 write rounds were attempted, then it stopped (no 4th call).
+    assert.equal(provider.calls.length, 3);
   });
 });
 

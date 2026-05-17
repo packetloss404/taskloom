@@ -164,6 +164,25 @@ function defaultPrompts(): ResolvedPrompts {
 }
 
 // =============================================================================
+// Chunking constants
+// =============================================================================
+
+/**
+ * Maximum number of files emitted per write-phase round. When the plan has
+ * more than 10 files, the orchestrator splits the write phase into multiple
+ * rounds, each constrained to this many files, so the model doesn't run out
+ * of output budget (`maxTokens=8192`) or simply forget files mid-stream.
+ */
+export const MAX_FILES_PER_WRITE_CHUNK = 8;
+
+/**
+ * Threshold above which the write phase is chunked. Plans with at most this
+ * many files use the original single-round write phase to keep small-app
+ * generation latency unchanged.
+ */
+const CHUNK_WRITE_THRESHOLD = 10;
+
+// =============================================================================
 // Tool definition
 // =============================================================================
 
@@ -353,17 +372,19 @@ interface WritePhaseResult {
   files: GeneratedFile[];
 }
 
-async function runWritePhase(
-  plan: PlannedFile[],
+/**
+ * Runs a single write-phase round. The caller decides what prompt text to
+ * send (the original single-round prompt for small plans, or a chunk-scoped
+ * prompt for large plans). The tool list and streaming logic are identical
+ * across both call sites; only the user message text differs.
+ */
+async function runSingleWriteRound(
   prompts: ResolvedPrompts,
   resolved: ResolvedProvider,
   options: AuthorAppOptions,
+  userContent: string,
   emit: (chunk: string) => void | Promise<void>,
 ): Promise<WritePhaseResult | null> {
-  const planSummary = plan
-    .map((entry) => `- ${entry.path} — ${entry.purpose}`)
-    .join("\n");
-
   let stream: AsyncIterable<ProviderStreamChunk>;
   try {
     stream = resolved.provider.stream({
@@ -375,7 +396,7 @@ async function runWritePhase(
       ...(options.signal ? { signal: options.signal } : {}),
       messages: [
         { role: "system", content: prompts.systemPrompt },
-        { role: "user", content: prompts.writeUserPrompt(planSummary) },
+        { role: "user", content: userContent },
       ],
       tools: [WRITE_FILE_TOOL],
     });
@@ -429,6 +450,97 @@ async function runWritePhase(
   return { files };
 }
 
+function buildPlanSummary(plan: PlannedFile[]): string {
+  return plan.map((entry) => `- ${entry.path} — ${entry.purpose}`).join("\n");
+}
+
+function buildChunkUserPrompt(chunk: PlannedFile[]): string {
+  const pathList = chunk.map((entry) => entry.path).join(", ");
+  const chunkBullets = chunk
+    .map((entry) => `- ${entry.path} — ${entry.purpose}`)
+    .join("\n");
+  return [
+    `Write these files: ${pathList}. Don't write any other files in this turn.`,
+    "",
+    "For each file below, call the `write_file` tool with its workspace-",
+    "relative path and the COMPLETE file contents.",
+    "",
+    "Files to emit in this turn:",
+    chunkBullets,
+  ].join("\n");
+}
+
+async function runWritePhase(
+  plan: PlannedFile[],
+  prompts: ResolvedPrompts,
+  resolved: ResolvedProvider,
+  options: AuthorAppOptions,
+  emit: (chunk: string) => void | Promise<void>,
+): Promise<WritePhaseResult | null> {
+  const planSummary = buildPlanSummary(plan);
+  return runSingleWriteRound(
+    prompts,
+    resolved,
+    options,
+    prompts.writeUserPrompt(planSummary),
+    emit,
+  );
+}
+
+/**
+ * Chunked write phase used when `plan.length > CHUNK_WRITE_THRESHOLD`. The
+ * plan is split (in plan order) into groups of at most
+ * `MAX_FILES_PER_WRITE_CHUNK` files. Each chunk runs as an independent write
+ * round; results accumulate. If a round emits zero `write_file` calls, the
+ * orchestrator stops early and returns whatever it has so far (partial
+ * result rather than all-or-nothing).
+ */
+async function runWritePhaseChunked(
+  plan: PlannedFile[],
+  prompts: ResolvedPrompts,
+  resolved: ResolvedProvider,
+  options: AuthorAppOptions,
+  emit: (chunk: string) => void | Promise<void>,
+): Promise<WritePhaseResult | null> {
+  const chunks: PlannedFile[][] = [];
+  for (let i = 0; i < plan.length; i += MAX_FILES_PER_WRITE_CHUNK) {
+    chunks.push(plan.slice(i, i + MAX_FILES_PER_WRITE_CHUNK));
+  }
+
+  const accumulated: GeneratedFile[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk) continue;
+    const userContent = buildChunkUserPrompt(chunk);
+    const roundResult = await runSingleWriteRound(
+      prompts,
+      resolved,
+      options,
+      userContent,
+      emit,
+    );
+    if (!roundResult) {
+      // Hard error from the provider stream. Surface as null only if we
+      // haven't accumulated anything yet; otherwise return the partial
+      // result so the caller can still ship what was produced.
+      if (accumulated.length === 0) return null;
+      console.warn(
+        `[llm-author] write chunk ${i + 1}/${chunks.length} stream failed; returning partial result`,
+      );
+      return { files: accumulated };
+    }
+    if (roundResult.files.length === 0) {
+      console.warn(
+        `[llm-author] write chunk ${i + 1}/${chunks.length} emitted 0 files; stopping`,
+      );
+      return { files: accumulated };
+    }
+    accumulated.push(...roundResult.files);
+  }
+
+  return { files: accumulated };
+}
+
 // =============================================================================
 // Public orchestrator
 // =============================================================================
@@ -463,14 +575,25 @@ export async function authorAppViaLLM(
     return null;
   }
 
-  // Phase 2: write.
-  const writeResult = await runWritePhase(
-    planResult.plan,
-    prompts,
-    resolved,
-    options,
-    emit,
-  );
+  // Phase 2: write. For plans up to CHUNK_WRITE_THRESHOLD files we run a
+  // single write round (preserving small-app latency). Larger plans are
+  // chunked across multiple rounds so we don't blow past maxTokens.
+  const writeResult =
+    planResult.plan.length > CHUNK_WRITE_THRESHOLD
+      ? await runWritePhaseChunked(
+          planResult.plan,
+          prompts,
+          resolved,
+          options,
+          emit,
+        )
+      : await runWritePhase(
+          planResult.plan,
+          prompts,
+          resolved,
+          options,
+          emit,
+        );
   if (!writeResult) return null;
   if (writeResult.files.length === 0) {
     console.warn(`[llm-author] model emitted zero write_file calls`);
