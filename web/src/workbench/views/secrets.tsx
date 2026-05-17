@@ -1,5 +1,4 @@
 import { I } from "../icons";
-import { Topbar, PanelHeader } from "../Shell";
 import { AdminToggle } from "./admin-controls";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
@@ -10,12 +9,7 @@ export function SecretsView() {
   const secrets = list.filter(e => e.secret);
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Secrets"]}
-        actions={<button className="top-btn"><I.plus size={13}/> New secret</button>}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">VAULT</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Secrets</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {secrets.length} secret{secrets.length === 1 ? "" : "s"} · {list.length - secrets.length} non-secret env vars · accessed via reference, never returned in plaintext over HTTP.
         </p>
@@ -58,7 +52,6 @@ export function SecretsView() {
           <AdminToggle label="Block reveal in production" sub="Reveal returns reference id only; plaintext never leaves the host" on={true}/>
           <AdminToggle label="Require approval for cross-scope reads" sub="2 reviewers required for workspace → agent secret reads" on={false}/>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

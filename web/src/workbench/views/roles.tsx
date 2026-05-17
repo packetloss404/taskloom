@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { I } from "../icons";
-import { Topbar, PanelHeader } from "../Shell";
+import { PanelHeader } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -58,11 +58,7 @@ export function RolesView() {
   const has = (key: string) => role.grants.includes("*") || role.grants.includes(key);
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Roles & permissions"]}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">ACCESS CONTROL</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Roles & permissions</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {ROLE_TEMPLATES.length} roles · {PERMISSIONS.length} permissions · enforced server-side on every request.
         </p>
@@ -120,7 +116,6 @@ export function RolesView() {
             ))}
           </div>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

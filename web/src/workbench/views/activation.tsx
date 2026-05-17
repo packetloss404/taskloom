@@ -1,5 +1,4 @@
 import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -13,9 +12,7 @@ export function ActivationView() {
   const stage = summary?.stageLabel ?? "onboarding";
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Activation"]}/>
-      <div style={{ padding: "32px 28px", maxWidth: 880 }}>
+    <div style={{ padding: "32px 28px", maxWidth: 880 }}>
         <div className="kicker">ONBOARDING · STAGE: {stage.toUpperCase()}</div>
         <h1 className="h1" style={{ fontSize: 32, marginTop: 6 }}>Get to first value.</h1>
         <p style={{ fontSize: 14.5, color: "var(--silver-300)", marginTop: 6, marginBottom: 22 }}>
@@ -83,7 +80,6 @@ export function ActivationView() {
             decide when to surface advanced features (share tokens, audit log, op runbooks).
           </p>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

@@ -1,5 +1,4 @@
-import { I } from "../icons";
-import { Topbar, PanelHeader } from "../Shell";
+import { PanelHeader } from "../Shell";
 import { useApiData } from "../useApiData";
 import { useWorkbench } from "../WorkbenchContext";
 import { api } from "@/lib/api";
@@ -16,10 +15,7 @@ export function BackupsView() {
   const topology = status.data?.storageTopology;
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Backups & data"]}
-        actions={canManageWorkspace ? <button className="top-btn" onClick={() => { void status.refresh(); }}><I.refresh size={13}/> Refresh</button> : null}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         {!canManageWorkspace ? (
           <div className="card" style={{ padding: 18 }}>
             <div className="h3" style={{ fontSize: 14, marginBottom: 8 }}>Admin access required</div>
@@ -29,8 +25,6 @@ export function BackupsView() {
           </div>
         ) : (
         <>
-        <div className="kicker">DATA PROTECTION</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Backups & restore</h1>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           Backup orchestration is configured per-deployment. The topology and release-evidence reports below come live from the operations status endpoint.
         </p>
@@ -68,7 +62,6 @@ export function BackupsView() {
         </div>
         </>
         )}
-      </div>
-    </>
+    </div>
   );
 }

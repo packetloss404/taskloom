@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api, streamSandboxExec } from "@/lib/api";
 import type {
@@ -88,12 +87,6 @@ export function SandboxView() {
     .sort((a, b) => a - b);
   const median = durations.length > 0 ? durations[Math.floor(durations.length / 2)]! : 0;
 
-  const refreshAll = () => {
-    void status.refresh();
-    void runtimes.refresh();
-    void execs.refresh();
-  };
-
   const startExec = async () => {
     if (!command.trim() || working) return;
     setWorking(true);
@@ -125,20 +118,7 @@ export function SandboxView() {
   };
 
   return (
-    <>
-      <Topbar
-        crumbs={["__WS__", "Sandbox"]}
-        actions={
-          <button className="top-btn" onClick={refreshAll}>
-            <I.refresh size={13} /> Refresh
-          </button>
-        }
-      />
-      <div style={{ padding: "26px 28px", maxWidth: 1320 }}>
-        <div className="kicker">SANDBOX</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>
-          Sandboxed code execution
-        </h1>
+    <div style={{ padding: "26px 28px", maxWidth: 1320 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 18 }}>
           Run commands in a sandboxed runtime. Streams stdout/stderr live.
         </p>
@@ -218,8 +198,7 @@ export function SandboxView() {
             />
           </div>
         )}
-      </div>
-    </>
+    </div>
   );
 }
 
