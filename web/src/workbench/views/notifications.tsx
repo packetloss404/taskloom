@@ -1,5 +1,4 @@
 import { I, type IconKey } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -33,12 +32,7 @@ export function NotificationsView() {
     }));
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Notifications"]}
-        actions={<button className="top-btn" onClick={() => { void alerts.refresh(); }}><I.refresh size={13}/> Refresh</button>}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">ALERTS · ROUTING</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Notifications</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {active} active alert{active === 1 ? "" : "s"} · {list.length} total in window · {channels.length} channel{channels.length === 1 ? "" : "s"} configured.
         </p>
@@ -88,7 +82,6 @@ export function NotificationsView() {
             </tbody>
           </table>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

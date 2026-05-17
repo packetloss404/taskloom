@@ -1,5 +1,3 @@
-import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -10,12 +8,7 @@ export function ReleasesView() {
   const live = releases.filter(r => r.status === "confirmed");
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Releases"]}
-        actions={<button className="top-btn" onClick={() => data.refresh()}><I.refresh size={13}/> Refresh</button>}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">DEPLOYMENTS</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Releases</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {live.length} confirmed release{live.length === 1 ? "" : "s"} · {releases.length} total in history.
         </p>
@@ -62,7 +55,6 @@ export function ReleasesView() {
             </tbody>
           </table>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

@@ -1,5 +1,3 @@
-import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { AdminToggle, AdminField } from "./admin-controls";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
@@ -15,11 +13,7 @@ export function RateLimitsView() {
   for (const p of providers.data ?? []) rows.push({ scope: `Provider · ${p.name}`, status: p.status === "connected" ? "ok" : "warning" });
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Rate limits"]}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">QUOTAS</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Rate limits & quotas</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           Defaults applied per minute and per day · enforced by the distributed limiter · 429 returned on overflow with Retry-After.
         </p>
@@ -64,7 +58,6 @@ export function RateLimitsView() {
             <AdminToggle label="Page on sustained throttle (5 min)" sub="Routes to Notifications · alert.fired" on={false}/>
           </div>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

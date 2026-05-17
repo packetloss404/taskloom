@@ -1,5 +1,5 @@
 import { I } from "../icons";
-import { Topbar, PanelHeader } from "../Shell";
+import { PanelHeader } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -33,12 +33,7 @@ export function BillingView() {
     .slice(0, 6);
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Billing"]}
-        actions={<button className="top-btn" onClick={() => { void usage.refresh(); }}><I.refresh size={13}/> Refresh</button>}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">BILLING & USAGE</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Self-hosted</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           ${totalCost.toFixed(2)} all-time · ${last24h.toFixed(2)} last 24 hours · {totalCalls} provider calls · {memberCount} member{memberCount === 1 ? "" : "s"}.
         </p>
@@ -121,7 +116,6 @@ export function BillingView() {
             </tbody>
           </table>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

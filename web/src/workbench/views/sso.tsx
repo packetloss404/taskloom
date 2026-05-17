@@ -1,5 +1,5 @@
 import { I } from "../icons";
-import { Topbar, PanelHeader } from "../Shell";
+import { PanelHeader } from "../Shell";
 import { AdminToggle } from "./admin-controls";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
@@ -10,11 +10,7 @@ export function SSOView() {
   const configured = ssoEnv.length > 0;
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "SSO & auth"]}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1080 }}>
-        <div className="kicker">AUTHENTICATION</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>SSO & session policy</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1080 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {configured ? `${ssoEnv.length} SSO env var${ssoEnv.length === 1 ? "" : "s"} configured` : "No SSO configuration detected — log in via password until SSO env vars are added."}
         </p>
@@ -68,7 +64,6 @@ export function SSOView() {
             (<span className="mono">TASKLOOM_SESSION_*</span>). They surface here read-only.
           </p>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

@@ -1,5 +1,4 @@
 import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -16,12 +15,7 @@ export function WebhooksView() {
   ];
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Webhooks"]}
-        actions={<button className="top-btn"><I.plus size={13}/> New webhook</button>}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
-        <div className="kicker">INBOUND WEBHOOKS · AGENT TRIGGERS</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Webhooks</h1>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {webhookAgents.length} agent{webhookAgents.length === 1 ? "" : "s"} listening on webhook triggers · signed with HMAC-SHA256, retried with exponential backoff.
         </p>
@@ -62,7 +56,6 @@ export function WebhooksView() {
             ))}
           </div>
         </div>
-      </div>
-    </>
+    </div>
   );
 }

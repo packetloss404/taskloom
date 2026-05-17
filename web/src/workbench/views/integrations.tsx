@@ -1,5 +1,4 @@
 import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 import type { ProviderRecord } from "@/lib/types";
@@ -19,14 +18,7 @@ export function IntegrationsView() {
   }
 
   return (
-    <>
-      <Topbar
-        crumbs={["__WS__", "Providers"]}
-        actions={<button className="top-btn"><I.plus size={13}/> Add provider</button>}
-      />
-      <div style={{ padding: "26px 28px", maxWidth: 1180 }}>
-        <div className="kicker">INTEGRATIONS</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Providers · tools · env</h1>
+    <div style={{ padding: "26px 28px", maxWidth: 1180 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 18 }}>
           {providerList.filter(p => p.status === "connected").length} connected ·{" "}
           {providerList.filter(p => p.status === "missing_key").length} missing key ·{" "}
@@ -86,8 +78,7 @@ export function IntegrationsView() {
             </tbody>
           </table>
         </div>
-      </div>
-    </>
+    </div>
   );
 }
 

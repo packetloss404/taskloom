@@ -1,5 +1,4 @@
-import { I } from "../icons";
-import { Topbar, Stat, PanelHeader } from "../Shell";
+import { Stat, PanelHeader } from "../Shell";
 import { useApiData } from "../useApiData";
 import { useWorkbench } from "../WorkbenchContext";
 import { api } from "@/lib/api";
@@ -24,10 +23,7 @@ export function StorageView() {
   const storeSubsystem = (health.data?.subsystems ?? []).find(s => s.name === "store" || s.name === "managed_pg");
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Admin", "Storage"]}
-        actions={canManageWorkspace ? <button className="top-btn" onClick={() => { void status.refresh(); void health.refresh(); }}><I.refresh size={13}/> Refresh</button> : null}/>
-      <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
+    <div style={{ padding: "26px 28px 60px", maxWidth: 1180 }}>
         {!canManageWorkspace ? (
           <div className="card" style={{ padding: 18 }}>
             <div className="h3" style={{ fontSize: 14, marginBottom: 8 }}>Admin access required</div>
@@ -37,8 +33,6 @@ export function StorageView() {
           </div>
         ) : (
         <>
-        <div className="kicker">STORAGE</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Database & storage</h1>
         <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
           {topology?.engine ?? "—"}
           {topology?.posture ? ` · ${topology.posture}` : ""}
@@ -83,7 +77,6 @@ export function StorageView() {
         </div>
         </>
         )}
-      </div>
-    </>
+    </div>
   );
 }

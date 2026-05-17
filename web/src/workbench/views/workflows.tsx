@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -17,8 +16,6 @@ export function WorkflowsView() {
 
   return (
     <>
-      <Topbar crumbs={["__WS__", "Workflows"]}
-        actions={<><button className="top-btn"><I.share size={13}/> Share</button><button className="top-btn"><I.rocket size={13}/> Confirm release</button></>}/>
       <div className="tabbar">
         {([
           { id: "brief", label: "Brief" },

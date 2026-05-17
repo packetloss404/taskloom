@@ -1,5 +1,4 @@
 import { I } from "../icons";
-import { Topbar } from "../Shell";
 import { useApiData } from "../useApiData";
 import { api } from "@/lib/api";
 
@@ -47,12 +46,7 @@ export function OperationsView() {
   const jobList: JobMetricEntry[] = Array.isArray(jobs.data) ? jobs.data : jobs.data?.history ?? [];
 
   return (
-    <>
-      <Topbar crumbs={["__WS__", "Operations"]}
-        actions={<button className="top-btn" onClick={() => { void health.refresh(); void alerts.refresh(); void jobs.refresh(); }}><I.refresh size={13}/> Refresh</button>}/>
-      <div style={{ padding: "26px 28px", maxWidth: 1200 }}>
-        <div className="kicker">OPERATIONS</div>
-        <h1 className="h1" style={{ fontSize: 28, marginTop: 4, marginBottom: 4 }}>Health · alerts · jobs</h1>
+    <div style={{ padding: "26px 28px", maxWidth: 1200 }}>
         <p className="muted" style={{ fontSize: 13, marginBottom: 18 }}>
           {okCount} of {subsystems.length || "—"} subsystems healthy · {activeAlerts} active alert{activeAlerts === 1 ? "" : "s"}
         </p>
@@ -122,7 +116,6 @@ export function OperationsView() {
             </div>
           </div>
         </div>
-      </div>
-    </>
+    </div>
   );
 }
