@@ -55,10 +55,37 @@ function makeStreamingProvider(toolInput: Record<string, unknown> | null, prose:
   });
 }
 
-test("applyAppIterationViaLLM returns null when no API key and no provider override is set", async () => {
-  const original = process.env.ANTHROPIC_API_KEY;
-  delete process.env.ANTHROPIC_API_KEY;
+const PROVIDER_KEY_ENV = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "MINIMAX_API_KEY",
+  "GEMINI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "TASKLOOM_PROVIDER_PRIORITY",
+] as const;
+
+async function withNoProviderKeys(body: () => Promise<void>): Promise<void> {
+  const originals: Partial<Record<string, string | undefined>> = {};
+  for (const key of PROVIDER_KEY_ENV) {
+    originals[key] = process.env[key];
+    delete process.env[key];
+  }
+  // Force ollama out of consideration by setting an explicit priority that
+  // excludes it. The resolver assumes ollama is always reachable otherwise.
+  process.env.TASKLOOM_PROVIDER_PRIORITY = "anthropic,openai,minimax,gemini,openrouter";
   try {
+    await body();
+  } finally {
+    for (const key of PROVIDER_KEY_ENV) {
+      const original = originals[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  }
+}
+
+test("applyAppIterationViaLLM returns null when no provider key and no provider override is set", async () => {
+  await withNoProviderKeys(async () => {
     const result = await applyAppIterationViaLLM(
       draftFixture(),
       { kind: "page", path: "/login" },
@@ -66,10 +93,7 @@ test("applyAppIterationViaLLM returns null when no API key and no provider overr
       { workspaceId: "ws-1" },
     );
     assert.equal(result, null);
-  } finally {
-    if (original === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = original;
-  }
+  });
 });
 
 test("applyAppIterationViaLLM streams prose deltas and parses the tool_use diff when an injected provider is used", async () => {

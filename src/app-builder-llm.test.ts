@@ -98,13 +98,37 @@ function streamingClient(opts: {
   };
 }
 
-function withTempEnv(key: string, value: string | undefined, body: () => Promise<void>): Promise<void> {
-  const original = process.env[key];
-  if (value === undefined) delete process.env[key];
-  else process.env[key] = value;
+/**
+ * Clear every provider key the preset resolver knows about. Tests that assert
+ * "no provider configured → null" must scrub all of them, otherwise the
+ * resolver would pick a different provider and the assertion would flap on
+ * developer machines that happen to have e.g. OPENAI_API_KEY set.
+ */
+const PROVIDER_KEY_ENV = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "MINIMAX_API_KEY",
+  "GEMINI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "TASKLOOM_PROVIDER_PRIORITY",
+] as const;
+
+function withNoProviderKeys(body: () => Promise<void>): Promise<void> {
+  const originals: Partial<Record<string, string | undefined>> = {};
+  for (const key of PROVIDER_KEY_ENV) {
+    originals[key] = process.env[key];
+    delete process.env[key];
+  }
+  // Force ollama to be considered "not configured" too: the resolver assumes
+  // ollama is always reachable, so we shadow it by setting a priority list that
+  // excludes it. This keeps the "no provider configured" assertion pure.
+  process.env.TASKLOOM_PROVIDER_PRIORITY = "anthropic,openai,minimax,gemini,openrouter";
   return body().finally(() => {
-    if (original === undefined) delete process.env[key];
-    else process.env[key] = original;
+    for (const key of PROVIDER_KEY_ENV) {
+      const original = originals[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
   });
 }
 
@@ -117,8 +141,8 @@ test("modelForPreset maps presets to Anthropic models", () => {
   assert.equal(modelForPreset("smart", "claude-opus-4-7"), "claude-opus-4-7");
 });
 
-test("generateAppDraftViaLLM returns null when no ANTHROPIC_API_KEY is configured", async () => {
-  await withTempEnv("ANTHROPIC_API_KEY", undefined, async () => {
+test("generateAppDraftViaLLM returns null when no provider key is configured", async () => {
+  await withNoProviderKeys(async () => {
     const emitted: string[] = [];
     const result = await generateAppDraftViaLLM(
       "Build a CRM for sales teams to track leads and deals.",
@@ -131,7 +155,7 @@ test("generateAppDraftViaLLM returns null when no ANTHROPIC_API_KEY is configure
 });
 
 test("generateAppDraftWithLLM falls back to the template generator when no key is configured", async () => {
-  await withTempEnv("ANTHROPIC_API_KEY", undefined, async () => {
+  await withNoProviderKeys(async () => {
     const emitted: string[] = [];
     const { draft, source } = await generateAppDraftWithLLM(
       "Build a CRM for sales teams to track leads and deals.",

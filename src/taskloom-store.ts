@@ -624,7 +624,7 @@ export interface ProviderCallRecord {
   id: string;
   workspaceId: string;
   routeKey: string;
-  provider: "anthropic" | "openai" | "minimax" | "ollama" | "stub";
+  provider: "anthropic" | "openai" | "minimax" | "ollama" | "gemini" | "openrouter" | "stub";
   model: string;
   promptTokens: number;
   completionTokens: number;

@@ -75,6 +75,29 @@ export class ProviderRouter {
   has(name: ProviderName): boolean {
     return this.providers.get(name) !== undefined && (name === "stub" || this.providers.get(name) !== this.providers.get("stub"));
   }
+
+  /**
+   * Returns the set of provider names currently registered (excluding the
+   * always-present "stub" fallback). Useful for resolvers that need to know
+   * which providers are even candidates before checking env credentials.
+   */
+  registeredProviders(): ProviderName[] {
+    const out: ProviderName[] = [];
+    for (const name of this.providers.keys()) {
+      if (name !== "stub") out.push(name);
+    }
+    return out;
+  }
+
+  /**
+   * Returns the live `LLMProvider` instance for `name`, or `undefined` if it
+   * isn't registered. Callers that need to drive a provider directly (e.g.
+   * after the preset resolver picked one) use this to grab the instance the
+   * router would otherwise dispatch to.
+   */
+  get(name: ProviderName): LLMProvider | undefined {
+    return this.providers.get(name);
+  }
 }
 
 let defaultRouter: ProviderRouter | null = null;

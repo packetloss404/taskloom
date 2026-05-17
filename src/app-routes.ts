@@ -228,6 +228,7 @@ appRoutes.get("/app/integration-marketplace", async (c) => integrationMarketplac
 appRoutes.get("/app/integrations/marketplace", async (c) => integrationMarketplace(c));
 appRoutes.get("/app/model-routing-presets", async (c) => modelRoutingPresets(c));
 appRoutes.get("/app/llm/routing-presets", async (c) => modelRoutingPresets(c));
+appRoutes.get("/app/builder/providers/status", async (c) => builderProviderStatus(c));
 appRoutes.post("/app/llm/test", async (c) => integrationSandboxTest(c, "model_provider"));
 appRoutes.post("/app/tools/browser/test", async (c) => integrationSandboxTest(c, "browser"));
 appRoutes.post("/app/integrations/:kind/test", async (c) => integrationSandboxTest(c, connectorForIntegrationTestKind(c.req.param("kind"))));
@@ -238,6 +239,27 @@ async function integrationMarketplace(c: Context) {
     await requireWorkspacePermission(context, "viewWorkspace");
     const readiness = await getIntegrationReadinessAsync(context);
     return c.json({ marketplace: buildIntegrationMarketplace({ readiness, env: process.env }) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+async function builderProviderStatus(c: Context) {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "viewWorkspace");
+    // Lazy-import to avoid a circular dep between app-routes and provider
+    // bootstrap (which itself imports route-adjacent modules in some setups).
+    const { registerDefaultProviders } = await import("./providers/bootstrap.js");
+    const { snapshotPresetResolutions, availableProviders } = await import("./providers/preset-resolver.js");
+    registerDefaultProviders();
+    const snapshot = snapshotPresetResolutions();
+    const available = availableProviders();
+    return c.json({
+      presets: snapshot,
+      availableProviders: available,
+      priority: process.env.TASKLOOM_PROVIDER_PRIORITY ?? null,
+    });
   } catch (error) {
     return errorResponse(c, error);
   }

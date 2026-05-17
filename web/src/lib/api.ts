@@ -11,6 +11,7 @@ import type {
   GeneratedAppSummary,
   BuilderModelPreset,
   BuilderModelPresetId,
+  BuilderProviderStatusPayload,
   AppBuilderApproveResult,
   AppBuilderApplyStatus,
   AppBuilderChangeSetResult,
@@ -360,6 +361,8 @@ export const api = {
           : preset.primary?.blockers[0] ?? "Needs provider setup before this preset can use a live model.",
       })),
     ),
+  getBuilderProviderStatus: () =>
+    j<BuilderProviderStatusPayload>("/api/app/builder/providers/status"),
   listProviders: () => j<{ providers: ProviderRecord[] }>("/api/app/providers").then((payload) => payload.providers),
   createProvider: (body: SaveProviderInput) =>
     j<{ provider: ProviderRecord }>("/api/app/providers", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.provider),
