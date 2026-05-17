@@ -11,7 +11,10 @@ These items are complete and shipped to `main`. They are kept here for traceabil
 - **Full-bleed Builder.** `/builder` is now its own route outside the workbench Shell, with a chat thread, streamed prose, and a split preview. The Topbar no longer leaks into the builder.
 - **Admin consolidation.** Sixteen operator surfaces (Roles, SSO, Secrets, Rate limits, Webhooks, Releases, Storage, Backups, Notifications, Operations, Integrations, Activation, Sandbox, Workflows, Billing, Alerts) live under a single tabbed `/admin/:tab` page. Back-compat redirects keep the old per-page URLs working.
 - **Sidebar collapsed to four items.** Build, Projects, Runs, Admin. Removes the long secondary nav that competed with the Builder.
-- **LLM wire-up via Anthropic.** Both `generateAppDraftViaLLM` and `applyAppIterationViaLLM` call `AnthropicProvider`; iteration emits a real SSE prose stream. Template-only generation is the documented fallback when no key is set. Multi-provider routing for the builder draft path is still planned (see Phase 3 Track A below).
+- **LLM wire-up via `ProviderRouter`.** Both `generateAppDraftViaLLM` and `applyAppIterationViaLLM` now route through `ProviderRouter`; iteration emits a real SSE prose stream. Template-only generation is the documented fallback when no provider is configured.
+- **Six-provider BYOK at the builder.** Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM provider (Ollama / vLLM / LM Studio / llama.cpp) are first-class. Anthropic remains the default; `TASKLOOM_PROVIDER_PRIORITY` re-orders the priority walk for every preset; the `local` preset is strict.
+- **Remote-pointable local LLM.** `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_API_FORMAT` (`ollama` | `openai`), and `LOCAL_LLM_MODEL` let the local provider talk to a separate GPU box on the LAN. `OLLAMA_BASE_URL` is honored as a legacy synonym.
+- **Preset → provider+model resolver with env override.** `src/providers/preset-resolver.ts` walks per-preset priority lists, respects `TASKLOOM_PROVIDER_PRIORITY`, and surfaces the resolved provider+model on Builder UI chips. `GET /api/app/builder/providers/status` exposes the resolution snapshot for ops verification.
 - **Sentence case copy.** The uppercase kicker / eyebrow pattern is gone across the workbench. Section labels are sentence case.
 - **Hide raw IDs.** IDs are now behind a Details disclosure rather than rendered in primary copy.
 - **Per-message revert in chat.** Each chat message in the Builder has a revert affordance back to the prior checkpoint.
@@ -27,14 +30,14 @@ These items are complete and shipped to `main`. They are kept here for traceabil
 
 These items are not yet done. They are organized by product outcome.
 
-### Multi-provider BYOK (Phase 3 Track A)
+### Multi-provider BYOK — remaining work (Phase 3 Track A)
 
-- Route `generateAppDraftViaLLM` + `applyAppIterationViaLLM` through `ProviderRouter` instead of straight to `AnthropicProvider`.
-- Add a model-preset → provider+model resolver (cheap / fast / smart / top) that picks based on configured env, with local providers preferred when present.
+The router, preset resolver, and six adapters are shipped (see "Done in this pass"). What remains:
+
 - Per-provider policy layer: local providers default to single-file tool calls + multi-turn iteration; hosted providers default to multi-file per turn.
 - XGrammar / structured-decoding support when the provider is vLLM; best-effort JSON parsing fallback elsewhere.
 - One-shot retry-with-correction loop for malformed tool_use input.
-- Gemini and OpenRouter adapters (Phase 3.5 — streaming and capability-matrix quirks make them their own chunk).
+- Vault-storage support for Gemini and OpenRouter keys (today they are env-only; see the `VAULT_PROVIDERS` guard in `src/providers/bootstrap.ts`).
 
 ### File-tree as source of truth (Phase 3 Track B)
 
