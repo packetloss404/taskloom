@@ -1,8 +1,18 @@
 # Taskloom
 
-**Self-hosted, open-source app and agent workbench. Describe what you need, preview it locally, own the runtime.**
+**Self-hosted, open-source workbench for building internal apps and agents. Bring your own LLM key, own your runtime, own your source code.**
 
-Taskloom is an OSS, self-hosted workbench for building internal apps and agents from plain-language prompts. Sign in, open `/builder`, describe an internal tool or agent, get a brief, plan, generated source files, and a saved local preview, iterate with scoped change prompts, then create a local publish package and URL handoff for the workspace you operate. Bring your own model keys (Anthropic, OpenAI, MiniMax, Ollama). MIT licensed. No telemetry.
+Taskloom is a self-hosted, open-source workbench for building internal apps and agents. You bring your own LLM key (Anthropic, OpenAI, MiniMax, or local Ollama), your own deploy target, and you keep full ownership of the generated source code. No vendor lock-in, no per-seat pricing, no cloud dependency, no telemetry.
+
+Sign in, open `/builder`, describe an internal tool or agent, get a brief, plan, generated source files, and a saved local preview. Iterate with scoped change prompts, then create a local publish package and URL handoff for the workspace you operate. MIT licensed.
+
+## How it compares
+
+Taskloom is not trying to match hosted AI app builders (twin.so, Replit Agents, Lovable, v0, anything.com) feature-for-feature. It is a different category — a self-host workbench, not a hosted SaaS — and the tradeoffs are deliberate.
+
+- **What self-host gives up.** No free public subdomain with auto TLS (you bring your own DNS and certificate). No pre-wired OAuth connectors (you register your own OAuth clients with each provider). No one-click App Store / Play Store submission (no managed macOS build farm). No hosted browser-agent farm with persistent sessions. No cross-tenant user memory. No vendor-hosted credit meter.
+- **What self-host gains.** Your data, your source code, your LLM key, and your deploy target — all on infrastructure you own. No vendor in the path between you and your customers. No per-seat pricing. No rate limits beyond what your own LLM provider imposes on your own key. Single MIT-licensed binary that runs anywhere Node 22 runs — laptop, container, VPS, homelab, behind a VPN.
+- **Honest about the gap.** The deferred hosted-only capabilities and what a future "Taskloom Cloud" product would need to ship them are inventoried in [CLOUD.md](CLOUD.md). That document is for strategic reference, not a roadmap commitment — self-host stays the default.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue.svg)](https://github.com/packetloss404/taskloom/releases)
@@ -17,6 +27,8 @@ Taskloom is an OSS, self-hosted workbench for building internal apps and agents 
 
 ## Project docs
 
+- [docs/SELF_HOST.md](docs/SELF_HOST.md) is the canonical setup guide: prerequisites, 5-minute quick start, BYO-LLM-key configuration, and Docker-Compose deploy.
+- [CLOUD.md](CLOUD.md) inventories the hosted-only capabilities Taskloom intentionally does not ship as self-host, and what a hypothetical Taskloom Cloud product would need to ship them.
 - [CHANGELOG.md](CHANGELOG.md) records notable product and platform changes.
 - [BACKLOG.md](BACKLOG.md) tracks the remaining builder-first work needed before Taskloom can credibly present itself as an open-source alternative to hosted app/agent builders.
 - [dev/TESTING.md](dev/TESTING.md) covers local verification and release checks.
@@ -24,11 +36,11 @@ Taskloom is an OSS, self-hosted workbench for building internal apps and agents 
 
 ## Why Taskloom
 
-Most prompt-to-app builders are hosted SaaS that own your data, your runtime, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, or behind your VPN. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, and audit included.
+Most prompt-to-app builders are hosted SaaS that own your data, your runtime, your model relationships, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, behind your VPN, or on a colo box you own. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, and audit included.
 
-If you have used v0, Bolt, Lovable, Replit Agents, or Base44 and wished the workbench and runtime were easier to self-host, Taskloom is pointed in that direction. It is not claiming hosted-builder feature parity; the current focus is local generation, preview, validation, and self-host handoff.
+This is a deliberate category split. If a free public URL, pre-wired OAuth connectors, a hosted browser farm, or one-click App Store submission is what you actually need, a hosted vendor will serve you better — those features are structurally easier when a vendor owns the runtime. See [CLOUD.md](CLOUD.md) for a full inventory of what self-host gives up. If instead you want to own your data, your source code, and your LLM key end-to-end with no vendor in the path, Taskloom is built for that.
 
-## Quick start
+## Getting started
 
 ```bash
 git clone https://github.com/packetloss404/taskloom.git
@@ -50,6 +62,19 @@ For a built-and-served run on a single port (`8484`):
 npm run build:web
 npm start
 ```
+
+### Bring your own LLM key
+
+Taskloom does not ship with a bundled LLM key. The builder needs one to turn open-ended prompts into briefs, plans, and source files; without a key it falls back to deterministic template-only generation. Configure a provider in one of two ways:
+
+- **In the workbench** — open the **Providers** view and paste a key. It is stored in the encrypted secrets vault (AES-256-GCM at rest), never logged.
+- **As an environment variable** — copy `.env.example` to `.env` and set one of:
+  - `ANTHROPIC_API_KEY=sk-ant-...` (recommended default; targets `claude-sonnet-4-6`; see https://docs.claude.com/en/api)
+  - `OPENAI_API_KEY=sk-...`
+  - `OLLAMA_BASE_URL=http://localhost:11434` (fully local; recommend `qwen2.5-coder:32b` or `llama3.1:70b`)
+  - `MINIMAX_API_KEY=...`
+
+Configure only the providers you actually use. See [docs/SELF_HOST.md](docs/SELF_HOST.md) for the full BYO-key walkthrough, model recommendations, and the template-only fallback behavior.
 
 ### First 10 minutes: self-host path
 
@@ -188,7 +213,7 @@ Generated `web/dist/` is gitignored; rebuild locally rather than committing it.
 - **Publish is a handoff.** The publish surface records package metadata, artifact manifests, validation state, compose guidance, history, and rollback targets. Operators still run the self-hosted runtime and networking.
 - **Generated source is real but intentionally narrow.** The builder writes a generated React/Vite CRUD bundle, seed data, schema, API helper, and migration starter. It is not yet a full hosted IDE with arbitrary repo editing or per-app package installation.
 - **Sandbox smoke is opt-in.** Docker-backed smoke checks require Docker and `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`; otherwise statuses should remain explicit about pending, blocked, or fallback checks.
-- **No hosted SaaS parity claim.** Taskloom is not Replit, v0, Bolt, Lovable, or Anything. It is a self-host-first engine with an expanding builder loop.
+- **Self-host is the category, not a step toward hosted.** Taskloom is not pursuing parity with Replit, v0, Bolt, Lovable, or anything.com. Hosted-only capabilities (free public subdomain, pre-wired OAuth, managed App Store submission, hosted browser farm) are inventoried in [CLOUD.md](CLOUD.md) and intentionally out of scope.
 
 ### SQLite mode
 

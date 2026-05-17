@@ -56,6 +56,8 @@ It is intentionally not a phase list. Items are grouped by product outcome so we
 
 ## Later, Not MVP
 
+> Hosted-only capabilities (managed deploy with free public subdomain, hosted browser-agent farm, one-click App Store / Play submission, hosted OAuth proxy with pre-wired connectors, cross-tenant user memory, shareable / remixable conversation URLs, managed credit meter) are intentionally out of scope for self-host. See [CLOUD.md](CLOUD.md) for the inventory and what a hypothetical Taskloom Cloud product would need to ship them.
+
 - Collaborative multiplayer editing.
 - Hosted cloud deployment managed by Taskloom.
 - Full browser IDE with arbitrary repo editing.
