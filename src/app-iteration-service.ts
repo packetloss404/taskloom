@@ -1,6 +1,83 @@
+import { AnthropicProvider } from "./providers/anthropic.js";
+import type { ProviderStreamChunk } from "./providers/types.js";
+
 export type AppIterationTargetKind = "page" | "api" | "data" | "auth" | "config";
 export type AppIterationAction = "add" | "update" | "remove";
 export type AppIterationRiskSeverity = "low" | "medium" | "high";
+
+export type AppIterationPresetId = "fast" | "smart" | "cheap" | "local";
+
+export interface AppIterationLLMOptions {
+  workspaceId: string;
+  preset?: AppIterationPresetId;
+  signal?: AbortSignal;
+  provider?: AnthropicProvider;
+}
+
+export interface AppIterationLLMResult {
+  changedSummary: string;
+  files: Array<{
+    path: string;
+    changeType: "added" | "modified" | "deleted" | "renamed";
+    summary: string;
+    diff: string;
+  }>;
+  prose: string;
+  model: string;
+}
+
+const PRESET_TO_MODEL: Record<AppIterationPresetId, string> = {
+  cheap: "claude-haiku-4-5-20251001",
+  fast: "claude-haiku-4-5-20251001",
+  smart: "claude-sonnet-4-6",
+  local: "claude-sonnet-4-6",
+};
+const DEFAULT_LLM_MODEL = "claude-sonnet-4-6";
+
+const ITERATION_SYSTEM_PROMPT = [
+  "You are Taskloom's app-builder iteration assistant.",
+  "Given a current app draft (pages, API routes, data entities, auth, config) and a user iteration prompt,",
+  "produce a concrete change set as a tool call to `submit_iteration_diff`.",
+  "",
+  "Constraints:",
+  "- Only emit changes that are clearly implied by the user prompt.",
+  "- Each file entry must include a stable path under the generated app (e.g. `app/pages/<slug>.tsx`, `app/api/<route>.ts`, `app/data/<entity>.ts`).",
+  "- `changeType` is one of: added, modified, deleted, renamed.",
+  "- `diff` should be a short unified-diff style snippet describing the intent of the change (it does not need to be byte-perfect).",
+  "- `changedSummary` is a single sentence describing the overall change.",
+  "",
+  "Before calling the tool, narrate what you plan to do as plain prose text (one short paragraph).",
+  "Then call `submit_iteration_diff` exactly once.",
+].join("\n");
+
+const ITERATION_TOOL_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    changedSummary: {
+      type: "string",
+      description: "Single-sentence summary of the change.",
+    },
+    files: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path of the generated source file." },
+          changeType: {
+            type: "string",
+            enum: ["added", "modified", "deleted", "renamed"],
+          },
+          summary: { type: "string", description: "One-line description of this file change." },
+          diff: { type: "string", description: "Unified-diff style snippet describing the change." },
+        },
+        required: ["path", "changeType", "summary", "diff"],
+      },
+    },
+  },
+  required: ["changedSummary", "files"],
+};
+
+const ITERATION_TOOL_NAME = "submit_iteration_diff";
 
 export interface AppIterationTargetInput {
   kind?: AppIterationTargetKind;
@@ -874,4 +951,132 @@ function redactSecrets(value: string): string {
 
 function removeUndefined<T extends Record<string, unknown>>(record: T): T {
   return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
+}
+
+function resolveIterationModel(preset: AppIterationPresetId | undefined): string {
+  if (!preset) return DEFAULT_LLM_MODEL;
+  return PRESET_TO_MODEL[preset] ?? DEFAULT_LLM_MODEL;
+}
+
+function hasAnthropicCredentials(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.trim().length > 0);
+}
+
+function buildIterationUserMessage(
+  draft: GeneratedAppDraftLike,
+  target: AppIterationTargetInput | undefined,
+  prompt: string,
+): string {
+  const draftSummary = JSON.stringify(draft, null, 2);
+  const targetSummary = target ? JSON.stringify(target) : "null";
+  return [
+    "Current app draft (truncated/normalized):",
+    "```json",
+    draftSummary.length > 8000 ? `${draftSummary.slice(0, 8000)}\n…[truncated]` : draftSummary,
+    "```",
+    "",
+    `Target (may be null): ${targetSummary}`,
+    "",
+    `User iteration prompt: ${prompt}`,
+  ].join("\n");
+}
+
+/**
+ * Streams a real Anthropic Messages call to produce an iteration diff.
+ * Returns `null` if no API key is available or the LLM produced no tool call,
+ * so callers can fall back to the deterministic regex pipeline.
+ *
+ * `emit` receives text-delta chunks as plain prose; it is invoked many times
+ * during streaming.
+ */
+export async function applyAppIterationViaLLM(
+  draft: GeneratedAppDraftLike,
+  target: AppIterationTargetInput | undefined,
+  prompt: string,
+  options: AppIterationLLMOptions,
+  emit?: (chunk: string) => void | Promise<void>,
+): Promise<AppIterationLLMResult | null> {
+  if (!options.provider && !hasAnthropicCredentials()) {
+    return null;
+  }
+
+  const provider = options.provider ?? new AnthropicProvider();
+  const model = resolveIterationModel(options.preset);
+  const userMessage = buildIterationUserMessage(draft, target, prompt);
+
+  const stream = provider.stream({
+    model,
+    workspaceId: options.workspaceId,
+    routeKey: "workflow.draft",
+    maxTokens: 4096,
+    temperature: 0.2,
+    signal: options.signal,
+    messages: [
+      { role: "system", content: ITERATION_SYSTEM_PROMPT },
+      { role: "user", content: userMessage },
+    ],
+    tools: [{
+      name: ITERATION_TOOL_NAME,
+      description: "Emit the final iteration diff with file-level changes.",
+      inputSchema: ITERATION_TOOL_SCHEMA,
+    }],
+  });
+
+  const proseChunks: string[] = [];
+  let toolInput: Record<string, unknown> | null = null;
+  let errored = false;
+
+  try {
+    for await (const chunk of stream as AsyncIterable<ProviderStreamChunk>) {
+      if (chunk.error) {
+        errored = true;
+        break;
+      }
+      if (chunk.delta) {
+        proseChunks.push(chunk.delta);
+        if (emit) {
+          try { await emit(chunk.delta); } catch { /* swallow emit errors */ }
+        }
+      }
+      if (chunk.toolCall && chunk.toolCall.name === ITERATION_TOOL_NAME) {
+        toolInput = chunk.toolCall.input;
+      }
+    }
+  } catch {
+    errored = true;
+  }
+
+  if (errored || !toolInput) return null;
+
+  const files = Array.isArray(toolInput.files)
+    ? (toolInput.files as Array<Record<string, unknown>>)
+        .map((entry) => normalizeLLMFile(entry))
+        .filter((entry): entry is AppIterationLLMResult["files"][number] => entry !== null)
+    : [];
+
+  if (files.length === 0) return null;
+
+  return {
+    changedSummary: typeof toolInput.changedSummary === "string" && toolInput.changedSummary.trim().length > 0
+      ? toolInput.changedSummary.trim()
+      : `LLM iteration for ${target?.kind ?? "app"}`,
+    files,
+    prose: proseChunks.join(""),
+    model,
+  };
+}
+
+function normalizeLLMFile(entry: Record<string, unknown>): AppIterationLLMResult["files"][number] | null {
+  const path = typeof entry.path === "string" ? entry.path.trim() : "";
+  if (!path) return null;
+  const allowedTypes = new Set(["added", "modified", "deleted", "renamed"]);
+  const changeType = typeof entry.changeType === "string" && allowedTypes.has(entry.changeType)
+    ? entry.changeType as AppIterationLLMResult["files"][number]["changeType"]
+    : "modified";
+  return {
+    path,
+    changeType,
+    summary: typeof entry.summary === "string" ? entry.summary : `Update ${path}`,
+    diff: typeof entry.diff === "string" ? entry.diff : "",
+  };
 }
