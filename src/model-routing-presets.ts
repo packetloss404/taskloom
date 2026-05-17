@@ -90,6 +90,13 @@ const PROVIDERS: Record<ProviderKind, ProviderDefinition> = {
     modelEnv: ["OLLAMA_MODEL", "TASKLOOM_OLLAMA_MODEL"],
     requiredEnv: ["OLLAMA_BASE_URL"],
   },
+  gemini: {
+    provider: "gemini",
+    defaultModel: "gemini-2.0-flash-exp",
+    keyEnv: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+    modelEnv: ["GEMINI_MODEL", "TASKLOOM_GEMINI_MODEL"],
+    requiredEnv: ["GOOGLE_API_KEY"],
+  },
   custom: {
     provider: "custom",
     defaultModel: "custom-chat",
@@ -110,28 +117,28 @@ const PRESETS: Array<{
     id: "fast",
     label: "Fast",
     goal: "Low-latency drafts, summaries, and interactive agent turns.",
-    preference: ["openai", "azure_openai", "minimax", "anthropic", "ollama", "custom"],
+    preference: ["openai", "gemini", "azure_openai", "minimax", "anthropic", "ollama", "custom"],
     envHints: ["TASKLOOM_MODEL_PRESET_FAST", "TASKLOOM_FAST_MODEL"],
   },
   {
     id: "smart",
     label: "Smart",
     goal: "Heavier reasoning, review, and planning work where quality matters most.",
-    preference: ["anthropic", "openai", "azure_openai", "minimax", "custom", "ollama"],
+    preference: ["anthropic", "gemini", "openai", "azure_openai", "minimax", "custom", "ollama"],
     envHints: ["TASKLOOM_MODEL_PRESET_SMART", "TASKLOOM_SMART_MODEL"],
   },
   {
     id: "cheap",
     label: "Cheap",
     goal: "High-volume background work with cost-aware hosted fallbacks.",
-    preference: ["openai", "minimax", "ollama", "azure_openai", "anthropic", "custom"],
+    preference: ["gemini", "openai", "minimax", "ollama", "azure_openai", "anthropic", "custom"],
     envHints: ["TASKLOOM_MODEL_PRESET_CHEAP", "TASKLOOM_CHEAP_MODEL"],
   },
   {
     id: "local",
     label: "Local",
     goal: "Private local development first, with hosted providers only as fallback.",
-    preference: ["ollama", "openai", "anthropic", "minimax", "azure_openai", "custom"],
+    preference: ["ollama", "openai", "anthropic", "gemini", "minimax", "azure_openai", "custom"],
     envHints: ["TASKLOOM_MODEL_PRESET_LOCAL", "TASKLOOM_LOCAL_MODEL"],
   },
 ];
@@ -360,9 +367,9 @@ function hasValue(value: string | undefined): boolean {
 }
 
 function isProviderKind(value: string): value is ProviderKind {
-  return value === "openai" || value === "anthropic" || value === "minimax" || value === "azure_openai" || value === "ollama" || value === "custom";
+  return value === "openai" || value === "anthropic" || value === "minimax" || value === "azure_openai" || value === "ollama" || value === "gemini" || value === "custom";
 }
 
 function isApiKeyProvider(value: ProviderKind): value is ApiKeyProvider {
-  return value === "openai" || value === "anthropic" || value === "minimax" || value === "ollama";
+  return value === "openai" || value === "anthropic" || value === "minimax" || value === "ollama" || value === "gemini";
 }

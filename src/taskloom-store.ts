@@ -512,7 +512,7 @@ export interface GeneratedAppRecord {
   updatedAt: string;
 }
 
-export type ProviderKind = "openai" | "anthropic" | "minimax" | "azure_openai" | "ollama" | "custom";
+export type ProviderKind = "openai" | "anthropic" | "minimax" | "azure_openai" | "ollama" | "gemini" | "custom";
 export type ProviderStatus = "connected" | "missing_key" | "disabled";
 
 export interface ProviderRecord {
@@ -605,7 +605,7 @@ export interface WorkspaceEnvVarRecord {
   updatedAt: string;
 }
 
-export type ApiKeyProvider = "anthropic" | "openai" | "minimax" | "ollama";
+export type ApiKeyProvider = "anthropic" | "openai" | "minimax" | "ollama" | "gemini";
 
 export interface ApiKeyRecord {
   id: string;
@@ -624,7 +624,7 @@ export interface ProviderCallRecord {
   id: string;
   workspaceId: string;
   routeKey: string;
-  provider: "anthropic" | "openai" | "minimax" | "ollama" | "stub";
+  provider: "anthropic" | "openai" | "minimax" | "ollama" | "gemini" | "stub";
   model: string;
   promptTokens: number;
   completionTokens: number;

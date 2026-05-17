@@ -6,6 +6,7 @@ import type {
   ProviderStreamChunk,
 } from "./types.js";
 import { StubProvider } from "./stub.js";
+import { GEMINI_DEFAULT_MODELS, readGeminiEnvKey } from "./gemini.js";
 
 export interface ProviderRoute {
   provider: ProviderName;
@@ -20,7 +21,22 @@ export const DEFAULT_ROUTES: Record<string, ProviderRoute> = {
   "agent.reasoning": { provider: "anthropic", model: "claude-opus-4-7" },
   "code.generation": { provider: "minimax", model: "abab6.5-chat" },
   "local.dev": { provider: "ollama", model: "llama3.2" },
+  // Gemini BYOK presets — used when the caller selects `provider: "gemini"` or
+  // when the user only has GOOGLE_API_KEY / GEMINI_API_KEY configured. The
+  // *.cheap / *.fast / *.smart route keys mirror common preset names used
+  // elsewhere in the codebase so a future router override can point at them.
+  "gemini.cheap": { provider: "gemini", model: GEMINI_DEFAULT_MODELS.cheap },
+  "gemini.fast": { provider: "gemini", model: GEMINI_DEFAULT_MODELS.fast },
+  "gemini.smart": { provider: "gemini", model: GEMINI_DEFAULT_MODELS.smart },
 };
+
+/**
+ * True when the running process has a Gemini API key in env (either name).
+ * Bootstrap uses this to decide whether to register the provider eagerly.
+ */
+export function hasGeminiEnvKey(): boolean {
+  return readGeminiEnvKey() !== undefined;
+}
 
 const FALLBACK_ROUTE: ProviderRoute = { provider: "stub", model: "stub-small" };
 
