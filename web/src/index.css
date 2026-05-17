@@ -103,21 +103,19 @@
 
 @layer components {
   /* ------------------------------------------------------------------ */
-  /*  KICKER — small-caps mono label above section headings             */
+  /*  KICKER — small muted section label                                */
   /* ------------------------------------------------------------------ */
   .kicker {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    letter-spacing: 0.01em;
     color: var(--silver-400);
   }
 
   .kicker-amber {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    letter-spacing: 0.01em;
     color: var(--green);
   }
 

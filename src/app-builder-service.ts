@@ -1563,9 +1563,30 @@ const appName = ${appName};
 const summary = ${summary};
 const primaryEntity = ${primaryEntityLiteral};
 const appId = ${appIdLiteral};
-const storageKey = \`taskloom_app_\${appId}_db\`;
 const entities = dataContracts.entities as EntityContract[];
 const typedSeedData = seedData as SeedData;
+
+// Include a fingerprint of the schema in the storage key so that when the
+// user iterates and changes entity fields, the next load doesn't silently
+// reuse an old SQLite file whose tables are missing the new columns.
+// (CREATE TABLE IF NOT EXISTS would otherwise be a no-op and inserts would
+// fail or lose data.) Bumping the schema starts a clean DB; that's the
+// right tradeoff for an unbundled preview where migrations aren't worth
+// emitting from the LLM.
+const schemaFingerprint = (() => {
+  const stable = entities.map((e) => ({
+    name: e.name,
+    fields: (e.fields ?? []).map((f) => ({ name: f.name, type: f.type, enum: f.enumValues ?? null })),
+  }));
+  const text = JSON.stringify(stable);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+  }
+  return hash.toString(16).slice(0, 8);
+})();
+const storageKey = \`taskloom_app_\${appId}_db_\${schemaFingerprint}\`;
 
 function sqlTypeForField(field: FieldDef): string {
   if (field.type === "number") return "REAL";

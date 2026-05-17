@@ -2033,14 +2033,16 @@ async function previewGeneratedApp(c: Context) {
       });
       if ("file" in fallback) {
         c.header("X-Taskloom-Generated-App-Fallback", "entrypoint");
-        c.header("Content-Type", fallback.file.contentType);
-        return c.body(fallback.file.content);
+        const { content: fbContent, contentType: fbType } = await transformPreviewFile(fallback.file.path, fallback.file.content, fallback.file.contentType);
+        c.header("Content-Type", fbType);
+        return c.body(fbContent);
       }
     }
 
     if (!("file" in resolved)) throw httpRouteError(404, "preview file not found");
-    c.header("Content-Type", resolved.file.contentType);
-    return c.body(resolved.file.content);
+    const { content: outContent, contentType: outType } = await transformPreviewFile(resolved.file.path, resolved.file.content, resolved.file.contentType);
+    c.header("Content-Type", outType);
+    return c.body(outContent);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -2051,6 +2053,35 @@ function wantsGeneratedAppPreviewReadiness(c: Context) {
   if (format === "json" || format === "1" || format === "true") return true;
   const accept = c.req.header("accept") ?? "";
   return accept.includes("application/json") && !accept.includes("text/html");
+}
+
+// Transform .tsx/.ts files to executable JS at preview-serve time. The generated
+// app's index.html loads /src/main.tsx as a module script; browsers reject the
+// raw TS source (text/typescript MIME) so we transpile via esbuild on each request.
+// This is the unbundled-preview path. A future Phase 3 will replace this with a
+// proper Vite build cached per checkpoint.
+async function transformPreviewFile(
+  path: string,
+  content: string,
+  contentType: string,
+): Promise<{ content: string; contentType: string }> {
+  const isTs = /\.tsx?$/.test(path);
+  if (!isTs) return { content, contentType };
+  try {
+    const { transform } = await import("esbuild");
+    const result = await transform(content, {
+      loader: path.endsWith(".tsx") ? "tsx" : "ts",
+      jsx: "automatic",
+      jsxImportSource: "react",
+      target: "es2022",
+      format: "esm",
+      sourcefile: path,
+    });
+    return { content: result.code, contentType: "application/javascript; charset=utf-8" };
+  } catch (error) {
+    console.warn(`[preview-transform] failed for ${path}: ${(error as Error).message}`);
+    return { content, contentType };
+  }
 }
 
 function generatedAppPreviewPathFromRequest(c: Context, appId: string): string {

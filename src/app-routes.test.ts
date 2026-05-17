@@ -885,8 +885,9 @@ test("generated app preview route resolves by actual app id or slug", async () =
   });
   const sourceFileBody = await sourceFileResponse.text();
   assert.equal(sourceFileResponse.status, 200);
-  assert.match(sourceFileResponse.headers.get("content-type") ?? "", /text\/typescript/);
-  assert.match(sourceFileBody, /export function GeneratedApp/);
+  // TSX is transformed to JS at serve time so browsers accept it as a module script.
+  assert.match(sourceFileResponse.headers.get("content-type") ?? "", /application\/javascript/);
+  assert.match(sourceFileBody, /function GeneratedApp/);
 
   const assetResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview/assets/preview.css`, {
     headers: authHeaders(alpha.cookieValue),

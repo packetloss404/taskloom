@@ -36,6 +36,7 @@ const PRESET_OPTIONS: Array<{ id: BuilderModelPresetId; label: string; hint: str
 type ChatBody =
   | { kind: "text"; text: string }
   | { kind: "steps"; steps: string[] }
+  | { kind: "prose"; text: string }
   | { kind: "plan"; draft: AppBuilderDraft }
   | { kind: "diff"; iteration: AppBuilderIterationResult }
   | { kind: "status"; text: string; tone: "info" | "warn" | "error" | "ok" };
@@ -280,6 +281,11 @@ export function BuilderView() {
             if (m.body.kind !== "steps") return m;
             return { ...m, body: { kind: "steps", steps: [...m.body.steps, event.text] } };
           });
+        } else if (event.type === "prose") {
+          updateMessage(assistantId, (m) => {
+            const next = m.body.kind === "prose" ? m.body.text + event.text : event.text;
+            return { ...m, body: { kind: "prose", text: next } };
+          });
         } else if (event.type === "draft") {
           setPrompt(event.draft.prompt || nextPrompt);
           setState({
@@ -385,6 +391,11 @@ export function BuilderView() {
           updateMessage(assistantId, (m) => {
             if (m.body.kind !== "steps") return m;
             return { ...m, body: { kind: "steps", steps: [...m.body.steps, event.text] } };
+          });
+        } else if (event.type === "prose") {
+          updateMessage(assistantId, (m) => {
+            const next = m.body.kind === "prose" ? m.body.text + event.text : event.text;
+            return { ...m, body: { kind: "prose", text: next } };
           });
         } else if (event.type === "diff") {
           setState((prev) => ({ ...prev, iteration: event.iteration }));
@@ -837,6 +848,7 @@ export function BuilderView() {
               {tab === "preview" && (
                 <PreviewTab
                   draft={draft}
+                  appId={state.appId}
                   previewUrl={state.previewUrl}
                   onSelectElement={(sel) => setSelectedElement(sel)}
                   selectedSelector={selectedElement?.selector ?? null}
@@ -974,6 +986,13 @@ function ThreadMessageBody({
       </ul>
     );
   }
+  if (body.kind === "prose") {
+    return (
+      <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--silver-100)", whiteSpace: "pre-wrap" }}>
+        {body.text || <span className="muted" style={{ fontStyle: "italic" }}>working…</span>}
+      </div>
+    );
+  }
   if (body.kind === "plan") {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1084,11 +1103,13 @@ function IterationCard({ iteration, onApply, working }: { iteration: AppBuilderI
 
 function PreviewTab({
   draft,
+  appId,
   previewUrl,
   onSelectElement,
   selectedSelector,
 }: {
   draft: AppBuilderDraft;
+  appId: string | null;
   previewUrl: string | null;
   onSelectElement: (sel: SelectedElement) => void;
   selectedSelector: string | null;
@@ -1144,6 +1165,10 @@ function PreviewTab({
       };
       const onLeave = () => setHoverRect(null);
       const onClick = (event: MouseEvent) => {
+        // Only capture the click for element-select when a modifier is held.
+        // Without this gate the preview's own buttons, links, inputs, and form
+        // submits are all inert — the user can't actually try their app.
+        if (!event.metaKey && !event.ctrlKey) return;
         event.preventDefault();
         event.stopPropagation();
         const target = event.target as HTMLElement | null;
@@ -1192,7 +1217,7 @@ function PreviewTab({
         color: "var(--silver-400)",
       }}>
         <I.zap size={11} style={{ color: "var(--green)" }}/>
-        <span>Click any element · hold ⌘/Ctrl to outline</span>
+        <span>Hold ⌘/Ctrl and click an element to scope your next change</span>
         {selectedSelector && (
           <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-200)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 }}>
             · {selectedSelector}
@@ -1203,7 +1228,7 @@ function PreviewTab({
         <div style={{ position: "relative", width: "100%", height: "100%" }}>
           <iframe
             ref={iframeRef}
-            src={previewUrl}
+            src={appId ? `/api/app/generated-apps/${encodeURIComponent(appId)}/preview/` : previewUrl}
             style={{
               width: "100%", height: "100%",
               border: "1px solid var(--line)",
