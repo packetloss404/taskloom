@@ -1,10 +1,22 @@
 import type { LLMProvider, ProviderStreamChunk } from "./providers/types.js";
-import { getDefaultRouter } from "./providers/router.js";
+import { getDefaultRouter, type ProviderRouter } from "./providers/router.js";
 import { registerDefaultProviders } from "./providers/bootstrap.js";
 import {
   resolvePresetToProviderModel,
   type ModelPreset,
 } from "./providers/preset-resolver.js";
+import {
+  authorAppViaLLM,
+  type AuthorAppOptions,
+  type AuthorAppResult,
+  type GeneratedFile,
+  type ResolvedPrompts,
+} from "./codegen/llm-author.js";
+import {
+  validateFileTree,
+  type ValidateOptions,
+  type ValidationResult,
+} from "./codegen/validate.js";
 
 export type AppIterationTargetKind = "page" | "api" | "data" | "auth" | "config";
 export type AppIterationAction = "add" | "update" | "remove";
@@ -1099,4 +1111,304 @@ function normalizeLLMFile(entry: Record<string, unknown>): AppIterationLLMResult
     summary: typeof entry.summary === "string" ? entry.summary : `Update ${path}`,
     diff: typeof entry.diff === "string" ? entry.diff : "",
   };
+}
+
+// =============================================================================
+// File-tree iteration path (Track B, Round 2)
+// =============================================================================
+//
+// Mirror of `applyAppIterationViaLLM` for the file-tree codegen path. When the
+// `TASKLOOM_FILETREE_CODEGEN=1` flag is on AND the draft being iterated on was
+// generated via the file-tree path, the HTTP route should prefer this entry
+// point. The orchestrator is asked to re-emit the FULL new tree; we then diff
+// the old and new trees to produce `AppIterationLLMResult`-shaped entries
+// suitable for the existing UI/storage layer.
+// =============================================================================
+
+/** Default budget for inlining file contents in the iteration prompt. */
+const FILE_TREE_PROMPT_CONTENT_BUDGET_BYTES = 40_000;
+
+/** Test-only seam: pluggable orchestrator entry point. */
+export type AuthorFileTreeFn = typeof authorAppViaLLM;
+
+/** Test-only seam: pluggable validator. */
+export type ValidateFileTreeFn = typeof validateFileTree;
+
+export interface AppIterationFileTreeOptions {
+  workspaceId: string;
+  preset?: AppIterationPresetId;
+  signal?: AbortSignal;
+  /** Optional override of the registered router (for tests). */
+  router?: ProviderRouter;
+  /**
+   * Test-only override of the orchestrator entry point. Production callers
+   * should leave this undefined so the real `authorAppViaLLM` is used.
+   */
+  authorFn?: AuthorFileTreeFn;
+  /**
+   * Test-only override of the validator. Production callers should leave this
+   * undefined so the real `validateFileTree` is used.
+   */
+  validateFn?: ValidateFileTreeFn;
+}
+
+export interface AppIterationFileTreeResult {
+  changedSummary: string;
+  files: AppIterationLLMResult["files"];
+  prose: string;
+  model: string;
+  /** Full new file tree, for derived-draft projection by callers. */
+  newFiles: GeneratedFile[];
+  /** Populated when the validator reported issues. */
+  validationErrors?: string[];
+}
+
+/**
+ * Returns true when the HTTP route layer should use the file-tree iteration
+ * path. The three required conditions are:
+ *   1. The opt-in flag is on.
+ *   2. The draft being iterated was generated via the file-tree path (so the
+ *      caller has the canonical file tree, not just a derived `AppDraft`).
+ *   3. The caller actually passes a non-empty `files` array alongside the
+ *      draft. Without that we have nothing to diff against.
+ */
+export function shouldUseFileTreeIteration(input: {
+  flagOn: boolean;
+  draftSource: string | undefined;
+  files?: GeneratedFile[] | undefined;
+}): boolean {
+  if (!input.flagOn) return false;
+  if (input.draftSource !== "llm-filetree") return false;
+  if (!Array.isArray(input.files) || input.files.length === 0) return false;
+  return true;
+}
+
+/**
+ * Builds the iteration user goal string. The orchestrator's default prompts
+ * already split this into plan + write phases; we just embed the existing tree
+ * and the user's change request into a single goal string so the model has all
+ * the context it needs.
+ *
+ * When the total file content would exceed `FILE_TREE_PROMPT_CONTENT_BUDGET_BYTES`,
+ * the longest files are replaced with a short summary line (path + byte count)
+ * to keep the prompt within a sensible token budget.
+ */
+export function buildFileTreeIterationGoal(
+  files: GeneratedFile[],
+  changeRequest: string,
+): string {
+  const safe = Array.isArray(files) ? files.filter((f) => f && typeof f.path === "string" && typeof f.content === "string") : [];
+
+  // Greedy budget: include full contents until we exceed the budget; then
+  // switch to summary lines for the remaining (largest) files.
+  const sortedByContentLength = [...safe].sort((a, b) => a.content.length - b.content.length);
+  let used = 0;
+  const fullPaths = new Set<string>();
+  for (const file of sortedByContentLength) {
+    const cost = file.path.length + file.content.length + 32; // markdown framing overhead
+    if (used + cost > FILE_TREE_PROMPT_CONTENT_BUDGET_BYTES) break;
+    used += cost;
+    fullPaths.add(file.path);
+  }
+
+  const sections: string[] = [];
+  sections.push("You are iterating on an existing app's file tree.");
+  sections.push("");
+  sections.push("Current file tree:");
+  for (const file of safe) {
+    if (fullPaths.has(file.path)) {
+      sections.push("```");
+      sections.push(`// path: ${file.path}`);
+      sections.push(file.content);
+      sections.push("```");
+    } else {
+      sections.push(`- ${file.path} (${file.content.length} bytes, omitted for brevity)`);
+    }
+  }
+  sections.push("");
+  sections.push("User change request:");
+  sections.push(changeRequest.trim() || "(no change requested)");
+  sections.push("");
+  sections.push(
+    "Re-emit the FULL new file tree via `write_file` tool calls. Any file " +
+      "that you do NOT re-emit will be treated as DELETED. Include every file " +
+      "that should remain in the app, even if unchanged.",
+  );
+
+  return sections.join("\n");
+}
+
+/**
+ * Compute a structured diff between `oldFiles` and `newFiles`. Files added,
+ * modified, or deleted are returned in the same shape as
+ * `AppIterationLLMResult["files"]`. Unchanged files are omitted.
+ */
+export function diffFileTrees(
+  oldFiles: GeneratedFile[],
+  newFiles: GeneratedFile[],
+): AppIterationLLMResult["files"] {
+  const oldByPath = new Map<string, string>();
+  for (const file of oldFiles) {
+    if (file && typeof file.path === "string" && typeof file.content === "string") {
+      oldByPath.set(file.path, file.content);
+    }
+  }
+  const newByPath = new Map<string, string>();
+  for (const file of newFiles) {
+    if (file && typeof file.path === "string" && typeof file.content === "string") {
+      newByPath.set(file.path, file.content);
+    }
+  }
+
+  const entries: AppIterationLLMResult["files"] = [];
+
+  for (const [path, content] of newByPath.entries()) {
+    if (!oldByPath.has(path)) {
+      entries.push({
+        path,
+        changeType: "added",
+        summary: `Added ${path}`,
+        diff: buildSimpleDiff("", content),
+      });
+    } else if (oldByPath.get(path) !== content) {
+      entries.push({
+        path,
+        changeType: "modified",
+        summary: `Modified ${path}`,
+        diff: buildSimpleDiff(oldByPath.get(path) ?? "", content),
+      });
+    }
+  }
+  for (const [path, content] of oldByPath.entries()) {
+    if (!newByPath.has(path)) {
+      entries.push({
+        path,
+        changeType: "deleted",
+        summary: `Removed ${path}`,
+        diff: buildSimpleDiff(content, ""),
+      });
+    }
+  }
+
+  return entries;
+}
+
+/** Produce a short unified-diff-style snippet. Not byte-perfect; informational. */
+function buildSimpleDiff(before: string, after: string): string {
+  const beforeLines = before.split(/\r?\n/);
+  const afterLines = after.split(/\r?\n/);
+  const maxPreview = 6;
+  const beforePreview = beforeLines.slice(0, maxPreview);
+  const afterPreview = afterLines.slice(0, maxPreview);
+  const parts: string[] = [];
+  if (before.length === 0 && after.length === 0) return "";
+  parts.push("--- before");
+  parts.push("+++ after");
+  for (const line of beforePreview) parts.push(`-${line}`);
+  if (beforeLines.length > maxPreview) parts.push(`-... (${beforeLines.length - maxPreview} more lines)`);
+  for (const line of afterPreview) parts.push(`+${line}`);
+  if (afterLines.length > maxPreview) parts.push(`+... (${afterLines.length - maxPreview} more lines)`);
+  return parts.join("\n");
+}
+
+/**
+ * Iterate on an existing app via the file-tree codegen path. The orchestrator
+ * is asked to re-emit the FULL new tree; we diff against the input and return
+ * `AppIterationLLMResult`-shaped entries so the existing UI/storage layer keeps
+ * working unchanged.
+ *
+ * Returns `null` on any failure (orchestrator returned null, zero files, etc.)
+ * so the caller can fall back to the regex/structured-tool path.
+ *
+ * `emit` receives prose deltas during the plan/write phases so the chat UI can
+ * show what the model is doing in real time.
+ */
+export async function applyAppIterationViaFileTree(
+  currentFiles: GeneratedFile[],
+  changeRequest: string,
+  options: AppIterationFileTreeOptions,
+  emit?: (chunk: string) => void | Promise<void>,
+): Promise<AppIterationFileTreeResult | null> {
+  if (!Array.isArray(currentFiles) || currentFiles.length === 0) return null;
+  const trimmedRequest = (changeRequest ?? "").trim();
+  if (trimmedRequest.length === 0) return null;
+
+  const author = options.authorFn ?? authorAppViaLLM;
+  const validate = options.validateFn ?? validateFileTree;
+  const noopEmit = async (_: string) => {};
+  const emitFn = emit ?? noopEmit;
+
+  const userGoal = buildFileTreeIterationGoal(currentFiles, trimmedRequest);
+
+  const authorOptions: AuthorAppOptions = { workspaceId: options.workspaceId };
+  if (options.preset) authorOptions.preset = options.preset;
+  if (options.signal) authorOptions.signal = options.signal;
+  if (options.router) authorOptions.router = options.router;
+
+  let result: AuthorAppResult | null;
+  try {
+    result = await author(userGoal, authorOptions, emitFn);
+  } catch (error) {
+    console.warn(`[app-iteration-filetree] orchestrator threw: ${(error as Error).message}`);
+    return null;
+  }
+  if (!result || !Array.isArray(result.files) || result.files.length === 0) {
+    return null;
+  }
+
+  const validateOptions: ValidateOptions = {};
+  if (options.signal) validateOptions.signal = options.signal;
+  let validation: ValidationResult;
+  try {
+    validation = await validate(result.files, validateOptions);
+  } catch (error) {
+    console.warn(`[app-iteration-filetree] validator threw: ${(error as Error).message}`);
+    // Validator failure should not block iteration; treat as no errors and
+    // surface the error message in validationErrors so the UI can display it.
+    validation = {
+      ok: false,
+      source: "real",
+      errors: [{ file: "<validator>", message: (error as Error).message, severity: "error" }],
+      warnings: [],
+      durationMs: 0,
+    };
+  }
+
+  const diffEntries = diffFileTrees(currentFiles, result.files);
+
+  const model = resolveIterationModel(options.preset);
+
+  const validationErrors =
+    !validation.ok && validation.errors.length > 0
+      ? validation.errors.map((e) => `${e.file}${e.line ? `:${e.line}` : ""}: ${e.message}`)
+      : undefined;
+
+  const changedSummary = buildFileTreeChangedSummary(diffEntries, result.summary);
+
+  const out: AppIterationFileTreeResult = {
+    changedSummary,
+    files: diffEntries,
+    prose: result.summary ?? "",
+    model,
+    newFiles: result.files,
+  };
+  if (validationErrors) out.validationErrors = validationErrors;
+  return out;
+}
+
+function buildFileTreeChangedSummary(
+  diffEntries: AppIterationLLMResult["files"],
+  orchestratorSummary: string | undefined,
+): string {
+  const added = diffEntries.filter((e) => e.changeType === "added").length;
+  const modified = diffEntries.filter((e) => e.changeType === "modified").length;
+  const deleted = diffEntries.filter((e) => e.changeType === "deleted").length;
+  if (added === 0 && modified === 0 && deleted === 0) {
+    return orchestratorSummary?.trim() || "No file changes detected.";
+  }
+  const parts: string[] = [];
+  if (added) parts.push(`${added} added`);
+  if (modified) parts.push(`${modified} modified`);
+  if (deleted) parts.push(`${deleted} deleted`);
+  return `File-tree iteration: ${parts.join(", ")}.`;
 }
