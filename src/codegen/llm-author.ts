@@ -1,0 +1,501 @@
+// =============================================================================
+// LLM file-tree authoring orchestrator (Track B skeleton)
+// =============================================================================
+//
+// The Builder MVP currently slot-fills one of a handful of hardcoded templates
+// (`renderGeneratedAppTsx` + `TEMPLATE_DEFINITIONS`). That keeps generations
+// fast and predictable but caps the kinds of apps the user can ask for at
+// whatever the template author imagined.
+//
+// This orchestrator is the alternative path: instead of selecting a template,
+// the LLM authors the actual file tree by emitting a sequence of
+// `write_file(path, content)` tool calls. The orchestrator:
+//
+//   1. Asks the model to OUTLINE the files it will write (plan phase). The
+//      plan is returned as JSON `[{ path, purpose }]` so the orchestrator (and
+//      eventually the validator in B2) can decide whether to proceed or
+//      abort before any real writes happen.
+//   2. Asks the model to EMIT those files via `write_file` tool calls (write
+//      phase). Prose narration is streamed to the caller's `emit` callback so
+//      the chat thread shows what the model is doing.
+//
+// The orchestrator routes through `ProviderRouter` + the preset resolver so it
+// works with any of the registered providers (Anthropic, OpenAI, OpenRouter,
+// Minimax, Ollama, Gemini). It never imports a specific provider directly.
+//
+// This file is intentionally standalone: B2 will add `./path-validator.js`,
+// B3 will add richer prompts in `./prompts.ts`, and B4 will wire the
+// orchestrator into `app-builder-service.ts` behind an opt-in flag. Until
+// those land, local placeholders keep this file compileable on its own.
+// =============================================================================
+
+import {
+  getDefaultRouter,
+  type ProviderRouter,
+} from "../providers/router.js";
+import {
+  resolvePresetToProviderModel,
+  type ModelPreset,
+} from "../providers/preset-resolver.js";
+import type {
+  LLMProvider,
+  ProviderStreamChunk,
+  ProviderToolDef,
+} from "../providers/types.js";
+
+// =============================================================================
+// Public types
+// =============================================================================
+
+export interface GeneratedFile {
+  /** Workspace-relative path, e.g. "src/App.tsx". */
+  path: string;
+  /** Complete file contents. */
+  content: string;
+}
+
+export interface AuthorAppResult {
+  files: GeneratedFile[];
+  /** Short human-readable description of what was built. */
+  summary: string;
+  /** Always "llm" here; the template path is owned by the caller (B4). */
+  source: "llm" | "template";
+}
+
+export interface PlannedFile {
+  path: string;
+  purpose: string;
+}
+
+export interface ResolvedPrompts {
+  systemPrompt: string;
+  planUserPrompt: (userGoal: string) => string;
+  writeUserPrompt: (plan: string) => string;
+}
+
+export interface AuthorAppOptions {
+  preset?: "cheap" | "fast" | "smart" | "local";
+  workspaceId: string;
+  signal?: AbortSignal;
+  /** Optional override of the registered router (for tests). */
+  router?: ProviderRouter;
+  /** Optional override of the prompt resolver (for tests). */
+  resolvePrompts?: () => ResolvedPrompts;
+}
+
+// =============================================================================
+// Internal placeholders (TODO: replace at merge time)
+// =============================================================================
+
+/**
+ * Path safety check. B2 will replace this import with the shared
+ * `./path-validator.js`. Until then, a minimal local guard keeps us from
+ * accepting paths that obviously escape the workspace root.
+ *
+ * Rejects:
+ *   - Empty strings
+ *   - Absolute paths (POSIX `/foo` or Windows `C:\foo`)
+ *   - Paths containing `..` segments
+ *   - Backslash-only paths (normalise to forward slash first)
+ */
+export function isSafePath(input: string): boolean {
+  if (typeof input !== "string") return false;
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return false;
+  // Normalise Windows-style separators so the segment check works on either.
+  const normalised = trimmed.replace(/\\/g, "/");
+  if (normalised.startsWith("/")) return false;
+  if (/^[a-zA-Z]:\//.test(normalised)) return false;
+  const segments = normalised.split("/");
+  for (const segment of segments) {
+    if (segment === "..") return false;
+    if (segment === "" && segments.indexOf(segment) !== segments.length - 1) {
+      // Empty middle segments imply `//` which is suspicious. Trailing empty
+      // (from a trailing slash) is just a directory marker; allow it.
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Default prompts. B3 will move these into `./prompts.ts` so the catalog of
+ * Builder prompts lives in one place. Until then, the orchestrator carries
+ * a usable default that the tests can override via `options.resolvePrompts`.
+ */
+function defaultPrompts(): ResolvedPrompts {
+  const systemPrompt = [
+    "You are Taskloom's code authoring assistant. You generate small, self-",
+    "contained web apps as a file tree. Your output runs in a Vite + React",
+    "workspace under `src/`.",
+    "",
+    "You work in two phases:",
+    "  1. PLAN — outline the files you will write. Respond with prose, then a",
+    "     single JSON block formatted as `[{\"path\": string, \"purpose\":",
+    "     string}, ...]`. The JSON MUST be parseable.",
+    "  2. WRITE — emit one `write_file` tool call per planned file. Each call",
+    "     carries a workspace-relative path and complete file contents.",
+    "",
+    "Constraints:",
+    "  - All paths are relative to the workspace root.",
+    "  - Never write outside the workspace (no `..`, no absolute paths).",
+    "  - Keep the file count small (typically 5–15 files).",
+  ].join("\n");
+  return {
+    systemPrompt,
+    planUserPrompt: (userGoal: string) =>
+      [
+        `User goal: ${userGoal}`,
+        "",
+        "Plan the files you will write to satisfy this goal. Respond with a",
+        "short narration followed by a JSON array of {path, purpose} objects.",
+      ].join("\n"),
+    writeUserPrompt: (plan: string) =>
+      [
+        "Now emit the files. For each entry in the plan below, call the",
+        "`write_file` tool with the workspace-relative path and the COMPLETE",
+        "file contents. Do not skip files; do not invent files that are not in",
+        "the plan.",
+        "",
+        "Plan:",
+        plan,
+      ].join("\n"),
+  };
+}
+
+// =============================================================================
+// Tool definition
+// =============================================================================
+
+const WRITE_FILE_TOOL: ProviderToolDef = {
+  name: "write_file",
+  description:
+    "Write a single file in the generated app's workspace. Path must be relative to the workspace root. Content is the complete file contents.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Workspace-relative path. e.g. src/App.tsx",
+      },
+      content: {
+        type: "string",
+        description: "Complete file contents.",
+      },
+    },
+    required: ["path", "content"],
+  },
+};
+
+// =============================================================================
+// Plan parsing
+// =============================================================================
+
+/**
+ * Extracts the first JSON array of `{path, purpose}` objects from a blob of
+ * model prose. Returns `null` if no valid plan is found. The model is
+ * encouraged to format the plan as ```json ... ``` but we accept any JSON
+ * array that parses and has the right shape.
+ */
+export function parsePlan(blob: string): PlannedFile[] | null {
+  if (typeof blob !== "string" || blob.trim().length === 0) return null;
+
+  // 1. Try fenced ```json ... ``` blocks first.
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  const candidates: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = fenceRegex.exec(blob)) !== null) {
+    if (match[1]) candidates.push(match[1]);
+  }
+
+  // 2. Also try to find a top-level JSON array anywhere in the text.
+  const firstBracket = blob.indexOf("[");
+  const lastBracket = blob.lastIndexOf("]");
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    candidates.push(blob.slice(firstBracket, lastBracket + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate.trim());
+      if (!Array.isArray(parsed)) continue;
+      const files: PlannedFile[] = [];
+      for (const entry of parsed) {
+        if (!entry || typeof entry !== "object") continue;
+        const path = (entry as Record<string, unknown>).path;
+        const purpose = (entry as Record<string, unknown>).purpose;
+        if (typeof path !== "string" || path.length === 0) continue;
+        if (typeof purpose !== "string") continue;
+        files.push({ path, purpose });
+      }
+      if (files.length > 0) return files;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return null;
+}
+
+// =============================================================================
+// Provider resolution
+// =============================================================================
+
+interface ResolvedProvider {
+  provider: LLMProvider;
+  model: string;
+}
+
+function resolveProvider(
+  options: AuthorAppOptions,
+): ResolvedProvider | null {
+  const router = options.router ?? getDefaultRouter();
+  const resolved = resolvePresetToProviderModel(
+    options.preset as ModelPreset | undefined,
+    { router },
+  );
+  if (!resolved) return null;
+  const provider = router.get(resolved.provider);
+  if (!provider) return null;
+  return { provider, model: resolved.model };
+}
+
+// =============================================================================
+// Phase 1: planning
+// =============================================================================
+
+interface PlanPhaseResult {
+  /** Parsed plan, or null if parsing failed twice. */
+  plan: PlannedFile[] | null;
+  /** Full prose blob for debug / pass-through to write phase. */
+  prose: string;
+}
+
+async function runPlanPhase(
+  userGoal: string,
+  prompts: ResolvedPrompts,
+  resolved: ResolvedProvider,
+  options: AuthorAppOptions,
+  emit: (chunk: string) => void | Promise<void>,
+): Promise<PlanPhaseResult | null> {
+  let lastProse = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const userContent =
+      attempt === 0
+        ? prompts.planUserPrompt(userGoal)
+        : [
+            prompts.planUserPrompt(userGoal),
+            "",
+            "Your previous response did not contain a parseable JSON plan.",
+            "Respond with ONLY a JSON array of {path, purpose} objects.",
+          ].join("\n");
+
+    let stream: AsyncIterable<ProviderStreamChunk>;
+    try {
+      stream = resolved.provider.stream({
+        model: resolved.model,
+        workspaceId: options.workspaceId,
+        routeKey: "code.generation",
+        maxTokens: 2048,
+        temperature: 0.2,
+        ...(options.signal ? { signal: options.signal } : {}),
+        messages: [
+          { role: "system", content: prompts.systemPrompt },
+          { role: "user", content: userContent },
+        ],
+      });
+    } catch (error) {
+      console.warn(
+        `[llm-author] plan stream init failed: ${(error as Error).message}`,
+      );
+      return null;
+    }
+
+    const proseParts: string[] = [];
+    try {
+      for await (const chunk of stream) {
+        if (chunk.error) {
+          console.warn(`[llm-author] plan stream error: ${chunk.error}`);
+          return null;
+        }
+        if (chunk.delta) {
+          proseParts.push(chunk.delta);
+          try {
+            await emit(chunk.delta);
+          } catch {
+            // emit must not break generation
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[llm-author] plan stream consume failed: ${(error as Error).message}`,
+      );
+      return null;
+    }
+
+    lastProse = proseParts.join("");
+    const plan = parsePlan(lastProse);
+    if (plan && plan.length > 0) {
+      return { plan, prose: lastProse };
+    }
+  }
+
+  // Both attempts failed to produce a parseable plan.
+  return { plan: null, prose: lastProse };
+}
+
+// =============================================================================
+// Phase 2: writing
+// =============================================================================
+
+interface WritePhaseResult {
+  files: GeneratedFile[];
+}
+
+async function runWritePhase(
+  plan: PlannedFile[],
+  prompts: ResolvedPrompts,
+  resolved: ResolvedProvider,
+  options: AuthorAppOptions,
+  emit: (chunk: string) => void | Promise<void>,
+): Promise<WritePhaseResult | null> {
+  const planSummary = plan
+    .map((entry) => `- ${entry.path} — ${entry.purpose}`)
+    .join("\n");
+
+  let stream: AsyncIterable<ProviderStreamChunk>;
+  try {
+    stream = resolved.provider.stream({
+      model: resolved.model,
+      workspaceId: options.workspaceId,
+      routeKey: "code.generation",
+      maxTokens: 8192,
+      temperature: 0.2,
+      ...(options.signal ? { signal: options.signal } : {}),
+      messages: [
+        { role: "system", content: prompts.systemPrompt },
+        { role: "user", content: prompts.writeUserPrompt(planSummary) },
+      ],
+      tools: [WRITE_FILE_TOOL],
+    });
+  } catch (error) {
+    console.warn(
+      `[llm-author] write stream init failed: ${(error as Error).message}`,
+    );
+    return null;
+  }
+
+  const files: GeneratedFile[] = [];
+  try {
+    for await (const chunk of stream) {
+      if (chunk.error) {
+        console.warn(`[llm-author] write stream error: ${chunk.error}`);
+        return null;
+      }
+      if (chunk.delta) {
+        try {
+          await emit(chunk.delta);
+        } catch {
+          // emit must not break generation
+        }
+      }
+      if (chunk.toolCall && chunk.toolCall.name === WRITE_FILE_TOOL.name) {
+        const input = chunk.toolCall.input ?? {};
+        const path = (input as Record<string, unknown>).path;
+        const content = (input as Record<string, unknown>).content;
+        if (typeof path !== "string" || typeof content !== "string") {
+          console.warn(
+            `[llm-author] write_file call missing path/content; skipping`,
+          );
+          continue;
+        }
+        if (!isSafePath(path)) {
+          console.warn(
+            `[llm-author] write_file rejected unsafe path: ${path}`,
+          );
+          continue;
+        }
+        files.push({ path, content });
+      }
+    }
+  } catch (error) {
+    console.warn(
+      `[llm-author] write stream consume failed: ${(error as Error).message}`,
+    );
+    return null;
+  }
+
+  return { files };
+}
+
+// =============================================================================
+// Public orchestrator
+// =============================================================================
+
+/**
+ * Two-phase plan-then-write LLM orchestration. Returns `null` on any
+ * non-recoverable error (no provider, stream error, zero files written, plan
+ * parse failure after retry) so the caller can fall back to the template
+ * generator.
+ */
+export async function authorAppViaLLM(
+  userGoal: string,
+  options: AuthorAppOptions,
+  emit: (chunk: string) => void | Promise<void>,
+): Promise<AuthorAppResult | null> {
+  const trimmed = (userGoal ?? "").trim();
+  if (trimmed.length === 0) return null;
+
+  const resolved = resolveProvider(options);
+  if (!resolved) {
+    console.warn(`[llm-author] no provider resolved for preset=${options.preset ?? "fast"}`);
+    return null;
+  }
+
+  const prompts = (options.resolvePrompts ?? defaultPrompts)();
+
+  // Phase 1: plan.
+  const planResult = await runPlanPhase(trimmed, prompts, resolved, options, emit);
+  if (!planResult) return null;
+  if (!planResult.plan) {
+    console.warn(`[llm-author] plan unparseable after 1 retry; aborting`);
+    return null;
+  }
+
+  // Phase 2: write.
+  const writeResult = await runWritePhase(
+    planResult.plan,
+    prompts,
+    resolved,
+    options,
+    emit,
+  );
+  if (!writeResult) return null;
+  if (writeResult.files.length === 0) {
+    console.warn(`[llm-author] model emitted zero write_file calls`);
+    return null;
+  }
+
+  const summary = buildSummary(trimmed, planResult.plan, writeResult.files);
+
+  return {
+    files: writeResult.files,
+    summary,
+    source: "llm",
+  };
+}
+
+function buildSummary(
+  userGoal: string,
+  plan: PlannedFile[],
+  files: GeneratedFile[],
+): string {
+  const fileCount = files.length;
+  const goalSnippet = userGoal.length > 80 ? `${userGoal.slice(0, 77)}...` : userGoal;
+  const plannedNote =
+    plan.length === files.length
+      ? `${fileCount} files`
+      : `${fileCount}/${plan.length} files`;
+  return `LLM-authored app for: ${goalSnippet} (${plannedNote})`;
+}
