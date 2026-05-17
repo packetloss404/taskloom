@@ -251,4 +251,117 @@ test("parseTscOutput unit: handles empty and noisy input", () => {
   );
   assert.equal(noisy.errors.length, 1);
   assert.equal(noisy.errors[0]!.line, 1);
+  // Phase tagging is part of the contract — every parsed diagnostic must carry
+  // its phase so downstream callers can attribute failures correctly.
+  assert.equal(noisy.errors[0]!.phase, "typecheck");
+});
+
+// ---------------------------------------------------------------------------
+// Phase-aware validation: tsc + vite build
+// ---------------------------------------------------------------------------
+
+test("tsc passes + vite build passes: both phases run and result is ok", async () => {
+  const calls: string[] = [];
+  const runner: ValidationRunner = async ({ command }) => {
+    calls.push(command);
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const result = await validateFileTree(SAMPLE_FILES, {
+    env: smokeEnv(),
+    runner,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "real");
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.phases, { typecheck: "passed", build: "passed" });
+  // Both phases were invoked through the runner; disambiguate by command.
+  assert.equal(calls.length, 2);
+  assert.match(calls[0]!, /tsc/);
+  assert.match(calls[1]!, /vite/);
+});
+
+test("tsc passes + vite build fails: build error is reported with phase=build", async () => {
+  const calls: string[] = [];
+  const runner: ValidationRunner = async ({ command }) => {
+    calls.push(command);
+    if (/tsc/.test(command)) {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        '[vite]: Could not resolve "./missing.tsx" from "src/App.tsx"\nerror during build:\n',
+    };
+  };
+  const result = await validateFileTree(SAMPLE_FILES, {
+    env: smokeEnv(),
+    runner,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.source, "real");
+  assert.deepEqual(result.phases, { typecheck: "passed", build: "failed" });
+  assert.equal(calls.length, 2);
+  assert.ok(result.errors.length >= 1);
+  const buildErr = result.errors.find((e) => e.phase === "build");
+  assert.ok(buildErr, "expected at least one error with phase=build");
+  assert.match(buildErr!.message, /Could not resolve/);
+  // None of the surfaced errors should be tagged as typecheck — tsc passed.
+  assert.ok(result.errors.every((e) => e.phase === "build"));
+});
+
+test("tsc fails: build phase is skipped and runner is invoked exactly once", async () => {
+  const calls: string[] = [];
+  const runner: ValidationRunner = async ({ command }) => {
+    calls.push(command);
+    return {
+      exitCode: 2,
+      stdout: "src/App.tsx(3,5): error TS2304: Cannot find name 'foo'.\n",
+      stderr: "",
+    };
+  };
+  const result = await validateFileTree(SAMPLE_FILES, {
+    env: smokeEnv(),
+    runner,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.source, "real");
+  assert.deepEqual(result.phases, { typecheck: "failed", build: "skipped" });
+  assert.equal(calls.length, 1, "vite build must NOT run when tsc fails");
+  assert.match(calls[0]!, /tsc/);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]!.phase, "typecheck");
+  assert.equal(result.errors[0]!.file, "src/App.tsx");
+  assert.equal(result.errors[0]!.line, 3);
+  assert.equal(result.errors[0]!.column, 5);
+  assert.match(result.errors[0]!.message, /Cannot find name 'foo'/);
+});
+
+test("vite build success with non-empty stdout: no errors bubble up", async () => {
+  const runner: ValidationRunner = async ({ command }) => {
+    if (/tsc/.test(command)) {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    return {
+      exitCode: 0,
+      stdout: [
+        "vite v5.0.0 building for production...",
+        "transforming...",
+        "✓ 42 modules transformed.",
+        "dist/index.html  0.45 kB",
+        "dist/assets/index-abc.js  120.34 kB │ gzip: 38.21 kB",
+        "✓ built in 1.23s",
+      ].join("\n"),
+      stderr: "",
+    };
+  };
+  const result = await validateFileTree(SAMPLE_FILES, {
+    env: smokeEnv(),
+    runner,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.phases, { typecheck: "passed", build: "passed" });
 });
