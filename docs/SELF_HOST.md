@@ -93,26 +93,78 @@ OPENAI_API_KEY=sk-...
 
 Get a key at https://platform.openai.com/api-keys. Default model is `gpt-4o`; switch per-agent under **Admin → Integrations**. Note: this key is not yet consumed by the builder draft path — set `ANTHROPIC_API_KEY` if you want the builder to call an LLM today.
 
-### Option C — Local Ollama (agent runs today; builder pending)
+### Option C — Local LLM (Ollama / vLLM / LM Studio / remote llama.cpp)
 
-```bash
-# .env
-OLLAMA_BASE_URL=http://localhost:11434
-```
+The "ollama" provider is intentionally generic: it can talk to **any OpenAI-compatible local LLM server**, on `localhost` or on a separate machine on your LAN (think: a beefy GPU box). It is registered unconditionally — but it is **not the default** for hosted presets. Anthropic / OpenAI / Gemini / OpenRouter take precedence unless you (a) explicitly request the `local` preset, or (b) set `TASKLOOM_PROVIDER_PRIORITY=ollama,...`.
 
-Install Ollama from https://ollama.com, then pull a model with reasonable code-generation quality:
+Three env vars control where requests go and how they're shaped:
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOCAL_LLM_BASE_URL` | unset | Base URL of the local LLM server. Takes precedence over `OLLAMA_BASE_URL`. Use this for non-Ollama servers (vLLM, LM Studio, llama.cpp) — it documents intent. |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Legacy synonym for `LOCAL_LLM_BASE_URL`. Honored when `LOCAL_LLM_BASE_URL` is unset. |
+| `LOCAL_LLM_API_FORMAT` | `ollama` | Either `ollama` (native `/api/chat`) or `openai` (`/v1/chat/completions`). Set to `openai` for vLLM, LM Studio, and llama.cpp's OpenAI-compat server. |
+| `LOCAL_LLM_MODEL` | unset | Overrides the per-call model name. Useful when the remote server only loads one specific model. |
+
+**Recipe 1: Local Ollama (zero config).** No env needed; Taskloom hits `http://localhost:11434` by default.
 
 ```bash
 ollama pull qwen2.5-coder:32b
-# or, for stronger code generation on bigger hardware:
-ollama pull qwen3-coder-next
-# or, for smaller hardware:
-ollama pull llama3.1:8b
+# Taskloom will pick this up automatically when the `local` preset is selected.
 ```
 
-Smaller Ollama models produce noticeably worse generated apps than Claude or GPT-4-class hosted models — this is honest, not pessimistic. If you need fully offline and don't want to compromise quality, plan to run `qwen2.5-coder:32b` or larger on a machine with 32 GB+ RAM and a recent GPU. The Phase 3 plan calls out `qwen3-coder-next` (80B MoE, 3B active) as the local sweet spot once the builder is routed through `ProviderRouter`.
+**Recipe 2: Remote Ollama on another box (same LAN).**
 
-As with OpenAI: Ollama works today for agent runs but is not yet wired into the builder draft path.
+```bash
+# .env
+OLLAMA_BASE_URL=http://192.168.1.100:11434
+```
+
+Run Ollama on the GPU box with `OLLAMA_HOST=0.0.0.0:11434 ollama serve` so it binds to the LAN interface, not just localhost.
+
+**Recipe 3: vLLM on a remote GPU machine.**
+
+```bash
+# .env
+LOCAL_LLM_BASE_URL=http://gpu-box:8000
+LOCAL_LLM_API_FORMAT=openai
+LOCAL_LLM_MODEL=qwen2.5-coder-32b-instruct
+```
+
+Start vLLM with e.g. `vllm serve Qwen/Qwen2.5-Coder-32B-Instruct --host 0.0.0.0 --port 8000`. `LOCAL_LLM_MODEL` is required because vLLM only serves the one model that was loaded at startup, and its OpenAI-compat layer matches model names strictly.
+
+**Recipe 4: LM Studio (local app on a developer laptop).**
+
+```bash
+# .env
+LOCAL_LLM_BASE_URL=http://localhost:1234
+LOCAL_LLM_API_FORMAT=openai
+```
+
+In LM Studio, load a model and start the "Local Server" tab. Default port is `1234`. LM Studio exposes the OpenAI-compatible API.
+
+**Recipe 5: llama.cpp's OpenAI-compatible server.**
+
+```bash
+# .env
+LOCAL_LLM_BASE_URL=http://localhost:8080
+LOCAL_LLM_API_FORMAT=openai
+LOCAL_LLM_MODEL=deepseek-coder-v2
+```
+
+Run llama.cpp with `./llama-server -m deepseek-coder-v2.gguf --port 8080 --host 0.0.0.0`. Same caveat as vLLM: set `LOCAL_LLM_MODEL` to whatever name your server reports.
+
+**Quality caveat.** Smaller local models (7B–13B) produce noticeably worse generated apps than Claude / GPT-4-class hosted models. For real builder workloads on local hardware, plan to run `qwen2.5-coder:32b` or larger. The Phase 3 plan calls out `qwen3-coder-next` (80B MoE, 3B active) as the local sweet spot once the builder is routed through `ProviderRouter`.
+
+**Making local first.** To force every preset that supports it to prefer your local server over hosted providers (e.g. when you want the 1.5 TB RAM farm to do everything):
+
+```bash
+TASKLOOM_PROVIDER_PRIORITY=ollama,anthropic,openai
+```
+
+Otherwise, the `local` Builder preset is the explicit knob — it routes only to the local provider and returns null (template-only fallback) if `LOCAL_LLM_BASE_URL` and `OLLAMA_BASE_URL` are both unset and `localhost:11434` is unreachable.
+
+As with OpenAI: the local provider works today for agent runs but is not yet wired into the builder draft path.
 
 ### Option D — No key (template-only fallback)
 
