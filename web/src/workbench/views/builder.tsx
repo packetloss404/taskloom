@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { I, type IconKey } from "../icons";
-import { Topbar } from "../Shell";
 import { api } from "@/lib/api";
 import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
@@ -188,16 +186,7 @@ function cssPathFor(el: Element): string {
   return segments.join(" > ");
 }
 
-function openPreviewTarget(target: string, navigate: NavigateFunction) {
-  if (/^https?:\/\//i.test(target)) {
-    window.open(target, "_blank", "noopener,noreferrer");
-    return;
-  }
-  navigate(target);
-}
-
 export function BuilderView() {
-  const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>("empty");
   const [builderKind, setBuilderKind] = useState<BuilderKind>("app");
   const [prompt, setPrompt] = useState("");
@@ -217,7 +206,6 @@ export function BuilderView() {
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
-  const previewTarget = getPreviewNavigationTarget(state.previewUrl, state.appId);
   const iterationTargetOptions = useMemo(() => buildIterationTargetOptions(state.draft), [state.draft]);
   const selectedIterationTarget = iterationTargetOptions.find((target) => target.id === iterTargetId) ?? iterationTargetOptions[0]!;
   const selectedTargetKind = selectedElement ? "page" : selectedIterationTarget.kind;
@@ -576,8 +564,12 @@ export function BuilderView() {
     <>
       <header className="flex items-center justify-between px-4 h-10 border-b border-line text-sm">
         <div className="flex items-center gap-2">
-          {state.appId && (
-            <a href="/" className="text-silver-400 hover:text-silver-50" aria-label="Back">
+          {state.appId ? (
+            <a href="/builder" className="text-silver-400 hover:text-silver-50" aria-label="Back to builder">
+              ‹
+            </a>
+          ) : (
+            <a href="/" className="text-silver-400 hover:text-silver-50" aria-label="Back to home">
               ‹
             </a>
           )}
@@ -809,7 +801,9 @@ export function BuilderView() {
                 return (
                   <div key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
                     <Ico size={13} style={{ marginRight: 6, verticalAlign: "-2px" }}/>{t.label}
-                    {"count" in t && t.count !== undefined && t.count > 0 && <span className="mono muted" style={{ fontSize: 10.5, marginLeft: 6 }}>{t.count}</span>}
+                    {"count" in t && t.count !== undefined && t.count > 0 && (
+                      <span className="mono muted" style={{ fontSize: 10.5, marginLeft: 6 }}>· {t.count}</span>
+                    )}
                   </div>
                 );
               })}

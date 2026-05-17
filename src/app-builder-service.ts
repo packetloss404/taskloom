@@ -798,6 +798,7 @@ function chooseTemplate(prompt: string): TemplateDefinition {
 }
 
 function buildAppName(prompt: string, template: TemplateDefinition): string {
+  const suffixTokens = new Set(template.nameSuffix.toLowerCase().split(/\s+/).filter(Boolean));
   const domainWords = prompt
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
@@ -806,6 +807,7 @@ function buildAppName(prompt: string, template: TemplateDefinition): string {
     .filter((word) => word.length > 2)
     .filter((word) => !STOP_WORDS.has(word))
     .filter((word) => !template.keywords.includes(word))
+    .filter((word) => !suffixTokens.has(word))
     .slice(0, 2);
 
   const prefix = domainWords.length > 0
