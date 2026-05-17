@@ -7,6 +7,7 @@ import { assertPermission, type WorkspacePermission } from "./rbac.js";
 import { applyCsrfCookie, clearCsrfCookie, rejectCrossOriginPrivateMutation } from "./route-security.js";
 import {
   generateAppDraftFromPrompt,
+  generateAppDraftWithLLM,
   type ApiRouteStub,
   type AppDraft,
   type CrudFlowDraft,
@@ -440,13 +441,25 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
       await emitStep(sse, "Reading the prompt");
       await chatStreamDelay();
       const prompt = promptFromBody(body.prompt);
-      const draft = generateAppDraftFromPrompt(prompt);
-      await emitStep(sse, `Selected the ${draft.templateId} template`);
+      // Fork B: prefer the LLM-backed generator when ANTHROPIC_API_KEY is
+      // configured, otherwise fall back to the deterministic template path.
+      // The `emit` callback forwards model prose token-by-token to the UI as
+      // SSE "delta" events so the chat bubble streams as the model thinks.
+      const { draft, source } = await generateAppDraftWithLLM(
+        prompt,
+        { preset: body.preset },
+        async (text) => {
+          await sse.writeSSE({ event: "delta", data: JSON.stringify({ type: "delta", text }) });
+        },
+      );
+      await emitStep(sse, source === "llm"
+        ? `Drafted with Claude (${draft.templateId} shape)`
+        : `Selected the ${draft.templateId} template`);
       await chatStreamDelay();
       await emitStep(sse, "Building data schema and API routes");
       await chatStreamDelay();
       const built = buildAppBuilderDraft(draft, context);
-      await sse.writeSSE({ event: "draft", data: JSON.stringify({ type: "draft", draft: built }) });
+      await sse.writeSSE({ event: "draft", data: JSON.stringify({ type: "draft", draft: built, source }) });
       await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
     } catch (error) {
       await sse.writeSSE({ event: "error", data: JSON.stringify({ type: "error", error: redactedErrorMessage(error) }) });
