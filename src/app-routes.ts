@@ -540,6 +540,12 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
       await emitStep(sse, "Building data schema and API routes");
       await chatStreamDelay();
       const built = buildAppBuilderDraft(draft, context);
+      // When no LLM ran (template fallback), synthesize conversational
+      // narration so the chat thread isn't silent. The LLM paths already
+      // emit their own prose via the `emit` callback above.
+      if (source === "template") {
+        await streamTemplateNarration(sse, draft);
+      }
       await sse.writeSSE({ event: "draft", data: JSON.stringify({ type: "draft", draft: built, source }) });
       await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
     } catch (error) {
@@ -547,6 +553,65 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
     }
   });
 });
+
+const TEMPLATE_NARRATION_LABELS: Record<AppDraft["templateId"], string> = {
+  crm: "CRM",
+  booking: "booking",
+  internal_dashboard: "internal dashboard",
+  task_tracker: "task tracker",
+  customer_portal: "customer portal",
+};
+
+function templateNarrationLines(draft: AppDraft): string[] {
+  const lines: string[] = [];
+  lines.push("Let me take a look at what you're describing…\n\n");
+
+  const entities = Array.isArray(draft.dataSchema?.entities) ? draft.dataSchema.entities : [];
+  const routes = Array.isArray(draft.apiRouteStubs) ? draft.apiRouteStubs : [];
+  const label = (draft.templateId && TEMPLATE_NARRATION_LABELS[draft.templateId]) || draft.templateId;
+  if (label) {
+    lines.push(`I think the **${label}** shape fits this best — it has ${entities.length} entities and ${routes.length} routes ready to go.\n\nLet me put the plan together…\n\n`);
+  }
+
+  const entityNames = entities.map((entity) => entity?.name).filter((name): name is string => typeof name === "string" && name.length > 0);
+  if (entityNames.length > 0) {
+    lines.push(`I'm sketching out the data model: ${entityNames.join(", ")}.\n\n`);
+  }
+
+  const routeNames = routes
+    .map((route) => (route && typeof route.path === "string" ? route.path : null))
+    .filter((path): path is string => typeof path === "string" && path.length > 0)
+    .slice(0, 6);
+  if (routeNames.length > 0) {
+    lines.push(`Wiring up the API surface — ${routeNames.join(", ")}.\n\n`);
+  }
+
+  lines.push("Here's the plan. Click Approve when it looks right.\n\n");
+  return lines;
+}
+
+async function streamTemplateNarration(
+  sse: { writeSSE: (event: { event: string; data: string }) => Promise<void> },
+  draft: AppDraft,
+): Promise<void> {
+  let lines: string[];
+  try {
+    lines = templateNarrationLines(draft);
+  } catch {
+    return;
+  }
+  for (const line of lines) {
+    // Split on word boundaries so each whitespace-separated token streams
+    // as its own SSE chunk, but preserve trailing whitespace (incl. the
+    // double newlines that separate paragraphs) so the UI renders newlines.
+    const tokens = line.match(/\S+\s*|\s+/g);
+    if (!tokens) continue;
+    for (const token of tokens) {
+      await emitProse(sse, token);
+      await chatStreamDelay();
+    }
+  }
+}
 
 appRoutes.get("/app/generated-apps", async (c) => listGeneratedApps(c));
 appRoutes.get("/app/generated-apps/:appId/source", async (c) => getGeneratedAppSourceFiles(c));
