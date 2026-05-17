@@ -34,6 +34,44 @@ const PRESET_OPTIONS: Array<{ id: BuilderModelPresetId; label: string; hint: str
   { id: "local", label: "Local", hint: "Ollama-first" },
 ];
 
+/**
+ * Quality-tier ladder used by the per-message "Try again smarter" affordance.
+ * `local` is a separate provider axis and not part of the smarter ladder; when
+ * the user is on `local` we treat them as already at the top tier (the button
+ * surfaces the "Already at the highest preset." tooltip).
+ */
+const SMARTER_TIER_LADDER: BuilderModelPresetId[] = ["cheap", "fast", "smart"];
+
+function nextSmarterPreset(current: BuilderModelPresetId): BuilderModelPresetId | null {
+  const idx = SMARTER_TIER_LADDER.indexOf(current);
+  if (idx < 0) return null; // e.g. "local"
+  if (idx >= SMARTER_TIER_LADDER.length - 1) return null;
+  return SMARTER_TIER_LADDER[idx + 1] ?? null;
+}
+
+/**
+ * Build a short context snippet describing an assistant message so the
+ * "Tell me what to change" affordance can prepend a useful hint to the
+ * iteration composer (e.g. "About this change (diff: contacts page): ").
+ */
+function describeMessageForContext(msg: ChatMessage | undefined): string {
+  if (!msg) return "";
+  if (msg.body.kind === "plan") {
+    const name = msg.body.draft?.app?.name;
+    return name ? `plan: ${name}` : "plan";
+  }
+  if (msg.body.kind === "diff") {
+    const label = msg.body.iteration?.target?.label;
+    return label ? `diff: ${label}` : "diff";
+  }
+  if (msg.body.kind === "prose" || msg.body.kind === "text") {
+    const text = msg.body.text.replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  }
+  return "";
+}
+
 type ChatBody =
   | { kind: "text"; text: string }
   | { kind: "steps"; steps: string[] }
@@ -277,9 +315,10 @@ export function BuilderView() {
     return () => { mounted = false; };
   }, [state.appId, state.checkpointId]);
 
-  const generate = async () => {
+  const generate = async (opts?: { presetOverride?: BuilderModelPresetId }) => {
     const nextPrompt = prompt.trim();
     if (!nextPrompt || working) return;
+    const effectivePreset = opts?.presetOverride ?? composerPreset;
     const previousMode = mode;
     setWorking(true);
     setError(null);
@@ -288,7 +327,7 @@ export function BuilderView() {
     const assistantId = newId();
     appendMessage({ id: assistantId, role: "assistant", body: { kind: "steps", steps: [] }, streaming: true });
     try {
-      await api.streamAppBuilderDraft({ prompt: nextPrompt, preset: composerPreset }, (event) => {
+      await api.streamAppBuilderDraft({ prompt: nextPrompt, preset: effectivePreset }, (event) => {
         if (event.type === "step") {
           updateMessage(assistantId, (m) => {
             if (m.body.kind !== "steps") return m;
@@ -383,9 +422,10 @@ export function BuilderView() {
     }
   };
 
-  const iterate = async (promptOverride?: string) => {
+  const iterate = async (promptOverride?: string, opts?: { presetOverride?: BuilderModelPresetId }) => {
     const effectivePrompt = promptOverride ?? iterPrompt;
     if (!state.draft || !effectivePrompt.trim() || working) return;
+    const effectivePreset = opts?.presetOverride ?? composerPreset;
     const baseTarget = selectedElement ? pageIterationTarget : selectedIterationTarget;
     const target: AppBuilderIterationTarget = selectedElement
       ? {
@@ -414,7 +454,7 @@ export function BuilderView() {
         draft: state.draft,
         target,
         prompt: composedPrompt,
-        preset: composerPreset,
+        preset: effectivePreset,
       }, (event) => {
         if (event.type === "step") {
           updateMessage(assistantId, (m) => {
@@ -751,12 +791,76 @@ export function BuilderView() {
                 <ThreadMessage
                   key={msg.id}
                   message={msg}
+                  preset={composerPreset}
                   onApplyIteration={() => { void applyIteration(); }}
                   onRevert={(checkpointId) => { void rollback(checkpointId); }}
                   onFixErrors={(errors) => {
                     const fixPrompt = buildFixErrorsPrompt(errors);
                     setIterPrompt(fixPrompt);
                     void iterate(fixPrompt);
+                  }}
+                  onTrySmarter={(messageId) => {
+                    const target = messages.find((m) => m.id === messageId);
+                    if (!target) return;
+                    const nextPreset = nextSmarterPreset(composerPreset);
+                    if (!nextPreset) return;
+                    setComposerPreset(nextPreset);
+                    if (target.body.kind === "plan") {
+                      // Re-run draft generation at the smarter tier using the current
+                      // prompt. We pass the preset directly so we never depend on the
+                      // setComposerPreset state update having flushed first.
+                      void generate({ presetOverride: nextPreset });
+                    } else if (target.body.kind === "diff") {
+                      // Reuse the prompt from the user message immediately preceding
+                      // this assistant diff so a retry mirrors the original turn.
+                      const idx = messages.findIndex((m) => m.id === messageId);
+                      let priorPrompt = "";
+                      for (let i = idx - 1; i >= 0; i--) {
+                        const prev = messages[i]!;
+                        if (prev.role === "user" && prev.body.kind === "text") {
+                          priorPrompt = prev.body.text;
+                          break;
+                        }
+                      }
+                      if (!priorPrompt) return;
+                      void iterate(priorPrompt, { presetOverride: nextPreset });
+                    }
+                  }}
+                  onTellMeWhatToChange={(messageId) => {
+                    const target = messages.find((m) => m.id === messageId);
+                    const summary = describeMessageForContext(target);
+                    const contextLine = summary ? `About this change (${summary}): ` : `About this change: `;
+                    // Iteration composer exists post-draft. If we have a draft, prepend
+                    // to iterPrompt and focus the post-draft textarea. Otherwise focus
+                    // the main (cold-start) composer.
+                    if (state.draft) {
+                      setIterPrompt((prev) => (prev.startsWith(contextLine) ? prev : contextLine + prev));
+                      // After the state update commits, focus the iteration textarea.
+                      // We look it up via placeholder match so we never have to edit the
+                      // composer section to add a ref.
+                      requestAnimationFrame(() => {
+                        const composer = document.querySelector<HTMLTextAreaElement>(
+                          'textarea.field[placeholder^="Refine"], textarea.field[placeholder^="Tell me what to change"]',
+                        );
+                        if (composer) {
+                          composer.focus();
+                          const len = composer.value.length;
+                          composer.setSelectionRange(len, len);
+                        }
+                      });
+                    } else {
+                      setPrompt((prev) => (prev.startsWith(contextLine) ? prev : contextLine + prev));
+                      requestAnimationFrame(() => {
+                        const composer = document.querySelector<HTMLTextAreaElement>(
+                          'textarea.field',
+                        );
+                        if (composer) {
+                          composer.focus();
+                          const len = composer.value.length;
+                          composer.setSelectionRange(len, len);
+                        }
+                      });
+                    }
                   }}
                   working={working}
                 />
@@ -937,15 +1041,21 @@ export function BuilderView() {
 
 function ThreadMessage({
   message,
+  preset,
   onApplyIteration,
   onRevert,
   onFixErrors,
+  onTrySmarter,
+  onTellMeWhatToChange,
   working,
 }: {
   message: ChatMessage;
+  preset: BuilderModelPresetId;
   onApplyIteration: () => void;
   onRevert: (checkpointId: string) => void;
   onFixErrors: (errors: string[]) => void;
+  onTrySmarter: (messageId: string) => void;
+  onTellMeWhatToChange: (messageId: string) => void;
   working: boolean;
 }) {
   const { role, body, streaming, checkpointId } = message;
@@ -963,6 +1073,7 @@ function ThreadMessage({
   }
 
   const isUser = role === "user";
+  const isAssistant = role === "assistant";
   // Per-message revert is exposed only for assistant messages that produced a
   // checkpoint (plan or diff with a known checkpointId, never for streaming partials).
   const canRevert =
@@ -970,6 +1081,34 @@ function ThreadMessage({
     !streaming &&
     !!checkpointId &&
     (body.kind === "plan" || body.kind === "diff");
+  // "Try again smarter" only makes sense on assistant plan/diff messages; we
+  // disable while still streaming (no checkpointId yet means the turn is mid-flight).
+  const canTrySmarter = isAssistant && (body.kind === "plan" || body.kind === "diff");
+  const smarterTier = canTrySmarter ? nextSmarterPreset(preset) : null;
+  const trySmarterDisabled = working || streaming || !checkpointId || !smarterTier;
+  const trySmarterTitle = !smarterTier
+    ? "Already at the highest preset."
+    : streaming || !checkpointId
+      ? "Wait for this response to finish before retrying."
+      : `Re-run at the ${smarterTier} preset.`;
+  // "Tell me what to change" renders on every assistant message so a confused
+  // user always has a fast way to nudge the iteration composer with context.
+  const canTellMe = isAssistant;
+  const hoverBtnStyle = {
+    padding: "2px 8px",
+    fontSize: 10.5,
+    background: "transparent",
+    border: "1px solid var(--line-2)",
+    borderRadius: 4,
+    color: "var(--silver-300)",
+    cursor: working ? "not-allowed" : "pointer",
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: 4,
+    textTransform: "none" as const,
+    letterSpacing: 0,
+  };
+  const hasAnyHoverAction = canRevert || canTrySmarter || canTellMe;
   return (
     <div className="group" style={{ display: "flex", gap: 8, position: "relative" }}>
       <div style={{
@@ -982,31 +1121,52 @@ function ThreadMessage({
         <div className="kicker" style={{ fontSize: 9.5, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
           <span>{isUser ? "You" : "Taskloom"}</span>
           {streaming && <span className="mono" style={{ color: "var(--green)" }}>· thinking</span>}
-          {canRevert && (
-            <button
-              type="button"
-              className="opacity-0 group-hover:opacity-100 transition mono"
-              onClick={() => onRevert(checkpointId!)}
-              disabled={working}
-              title={`Revert app to the checkpoint produced by this message (${checkpointId!.slice(0, 8)})`}
-              style={{
-                marginLeft: "auto",
-                padding: "2px 8px",
-                fontSize: 10.5,
-                background: "transparent",
-                border: "1px solid var(--line-2)",
-                borderRadius: 4,
-                color: "var(--silver-300)",
-                cursor: working ? "not-allowed" : "pointer",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                textTransform: "none",
-                letterSpacing: 0,
-              }}
+          {hasAnyHoverAction && (
+            <div
+              className="opacity-0 group-hover:opacity-100 transition"
+              style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}
             >
-              <span aria-hidden>↶</span> Revert to here
-            </button>
+              {canTrySmarter && (
+                <button
+                  type="button"
+                  className="mono"
+                  onClick={() => onTrySmarter(message.id)}
+                  disabled={trySmarterDisabled}
+                  title={trySmarterTitle}
+                  style={{
+                    ...hoverBtnStyle,
+                    cursor: trySmarterDisabled ? "not-allowed" : "pointer",
+                    opacity: trySmarterDisabled ? 0.55 : 1,
+                  }}
+                >
+                  <I.zap size={11}/> Try again smarter
+                </button>
+              )}
+              {canTellMe && (
+                <button
+                  type="button"
+                  className="mono"
+                  onClick={() => onTellMeWhatToChange(message.id)}
+                  disabled={working}
+                  title="Focus the iteration composer with this message as context."
+                  style={hoverBtnStyle}
+                >
+                  <I.edit size={11}/> Tell me what to change
+                </button>
+              )}
+              {canRevert && (
+                <button
+                  type="button"
+                  className="mono"
+                  onClick={() => onRevert(checkpointId!)}
+                  disabled={working}
+                  title={`Revert app to the checkpoint produced by this message (${checkpointId!.slice(0, 8)})`}
+                  style={hoverBtnStyle}
+                >
+                  <span aria-hidden>↶</span> Revert to here
+                </button>
+              )}
+            </div>
           )}
         </div>
         <ThreadMessageBody body={body} onApplyIteration={onApplyIteration} onFixErrors={onFixErrors} working={working}/>
