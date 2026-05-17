@@ -13,7 +13,7 @@ export type ViewKey =
   | "notifications" | "storage" | "backups"
   | "admin";
 
-type NavSpec = { id: ViewKey; label: string; icon: IconKey; badge?: string };
+type NavSpec = { id: ViewKey; label: string; icon: IconKey; badge?: string; title?: string };
 
 function viewFromPath(pathname: string): ViewKey {
   const m = pathname.match(/^\/?([^/?#]*)/);
@@ -42,10 +42,10 @@ export function Sidebar({ agentBadge }: { agentBadge?: string }) {
   };
 
   const primary: NavSpec[] = [
-    { id: "builder", label: "Build", icon: "code", badge: "live" },
-    { id: "agents", label: "Projects", icon: "layout", badge: agentBadge },
-    { id: "runs", label: "Runs", icon: "activity" },
-    { id: "admin", label: "Admin", icon: "settings" },
+    { id: "builder", label: "Build", icon: "code", badge: "live", title: "Create and iterate on apps and agents" },
+    { id: "agents", label: "Projects", icon: "layout", badge: agentBadge, title: "Browse generated apps and agents in this workspace" },
+    { id: "runs", label: "Runs", icon: "activity", title: "See past agent runs" },
+    { id: "admin", label: "Admin", icon: "settings", title: "Workspace settings, integrations, secrets, billing" },
   ];
 
   const initial = (workspaceName.trim()[0] ?? "W").toUpperCase();
@@ -111,7 +111,7 @@ function NavItem({
 }) {
   const Ico = I[item.icon] || I.home;
   return (
-    <div className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>
+    <div className={`nav-item ${active ? "active" : ""}`} title={item.title} onClick={onClick}>
       <Ico size={15} className="ico" />
       <span>{item.label}</span>
       {item.badge && <span className="badge">{item.badge}</span>}
