@@ -19,6 +19,7 @@ import type {
   AppBuilderSmokeBuildStatus,
   AppBuilderWorkspaceSummary,
   BuilderModelPresetId,
+  BuilderProviderStatusPayload,
 } from "@/lib/types";
 
 interface SelectedElement {
@@ -209,6 +210,13 @@ export function BuilderView() {
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composerPreset, setComposerPreset] = useState<BuilderModelPresetId>("smart");
+  // Resolved (provider, model) for each preset, computed from current env on
+  // the server. Used to render the model-preset chip tooltips so users can see
+  // *which* model their selection actually drives.
+  const providerStatus = useApiData<BuilderProviderStatusPayload>(
+    () => api.getBuilderProviderStatus(),
+    [],
+  );
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const iterationTargetOptions = useMemo(() => buildIterationTargetOptions(state.draft), [state.draft]);
@@ -790,25 +798,37 @@ export function BuilderView() {
               <div style={{ display: "flex", gap: 4, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
                 {PRESET_OPTIONS.map((p) => {
                   const active = composerPreset === p.id;
+                  const resolution = providerStatus.data?.presets[p.id] ?? null;
+                  const tooltip = resolution
+                    ? `${p.hint} — ${resolution.provider}/${resolution.model}${resolution.local ? " (local)" : ""}`
+                    : providerStatus.loading
+                      ? `${p.hint} — resolving…`
+                      : `${p.hint} — no provider configured (template fallback)`;
                   return (
                     <button
                       key={p.id}
                       onClick={() => setComposerPreset(p.id)}
-                      title={p.hint}
+                      title={tooltip}
                       style={{
                         padding: "3px 9px",
                         borderRadius: 999,
                         border: `1px solid ${active ? "var(--green-deep)" : "var(--line-2)"}`,
                         background: active ? "rgba(184,242,92,0.08)" : "transparent",
-                        color: active ? "var(--green)" : "var(--silver-300)",
+                        color: active ? "var(--green)" : resolution ? "var(--silver-300)" : "var(--silver-500)",
                         fontFamily: "var(--font-mono)",
                         fontSize: 10.5,
                         textTransform: "uppercase",
                         letterSpacing: "0.08em",
                         cursor: "pointer",
+                        opacity: resolution ? 1 : 0.7,
                       }}
                     >
                       {p.label}
+                      {resolution && (
+                        <span style={{ marginLeft: 4, opacity: 0.6, textTransform: "lowercase", letterSpacing: 0 }}>
+                          · {resolution.provider}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

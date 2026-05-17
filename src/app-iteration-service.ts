@@ -1,5 +1,10 @@
-import { AnthropicProvider } from "./providers/anthropic.js";
-import type { ProviderStreamChunk } from "./providers/types.js";
+import type { LLMProvider, ProviderStreamChunk } from "./providers/types.js";
+import { getDefaultRouter } from "./providers/router.js";
+import { registerDefaultProviders } from "./providers/bootstrap.js";
+import {
+  resolvePresetToProviderModel,
+  type ModelPreset,
+} from "./providers/preset-resolver.js";
 
 export type AppIterationTargetKind = "page" | "api" | "data" | "auth" | "config";
 export type AppIterationAction = "add" | "update" | "remove";
@@ -11,7 +16,12 @@ export interface AppIterationLLMOptions {
   workspaceId: string;
   preset?: AppIterationPresetId;
   signal?: AbortSignal;
-  provider?: AnthropicProvider;
+  /**
+   * Inject a pre-built provider (used by tests to mock the SDK). When set, the
+   * router resolver is bypassed and this provider is used directly. Accepts
+   * any `LLMProvider` (was previously typed as `AnthropicProvider` only).
+   */
+  provider?: LLMProvider;
 }
 
 export interface AppIterationLLMResult {
@@ -958,10 +968,6 @@ function resolveIterationModel(preset: AppIterationPresetId | undefined): string
   return PRESET_TO_MODEL[preset] ?? DEFAULT_LLM_MODEL;
 }
 
-function hasAnthropicCredentials(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.trim().length > 0);
-}
-
 function buildIterationUserMessage(
   draft: GeneratedAppDraftLike,
   target: AppIterationTargetInput | undefined,
@@ -996,12 +1002,26 @@ export async function applyAppIterationViaLLM(
   options: AppIterationLLMOptions,
   emit?: (chunk: string) => void | Promise<void>,
 ): Promise<AppIterationLLMResult | null> {
-  if (!options.provider && !hasAnthropicCredentials()) {
-    return null;
+  let provider: LLMProvider;
+  let model: string;
+
+  if (options.provider) {
+    provider = options.provider;
+    model = resolveIterationModel(options.preset);
+  } else {
+    // Route through the preset resolver so BYOK keys for any of the supported
+    // providers (Anthropic, OpenAI, Minimax, OpenRouter, Gemini, Ollama) drive
+    // the iteration LLM, not just Anthropic.
+    registerDefaultProviders();
+    const resolved = resolvePresetToProviderModel(options.preset as ModelPreset | undefined);
+    if (!resolved) return null;
+    const router = getDefaultRouter();
+    const candidate = router.get(resolved.provider);
+    if (!candidate) return null;
+    provider = candidate;
+    model = resolved.model;
   }
 
-  const provider = options.provider ?? new AnthropicProvider();
-  const model = resolveIterationModel(options.preset);
   const userMessage = buildIterationUserMessage(draft, target, prompt);
 
   const stream = provider.stream({

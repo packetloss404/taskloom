@@ -165,6 +165,28 @@ export interface BuilderModelPreset {
   fallbacks?: BuilderModelRoutingChoice[];
 }
 
+export type BuilderProviderName =
+  | "anthropic"
+  | "openai"
+  | "minimax"
+  | "ollama"
+  | "gemini"
+  | "openrouter"
+  | "stub";
+
+export interface BuilderProviderResolution {
+  provider: BuilderProviderName;
+  model: string;
+  local: boolean;
+}
+
+export interface BuilderProviderStatusPayload {
+  presets: Record<BuilderModelPresetId, BuilderProviderResolution | null>;
+  availableProviders: BuilderProviderName[];
+  /** Raw TASKLOOM_PROVIDER_PRIORITY env value, or null if unset. */
+  priority: string | null;
+}
+
 export interface ProviderRecord {
   id: string;
   workspaceId: string;

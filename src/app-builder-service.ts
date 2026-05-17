@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
-import { AnthropicProvider, type AnthropicClientFactory } from "./providers/anthropic.js";
-import type { ProviderStreamChunk } from "./providers/types.js";
+import type { AnthropicClientFactory } from "./providers/anthropic.js";
+import type { LLMProvider, ProviderStreamChunk } from "./providers/types.js";
+import { getDefaultRouter } from "./providers/router.js";
+import { registerDefaultProviders } from "./providers/bootstrap.js";
+import {
+  resolvePresetToProviderModel,
+  type ModelPreset,
+} from "./providers/preset-resolver.js";
 import {
   APP_BUILDER_SYSTEM_PROMPT,
   APP_BUILDER_TOOL_DESCRIPTION,
@@ -739,14 +745,28 @@ export interface AppDraftLLMOptions {
   model?: string;
   workspaceId?: string;
   signal?: AbortSignal;
-  /** Override the Anthropic SDK client for tests. */
+  /**
+   * Inject a pre-built provider (used by tests to mock the SDK). When set, the
+   * router resolver is bypassed and this provider is used directly.
+   */
+  provider?: LLMProvider;
+  /**
+   * Backwards-compat shim for the test fixtures that injected an Anthropic SDK
+   * factory directly. When set together with `apiKey`, a one-off
+   * AnthropicProvider is instantiated locally (test-only path).
+   */
   clientFactory?: AnthropicClientFactory;
-  /** Force the API key, otherwise process.env.ANTHROPIC_API_KEY is used. */
+  /** Force the API key (test-only when paired with `clientFactory`). */
   apiKey?: string;
 }
 
 export type AppDraftEmit = (text: string) => void | Promise<void>;
 
+/**
+ * Resolves a preset to a default Anthropic model name. Kept for backwards
+ * compatibility (older callers may want a deterministic Anthropic model
+ * string). The runtime path now goes through the preset resolver instead.
+ */
 export function modelForPreset(preset?: AppDraftLLMPreset, override?: string): string {
   if (override && override.trim().length > 0) return override.trim();
   switch (preset) {
@@ -765,9 +785,28 @@ export function modelForPreset(preset?: AppDraftLLMPreset, override?: string): s
 }
 
 /**
- * Calls the Anthropic Messages API with a structured submit_app_draft tool
- * and a cached system prompt. Returns null on any error (no key, network,
- * malformed tool input) so the caller can fall back to the template generator.
+ * Internal: backwards-compat test path. Constructs a one-off AnthropicProvider
+ * when the legacy `apiKey + clientFactory` test options are supplied. The
+ * dynamic import keeps the `new AnthropicProvider` callsite out of the file's
+ * main code path so the router-only design stays clean.
+ */
+async function legacyAnthropicProviderForTests(
+  apiKey: string,
+  clientFactory: AnthropicClientFactory,
+): Promise<LLMProvider> {
+  const mod = await import("./providers/anthropic.js");
+  return new mod.AnthropicProvider({
+    apiKeyResolver: async () => apiKey,
+    clientFactory,
+  }) as unknown as LLMProvider;
+}
+
+/**
+ * Generates an AppDraft by streaming a structured `submit_app_draft` tool call
+ * through whichever provider the preset resolver picks (Anthropic by default,
+ * any of the 5 supported BYOK providers once keys are configured). Returns
+ * `null` on any error (no key, network, malformed tool input) so the caller
+ * can fall back to the template generator.
  */
 export async function generateAppDraftViaLLM(
   prompt: string,
@@ -777,14 +816,30 @@ export async function generateAppDraftViaLLM(
   const trimmed = (prompt ?? "").trim();
   if (trimmed.length < 8) return null;
 
-  const apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey.trim().length === 0) return null;
+  let provider: LLMProvider;
+  let model: string;
 
-  const provider = new AnthropicProvider({
-    apiKeyResolver: async () => apiKey,
-    ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
-  });
-  const model = modelForPreset(options.preset, options.model);
+  if (options.provider) {
+    // Explicit provider injection (tests + future advanced callers).
+    provider = options.provider;
+    model = options.model ?? modelForPreset(options.preset);
+  } else if (options.apiKey && options.clientFactory) {
+    // Legacy test path: caller supplied an Anthropic SDK factory + key.
+    provider = await legacyAnthropicProviderForTests(options.apiKey, options.clientFactory);
+    model = options.model ?? modelForPreset(options.preset);
+  } else {
+    // Default runtime path: resolve preset → (provider, model) via the router.
+    registerDefaultProviders();
+    const resolved = resolvePresetToProviderModel(options.preset as ModelPreset | undefined, {
+      ...(options.model ? { modelOverride: options.model } : {}),
+    });
+    if (!resolved) return null;
+    const router = getDefaultRouter();
+    const candidate = router.get(resolved.provider);
+    if (!candidate) return null;
+    provider = candidate;
+    model = resolved.model;
+  }
 
   let stream: AsyncIterable<ProviderStreamChunk>;
   try {
@@ -796,8 +851,8 @@ export async function generateAppDraftViaLLM(
       temperature: 0.2,
       ...(options.signal ? { signal: options.signal } : {}),
       messages: [
-        // System message is large + reused, so AnthropicProvider will attach
-        // cache_control: { type: "ephemeral" } automatically (threshold ~1k tok).
+        // System message is large + reused; provider adapters that support
+        // prompt-caching will attach cache_control automatically.
         { role: "system", content: APP_BUILDER_SYSTEM_PROMPT },
         { role: "user", content: trimmed },
       ],
