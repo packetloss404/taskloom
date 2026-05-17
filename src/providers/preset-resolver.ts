@@ -71,11 +71,15 @@ const PRESET_MODELS: Record<ProviderName, Record<ModelPreset, string>> = {
     cheap: "abab6.5-chat",
     local: "abab6.5-chat",
   },
+  // Ollama / generic-local defaults. These names assume a local Ollama tag
+  // catalog; when pointing at vLLM / LM Studio / llama.cpp the model name
+  // probably doesn't match what's loaded — set LOCAL_LLM_MODEL to override
+  // every local call to a single specific model.
   ollama: {
     fast: "llama3.2",
-    smart: "llama3.2",
-    cheap: "llama3.2",
-    local: "llama3.2",
+    smart: "qwen2.5-coder:32b",
+    cheap: "qwen2.5-coder:7b",
+    local: "qwen2.5-coder:32b",
   },
   gemini: {
     fast: "gemini-2.5-flash",
