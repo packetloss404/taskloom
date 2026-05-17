@@ -2,17 +2,20 @@
 
 **Self-hosted, open-source workbench for building internal apps and agents. Bring your own LLM key, own your runtime, own your source code.**
 
-Taskloom is a self-hosted, open-source workbench for building internal apps and agents. You bring your own LLM key (Anthropic, OpenAI, MiniMax, or local Ollama), your own deploy target, and you keep full ownership of the generated source code. No vendor lock-in, no per-seat pricing, no cloud dependency, no telemetry.
+Taskloom is a self-hosted workbench for drafting internal apps and agents from natural-language prompts. The builder is a full-bleed surface at `/builder` — chat thread, streamed prose, draft, plan, generated files, and a saved local preview. The rest of the workbench (Projects, Runs, and a consolidated Admin) lives behind a four-item sidebar so operators can keep most of their day inside the builder.
 
-Sign in, open `/builder`, describe an internal tool or agent, get a brief, plan, generated source files, and a saved local preview. Iterate with scoped change prompts, then create a local publish package and URL handoff for the workspace you operate. MIT licensed.
+Today, the LLM wire-up is **Anthropic-only** — `/builder` calls `AnthropicProvider` for both the initial draft and scoped iteration. Without an API key, the builder falls back to deterministic template-only generation, which is enough to verify the loop is wired up but not enough to produce real apps from open-ended prompts. Multi-provider BYOK (OpenAI / MiniMax / OpenRouter / Gemini, plus local Ollama and vLLM) is the next step — see [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md), Track A.
+
+This is "Fork B": self-host first, MIT licensed, no telemetry, no vendor in the path. Hosted-only conveniences (free public subdomains, pre-wired OAuth, managed App Store submission, hosted browser-agent farms, cross-tenant memory, vendor-managed credit meters) are intentionally out of scope — they are inventoried in [CLOUD.md](CLOUD.md) for reference, not as a roadmap commitment.
 
 ## How it compares
 
 Taskloom is not trying to match hosted AI app builders (twin.so, Replit Agents, Lovable, v0, anything.com) feature-for-feature. It is a different category — a self-host workbench, not a hosted SaaS — and the tradeoffs are deliberate.
 
-- **What self-host gives up.** No free public subdomain with auto TLS (you bring your own DNS and certificate). No pre-wired OAuth connectors (you register your own OAuth clients with each provider). No one-click App Store / Play Store submission (no managed macOS build farm). No hosted browser-agent farm with persistent sessions. No cross-tenant user memory. No vendor-hosted credit meter.
+- **What self-host gives up.** No free public subdomain with auto TLS (you bring your own DNS and certificate). No pre-wired OAuth connectors (you register your own OAuth clients with each provider). No one-click App Store / Play Store submission (no managed macOS build farm). No hosted browser-agent farm with persistent sessions. No cross-tenant user memory. No vendor-hosted credit meter. No vendor-amortized LLM key — you bring your own, and today only Anthropic is wired in.
 - **What self-host gains.** Your data, your source code, your LLM key, and your deploy target — all on infrastructure you own. No vendor in the path between you and your customers. No per-seat pricing. No rate limits beyond what your own LLM provider imposes on your own key. Single MIT-licensed binary that runs anywhere Node 22 runs — laptop, container, VPS, homelab, behind a VPN.
-- **Honest about the gap.** The deferred hosted-only capabilities and what a future "Taskloom Cloud" product would need to ship them are inventoried in [CLOUD.md](CLOUD.md). That document is for strategic reference, not a roadmap commitment — self-host stays the default.
+- **Honest about what is not built yet.** Multi-provider BYOK is planned but not shipped (Anthropic only today). Generated apps persist data in the browser via sql.js loaded from a jsdelivr CDN — known issue, scheduled to move to a per-app server runtime with SQLite on disk in Phase 3 Track C. The builder writes a structured draft today; whole-file-tree codegen is Track B.
+- **Honest about the gap with hosted.** The deferred hosted-only capabilities and what a future "Taskloom Cloud" product would need to ship them are inventoried in [CLOUD.md](CLOUD.md). That document is for strategic reference, not a roadmap commitment — self-host stays the default.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue.svg)](https://github.com/packetloss404/taskloom/releases)
@@ -65,16 +68,20 @@ npm start
 
 ### Bring your own LLM key
 
-Taskloom does not ship with a bundled LLM key. The builder needs one to turn open-ended prompts into briefs, plans, and source files; without a key it falls back to deterministic template-only generation. Configure a provider in one of two ways:
+Taskloom does not ship with a bundled LLM key. The builder needs one to turn open-ended prompts into briefs, plans, and source files; without a key it falls back to deterministic template-only generation.
 
-- **In the workbench** — open the **Providers** view and paste a key. It is stored in the encrypted secrets vault (AES-256-GCM at rest), never logged.
-- **As an environment variable** — copy `.env.example` to `.env` and set one of:
-  - `ANTHROPIC_API_KEY=sk-ant-...` (recommended default; targets `claude-sonnet-4-6`; see https://docs.claude.com/en/api)
-  - `OPENAI_API_KEY=sk-...`
-  - `OLLAMA_BASE_URL=http://localhost:11434` (fully local; recommend `qwen2.5-coder:32b` or `llama3.1:70b`)
-  - `MINIMAX_API_KEY=...`
+**Today, the builder calls Anthropic only.** Both the initial app draft and scoped iteration route through `AnthropicProvider`. Other providers (OpenAI, MiniMax, OpenRouter, Gemini, local Ollama, local vLLM) have adapters in `src/providers/` and are reachable from agent runs, but the `/builder` draft + iteration path is not yet routed through `ProviderRouter`. Multi-provider BYOK at the builder is Phase 3 Track A — see [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md).
 
-Configure only the providers you actually use. See [docs/SELF_HOST.md](docs/SELF_HOST.md) for the full BYO-key walkthrough, model recommendations, and the template-only fallback behavior.
+Configure a provider in one of two ways:
+
+- **In the workbench** — open **Admin → Integrations** and paste a key. It is stored in the encrypted secrets vault (AES-256-GCM at rest), never logged.
+- **As an environment variable** — copy `.env.example` to `.env` and set:
+  - `ANTHROPIC_API_KEY=sk-ant-...` (today's recommended and only fully wired path for the builder; targets `claude-sonnet-4-6`; see https://docs.claude.com/en/api)
+  - `OPENAI_API_KEY=sk-...` (used by agent runs; not yet used by the builder draft path)
+  - `OLLAMA_BASE_URL=http://localhost:11434` (used by agent runs; not yet used by the builder draft path)
+  - `MINIMAX_API_KEY=...` (used by agent runs; not yet used by the builder draft path)
+
+See [docs/SELF_HOST.md](docs/SELF_HOST.md) for the full BYO-key walkthrough, model recommendations, and the template-only fallback behavior.
 
 ### First 10 minutes: self-host path
 
@@ -121,7 +128,7 @@ You can also register a new account from the sign-up page. To reset local data b
 - **Persistent jobs queue + cron.** Five-field cron expressions for any registered job type, with scheduler leader election for multi-process deployments.
 - **SSE run streaming** for live transcripts and tool-call output.
 - **RBAC** with viewer / member / admin / owner roles, enforced server-side.
-- **Rate limits, releases, backups, storage.** All exposed in the workbench under Operations and Settings.
+- **Consolidated Admin.** Sixteen operator surfaces (Roles, SSO, Secrets, Rate limits, Webhooks, Releases, Storage, Backups, Notifications, Operations, Integrations, Activation, Sandbox, Workflows, Billing, Alerts) live under a single tabbed `/admin/:tab` page. The sidebar collapses to four items: Build, Projects, Runs, Admin. Back-compat redirects keep the old per-page URLs working.
 - **Command palette** (Cmd/Ctrl-K) for fast navigation and run shortcuts.
 
 ### Self-host
@@ -174,11 +181,11 @@ Common environment variables:
 | `TASKLOOM_SANDBOX_CPUS` | `1` | Container CPU limit. |
 | `TASKLOOM_SANDBOX_SMOKE_ENABLED` | `0` | Route builder smoke checks through the sandbox. |
 
-Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are configured per-workspace in the Providers view, stored in the encrypted secrets vault, and never logged.
+Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are configured per-workspace under **Admin → Integrations**, stored in the encrypted secrets vault, and never logged.
 
 ## Architecture
 
-- **Frontend.** React 19 + Vite, mounted at `/`. Tailwind CSS, Geist fonts, a silver / grey / green-light theme. 30+ workbench views covering builder, agents, workflows, runs, integrations, operations, settings, billing, roles, SSO, secrets, webhooks, rate limits, releases, notifications, storage, backups, and sandbox.
+- **Frontend.** React 19 + Vite, mounted at `/`. Tailwind CSS, Geist fonts, a silver / grey / green-light theme. `/builder` is a full-bleed route outside the workbench Shell (chat thread, streamed prose, split preview). The rest of the workbench lives behind a four-item sidebar (Build, Projects, Runs, Admin); sixteen operator surfaces are tabbed under `/admin/:tab`.
 - **Backend.** Hono on `@hono/node-server`. Routes for `/api/health`, `/api/auth/*`, `/api/app/*` (with cross-origin and CSRF enforcement), `/api/public/share`, public webhooks, and sandbox.
 - **Persistence.** File-backed JSON for contributor flow; SQLite (WAL, foreign keys on, busy_timeout) for single-node deployments; managed Postgres for horizontal app writers.
 - **Jobs.** Persisted queue with five-field cron, exponential retry, dead-letter, and optional file- or HTTP-based scheduler leader election.
@@ -209,9 +216,11 @@ Generated `web/dist/` is gitignored; rebuild locally rather than committing it.
 
 ## Known limits
 
+- **Builder LLM is Anthropic-only today.** The `/builder` draft and iteration paths call `AnthropicProvider` directly. Without a key, the builder falls back to deterministic template-only generation. Multi-provider BYOK for the builder (OpenAI, MiniMax, OpenRouter, Gemini, local Ollama, local vLLM) is Phase 3 Track A — see [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md). Agent runs already route through `ProviderRouter` and accept all configured providers.
+- **Generated apps use sql.js loaded from a jsdelivr CDN.** Each generated app's index loads `sql-wasm.js` and the matching wasm file from `cdn.jsdelivr.net` and persists rows in browser `localStorage`. That means generated apps phone home on first load and lose data when the browser store is cleared. Replacing this with a per-app server runtime backed by SQLite on disk is Phase 3 Track C.
 - **Preview is local.** Builder preview routes serve generated source files from disk through Taskloom. They are not public deployments unless you configure and validate a public URL.
 - **Publish is a handoff.** The publish surface records package metadata, artifact manifests, validation state, compose guidance, history, and rollback targets. Operators still run the self-hosted runtime and networking.
-- **Generated source is real but intentionally narrow.** The builder writes a generated React/Vite CRUD bundle, seed data, schema, API helper, and migration starter. It is not yet a full hosted IDE with arbitrary repo editing or per-app package installation.
+- **Generated source is real but intentionally narrow.** The builder writes a generated React/Vite CRUD bundle, seed data, schema, API helper, and migration starter from a small set of templates. Whole-file-tree codegen authored by the LLM via `write_file` tool calls is Phase 3 Track B; today the structured `AppBuilderDraft` is the source of truth.
 - **Sandbox smoke is opt-in.** Docker-backed smoke checks require Docker and `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`; otherwise statuses should remain explicit about pending, blocked, or fallback checks.
 - **Self-host is the category, not a step toward hosted.** Taskloom is not pursuing parity with Replit, v0, Bolt, Lovable, or anything.com. Hosted-only capabilities (free public subdomain, pre-wired OAuth, managed App Store submission, hosted browser farm) are inventoried in [CLOUD.md](CLOUD.md) and intentionally out of scope.
 
@@ -227,7 +236,9 @@ npm run db:seed
 
 ## Project status
 
-Taskloom is in active development. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
+Taskloom is in active development under the Fork B (self-host first) positioning. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
+
+The next planned chunk of work — multi-provider BYOK at the builder, file-tree codegen, real per-app SQLite runtime, a fuller agent tool catalog, and the cross-cutting security hardening that goes with all of the above — is scoped in [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md) (29–39 focused days, 6–9 calendar weeks for a solo engineer).
 
 For current product changes, see [CHANGELOG.md](CHANGELOG.md). For the remaining MVP and post-MVP work, see [BACKLOG.md](BACKLOG.md), the [project website](https://packetloss404.github.io/taskloom/), and the [GitHub Issues](https://github.com/packetloss404/taskloom/issues) tab.
 
