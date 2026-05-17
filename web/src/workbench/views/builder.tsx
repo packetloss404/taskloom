@@ -5,6 +5,7 @@ import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
 import { AgentBuilderPanel } from "./builder-agent";
 import { ProviderBanner } from "./builder-provider-banner";
+import { BuilderTour, resetBuilderTour } from "./builder-tour";
 import type {
   AppBuilderApproveResult,
   AppBuilderApiRoute,
@@ -634,6 +635,7 @@ export function BuilderView() {
 
   return (
     <>
+      <BuilderTour />
       <header className="flex items-center justify-between px-4 h-10 border-b border-line text-sm">
         <div className="flex items-center gap-2">
           {state.appId ? (
@@ -655,7 +657,7 @@ export function BuilderView() {
           <ProviderBanner />
           <h1 className="text-[28px] font-medium text-silver-50 mb-6">What do you want to build today?</h1>
 
-          <div className="mx-auto w-full max-w-[720px] rounded-2xl border border-line bg-panel/60 backdrop-blur-sm focus-within:border-green-deep/60 transition">
+          <div data-tour="composer" className="mx-auto w-full max-w-[720px] rounded-2xl border border-line bg-panel/60 backdrop-blur-sm focus-within:border-green-deep/60 transition">
             <textarea
               placeholder="Describe what you want to build..."
               className="w-full resize-none bg-transparent px-5 pt-5 pb-2 text-[16px] leading-relaxed placeholder:text-silver-500 focus:outline-none min-h-[112px]"
@@ -666,6 +668,7 @@ export function BuilderView() {
               {/* TODO Phase 2: kind + preset popover */}
               <button
                 type="button"
+                data-tour="presets"
                 className="text-silver-400 hover:text-silver-50 px-2 py-1"
                 aria-label="Build options"
               >
@@ -677,7 +680,7 @@ export function BuilderView() {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 max-w-[720px] mx-auto w-full">
+          <div data-tour="chips" className="mt-4 grid grid-cols-2 gap-2 max-w-[720px] mx-auto w-full">
             <button
               type="button"
               className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
@@ -717,6 +720,20 @@ export function BuilderView() {
               }}
             >
               Support triage agent
+            </button>
+          </div>
+
+          <div className="mt-3 max-w-[720px] mx-auto w-full flex justify-center">
+            <button
+              type="button"
+              className="text-silver-500 hover:text-silver-300 text-xs underline underline-offset-2"
+              onClick={() => {
+                resetBuilderTour();
+                // Force a remount so the tour picks up the cleared flag.
+                if (typeof window !== "undefined") window.location.reload();
+              }}
+            >
+              Show tour
             </button>
           </div>
 
@@ -889,8 +906,9 @@ export function BuilderView() {
                 { id: "publish", label: "Publish", icon: "rocket" as IconKey },
               ] as const).map(t => {
                 const Ico = I[t.icon];
+                const tourId = t.id === "preview" ? "preview-tab" : t.id === "checkpoints" ? "checkpoints" : undefined;
                 return (
-                  <div key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+                  <div key={t.id} data-tour={tourId} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
                     <Ico size={13} style={{ marginRight: 6, verticalAlign: "-2px" }}/>{t.label}
                     {"count" in t && t.count !== undefined && t.count > 0 && (
                       <span className="mono muted" style={{ fontSize: 10.5, marginLeft: 6 }}>· {t.count}</span>
