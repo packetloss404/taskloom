@@ -40,7 +40,12 @@ type ChatBody =
   | { kind: "prose"; text: string }
   | { kind: "plan"; draft: AppBuilderDraft }
   | { kind: "diff"; iteration: AppBuilderIterationResult }
+  | { kind: "validation-errors"; errors: string[]; canFix: boolean }
   | { kind: "status"; text: string; tone: "info" | "warn" | "error" | "ok" };
+
+export function buildFixErrorsPrompt(errors: string[]): string {
+  return `Fix these TypeScript errors:\n${errors.join("\n")}`;
+}
 
 interface ChatMessage {
   id: string;
@@ -311,6 +316,21 @@ export function BuilderView() {
           setTab("preview");
           updateMessage(assistantId, (m) => ({ ...m, body: { kind: "plan", draft: event.draft }, streaming: false }));
           setMode("drafted");
+          if (event.validationErrors && event.validationErrors.length > 0) {
+            appendMessage({
+              id: newId(),
+              role: "assistant",
+              body: { kind: "validation-errors", errors: event.validationErrors, canFix: true },
+            });
+          }
+        } else if (event.type === "validation") {
+          if (event.errors.length > 0) {
+            appendMessage({
+              id: newId(),
+              role: "assistant",
+              body: { kind: "validation-errors", errors: event.errors, canFix: true },
+            });
+          }
         } else if (event.type === "error") {
           setError(event.error);
           updateMessage(assistantId, (m) => ({ ...m, body: { kind: "status", text: event.error, tone: "error" }, streaming: false }));
@@ -363,8 +383,9 @@ export function BuilderView() {
     }
   };
 
-  const iterate = async () => {
-    if (!state.draft || !iterPrompt.trim() || working) return;
+  const iterate = async (promptOverride?: string) => {
+    const effectivePrompt = promptOverride ?? iterPrompt;
+    if (!state.draft || !effectivePrompt.trim() || working) return;
     const baseTarget = selectedElement ? pageIterationTarget : selectedIterationTarget;
     const target: AppBuilderIterationTarget = selectedElement
       ? {
@@ -376,8 +397,8 @@ export function BuilderView() {
         }
       : baseTarget;
     const composedPrompt = selectedElement
-      ? `On the element \`${selectedElement.selector}\`${selectedElement.label ? ` ("${selectedElement.label}")` : ""}: ${iterPrompt}`
-      : iterPrompt;
+      ? `On the element \`${selectedElement.selector}\`${selectedElement.label ? ` ("${selectedElement.label}")` : ""}: ${effectivePrompt}`
+      : effectivePrompt;
     setWorking(true);
     setError(null);
     setMode("iterating");
@@ -409,6 +430,14 @@ export function BuilderView() {
           setState((prev) => ({ ...prev, iteration: event.iteration }));
           updateMessage(assistantId, (m) => ({ ...m, body: { kind: "diff", iteration: event.iteration }, streaming: false }));
           setMode("applied");
+        } else if (event.type === "validation") {
+          if (event.errors.length > 0) {
+            appendMessage({
+              id: newId(),
+              role: "assistant",
+              body: { kind: "validation-errors", errors: event.errors, canFix: true },
+            });
+          }
         } else if (event.type === "error") {
           setError(event.error);
           updateMessage(assistantId, (m) => ({ ...m, body: { kind: "status", text: event.error, tone: "error" }, streaming: false }));
@@ -724,6 +753,11 @@ export function BuilderView() {
                   message={msg}
                   onApplyIteration={() => { void applyIteration(); }}
                   onRevert={(checkpointId) => { void rollback(checkpointId); }}
+                  onFixErrors={(errors) => {
+                    const fixPrompt = buildFixErrorsPrompt(errors);
+                    setIterPrompt(fixPrompt);
+                    void iterate(fixPrompt);
+                  }}
                   working={working}
                 />
               ))}
@@ -905,11 +939,13 @@ function ThreadMessage({
   message,
   onApplyIteration,
   onRevert,
+  onFixErrors,
   working,
 }: {
   message: ChatMessage;
   onApplyIteration: () => void;
   onRevert: (checkpointId: string) => void;
+  onFixErrors: (errors: string[]) => void;
   working: boolean;
 }) {
   const { role, body, streaming, checkpointId } = message;
@@ -973,7 +1009,7 @@ function ThreadMessage({
             </button>
           )}
         </div>
-        <ThreadMessageBody body={body} onApplyIteration={onApplyIteration} working={working}/>
+        <ThreadMessageBody body={body} onApplyIteration={onApplyIteration} onFixErrors={onFixErrors} working={working}/>
       </div>
     </div>
   );
@@ -982,10 +1018,12 @@ function ThreadMessage({
 function ThreadMessageBody({
   body,
   onApplyIteration,
+  onFixErrors,
   working,
 }: {
   body: ChatBody;
   onApplyIteration: () => void;
+  onFixErrors: (errors: string[]) => void;
   working: boolean;
 }) {
   if (body.kind === "text") {
@@ -1023,6 +1061,67 @@ function ThreadMessageBody({
   }
   if (body.kind === "diff") {
     return <IterationCard iteration={body.iteration} onApply={onApplyIteration} working={working}/>;
+  }
+  if (body.kind === "validation-errors") {
+    const errors = body.errors;
+    return (
+      <div
+        className="card"
+        style={{
+          marginLeft: 30,
+          padding: 12,
+          background: "rgba(244,180,69,0.08)",
+          borderColor: "rgba(244,180,69,0.35)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <I.alert size={13} style={{ color: "var(--warn)" }}/>
+          <div className="kicker" style={{ color: "var(--warn)" }}>
+            Build errors · {errors.length} issue{errors.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        <ul
+          className="mono"
+          style={{
+            margin: 0,
+            padding: 0,
+            listStyle: "none",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            fontSize: 11.5,
+            color: "var(--silver-200)",
+            maxHeight: 220,
+            overflow: "auto",
+          }}
+        >
+          {errors.map((err, i) => (
+            <li key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {err}
+            </li>
+          ))}
+        </ul>
+        {body.canFix && (
+          <div style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={working}
+              onClick={() => onFixErrors(errors)}
+              style={{
+                background: "rgba(244,180,69,0.12)",
+                borderColor: "rgba(244,180,69,0.4)",
+                color: "var(--warn)",
+                fontSize: 11.5,
+              }}
+            >
+              {working ? <span className="spin"><I.refresh size={11}/></span> : <I.zap size={11}/>}
+              {working ? " Fixing…" : " Fix these errors"}
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
   if (body.kind === "status") {
     const color = body.tone === "error" ? "var(--danger)" : body.tone === "warn" ? "var(--warn)" : body.tone === "ok" ? "var(--green)" : "var(--silver-300)";
