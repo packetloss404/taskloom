@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { I, type IconKey } from "../icons";
 import { api } from "@/lib/api";
+import { translateError } from "@/lib/error-translator";
 import { useApiData } from "../useApiData";
 import { ExecTable, SelectedExecPanel } from "./sandbox";
 import { AgentBuilderPanel } from "./builder-agent";
@@ -226,6 +227,11 @@ export function BuilderView() {
   );
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
+  // Tracks the most recent user-submitted prompt across generate / iterate, so
+  // the "Try again" button on a FriendlyErrorCard can re-seed the right
+  // composer. We intentionally do not auto-resubmit — letting the user review
+  // and edit avoids re-triggering the same failure mode.
+  const lastPromptRef = useRef<{ kind: "generate" | "iterate"; text: string } | null>(null);
   const iterationTargetOptions = useMemo(() => buildIterationTargetOptions(state.draft), [state.draft]);
   const selectedIterationTarget = iterationTargetOptions.find((target) => target.id === iterTargetId) ?? iterationTargetOptions[0]!;
   const selectedTargetKind = selectedElement ? "page" : selectedIterationTarget.kind;
@@ -242,6 +248,24 @@ export function BuilderView() {
       setIterTargetId(iterationTargetOptions[0]!.id);
     }
   }, [iterationTargetOptions, iterTargetId]);
+
+  // Re-seed the appropriate composer when a FriendlyErrorCard fires its
+  // "Try again" event. We restore the prompt text rather than auto-submit so
+  // the user can edit before retrying (and so a stuck failure mode doesn't
+  // immediately re-fire).
+  useEffect(() => {
+    const onRetry = () => {
+      const last = lastPromptRef.current;
+      if (!last) return;
+      if (last.kind === "iterate") {
+        setIterPrompt(last.text);
+      } else {
+        setPrompt(last.text);
+      }
+    };
+    window.addEventListener("taskloom:retry-last-action", onRetry);
+    return () => window.removeEventListener("taskloom:retry-last-action", onRetry);
+  }, []);
 
   const appendMessage = (msg: ChatMessage) => setMessages((prev) => [...prev, msg]);
   const updateMessage = (id: string, updater: (msg: ChatMessage) => ChatMessage) =>
@@ -283,6 +307,7 @@ export function BuilderView() {
     const nextPrompt = prompt.trim();
     if (!nextPrompt || working) return;
     const previousMode = mode;
+    lastPromptRef.current = { kind: "generate", text: nextPrompt };
     setWorking(true);
     setError(null);
     setMode("drafting");
@@ -401,6 +426,7 @@ export function BuilderView() {
     const composedPrompt = selectedElement
       ? `On the element \`${selectedElement.selector}\`${selectedElement.label ? ` ("${selectedElement.label}")` : ""}: ${effectivePrompt}`
       : effectivePrompt;
+    lastPromptRef.current = { kind: "iterate", text: effectivePrompt };
     setWorking(true);
     setError(null);
     setMode("iterating");
@@ -1146,10 +1172,92 @@ function ThreadMessageBody({
     );
   }
   if (body.kind === "status") {
-    const color = body.tone === "error" ? "var(--danger)" : body.tone === "warn" ? "var(--warn)" : body.tone === "ok" ? "var(--green)" : "var(--silver-300)";
+    if (body.tone === "error") {
+      return <FriendlyErrorCard raw={body.text}/>;
+    }
+    const color = body.tone === "warn" ? "var(--warn)" : body.tone === "ok" ? "var(--green)" : "var(--silver-300)";
     return <div className="mono" style={{ fontSize: 12, color }}>{body.text}</div>;
   }
   return null;
+}
+
+/**
+ * Renders a chat-thread error tone with non-technical copy and an optional
+ * "Try again" button. Retry dispatches a window-level `taskloom:retry-last-action`
+ * event so BuilderView can re-seed the composer with the last prompt — keeping
+ * this component decoupled from the action plumbing.
+ */
+function FriendlyErrorCard({ raw }: { raw: string }) {
+  const friendly = translateError(raw);
+  const handleRetry = () => {
+    window.dispatchEvent(new CustomEvent("taskloom:retry-last-action"));
+  };
+  return (
+    <div
+      className="card"
+      style={{
+        marginLeft: 30,
+        padding: 12,
+        background: "rgba(232,90,90,0.06)",
+        borderColor: "rgba(232,90,90,0.35)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <I.alert size={14} style={{ color: "var(--danger)", marginTop: 2, flexShrink: 0 }}/>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--silver-100)" }}>{friendly.title}</div>
+          <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--silver-200)" }}>{friendly.body}</div>
+          <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>{friendly.suggestion}</div>
+        </div>
+      </div>
+      {friendly.retryable && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={handleRetry}
+            style={{
+              background: "rgba(232,90,90,0.1)",
+              borderColor: "rgba(232,90,90,0.35)",
+              color: "var(--silver-100)",
+              fontSize: 11.5,
+            }}
+          >
+            <I.refresh size={11}/>
+            {" Try again"}
+          </button>
+        </div>
+      )}
+      {friendly.technical && (
+        <details style={{ marginTop: 2 }}>
+          <summary className="muted" style={{ fontSize: 11, cursor: "pointer", userSelect: "none" }}>
+            Show technical details
+          </summary>
+          <pre
+            className="mono"
+            style={{
+              margin: "6px 0 0",
+              padding: 8,
+              background: "var(--bg)",
+              border: "1px solid var(--line-2)",
+              borderRadius: 6,
+              fontSize: 11,
+              color: "var(--silver-300)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 200,
+              overflow: "auto",
+            }}
+          >
+            {friendly.technical}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function PlanCard({ draft }: { draft: AppBuilderDraft }) {
