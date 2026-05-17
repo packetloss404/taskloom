@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { I, type IconKey } from "./icons";
 import { useUser, useWorkbench, useWorkspaceName } from "./WorkbenchContext";
@@ -10,15 +10,10 @@ export type ViewKey =
   | "operations" | "sandbox" | "activation" | "settings"
   | "billing" | "roles" | "sso" | "secrets"
   | "webhooks" | "rate-limits" | "releases"
-  | "notifications" | "storage" | "backups";
+  | "notifications" | "storage" | "backups"
+  | "admin";
 
 type NavSpec = { id: ViewKey; label: string; icon: IconKey; badge?: string };
-
-const ADVANCED_KEYS: ViewKey[] = [
-  "dashboard", "workflows", "integrations",
-  "operations", "sandbox", "activation",
-  "billing","roles","sso","backups","secrets","webhooks","rate-limits","releases","notifications","storage",
-];
 
 function viewFromPath(pathname: string): ViewKey {
   const m = pathname.match(/^\/?([^/?#]*)/);
@@ -41,11 +36,6 @@ export function Sidebar({ agentBadge }: { agentBadge?: string }) {
   const role = useWorkbench().session.workspace.role ?? "member";
 
   const palette = useCommandPalette();
-  const [advancedOpen, setAdvancedOpen] = useState<boolean>(ADVANCED_KEYS.includes(active));
-
-  useEffect(() => {
-    if (ADVANCED_KEYS.includes(active)) setAdvancedOpen(true);
-  }, [active]);
 
   const setActive = (key: ViewKey) => {
     navigate(`/${key}`);
@@ -55,25 +45,7 @@ export function Sidebar({ agentBadge }: { agentBadge?: string }) {
     { id: "builder", label: "Build", icon: "code", badge: "live" },
     { id: "agents", label: "Projects", icon: "layout", badge: agentBadge },
     { id: "runs", label: "Runs", icon: "activity" },
-    { id: "settings", label: "Settings", icon: "settings" },
-  ];
-  const advanced: NavSpec[] = [
-    { id: "dashboard", label: "Dashboard", icon: "home" },
-    { id: "workflows", label: "Workflows", icon: "flow" },
-    { id: "integrations", label: "Providers", icon: "key" },
-    { id: "operations", label: "Operations", icon: "pulse" },
-    { id: "sandbox", label: "Sandbox", icon: "cpu" },
-    { id: "activation", label: "Activation", icon: "rocket" },
-    { id: "billing", label: "Billing & plan", icon: "card" },
-    { id: "roles", label: "Roles & permissions", icon: "shield" },
-    { id: "sso", label: "SSO & auth", icon: "lock" },
-    { id: "secrets", label: "Secrets vault", icon: "vault" },
-    { id: "webhooks", label: "Webhooks", icon: "webhook" },
-    { id: "rate-limits", label: "Rate limits", icon: "gauge" },
-    { id: "releases", label: "Releases", icon: "branch" },
-    { id: "notifications", label: "Notifications", icon: "bell" },
-    { id: "storage", label: "Storage & DB", icon: "database" },
-    { id: "backups", label: "Backups & data", icon: "archive" },
+    { id: "admin", label: "Admin", icon: "settings" },
   ];
 
   const initial = (workspaceName.trim()[0] ?? "W").toUpperCase();
@@ -112,18 +84,6 @@ export function Sidebar({ agentBadge }: { agentBadge?: string }) {
 
       <div className="nav-section">
         {primary.map(it => (
-          <NavItem key={it.id} item={it} active={active === it.id} onClick={() => setActive(it.id)} />
-        ))}
-        <div
-          className="nav-section-title"
-          onClick={() => setAdvancedOpen(o => !o)}
-          style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, userSelect: "none" }}
-        >
-          <span>Advanced</span>
-          <I.chevDown size={10} style={{ transform: advancedOpen ? "none" : "rotate(-90deg)", transition: "transform .15s", color: "var(--silver-500)" }}/>
-          <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--silver-500)", textTransform: "none", letterSpacing: 0 }}>{advanced.length}</span>
-        </div>
-        {advancedOpen && advanced.map(it => (
           <NavItem key={it.id} item={it} active={active === it.id} onClick={() => setActive(it.id)} />
         ))}
       </div>
