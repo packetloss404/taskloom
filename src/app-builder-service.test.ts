@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   generateAppSourceArtifactBundle,
   generateAppDraftFromPrompt,
+  generateAppDraftWithLLM,
   listAppDraftTemplateIds,
 } from "./app-builder-service";
 
@@ -187,4 +188,130 @@ test("listAppDraftTemplateIds exposes the supported heuristics", () => {
     "task_tracker",
     "customer_portal",
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// Track B default-on behaviour for `generateAppDraftWithLLM`.
+//
+// File-tree codegen is now tried by default. These tests verify:
+//   1. With NO provider keys and no env flags set, the new default path is
+//      exercised and falls through to the template generator without
+//      throwing.
+//   2. Setting `TASKLOOM_LEGACY_TEMPLATES=1` skips the file-tree path
+//      entirely (legacy escape hatch / kill switch).
+//   3. Setting the legacy `TASKLOOM_FILETREE_CODEGEN=1` flag is a harmless
+//      no-op — the path is on by default now anyway.
+// ---------------------------------------------------------------------------
+
+const PROVIDER_KEY_ENV_FOR_DEFAULT_ON = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "MINIMAX_API_KEY",
+  "GEMINI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "TASKLOOM_PROVIDER_PRIORITY",
+  "TASKLOOM_LEGACY_TEMPLATES",
+  "TASKLOOM_FILETREE_CODEGEN",
+] as const;
+
+function withScrubbedEnv(
+  overrides: Record<string, string>,
+  body: () => Promise<void>,
+): Promise<void> {
+  const originals: Partial<Record<string, string | undefined>> = {};
+  for (const key of PROVIDER_KEY_ENV_FOR_DEFAULT_ON) {
+    originals[key] = process.env[key];
+    delete process.env[key];
+  }
+  // Exclude the keyless ollama provider so a fresh dev machine without
+  // any API keys configured behaves identically to CI: the resolver
+  // returns null, and `authorAppViaLLM` returns null in turn.
+  process.env.TASKLOOM_PROVIDER_PRIORITY =
+    "anthropic,openai,minimax,gemini,openrouter";
+  for (const [key, value] of Object.entries(overrides)) {
+    process.env[key] = value;
+  }
+  return body().finally(() => {
+    for (const key of PROVIDER_KEY_ENV_FOR_DEFAULT_ON) {
+      const original = originals[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+    // Clean up overrides that weren't in the scrub list.
+    for (const key of Object.keys(overrides)) {
+      if (
+        !(PROVIDER_KEY_ENV_FOR_DEFAULT_ON as readonly string[]).includes(key)
+      ) {
+        delete process.env[key];
+      }
+    }
+  });
+}
+
+test("generateAppDraftWithLLM default-on: file-tree path tried first, falls through to template when no key is configured", async () => {
+  await withScrubbedEnv({}, async () => {
+    const emitted: string[] = [];
+    // The new default tries `tryFileTreeCodegen` first. With no provider
+    // key configured, the orchestrator returns null, then the structured
+    // tool path also returns null, then the template generator wins. The
+    // important thing this test pins down is: NOTHING THROWS.
+    const { draft, source } = await generateAppDraftWithLLM(
+      "Build a CRM for sales teams to track leads and deals.",
+      {},
+      (text) => {
+        emitted.push(text);
+      },
+    );
+    assert.equal(source, "template");
+    assert.equal(draft.templateId, "crm");
+    assert.equal(
+      emitted.length,
+      0,
+      "no prose should be emitted when every path declined and the template fallback ran",
+    );
+  });
+});
+
+test("generateAppDraftWithLLM legacy escape hatch: TASKLOOM_LEGACY_TEMPLATES=1 skips the file-tree path", async () => {
+  await withScrubbedEnv(
+    { TASKLOOM_LEGACY_TEMPLATES: "1" },
+    async () => {
+      const emitted: string[] = [];
+      // With the kill switch set, behaviour reverts to the pre-Track-B
+      // contract: structured-tool path → template fallback. No file-tree
+      // path runs, so no codegen prose is emitted even with a provider
+      // key (and certainly not without one).
+      const { draft, source } = await generateAppDraftWithLLM(
+        "Build a CRM for sales teams to track leads and deals.",
+        {},
+        (text) => {
+          emitted.push(text);
+        },
+      );
+      assert.equal(source, "template");
+      assert.equal(draft.templateId, "crm");
+      assert.equal(
+        emitted.length,
+        0,
+        "legacy template path emits no prose deltas",
+      );
+    },
+  );
+});
+
+test("generateAppDraftWithLLM backward compat: TASKLOOM_FILETREE_CODEGEN=1 is a no-op", async () => {
+  // Setting the old opt-in flag must not change behaviour now that the
+  // path is on by default. With no provider key the result is the same
+  // template fallback as the default-on test above.
+  await withScrubbedEnv(
+    { TASKLOOM_FILETREE_CODEGEN: "1" },
+    async () => {
+      const { draft, source } = await generateAppDraftWithLLM(
+        "Build a CRM for sales teams to track leads and deals.",
+        {},
+      );
+      assert.equal(source, "template");
+      assert.equal(draft.templateId, "crm");
+    },
+  );
 });

@@ -935,21 +935,35 @@ export type GenerateAppDraftResult = {
  * but always return a valid AppDraft by falling back to the deterministic
  * template generator when no key is configured or the LLM call fails.
  *
- * When `TASKLOOM_FILETREE_CODEGEN=1` is set, the new Track B file-tree
- * orchestrator is tried first. If it returns null (BYOK provider not
- * configured, model declined the task, etc.) we fall through to the existing
- * structured-tool path so existing tests and keyless installs keep working
- * exactly as before.
+ * Track B file-tree codegen is now the **default** path: when a BYOK key is
+ * present we try the file-tree orchestrator first. When it returns null
+ * (BYOK provider not configured, model declined the task, etc.) we fall
+ * through to the existing structured-tool path so keyless installs keep
+ * working exactly as before.
+ *
+ * Env vars:
+ *  - `TASKLOOM_LEGACY_TEMPLATES=1` is the opt-out / kill switch. When set,
+ *    the file-tree path is skipped entirely and behaviour is identical to
+ *    the pre-Track-B version (structured-tool → template).
+ *  - `TASKLOOM_FILETREE_CODEGEN=1` is preserved as a documented **no-op**
+ *    for backward compatibility with installs that still set it. It used
+ *    to be the opt-in flag for the file-tree path; since that path is now
+ *    on by default, the flag is harmless.
  */
 export async function generateAppDraftWithLLM(
   prompt: string,
   options: AppDraftLLMOptions = {},
   emit?: AppDraftEmit,
 ): Promise<GenerateAppDraftResult> {
-  if (process.env.TASKLOOM_FILETREE_CODEGEN === "1") {
+  // Default-on: try the file-tree path first unless the legacy escape
+  // hatch is explicitly set. `TASKLOOM_FILETREE_CODEGEN` is preserved as a
+  // no-op for backward compatibility with installs that set it; we only
+  // gate on the new `TASKLOOM_LEGACY_TEMPLATES` opt-out.
+  if (process.env.TASKLOOM_LEGACY_TEMPLATES !== "1") {
     const filetree = await tryFileTreeCodegen(prompt, options, emit);
     if (filetree) return filetree;
-    // Orchestrator returned null — fall through to existing paths.
+    // Orchestrator returned null (no BYOK key, model declined, etc.) —
+    // fall through to the structured-tool path as before.
   }
   const llm = await generateAppDraftViaLLM(prompt, options, emit);
   if (llm) return { draft: llm, source: "llm" };
@@ -957,16 +971,20 @@ export async function generateAppDraftWithLLM(
 }
 
 /**
- * Opt-in Track B path: ask the file-tree orchestrator to author a generated
- * app as a list of files, run the build validator, then project the file
- * tree into an AppDraft so all downstream consumers keep working.
+ * Track B file-tree path (now the default in `generateAppDraftWithLLM`):
+ * ask the file-tree orchestrator to author a generated app as a list of
+ * files, run the build validator, then project the file tree into an
+ * AppDraft so all downstream consumers keep working.
  *
  * Returns null when the orchestrator declined (no BYOK key, model gave up,
- * etc.) so the caller can fall through to the existing template path.
+ * etc.) so the caller can fall through to the existing structured-tool /
+ * template paths. The legacy `TASKLOOM_FILETREE_CODEGEN=1` opt-in flag is
+ * preserved as a no-op; the opt-out is `TASKLOOM_LEGACY_TEMPLATES=1`, which
+ * is handled in `generateAppDraftWithLLM` before this function is called.
  *
  * Note: this code path's runtime behaviour depends on the real B1 / B2 / B3
- * modules under `src/codegen/`. Until those land, the local stubs make this
- * path inert (orchestrator returns null) — so wiring it up here is safe.
+ * modules under `src/codegen/`. With no BYOK key configured, the
+ * orchestrator returns null and the caller falls through transparently.
  */
 async function tryFileTreeCodegen(
   prompt: string,
