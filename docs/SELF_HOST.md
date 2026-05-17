@@ -58,11 +58,12 @@ Taskloom does not ship with a bundled LLM key. You bring your own — this is th
 
 Honest snapshot of where multi-provider BYOK actually stands:
 
-- **Builder draft + iteration**: Anthropic only. Both `generateAppDraftViaLLM` and `applyAppIterationViaLLM` call `AnthropicProvider` directly. Setting only `OPENAI_API_KEY`, `OLLAMA_BASE_URL`, or `MINIMAX_API_KEY` will not make the builder use those providers yet — the builder will use template-only fallback.
-- **Agent runs**: All configured providers (Anthropic, OpenAI, MiniMax, Ollama) route through `ProviderRouter` and are switchable per agent.
-- **Planned**: Routing the builder draft path through `ProviderRouter` with a local-first preset map. This is [Phase 3 Track A](PHASE3_SCOPE.md). Gemini and OpenRouter adapters are scheduled for Phase 3.5.
+- **Builder draft + iteration**: Routed through `ProviderRouter`. Six providers are first-class — Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM provider (Ollama / vLLM / LM Studio / llama.cpp). The Builder UI exposes four presets (`fast`, `smart`, `cheap`, `local`) and surfaces the resolved provider+model on each chip.
+- **Agent runs**: Same `ProviderRouter` instance — agents pick provider+model per run.
+- **Default**: Anthropic wins the default `fast` and `smart` priority walks when its key is present. The `local` preset is strict: it only routes to the local-LLM provider and returns null (template-only fallback) if nothing local is reachable.
+- **Override**: Set `TASKLOOM_PROVIDER_PRIORITY=ollama,openrouter,anthropic` to re-order every preset's walk. Hit `GET /api/app/builder/providers/status` to see what is actually resolved at runtime, without exposing any keys.
 
-So today, if your goal is to drive the builder with an LLM, set `ANTHROPIC_API_KEY`. The other variables below are documented because the agent surface uses them and because the builder will catch up to them.
+If you want to drive the builder with an LLM, configure one of the six provider blocks below. If you configure several, the priority walk (or your `TASKLOOM_PROVIDER_PRIORITY` override) decides which one each preset picks.
 
 ### Where to put the key
 
@@ -73,27 +74,56 @@ You can configure keys two ways:
 
 Configure **only the providers you actually use**. You do not need all of them.
 
-### Option A — Anthropic Claude (today's full path)
+### Option A — Anthropic Claude (default)
 
 ```bash
 # .env
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Get a key at https://console.anthropic.com. The default model Taskloom targets is `claude-sonnet-4-6` — a good balance of cost, latency, and quality for builder workloads. For more demanding multi-turn agent work, switch per-agent to `claude-opus-4-7` under **Admin → Integrations**.
+Get a key at https://console.anthropic.com. The default model Taskloom targets is `claude-sonnet-4-6` — a good balance of cost, latency, and quality for builder workloads. The `smart` preset upgrades to `claude-opus-4-7`; the `cheap` preset drops to `claude-haiku-4-5-20251001`. Anthropic wins the default priority walk for `fast` and `smart` when its key is present.
 
 Reference: https://docs.claude.com/en/api
 
-### Option B — OpenAI (agent runs today; builder pending)
+### Option B — OpenAI
 
 ```bash
 # .env
 OPENAI_API_KEY=sk-...
 ```
 
-Get a key at https://platform.openai.com/api-keys. Default model is `gpt-4o`; switch per-agent under **Admin → Integrations**. Note: this key is not yet consumed by the builder draft path — set `ANTHROPIC_API_KEY` if you want the builder to call an LLM today.
+Get a key at https://platform.openai.com/api-keys. Preset model picks: `fast` / `cheap` → `gpt-4o-mini`, `smart` → `gpt-4o`. OpenAI is second on the default `fast` / `smart` walks (after Anthropic), and third on `cheap` (after OpenRouter and Gemini).
 
-### Option C — Local LLM (Ollama / vLLM / LM Studio / remote llama.cpp)
+### Option C — Gemini (Google)
+
+```bash
+# .env
+GOOGLE_API_KEY=...
+# or, equivalently:
+GEMINI_API_KEY=...
+```
+
+Either env name is accepted. Get a key at https://aistudio.google.com/app/apikey. The Gemini adapter speaks Google's OpenAI-compatible endpoint, so it slots into the router with the same shape as OpenAI. Preset picks: `fast` / `cheap` → `gemini-2.5-flash`, `smart` → `gemini-2.5-pro`. Gemini is registered only when one of the two env vars is present (no vault path yet).
+
+### Option D — OpenRouter
+
+```bash
+# .env
+OPENROUTER_API_KEY=sk-or-...
+```
+
+Get a key at https://openrouter.ai/keys. OpenRouter is a model marketplace that exposes Anthropic, Google, Mistral, DeepSeek, and others behind a single OpenAI-compatible endpoint. Preset picks: `fast` / `cheap` → `google/gemini-2.5-flash`, `smart` → `anthropic/claude-sonnet-4`. OpenRouter is first on the default `cheap` walk because its marketplace pricing tends to undercut direct provider keys. Registered only when the env var is present.
+
+### Option E — MiniMax
+
+```bash
+# .env
+MINIMAX_API_KEY=...
+```
+
+Configured the same way as Anthropic / OpenAI. Useful when you want a non-Anthropic, non-OpenAI option for agent runs. MiniMax is registered unconditionally; the preset resolver only picks it when it appears in your `TASKLOOM_PROVIDER_PRIORITY` override (it is not in the default priority walks).
+
+### Option F — Local LLM (Ollama / vLLM / LM Studio / remote llama.cpp)
 
 The "ollama" provider is intentionally generic: it can talk to **any OpenAI-compatible local LLM server**, on `localhost` or on a separate machine on your LAN (think: a beefy GPU box). It is registered unconditionally — but it is **not the default** for hosted presets. Anthropic / OpenAI / Gemini / OpenRouter take precedence unless you (a) explicitly request the `local` preset, or (b) set `TASKLOOM_PROVIDER_PRIORITY=ollama,...`.
 
@@ -154,21 +184,13 @@ LOCAL_LLM_MODEL=deepseek-coder-v2
 
 Run llama.cpp with `./llama-server -m deepseek-coder-v2.gguf --port 8080 --host 0.0.0.0`. Same caveat as vLLM: set `LOCAL_LLM_MODEL` to whatever name your server reports.
 
-**Quality caveat.** Smaller local models (7B–13B) produce noticeably worse generated apps than Claude / GPT-4-class hosted models. For real builder workloads on local hardware, plan to run `qwen2.5-coder:32b` or larger. The Phase 3 plan calls out `qwen3-coder-next` (80B MoE, 3B active) as the local sweet spot once the builder is routed through `ProviderRouter`.
+**Quality caveat.** Smaller local models (7B–13B) produce noticeably worse generated apps than Claude / GPT-4-class hosted models. For real builder workloads on local hardware, plan to run `qwen2.5-coder:32b` or larger. The Phase 3 plan calls out `qwen3-coder-next` (80B MoE, 3B active) as the local sweet spot.
 
-**Making local first.** To force every preset that supports it to prefer your local server over hosted providers (e.g. when you want the 1.5 TB RAM farm to do everything):
+The local provider is registered unconditionally, but it is not in the default `fast` / `smart` / `cheap` priority walks — Anthropic / OpenAI / Gemini / OpenRouter come first. To make local the preferred path, either pick the `local` Builder preset (strict: only routes local) or set `TASKLOOM_PROVIDER_PRIORITY=ollama,...` (see the next section).
 
-```bash
-TASKLOOM_PROVIDER_PRIORITY=ollama,anthropic,openai
-```
+### Option G — No key (template-only fallback)
 
-Otherwise, the `local` Builder preset is the explicit knob — it routes only to the local provider and returns null (template-only fallback) if `LOCAL_LLM_BASE_URL` and `OLLAMA_BASE_URL` are both unset and `localhost:11434` is unreachable.
-
-As with OpenAI: the local provider works today for agent runs but is not yet wired into the builder draft path.
-
-### Option D — No key (template-only fallback)
-
-If no provider key is set, the builder falls back to deterministic template-only generation. This is fine for:
+If no provider key is set and no local server is reachable, the builder falls back to deterministic template-only generation. This is fine for:
 
 - Verifying the workbench is wired up end-to-end.
 - Running the sandbox and publish handoff against the bundled CRM template.
@@ -176,14 +198,34 @@ If no provider key is set, the builder falls back to deterministic template-only
 
 It is **not** sufficient for producing real apps from open-ended prompts — the LLM step is what turns "build a lightweight CRM for renewal tracking" into a tailored brief, plan, and source files.
 
-### MiniMax (optional, additional provider for agents)
+### Provider precedence and override
+
+The Builder UI exposes four presets — `fast`, `smart`, `cheap`, `local`. Each preset walks a priority list of providers and picks the first one that is both registered on the router and has a configured key (env or vault). The default walks are:
+
+| Preset | Default priority (first match wins) |
+| --- | --- |
+| `fast` | `anthropic` → `openai` → `gemini` → `openrouter` → `ollama` |
+| `smart` | `anthropic` → `openai` → `gemini` → `openrouter` → `ollama` |
+| `cheap` | `openrouter` → `gemini` → `openai` → `anthropic` → `ollama` |
+| `local` | `ollama` (strict — returns null if no local provider is reachable) |
+
+Set `TASKLOOM_PROVIDER_PRIORITY` to replace the walk for every non-`local` preset:
 
 ```bash
-# .env
-MINIMAX_API_KEY=...
+# Prefer local LLM for everything; fall back to OpenRouter, then Anthropic.
+TASKLOOM_PROVIDER_PRIORITY=ollama,openrouter,anthropic
 ```
 
-Configured the same way as Anthropic / OpenAI, and similarly available to agent runs but not yet to the builder. Used by some agent templates that want a non-Anthropic, non-OpenAI option.
+The override is comma-separated, case-insensitive, and silently drops unknown names. The `local` preset is unaffected — it always routes only to local providers.
+
+To confirm what is actually resolved at runtime, call:
+
+```bash
+curl -s --cookie-jar /tmp/jar --cookie /tmp/jar \
+  http://localhost:8484/api/app/builder/providers/status
+```
+
+(Authenticate first; the endpoint requires a signed-in viewer.) The response contains a `presets` map keyed by preset name, an `availableProviders` array of providers with credentials, and the active `priority` override string (or `null` if unset). No secrets are included.
 
 ---
 
@@ -224,11 +266,12 @@ For hosted-only conveniences Taskloom does not ship (free public subdomain, auto
 
 ### "No API key configured" / builder produces only template output
 
-The builder fell back to template-only generation because it could not find an Anthropic LLM key. Check, in order:
+The builder fell back to template-only generation because the preset resolver could not find a usable provider. Check, in order:
 
-1. Open **Admin → Integrations** in the workbench. Is `ANTHROPIC_API_KEY` configured? Other provider keys (OpenAI, Ollama, MiniMax) are accepted but not yet consumed by the builder draft path — see "What is wired in today" above.
-2. If you set the key via `.env`, did you restart `npm run dev` after editing the file? `.env` is read at process startup, not on every request.
-3. Test the key directly: `curl -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" https://api.anthropic.com/v1/messages -d '{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}'`. If this fails, the problem is the key or the provider, not Taskloom.
+1. Open **Admin → Integrations** in the workbench, or inspect `.env`. Is at least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` / `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `MINIMAX_API_KEY`, or `LOCAL_LLM_BASE_URL` / `OLLAMA_BASE_URL` configured?
+2. Hit `GET /api/app/builder/providers/status` (cookie-authenticated) and look at the `presets` map. If every preset is `null`, the resolver sees no usable provider. If only `local` is `null` but you set `LOCAL_LLM_BASE_URL`, the server is unreachable — try `curl $LOCAL_LLM_BASE_URL/api/tags` (Ollama) or `/v1/models` (OpenAI-compat).
+3. If you set the key via `.env`, did you restart `npm run dev` after editing the file? `.env` is read at process startup, not on every request.
+4. Test the key directly against the provider's own API. For Anthropic: `curl -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" https://api.anthropic.com/v1/messages -d '{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}'`. If this fails, the problem is the key or the provider, not Taskloom.
 
 ### Port collision (`EADDRINUSE` on 7341 or 8484)
 

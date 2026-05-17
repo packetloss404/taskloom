@@ -6,6 +6,41 @@ This project follows the spirit of [Keep a Changelog](https://keepachangelog.com
 
 ## [Unreleased]
 
+### 2026-05-17 — Six-provider BYOK, remote-pointable local LLM, cleanup
+
+This entry covers the two rounds of provider work that landed after the builder-first refactor: the builder draft + iteration paths are now fully routed through `ProviderRouter` and accept six providers, and the local-LLM provider became remote-pointable so a separate GPU box can serve the workbench laptop.
+
+#### Providers
+
+- **Gemini adapter** (`src/providers/gemini.ts`). Speaks Google's OpenAI-compatible endpoint. Registered only when `GOOGLE_API_KEY` or `GEMINI_API_KEY` is set. Preset picks: `gemini-2.5-flash` (fast / cheap), `gemini-2.5-pro` (smart).
+- **OpenRouter adapter** (`src/providers/openrouter.ts`). Marketplace access to Anthropic / Google / Mistral / DeepSeek / etc. via a single OpenAI-compatible endpoint. Registered only when `OPENROUTER_API_KEY` is set. First on the default `cheap` priority walk.
+- **`ProviderRouter` now routes all six providers** for both builder and agent paths: Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and the generic local-LLM provider. `generateAppDraftViaLLM` and `applyAppIterationViaLLM` no longer hard-code `AnthropicProvider`.
+- **Preset resolver** (`src/providers/preset-resolver.ts`). Maps the four Builder presets (`fast`, `smart`, `cheap`, `local`) to a concrete `(provider, model)` pair via a per-preset priority walk. The `local` preset is strict: only routes to local providers, or returns null.
+- **`TASKLOOM_PROVIDER_PRIORITY` env override**. Comma-separated provider list replaces the default walk for every non-`local` preset (e.g. `TASKLOOM_PROVIDER_PRIORITY=ollama,openrouter,anthropic`). First registered provider with a configured key wins.
+- **Builder UI surfaces the resolved provider+model** on each preset chip, so operators can see which key actually drives `fast` vs `smart` vs `cheap` without poking at the server.
+- **New endpoint `GET /api/app/builder/providers/status`**. Returns the resolved preset map, the list of providers with credentials, and the active priority override string. Used by the chip UI and useful for ops verification. No secrets in the response.
+
+#### Local LLM
+
+- **Remote-pointable**. The local-LLM provider can now talk to any OpenAI-compatible (or Ollama-native) endpoint on `localhost` or on a separate machine on your LAN — vLLM, LM Studio, llama.cpp's OpenAI-compat server, or remote Ollama. Local is **not** the default for hosted presets; Anthropic stays the default unless you pick `local` or set the priority override.
+- **New env var `LOCAL_LLM_BASE_URL`**. Takes precedence over `OLLAMA_BASE_URL`. Documents intent for non-Ollama servers.
+- **New env var `LOCAL_LLM_API_FORMAT`** (`ollama` | `openai`, default `ollama`). Switches between native Ollama `/api/chat` and OpenAI-compatible `/v1/chat/completions`. Set to `openai` for vLLM, LM Studio, and llama.cpp.
+- **New env var `LOCAL_LLM_MODEL`**. Overrides the per-call model name; required for vLLM / llama.cpp setups where the server only loads one specific model and matches names strictly.
+- **`OLLAMA_BASE_URL`** is honored as a legacy synonym when `LOCAL_LLM_BASE_URL` is unset.
+
+#### Cleanup
+
+- Workflows sub-tabs distinguished from the AdminPage outer tabs — fixes a UI collision where the Workflows admin pane's internal tabs were being styled by the same active-state rules as the top-level Admin nav.
+- Windows-incompatible sandbox test cleanly skipped (rather than failing the suite) on platforms without a POSIX shell.
+- Dead code removed from `builder.tsx` — the unused `ChatBubble` component and its imports.
+- `tmp/` Playwright artifacts no longer tracked; added to `.gitignore`.
+
+#### Docs
+
+- README reframed: opener and "How it compares" now describe six-provider BYOK and remote-pointable local LLM. "Known limits" no longer says the builder is Anthropic-only — that gap is closed.
+- `docs/SELF_HOST.md` gained per-provider subsections for all six providers, five concrete local-LLM recipes (Ollama / remote Ollama / vLLM / LM Studio / llama.cpp), a "Provider precedence and override" section explaining `TASKLOOM_PROVIDER_PRIORITY`, and a `curl` example for `/api/app/builder/providers/status`.
+- `BACKLOG.md` moved Gemini, OpenRouter, remote-pointable local LLM, and the preset → provider+model resolver from "Still planned" into "Done in this pass".
+
 ### 2026-05-17 — Builder-first refactor, admin consolidation, LLM wire-up
 
 This entry covers the work that landed since the prior changelog snapshot: the workbench was reshaped around a full-bleed Builder, the operator surfaces collapsed under a single Admin tab, the Builder draft + iteration paths got their first real LLM wire-up (Anthropic), and the Fork B (self-host first) positioning was made explicit in the docs.
