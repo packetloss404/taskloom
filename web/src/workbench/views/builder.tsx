@@ -47,6 +47,11 @@ interface ChatMessage {
   role: "user" | "assistant" | "system";
   body: ChatBody;
   streaming?: boolean;
+  /**
+   * Checkpoint id this message produced (set after approve/applyIteration succeeds).
+   * Powers the per-message "Revert to here" affordance in `ThreadMessage`.
+   */
+  checkpointId?: string;
 }
 
 function newId(): string {
@@ -240,6 +245,23 @@ export function BuilderView() {
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
   const pushSystemStatus = (text: string, tone: "info" | "warn" | "error" | "ok" = "info") =>
     appendMessage({ id: newId(), role: "system", body: { kind: "status", text, tone } });
+  /**
+   * Stamp the most recent plan/diff message that does not yet carry a checkpointId.
+   * Called after `approve` / `applyIteration` succeeds so the matching chat entry
+   * can render the "Revert to here" affordance.
+   */
+  const attachCheckpointToLatestPlanOrDiff = (checkpointId: string) =>
+    setMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i]!;
+        if (m.checkpointId) continue;
+        if (m.body.kind !== "plan" && m.body.kind !== "diff") continue;
+        const next = prev.slice();
+        next[i] = { ...m, checkpointId };
+        return next;
+      }
+      return prev;
+    });
 
   // Refresh checkpoints + publish state when an app is created
   useEffect(() => {
@@ -321,6 +343,8 @@ export function BuilderView() {
         sourceFiles: result.sourceFiles ?? result.artifact?.files ?? [],
         workspace: result.workspace ?? null,
       });
+      const newCheckpointId = result.checkpoint?.id;
+      if (newCheckpointId) attachCheckpointToLatestPlanOrDiff(newCheckpointId);
       setMode("applied");
       setTab("preview");
       const smokeStatus = result.smoke?.status ?? result.smokeBuild?.status;
@@ -423,6 +447,8 @@ export function BuilderView() {
         sourceFiles: result.sourceFiles ?? result.diff?.sourceFiles ?? result.diff?.artifact?.files ?? prev.sourceFiles,
         workspace: result.workspace ?? prev.workspace,
       }));
+      const newCheckpointId = result.checkpoint?.id;
+      if (newCheckpointId) attachCheckpointToLatestPlanOrDiff(newCheckpointId);
       setIterPrompt("");
       pushSystemStatus("Diff applied. Preview refreshed.", "ok");
     } catch (e) {
@@ -452,7 +478,6 @@ export function BuilderView() {
         workspace: prev.workspace,
       }));
       setSelectedElement(null);
-      setInspectMode(false);
       setMode("applied");
       setTab("preview");
       const nextAppId = result.app?.id ?? state.appId;
@@ -492,7 +517,6 @@ export function BuilderView() {
       });
       setMessages([]);
       setSelectedElement(null);
-      setInspectMode(false);
       setTab("preview");
       setMode("applied");
       pushSystemStatus(`Branched from ${sourceCheckpointShort} in '${sourceAppName}'.`, "info");
@@ -689,6 +713,7 @@ export function BuilderView() {
                   key={msg.id}
                   message={msg}
                   onApplyIteration={() => { void applyIteration(); }}
+                  onRevert={(checkpointId) => { void rollback(checkpointId); }}
                   working={working}
                 />
               ))}
@@ -732,7 +757,7 @@ export function BuilderView() {
                 }}>
                   <I.zap size={11}/>
                   <span className="mono" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    scoped: {selectedElement.selector}
+                    Editing: {selectedElement.selector}
                     {selectedElement.label && <span style={{ color: "var(--silver-300)" }}> · "{selectedElement.label}"</span>}
                   </span>
                   <button onClick={() => setSelectedElement(null)} style={{ background: "transparent", border: "none", color: "var(--silver-300)", cursor: "pointer", padding: 0 }}>
@@ -820,12 +845,7 @@ export function BuilderView() {
                 <PreviewTab
                   draft={draft}
                   previewUrl={state.previewUrl}
-                  inspectMode={inspectMode}
-                  onToggleInspect={() => setInspectMode((v) => !v)}
-                  onSelectElement={(sel) => {
-                    setSelectedElement(sel);
-                    setInspectMode(false);
-                  }}
+                  onSelectElement={(sel) => setSelectedElement(sel)}
                   selectedSelector={selectedElement?.selector ?? null}
                 />
               )}
@@ -859,13 +879,15 @@ export function BuilderView() {
 function ThreadMessage({
   message,
   onApplyIteration,
+  onRevert,
   working,
 }: {
   message: ChatMessage;
   onApplyIteration: () => void;
+  onRevert: (checkpointId: string) => void;
   working: boolean;
 }) {
-  const { role, body, streaming } = message;
+  const { role, body, streaming, checkpointId } = message;
   if (role === "system") {
     if (body.kind !== "status") return null;
     const tone = body.tone;
@@ -880,8 +902,15 @@ function ThreadMessage({
   }
 
   const isUser = role === "user";
+  // Per-message revert is exposed only for assistant messages that produced a
+  // checkpoint (plan or diff with a known checkpointId, never for streaming partials).
+  const canRevert =
+    !isUser &&
+    !streaming &&
+    !!checkpointId &&
+    (body.kind === "plan" || body.kind === "diff");
   return (
-    <div style={{ display: "flex", gap: 8 }}>
+    <div className="group" style={{ display: "flex", gap: 8, position: "relative" }}>
       <div style={{
         width: 22, height: 22, borderRadius: 6, flexShrink: 0,
         background: isUser ? "linear-gradient(135deg, #3F4549, #1E2225)" : "linear-gradient(135deg, var(--green) 0%, var(--green-deep) 100%)",
@@ -889,9 +918,35 @@ function ThreadMessage({
         color: isUser ? "var(--silver-100)" : "#0E1A02", fontSize: 10, fontWeight: 700,
       }}>{isUser ? "U" : "TL"}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="kicker" style={{ fontSize: 9.5, marginBottom: 4 }}>
-          {isUser ? "You" : "Taskloom"}
-          {streaming && <span className="mono" style={{ marginLeft: 8, color: "var(--green)" }}>· thinking</span>}
+        <div className="kicker" style={{ fontSize: 9.5, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>{isUser ? "You" : "Taskloom"}</span>
+          {streaming && <span className="mono" style={{ color: "var(--green)" }}>· thinking</span>}
+          {canRevert && (
+            <button
+              type="button"
+              className="opacity-0 group-hover:opacity-100 transition mono"
+              onClick={() => onRevert(checkpointId!)}
+              disabled={working}
+              title={`Revert app to the checkpoint produced by this message (${checkpointId!.slice(0, 8)})`}
+              style={{
+                marginLeft: "auto",
+                padding: "2px 8px",
+                fontSize: 10.5,
+                background: "transparent",
+                border: "1px solid var(--line-2)",
+                borderRadius: 4,
+                color: "var(--silver-300)",
+                cursor: working ? "not-allowed" : "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                textTransform: "none",
+                letterSpacing: 0,
+              }}
+            >
+              <span aria-hidden>↶</span> Revert to here
+            </button>
+          )}
         </div>
         <ThreadMessageBody body={body} onApplyIteration={onApplyIteration} working={working}/>
       </div>
@@ -1037,26 +1092,46 @@ function IterationCard({ iteration, onApply, working }: { iteration: AppBuilderI
 function PreviewTab({
   draft,
   previewUrl,
-  inspectMode,
-  onToggleInspect,
   onSelectElement,
   selectedSelector,
 }: {
   draft: AppBuilderDraft;
   previewUrl: string | null;
-  inspectMode: boolean;
-  onToggleInspect: () => void;
   onSelectElement: (sel: SelectedElement) => void;
   selectedSelector: string | null;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Always-on click-to-edit (2026 norm — matches Lovable/v0/Cursor/Bolt). Hover
+  // outline is gated on Cmd/Ctrl to avoid visual noise during ordinary browsing,
+  // but the click-capture stays armed so users discover the affordance by trying it.
   const [hoverRect, setHoverRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [outlineArmed, setOutlineArmed] = useState(false);
 
   useEffect(() => {
-    if (!inspectMode) {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey) setOutlineArmed(true);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey) {
+        setOutlineArmed(false);
+        setHoverRect(null);
+      }
+    };
+    const onBlur = () => {
+      setOutlineArmed(false);
       setHoverRect(null);
-      return;
-    }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
@@ -1064,7 +1139,6 @@ function PreviewTab({
       let doc: Document | null = null;
       try { doc = iframe.contentDocument; } catch { doc = null; }
       if (!doc) return;
-      doc.body.style.cursor = "crosshair";
 
       const onMove = (event: MouseEvent) => {
         const target = event.target as HTMLElement | null;
@@ -1094,7 +1168,6 @@ function PreviewTab({
         doc!.removeEventListener("mousemove", onMove);
         doc!.removeEventListener("mouseleave", onLeave);
         doc!.removeEventListener("click", onClick, true);
-        try { doc!.body.style.cursor = ""; } catch { /* ignore */ }
       };
     };
 
@@ -1108,35 +1181,27 @@ function PreviewTab({
       iframe.removeEventListener("load", onLoad);
       if (cleanup) cleanup();
     };
-  }, [inspectMode, previewUrl, onSelectElement]);
+  }, [previewUrl, onSelectElement]);
 
   return (
     <div style={{ padding: 20, height: "100%", position: "relative" }}>
       <div style={{
         position: "absolute", top: 28, right: 28, zIndex: 10,
         display: "flex", gap: 6, alignItems: "center",
-        padding: "4px 8px",
+        padding: "4px 10px",
         background: "var(--panel)",
-        border: `1px solid ${inspectMode ? "var(--green-deep)" : "var(--line-2)"}`,
+        border: "1px solid var(--line-2)",
         borderRadius: 8,
+        fontFamily: "var(--font-mono)",
+        fontSize: 10.5,
+        textTransform: "uppercase",
+        letterSpacing: "0.08em",
+        color: "var(--silver-400)",
       }}>
-        <button
-          onClick={onToggleInspect}
-          title={inspectMode ? "Exit inspect mode" : "Click an element in the preview to scope the next message"}
-          style={{
-            background: "transparent", border: "none", padding: "2px 6px",
-            color: inspectMode ? "var(--green)" : "var(--silver-300)",
-            cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
-            fontSize: 11.5,
-            fontFamily: "var(--font-mono)",
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-          }}
-        >
-          <I.zap size={12}/> {inspectMode ? "Inspecting" : "Inspect"}
-        </button>
+        <I.zap size={11} style={{ color: "var(--green)" }}/>
+        <span>Click any element · hold ⌘/Ctrl to outline</span>
         {selectedSelector && (
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-400)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-200)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 }}>
             · {selectedSelector}
           </span>
         )}
@@ -1148,20 +1213,20 @@ function PreviewTab({
             src={previewUrl}
             style={{
               width: "100%", height: "100%",
-              border: `1px solid ${inspectMode ? "rgba(184,242,92,0.5)" : "var(--line)"}`,
+              border: "1px solid var(--line)",
               borderRadius: 8,
               background: "var(--ink)",
             }}
           />
-          {inspectMode && hoverRect && (
+          {outlineArmed && hoverRect && (
             <div style={{
               position: "absolute",
               left: hoverRect.left,
               top: hoverRect.top,
               width: hoverRect.width,
               height: hoverRect.height,
-              border: "2px solid var(--green)",
-              background: "rgba(184,242,92,0.08)",
+              border: "1px solid var(--green-deep)",
+              background: "rgba(184,242,92,0.06)",
               borderRadius: 2,
               pointerEvents: "none",
               boxSizing: "border-box",
