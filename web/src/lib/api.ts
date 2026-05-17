@@ -263,6 +263,7 @@ export const api = {
   getPublicDashboard: () => j<PublicDashboardPayload>("/api/activation"),
   getBootstrap: () => j<BootstrapPayload>("/api/app/bootstrap"),
   getActivationDetail: () => j<ActivationDetailPayload>("/api/app/activation"),
+  getHostInfo: () => j<{ lanIps: string[]; port: number }>("/api/app/host-info"),
   getOnboarding: () => j<{ onboarding: BootstrapPayload["onboarding"] }>("/api/app/onboarding").then((payload) => payload.onboarding),
   completeOnboardingStep: (stepKey: string) => j<{ onboarding: BootstrapPayload["onboarding"] }>(`/api/app/onboarding/steps/${stepKey}/complete`, { method: "POST" }),
   updateProfile: (body: { displayName: string; timezone: string }) => j<{ profile: Session["user"] }>("/api/app/profile", { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.profile),

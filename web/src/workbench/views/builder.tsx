@@ -1304,24 +1304,29 @@ function PreviewTab({
     <div style={{ padding: 20, height: "100%", position: "relative" }}>
       <div style={{
         position: "absolute", top: 28, right: 28, zIndex: 10,
-        display: "flex", gap: 6, alignItems: "center",
-        padding: "4px 10px",
-        background: "var(--panel)",
-        border: "1px solid var(--line-2)",
-        borderRadius: 8,
-        fontFamily: "var(--font-mono)",
-        fontSize: 10.5,
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        color: "var(--silver-400)",
+        display: "flex", gap: 8, alignItems: "center",
       }}>
-        <I.zap size={11} style={{ color: "var(--green)" }}/>
-        <span>Hold ⌘/Ctrl and click an element to scope your next change</span>
-        {selectedSelector && (
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-200)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 }}>
-            · {selectedSelector}
-          </span>
-        )}
+        <SharePopover appId={appId} />
+        <div style={{
+          display: "flex", gap: 6, alignItems: "center",
+          padding: "4px 10px",
+          background: "var(--panel)",
+          border: "1px solid var(--line-2)",
+          borderRadius: 8,
+          fontFamily: "var(--font-mono)",
+          fontSize: 10.5,
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          color: "var(--silver-400)",
+        }}>
+          <I.zap size={11} style={{ color: "var(--green)" }}/>
+          <span>Hold ⌘/Ctrl and click an element to scope your next change</span>
+          {selectedSelector && (
+            <span className="mono" style={{ fontSize: 10.5, color: "var(--silver-200)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 }}>
+              · {selectedSelector}
+            </span>
+          )}
+        </div>
       </div>
       {previewUrl ? (
         <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -1378,6 +1383,194 @@ function PreviewTab({
         </div>
       )}
     </div>
+  );
+}
+
+function SharePopover({ appId }: { appId: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [hostInfo, setHostInfo] = useState<{ lanIps: string[]; port: number } | null>(null);
+  const [hostInfoError, setHostInfoError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    if (!hostInfo && !hostInfoError) {
+      api.getHostInfo()
+        .then((info) => { if (!cancelled) setHostInfo(info); })
+        .catch((err: Error) => { if (!cancelled) setHostInfoError(err.message || "couldn't load network info"); });
+    }
+    const onDown = (event: MouseEvent) => {
+      if (!wrapperRef.current) return;
+      if (event.target instanceof Node && wrapperRef.current.contains(event.target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, hostInfo, hostInfoError]);
+
+  useEffect(() => {
+    if (!copiedKey) return;
+    const handle = window.setTimeout(() => setCopiedKey(null), 2000);
+    return () => window.clearTimeout(handle);
+  }, [copiedKey]);
+
+  const localUrl = typeof window !== "undefined" ? window.location.href : "";
+  const firstLanIp = hostInfo?.lanIps[0] ?? null;
+  const lanUrl = firstLanIp && appId
+    ? `http://${firstLanIp}:${hostInfo!.port}/api/app/generated-apps/${encodeURIComponent(appId)}/preview/`
+    : null;
+
+  const copy = async (text: string, key: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const tmp = document.createElement("textarea");
+        tmp.value = text;
+        tmp.style.position = "fixed";
+        tmp.style.opacity = "0";
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand("copy");
+        document.body.removeChild(tmp);
+      }
+      setCopiedKey(key);
+    } catch {
+      setCopiedKey(null);
+    }
+  };
+
+  const ShareIcon = I.share ?? I.link;
+
+  return (
+    <div ref={wrapperRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="btn-ghost"
+        style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "5px 10px",
+          background: "var(--panel)",
+          border: "1px solid var(--line-2)",
+          borderRadius: 8,
+          fontSize: 11.5,
+          color: "var(--silver-100)",
+          cursor: "pointer",
+        }}
+      >
+        <ShareIcon size={12}/>
+        <span>Share</span>
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Share preview"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            width: 280,
+            background: "var(--panel)",
+            border: "1px solid var(--line-2)",
+            borderRadius: 8,
+            padding: 12,
+            zIndex: 20,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+            color: "var(--silver-100)",
+            fontSize: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <ShareOptionButton
+            label="Copy link to this device"
+            hint="Opens on this browser only"
+            copied={copiedKey === "local"}
+            onClick={() => { void copy(localUrl, "local"); }}
+          />
+          {hostInfo === null && hostInfoError === null && (
+            <div className="muted" style={{ fontSize: 11 }}>Loading network info…</div>
+          )}
+          {lanUrl ? (
+            <ShareOptionButton
+              label="Copy link for your network"
+              hint={`Anyone on ${firstLanIp} can open it`}
+              copied={copiedKey === "lan"}
+              onClick={() => { void copy(lanUrl, "lan"); }}
+            />
+          ) : hostInfo && (hostInfo.lanIps.length === 0 || !appId) ? (
+            <div className="muted" style={{ fontSize: 11, fontStyle: "italic" }}>
+              {appId
+                ? "(your computer isn't on a network)"
+                : "(save the draft first to share over your network)"}
+            </div>
+          ) : null}
+          <div style={{
+            borderTop: "1px solid var(--line)",
+            paddingTop: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}>
+            <div style={{ fontWeight: 500, fontSize: 12 }}>Download as Docker bundle</div>
+            <div className="muted" style={{ fontSize: 11 }}>
+              Switch to the Publish tab to generate a Docker Compose bundle.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShareOptionButton({
+  label,
+  hint,
+  copied,
+  onClick,
+}: {
+  label: string;
+  hint?: string;
+  copied: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        textAlign: "left",
+        background: "transparent",
+        border: "1px solid var(--line)",
+        borderRadius: 6,
+        padding: "8px 10px",
+        cursor: "pointer",
+        color: "var(--silver-100)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 500 }}>{label}</span>
+        {copied && (
+          <span className="mono" style={{ fontSize: 10.5, color: "var(--green)" }}>Copied!</span>
+        )}
+      </div>
+      {hint && <span className="muted" style={{ fontSize: 10.5 }}>{hint}</span>}
+    </button>
   );
 }
 
