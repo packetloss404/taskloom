@@ -11,24 +11,10 @@ import { RunDetailView } from "./views/run-detail";
 import { useApiData } from "./useApiData";
 import { DashboardView } from "./views/dashboard";
 import { AgentsView } from "./views/agents";
-import { WorkflowsView } from "./views/workflows";
 import { RunsView } from "./views/runs";
-import { IntegrationsView } from "./views/integrations";
-import { OperationsView } from "./views/operations";
-import { SandboxView } from "./views/sandbox";
-import { ActivationView } from "./views/activation";
 import { SettingsView } from "./views/settings";
 import { LoggedOutView } from "./views/logged-out";
-import { BillingView } from "./views/billing";
-import { RolesView } from "./views/roles";
-import { SSOView } from "./views/sso";
-import { SecretsView } from "./views/secrets";
-import { WebhooksView } from "./views/webhooks";
-import { RateLimitsView } from "./views/rate-limits";
-import { ReleasesView } from "./views/releases";
-import { NotificationsView } from "./views/notifications";
-import { StorageView } from "./views/storage";
-import { BackupsView } from "./views/backups";
+import { AdminPage } from "./views/admin";
 
 export default function Workbench() {
   const { session, loading, signIn, signOut } = useAuth();
@@ -86,26 +72,28 @@ function WorkbenchInner() {
             <Route path="agents" element={<AgentsView />} />
             <Route path="agents/new" element={<AgentEditorView />} />
             <Route path="agents/:id" element={<AgentEditorView />} />
-            <Route path="workflows" element={<WorkflowsView />} />
             <Route path="runs" element={<RunsView />} />
             <Route path="runs/:id" element={<RunDeepView />} />
             <Route path="activity" element={<RunsView />} />
             <Route path="activity/:id" element={<RunDetailView />} />
-            <Route path="integrations" element={<IntegrationsView />} />
-            <Route path="operations" element={<OperationsView />} />
-            <Route path="sandbox" element={<SandboxView />} />
-            <Route path="activation" element={<ActivationView />} />
             <Route path="settings" element={<SettingsView />} />
-            <Route path="billing" element={<BillingView />} />
-            <Route path="roles" element={<RolesView />} />
-            <Route path="sso" element={<SSOView />} />
-            <Route path="secrets" element={<SecretsView />} />
-            <Route path="webhooks" element={<WebhooksView />} />
-            <Route path="rate-limits" element={<RateLimitsView />} />
-            <Route path="releases" element={<ReleasesView />} />
-            <Route path="notifications" element={<NotificationsView />} />
-            <Route path="storage" element={<StorageView />} />
-            <Route path="backups" element={<BackupsView />} />
+            <Route path="admin/:tab?" element={<AdminPage />} />
+            <Route path="roles" element={<Navigate to="/admin/roles" replace />} />
+            <Route path="sso" element={<Navigate to="/admin/sso" replace />} />
+            <Route path="secrets" element={<Navigate to="/admin/secrets" replace />} />
+            <Route path="rate-limits" element={<Navigate to="/admin/rate-limits" replace />} />
+            <Route path="webhooks" element={<Navigate to="/admin/webhooks" replace />} />
+            <Route path="releases" element={<Navigate to="/admin/releases" replace />} />
+            <Route path="storage" element={<Navigate to="/admin/storage" replace />} />
+            <Route path="backups" element={<Navigate to="/admin/backups" replace />} />
+            <Route path="notifications" element={<Navigate to="/admin/notifications" replace />} />
+            <Route path="operations" element={<Navigate to="/admin/operations" replace />} />
+            <Route path="integrations" element={<Navigate to="/admin/integrations" replace />} />
+            <Route path="activation" element={<Navigate to="/admin/activation" replace />} />
+            <Route path="sandbox" element={<Navigate to="/admin/sandbox" replace />} />
+            <Route path="workflows" element={<Navigate to="/admin/workflows" replace />} />
+            <Route path="billing" element={<Navigate to="/admin/billing" replace />} />
+            <Route path="alerts" element={<Navigate to="/admin/alerts" replace />} />
             <Route path="*" element={<RedirectToBuilder />} />
           </Routes>
         </div>
