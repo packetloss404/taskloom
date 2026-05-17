@@ -17,3 +17,4 @@ exports/
 !.gitkeep
 .claude/
 .design-bundle/
+tmp/
