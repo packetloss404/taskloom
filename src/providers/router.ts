@@ -20,6 +20,11 @@ export const DEFAULT_ROUTES: Record<string, ProviderRoute> = {
   "agent.reasoning": { provider: "anthropic", model: "claude-opus-4-7" },
   "code.generation": { provider: "minimax", model: "abab6.5-chat" },
   "local.dev": { provider: "ollama", model: "llama3.2" },
+  // OpenRouter presets: when a user only has an OPENROUTER_API_KEY they still
+  // get usable defaults for the cheap/fast/smart tiers via OpenRouter's proxy.
+  "byok.openrouter.cheap": { provider: "openrouter", model: "qwen/qwen3-coder" },
+  "byok.openrouter.fast": { provider: "openrouter", model: "anthropic/claude-haiku-4-5" },
+  "byok.openrouter.smart": { provider: "openrouter", model: "anthropic/claude-sonnet-4-6" },
 };
 
 const FALLBACK_ROUTE: ProviderRoute = { provider: "stub", model: "stub-small" };

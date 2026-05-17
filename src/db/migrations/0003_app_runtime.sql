@@ -352,7 +352,7 @@ create table if not exists api_keys (
   created_at text not null,
   updated_at text not null,
   foreign key (workspace_id) references workspaces (id) on delete cascade,
-  check (provider in ('anthropic', 'openai', 'minimax', 'ollama'))
+  check (provider in ('anthropic', 'openai', 'openrouter', 'minimax', 'ollama'))
 );
 
 create index if not exists idx_api_keys_workspace on api_keys (workspace_id, provider);
@@ -372,7 +372,7 @@ create table if not exists provider_calls (
   started_at text not null,
   completed_at text not null,
   foreign key (workspace_id) references workspaces (id) on delete cascade,
-  check (provider in ('anthropic', 'openai', 'minimax', 'ollama', 'stub')),
+  check (provider in ('anthropic', 'openai', 'openrouter', 'minimax', 'ollama', 'stub')),
   check (status in ('success', 'error', 'canceled'))
 );
 
