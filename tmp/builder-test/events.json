@@ -1,0 +1,114 @@
+[
+  {
+    "t": 1779027550.0150156,
+    "msg": "GOTO /builder"
+  },
+  {
+    "t": 1779027551.6462426,
+    "msg": "url=http://localhost:7341/builder"
+  },
+  {
+    "t": 1779027551.7972274,
+    "msg": "shot -> 01_initial.png"
+  },
+  {
+    "t": 1779027551.8032436,
+    "msg": "attempting sign-in"
+  },
+  {
+    "t": 1779027551.891986,
+    "msg": "shot -> 02_signin_visible.png"
+  },
+  {
+    "t": 1779027552.026442,
+    "msg": "shot -> 03_signin_filled.png"
+  },
+  {
+    "t": 1779027552.8964076,
+    "msg": "after sign-in submit, url=http://localhost:7341/builder"
+  },
+  {
+    "t": 1779027552.9398754,
+    "msg": "shot -> 04_builder_cold_start.png"
+  },
+  {
+    "t": 1779027552.99713,
+    "msg": "cold probe saved"
+  },
+  {
+    "t": 1779027554.5333812,
+    "msg": "chip click: url_changed=False, textarea='Build a lightweight CRM for account managers to track companies, contacts, opportunities, and renewal risk.'"
+  },
+  {
+    "t": 1779027554.5744917,
+    "msg": "shot -> 05_after_chip_click.png"
+  },
+  {
+    "t": 1779027554.6904101,
+    "msg": "shot -> 06_prompt_typed.png"
+  },
+  {
+    "t": 1779027554.6945403,
+    "msg": "clicking build btn 'button:has-text('Build')'"
+  },
+  {
+    "t": 1779027557.310737,
+    "msg": "shot -> 07_drafting_state.png"
+  },
+  {
+    "t": 1779027557.3156605,
+    "msg": "draft ready after 0.0s"
+  },
+  {
+    "t": 1779027557.376724,
+    "msg": "shot -> 08_after_wait.png"
+  },
+  {
+    "t": 1779027557.4431872,
+    "msg": "shot -> 09_draft_visible.png"
+  },
+  {
+    "t": 1779027557.5132594,
+    "msg": "clicked Approve"
+  },
+  {
+    "t": 1779027559.0965722,
+    "msg": "shot -> 10_applying.png"
+  },
+  {
+    "t": 1779027559.161038,
+    "msg": "shot -> 11_after_approve.png"
+  },
+  {
+    "t": 1779027559.1610458,
+    "msg": "post-approve ready: True"
+  },
+  {
+    "t": 1779027560.480098,
+    "msg": "shot -> 12_tab_preview.png"
+  },
+  {
+    "t": 1779027561.8409808,
+    "msg": "shot -> 12_tab_source.png"
+  },
+  {
+    "t": 1779027563.2004755,
+    "msg": "shot -> 12_tab_quality.png"
+  },
+  {
+    "t": 1779027564.5420544,
+    "msg": "shot -> 12_tab_activity.png"
+  },
+  {
+    "t": 1779027565.8551872,
+    "msg": "shot -> 12_tab_runs.png"
+  },
+  {
+    "t": 1779027567.1911159,
+    "msg": "shot -> 12_tab_saves.png"
+  },
+  {
+    "t": 1779027568.5180972,
+    "msg": "shot -> 12_tab_publish.png"
+  }
+]

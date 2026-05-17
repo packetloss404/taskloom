@@ -1,0 +1,92 @@
+[
+  {
+    "t": 1779027639.574282,
+    "status": 200,
+    "url": "http://localhost:7341/api/auth/session",
+    "method": "GET"
+  },
+  {
+    "t": 1779027639.5994287,
+    "status": 200,
+    "url": "http://localhost:7341/api/auth/session",
+    "method": "GET"
+  },
+  {
+    "t": 1779027640.8895195,
+    "status": 200,
+    "url": "http://localhost:7341/api/auth/login",
+    "method": "POST"
+  },
+  {
+    "t": 1779027641.8932052,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/app-draft/stream",
+    "method": "POST"
+  },
+  {
+    "t": 1779027643.1374903,
+    "status": 201,
+    "url": "http://localhost:7341/api/app/builder/app-draft/apply",
+    "method": "POST"
+  },
+  {
+    "t": 1779027643.1763217,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/checkpoints?appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.1935074,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/publish/state?appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.3196442,
+    "status": 200,
+    "url": "http://localhost:7341/api/auth/session",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.3408153,
+    "status": 200,
+    "url": "http://localhost:7341/api/auth/session",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.353695,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/publish/state?appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.3627362,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/checkpoints?appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.3708847,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/publish/state?appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027643.379631,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/builder/checkpoints?appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027675.9530253,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/sandbox/exec?limit=50&appId=gapp_d40627aa1091",
+    "method": "GET"
+  },
+  {
+    "t": 1779027675.9619613,
+    "status": 200,
+    "url": "http://localhost:7341/api/app/sandbox/exec?limit=50&appId=gapp_d40627aa1091",
+    "method": "GET"
+  }
+]

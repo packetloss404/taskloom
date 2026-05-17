@@ -1,0 +1,331 @@
+{
+  "_streaming_samples": [
+    {
+      "t": 0.25,
+      "bodyLen": 31,
+      "steps": 0
+    },
+    {
+      "t": 0.47,
+      "bodyLen": 31,
+      "steps": 0
+    },
+    {
+      "t": 0.69,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 0.9,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 1.12,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 1.34,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 1.56,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 1.78,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 1.99,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 2.21,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 2.43,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 2.64,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 2.86,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 3.07,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 3.3,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 3.51,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 3.73,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 3.94,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 4.17,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 4.39,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 4.61,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 4.83,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 5.05,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 5.26,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 5.48,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 5.7,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 5.91,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 6.13,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 6.35,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 6.57,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 6.78,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 7.0,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 7.22,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 7.43,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 7.65,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 7.87,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 8.08,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 8.3,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 8.52,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 8.73,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 8.95,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 9.17,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 9.39,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 9.61,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 9.82,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 10.04,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 10.26,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 10.47,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 10.69,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 10.91,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 11.12,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 11.34,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 11.55,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 11.77,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 11.99,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 12.21,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 12.43,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 12.64,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 12.86,
+      "bodyLen": 4968,
+      "steps": 0
+    },
+    {
+      "t": 13.07,
+      "bodyLen": 4968,
+      "steps": 0
+    }
+  ],
+  "claim_1_streaming": "BROKEN (draft teleported in without intermediate step growth)",
+  "claim_6_naming": "WORKS (name surfaced: 'Simple Task Tracker')",
+  "claim_5_phase1_regressions": {
+    "saves_badge": "WORKS (Saves \u00b7 N separator visible)",
+    "eyebrow": "WORKS",
+    "saved_preview_case": "err: Locator.click: Timeout 4000ms exceeded.\nCall log:\n  - waiting for locator(\"button:has-text(\\\"Local preview\\\"), [role=\\\"tab\\\"]:has-text(\\\"Local preview\\\")\").first\n",
+    "back_chevron": "WORKS (link to '/', text='\u2039', aria='Back to home')"
+  },
+  "claim_2_click_to_edit": "BROKEN: no outline even with Ctrl held; outline correctly clears on Ctrl release; Editing: badge WORKS",
+  "_c2_evidence": {
+    "no_mod": {
+      "found": false
+    },
+    "with_mod": {
+      "found": false
+    },
+    "after_release": {
+      "found": false
+    },
+    "editing_badge": true
+  },
+  "claim_3_revert": "WORKS (Revert to here button present) \u2014 click executed without console errors",
+  "claim_4_persistence": "err: Locator.wait_for: Timeout 4000ms exceeded.\nCall log:\n  - waiting for locator(\"input[type=\\\"text\\\"], input:not([type=\\\"password\\\"]):not([type=\\\"email\\\"]):not([type=\\\"submit\\\"]):not([type=\\\"checkbox\\\"]), textarea\").first to be visible\n",
+  "claim_7_cloud_md": "WORKS (7 sections: ['Managed deploy with a free public subdomain and auto TLS', 'Hosted browser-agent farm for autonomous QA loops', 'iOS App Store and Google Play one-click submission', 'Hosted OAuth proxy with pre-wired connectors', 'Cross-tenant User Memory layer', 'Shareable and remixable conversation URLs with public hosting', 'Managed credit / billing meter for unbounded QA loops'])",
+  "claim_8_errors": "console_errors=0, bad_http_responses=0",
+  "_console_errors_sample": [],
+  "_bad_http_sample": []
+}

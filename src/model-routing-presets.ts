@@ -370,6 +370,9 @@ function isProviderKind(value: string): value is ProviderKind {
   return value === "openai" || value === "anthropic" || value === "minimax" || value === "azure_openai" || value === "ollama" || value === "gemini" || value === "custom";
 }
 
-function isApiKeyProvider(value: ProviderKind): value is ApiKeyProvider {
+function isApiKeyProvider(value: ProviderKind): value is ProviderKind & ApiKeyProvider {
+  // Narrows to ApiKeyProvider values that are also valid ProviderKinds. Note
+  // "openrouter" is an ApiKeyProvider but not a ProviderKind (no workspace
+  // provider record kind yet), so it's intentionally excluded here.
   return value === "openai" || value === "anthropic" || value === "minimax" || value === "ollama" || value === "gemini";
 }

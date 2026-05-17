@@ -605,7 +605,7 @@ export interface WorkspaceEnvVarRecord {
   updatedAt: string;
 }
 
-export type ApiKeyProvider = "anthropic" | "openai" | "minimax" | "ollama" | "gemini";
+export type ApiKeyProvider = "anthropic" | "openai" | "openrouter" | "minimax" | "ollama" | "gemini";
 
 export interface ApiKeyRecord {
   id: string;
@@ -624,7 +624,7 @@ export interface ProviderCallRecord {
   id: string;
   workspaceId: string;
   routeKey: string;
-  provider: "anthropic" | "openai" | "minimax" | "ollama" | "gemini" | "stub";
+  provider: "anthropic" | "openai" | "openrouter" | "minimax" | "ollama" | "gemini" | "stub";
   model: string;
   promptTokens: number;
   completionTokens: number;

@@ -1,0 +1,16 @@
+{
+  "claim_5_saved_preview_case": "BROKEN/UNCLEAR: kickers found = []",
+  "claim_2_click_to_edit": "modifier-gated outline WORKS; clears on Ctrl release; Editing: badge WORKS",
+  "_c2_iframe_url": "http://localhost:7341/builder/preview/alpha/gapp_70d160cc48c8/login",
+  "claim_4_persistence": "BROKEN (iframe never rendered any inputs/buttons; url=http://localhost:7341/builder/preview/alpha/gapp_70d160cc48c8/login)",
+  "claim_1_streaming": "DEGRADED-AS-EXPECTED: backend SSE emits 4 step events + draft + done over ~490ms (verified in run 3). Without ANTHROPIC_API_KEY, the template fallback emits discrete progress steps (Routing through the smart preset / Reading the prompt / Selected the task_tracker template / Building data schema and API routes) \u2014 no token-by-token prose. UI accumulates them visibly. This is the documented Fork B fallback path.",
+  "claim_5_saves_badge": "WORKS (Saves \u00b7 N format visible)",
+  "claim_5_eyebrow": "WORKS",
+  "claim_5_back_chevron": "WORKS (link to /, content='\u2039', aria-label='Back to home')",
+  "claim_6_naming": "WORKS (name surfaced: 'Simple Task Tracker')",
+  "claim_7_cloud_md": "WORKS (7 numbered sections)",
+  "claim_8_errors": "console_errors=0, bad_http_4xx_5xx=0",
+  "_console_errors_sample": [],
+  "_bad_http_sample": [],
+  "claim_3_revert": "WORKS (Revert to here button rendered on hover of assistant message; click rolled back without console error \u2014 verified in run 3)"
+}

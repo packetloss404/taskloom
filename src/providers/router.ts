@@ -22,12 +22,15 @@ export const DEFAULT_ROUTES: Record<string, ProviderRoute> = {
   "code.generation": { provider: "minimax", model: "abab6.5-chat" },
   "local.dev": { provider: "ollama", model: "llama3.2" },
   // Gemini BYOK presets — used when the caller selects `provider: "gemini"` or
-  // when the user only has GOOGLE_API_KEY / GEMINI_API_KEY configured. The
-  // *.cheap / *.fast / *.smart route keys mirror common preset names used
-  // elsewhere in the codebase so a future router override can point at them.
+  // when the user only has GOOGLE_API_KEY / GEMINI_API_KEY configured.
   "gemini.cheap": { provider: "gemini", model: GEMINI_DEFAULT_MODELS.cheap },
   "gemini.fast": { provider: "gemini", model: GEMINI_DEFAULT_MODELS.fast },
   "gemini.smart": { provider: "gemini", model: GEMINI_DEFAULT_MODELS.smart },
+  // OpenRouter presets: when a user only has an OPENROUTER_API_KEY they still
+  // get usable defaults for the cheap/fast/smart tiers via OpenRouter's proxy.
+  "byok.openrouter.cheap": { provider: "openrouter", model: "qwen/qwen3-coder" },
+  "byok.openrouter.fast": { provider: "openrouter", model: "anthropic/claude-haiku-4-5" },
+  "byok.openrouter.smart": { provider: "openrouter", model: "anthropic/claude-sonnet-4-6" },
 };
 
 /**

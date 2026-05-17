@@ -1,0 +1,6 @@
+{
+  "before_url": "http://localhost:7341/builder",
+  "after_url": "http://localhost:7341/builder",
+  "textarea_value": "Build a lightweight CRM for account managers to track companies, contacts, opportunities, and renewal risk.",
+  "looks_auto_submitted": false
+}

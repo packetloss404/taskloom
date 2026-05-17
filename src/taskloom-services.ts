@@ -3255,7 +3255,7 @@ function buildIntegrationReadinessSummary(data: TaskloomData, workspaceId: strin
     };
   });
 
-  const missingProviderKinds = DEFAULT_WORKSPACE_PROVIDER_KINDS.filter((kind) => !providerKinds.has(kind));
+  const missingProviderKinds = DEFAULT_WORKSPACE_PROVIDER_KINDS.filter((kind) => !providerKinds.has(kind as ProviderKind));
   const missingApiKeys = providerReadiness
     .filter((entry) => entry.apiKeyProvider && entry.requiresApiKey && !entry.apiKeyReady && entry.provider.status !== "disabled")
     .map((entry) => ({

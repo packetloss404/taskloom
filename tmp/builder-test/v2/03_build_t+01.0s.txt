@@ -1,0 +1,56 @@
+Simple Tracker Task Tracker
+⋯
+Simple Tracker Task Tracker
+/simple-tracker-task-tracker · 5p · 3e · 16r
+DRAFT
+U
+YOU
+Build a simple todo tracker
+TL
+TASKLOOM
+Simple Tracker Task Tracker is a deterministic task and project tracking workspace draft for: Build a simple todo tracker
+PLAN · 4 STEPS
+Simple Tracker Task Tracker build plan
+01
+Generate pages
+Create 5 routed screens and shared navigation from the page map.
+02
+Create data layer
+Provision postgres tables for project, task, comment.
+03
+Review API contracts
+Review 16 generated route contracts with validation and auth expectations before runtime execution.
+04
+Run smoke build
+Render the generated preview and run page plus API contract smoke checks.
+ACCEPTANCE
+· Simple Tracker Task Tracker uses the task and project tracking workspace heuristic selected from the prompt.
+· Users can create a task, assign an owner, and move it across board statuses.
+· Project detail reflects task counts by status.
+· Task comments persist in chronological order.
+· Generated API routes return validation errors for missing required fields.
+· Generated seed data can render every primary page without empty states.
+READY TO APPROVE
+
+Approving saves generated source metadata, runs build + smoke checks, and creates a checkpoint.
+
+Approve
+Simple Tracker Task Tracker
+Sign in (/login)
+Tasks (/tasks)
+Board (/boards/:boardId)
+Projects (/projects)
+Task detail (/tasks/:taskId)
+project
+task
+comment
+POST /api/public/generated/simple-tracker-task-tracker/auth/session
+GET /api/app/generated/simple-tracker-task-tracker/projects
+POST /api/app/generated/simple-tracker-task-tracker/projects
+GET /api/app/generated/simple-tracker-task-tracker/projects/:id
+PATCH /api/app/generated/simple-tracker-task-tracker/projects/:id
+DELETE /api/app/generated/simple-tracker-task-tracker/projects/:id
+GET /api/app/generated/simple-tracker-task-tracker/tasks
+POST /api/app/generated/simple-tracker-task-tracker/tasks
+GET /api/app/generated/simple-tracker-task-tracker/tasks/:id
+PATC

@@ -8,7 +8,7 @@ import {
 import { redactedErrorMessage } from "./security/redaction.js";
 import type { ApiKeyProvider } from "./taskloom-store.js";
 
-const VALID_PROVIDERS: ApiKeyProvider[] = ["anthropic", "openai", "minimax", "ollama"];
+const VALID_PROVIDERS: ApiKeyProvider[] = ["anthropic", "openai", "openrouter", "minimax", "ollama", "gemini"];
 
 function httpError(status: number, message: string): Error & { status: number } {
   return Object.assign(new Error(message), { status });
@@ -35,7 +35,7 @@ apiKeyRoutes.post("/", async (c) => {
     const { workspace } = requirePrivateWorkspaceRole(c, "admin");
     const body = (await c.req.json().catch(() => ({}))) as Partial<{ provider: string; label: string; value: string }>;
     if (!body.provider || !VALID_PROVIDERS.includes(body.provider as ApiKeyProvider)) {
-      throw httpError(400, "provider must be one of anthropic, openai, minimax, ollama");
+      throw httpError(400, "provider must be one of anthropic, openai, openrouter, minimax, ollama, gemini");
     }
     if (!body.label || typeof body.label !== "string") throw httpError(400, "label is required");
     if (!body.value || typeof body.value !== "string") throw httpError(400, "value is required");

@@ -1,0 +1,101 @@
+[
+  {
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 732,
+      "columnNumber": 8
+    }
+  },
+  {
+    "type": "info",
+    "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "location": {
+      "url": "http://localhost:7341/@fs/D:/projects/taskloom/node_modules/.vite/deps/react-dom_client.js?v=40fc52d3",
+      "lineNumber": 20100,
+      "columnNumber": 53
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connected.",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 826,
+      "columnNumber": 11
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 732,
+      "columnNumber": 8
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connected.",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 826,
+      "columnNumber": 11
+    }
+  },
+  {
+    "type": "info",
+    "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "location": {
+      "url": "http://localhost:7341/@fs/D:/projects/taskloom/node_modules/.vite/deps/react-dom_client.js?v=40fc52d3",
+      "lineNumber": 20100,
+      "columnNumber": 53
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 732,
+      "columnNumber": 8
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connected.",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 826,
+      "columnNumber": 11
+    }
+  },
+  {
+    "type": "info",
+    "text": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "location": {
+      "url": "http://localhost:7341/@fs/D:/projects/taskloom/node_modules/.vite/deps/react-dom_client.js?v=40fc52d3",
+      "lineNumber": 20100,
+      "columnNumber": 53
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 732,
+      "columnNumber": 8
+    }
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connected.",
+    "location": {
+      "url": "http://localhost:7341/@vite/client",
+      "lineNumber": 826,
+      "columnNumber": 11
+    }
+  }
+]
