@@ -1716,27 +1716,60 @@ function SharePopover({ appId }: { appId: string | null }) {
     return () => window.clearTimeout(handle);
   }, [copiedKey]);
 
-  const localUrl = typeof window !== "undefined" ? window.location.href : "";
   const firstLanIp = hostInfo?.lanIps[0] ?? null;
-  const lanUrl = firstLanIp && appId
-    ? `http://${firstLanIp}:${hostInfo!.port}/api/app/generated-apps/${encodeURIComponent(appId)}/preview/`
-    : null;
+  const lanShareable = Boolean(firstLanIp && appId);
 
-  const copy = async (text: string, key: string) => {
+  const mintTokenUrl = async (): Promise<{ localUrl: string; lanUrl: string | null } | null> => {
+    if (!appId) return null;
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const tmp = document.createElement("textarea");
-        tmp.value = text;
-        tmp.style.position = "fixed";
-        tmp.style.opacity = "0";
-        document.body.appendChild(tmp);
-        tmp.select();
-        document.execCommand("copy");
-        document.body.removeChild(tmp);
+      const { token } = await api.createPreviewToken(appId);
+      const previewPath = `/api/app/generated-apps/${encodeURIComponent(appId)}/preview/?token=${encodeURIComponent(token)}`;
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const local = `${origin}${previewPath}`;
+      const lan = firstLanIp && hostInfo
+        ? `http://${firstLanIp}:${hostInfo.port}${previewPath}`
+        : null;
+      return { localUrl: local, lanUrl: lan };
+    } catch {
+      return null;
+    }
+  };
+
+  const copyText = async (text: string) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const tmp = document.createElement("textarea");
+    tmp.value = text;
+    tmp.style.position = "fixed";
+    tmp.style.opacity = "0";
+    document.body.appendChild(tmp);
+    tmp.select();
+    document.execCommand("copy");
+    document.body.removeChild(tmp);
+  };
+
+  const copyLocal = async () => {
+    try {
+      const urls = await mintTokenUrl();
+      const target = urls?.localUrl ?? (typeof window !== "undefined" ? window.location.href : "");
+      await copyText(target);
+      setCopiedKey("local");
+    } catch {
+      setCopiedKey(null);
+    }
+  };
+
+  const copyLan = async () => {
+    try {
+      const urls = await mintTokenUrl();
+      if (!urls?.lanUrl) {
+        setCopiedKey(null);
+        return;
       }
-      setCopiedKey(key);
+      await copyText(urls.lanUrl);
+      setCopiedKey("lan");
     } catch {
       setCopiedKey(null);
     }
@@ -1788,19 +1821,19 @@ function SharePopover({ appId }: { appId: string | null }) {
         >
           <ShareOptionButton
             label="Copy link to this device"
-            hint="Opens on this browser only"
+            hint="Link expires in 1 hour · works in incognito on this device"
             copied={copiedKey === "local"}
-            onClick={() => { void copy(localUrl, "local"); }}
+            onClick={() => { void copyLocal(); }}
           />
           {hostInfo === null && hostInfoError === null && (
             <div className="muted" style={{ fontSize: 11 }}>Loading network info…</div>
           )}
-          {lanUrl ? (
+          {lanShareable ? (
             <ShareOptionButton
               label="Copy link for your network"
-              hint={`http://${firstLanIp} · viewers need workspace access (full multi-device sharing is coming with hosted Taskloom)`}
+              hint={`Link expires in 1 hour · valid on any device on your network (http://${firstLanIp})`}
               copied={copiedKey === "lan"}
-              onClick={() => { void copy(lanUrl, "lan"); }}
+              onClick={() => { void copyLan(); }}
             />
           ) : hostInfo && (hostInfo.lanIps.length === 0 || !appId) ? (
             <div className="muted" style={{ fontSize: 11, fontStyle: "italic" }}>

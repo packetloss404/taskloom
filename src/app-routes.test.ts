@@ -1940,3 +1940,169 @@ test("host-info route returns empty lanIps when no external IPv4 interfaces are 
   assert.equal(body.port, 8484);
   assert.deepEqual(body.lanIps, []);
 });
+
+async function setupGeneratedAppForPreviewTokenTests() {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+  const draftResponse = await app.request("/api/app/builder/app-draft", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Build a small invoice tracker for freelancers and clients." }),
+  });
+  const { draft } = await draftResponse.json() as { draft: Record<string, unknown> };
+  const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ draft, runSmoke: true }),
+  });
+  const applied = await applyResponse.json() as { app: { id: string; slug: string } };
+  assert.equal(applyResponse.status, 201);
+  return { app, alpha, headers, applied };
+}
+
+test("preview-token endpoint requires authentication", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const response = await app.request("/api/app/generated-apps/some-app/preview-token", {
+    method: "POST",
+  });
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "authentication required" });
+});
+
+test("preview-token endpoint mints a token with a future expiry and a previewUrl", async () => {
+  const { app, alpha, applied } = await setupGeneratedAppForPreviewTokenTests();
+  const before = Date.now();
+  const response = await app.request(`/api/app/generated-apps/${applied.app.id}/preview-token`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { token: string; expiresAt: string; previewUrl: string };
+  assert.match(body.token, /^tk_/);
+  assert.ok(body.token.includes(applied.app.id));
+  const expiresAtMs = Date.parse(body.expiresAt);
+  assert.ok(Number.isFinite(expiresAtMs));
+  assert.ok(expiresAtMs > before, "token expiry should be in the future");
+  // Default TTL is 1 hour; allow a small drift.
+  assert.ok(expiresAtMs - before <= 60 * 60 * 1000 + 5000);
+  assert.ok(expiresAtMs - before >= 60 * 60 * 1000 - 5000);
+  assert.equal(
+    body.previewUrl,
+    `/api/app/generated-apps/${encodeURIComponent(applied.app.id)}/preview/?token=${encodeURIComponent(body.token)}`,
+  );
+});
+
+test("preview-token endpoint rejects appIds outside the caller's workspace", async () => {
+  resetStoreForTests();
+  const app = createTestApp();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  mutateStore((data) => {
+    data.generatedApps ??= [];
+    data.generatedApps.push({
+      id: "gapp_beta_preview_token_test",
+      workspaceId: "beta",
+      slug: "beta-private-token",
+      name: "Beta Private Token",
+      description: "Other workspace",
+      prompt: "Build a private app for Beta.",
+      templateId: "crm",
+      status: "saved",
+      draft: { app: { name: "Beta Private Token" } },
+      checkpointId: "gapp_ckpt_beta_preview_token_test",
+      createdByUserId: "user_beta",
+      createdAt: "2026-05-01T12:00:00.000Z",
+      updatedAt: "2026-05-02T12:00:00.000Z",
+    });
+  });
+  const response = await app.request("/api/app/generated-apps/gapp_beta_preview_token_test/preview-token", {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { error: "generated app not found" });
+});
+
+test("preview route accepts a freshly minted token without a session cookie", async () => {
+  const { app, alpha, applied } = await setupGeneratedAppForPreviewTokenTests();
+  const tokenResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview-token`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const tokenBody = await tokenResponse.json() as { token: string };
+
+  // Note: NO cookie header here — this is what a phone on the LAN does.
+  const previewResponse = await app.request(
+    `/api/app/generated-apps/${applied.app.id}/preview/?token=${encodeURIComponent(tokenBody.token)}`,
+  );
+  assert.equal(previewResponse.status, 200);
+  assert.match(previewResponse.headers.get("content-type") ?? "", /text\/html/);
+  assert.equal(previewResponse.headers.get("x-taskloom-generated-app-id"), applied.app.id);
+  const html = await previewResponse.text();
+  assert.match(html, new RegExp(`data-app-id="${applied.app.id}"`));
+});
+
+test("preview route rejects an expired token with a friendly 401", async () => {
+  const { app, alpha, applied } = await setupGeneratedAppForPreviewTokenTests();
+  // Build an expired token directly via HMAC (mirrors the server's tk_<appId>_<expirySec>_<hmac> shape).
+  const crypto = await import("node:crypto");
+  const secret =
+    process.env.TASKLOOM_PREVIEW_TOKEN_SECRET?.trim()
+    || process.env.TASKLOOM_MASTER_KEY?.trim()
+    || "taskloom-preview-token-dev-fallback-DO-NOT-USE-IN-PROD";
+  const expirySec = Math.floor(Date.now() / 1000) - 60;
+  const hmac = crypto.createHmac("sha256", secret).update(`${applied.app.id}.${expirySec}`).digest("base64")
+    .replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const token = `tk_${applied.app.id}_${expirySec}_${hmac}`;
+
+  const previewResponse = await app.request(
+    `/api/app/generated-apps/${applied.app.id}/preview/?token=${encodeURIComponent(token)}`,
+  );
+  assert.equal(previewResponse.status, 401);
+  assert.deepEqual(await previewResponse.json(), { error: "preview link expired or invalid" });
+});
+
+test("preview route rejects a tampered or wrong-app token with a friendly 401", async () => {
+  const { app, alpha, applied } = await setupGeneratedAppForPreviewTokenTests();
+  const tokenResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/preview-token`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  const tokenBody = await tokenResponse.json() as { token: string };
+
+  // Tampered: flip the last character of the hmac portion.
+  const flipped = tokenBody.token.slice(0, -1) + (tokenBody.token.endsWith("A") ? "B" : "A");
+  const tamperedResponse = await app.request(
+    `/api/app/generated-apps/${applied.app.id}/preview/?token=${encodeURIComponent(flipped)}`,
+  );
+  assert.equal(tamperedResponse.status, 401);
+  assert.deepEqual(await tamperedResponse.json(), { error: "preview link expired or invalid" });
+
+  // Wrong app: use a valid token but mount it under a different appId in the path.
+  // The token's appId no longer matches the route param, so verification must fail.
+  mutateStore((data) => {
+    data.generatedApps ??= [];
+    data.generatedApps.push({
+      id: "gapp_alpha_preview_token_other",
+      workspaceId: "alpha",
+      slug: "alpha-other-token",
+      name: "Alpha Other Token",
+      description: "Another alpha app",
+      prompt: "Build a different alpha app.",
+      templateId: "crm",
+      status: "saved",
+      draft: { app: { name: "Alpha Other Token" } },
+      checkpointId: "gapp_ckpt_alpha_preview_token_other",
+      createdByUserId: "user_alpha",
+      createdAt: "2026-05-01T13:00:00.000Z",
+      updatedAt: "2026-05-02T13:00:00.000Z",
+    });
+  });
+  const wrongAppResponse = await app.request(
+    `/api/app/generated-apps/gapp_alpha_preview_token_other/preview/?token=${encodeURIComponent(tokenBody.token)}`,
+  );
+  assert.equal(wrongAppResponse.status, 401);
+  assert.deepEqual(await wrongAppResponse.json(), { error: "preview link expired or invalid" });
+});

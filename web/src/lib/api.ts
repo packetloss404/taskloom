@@ -282,6 +282,17 @@ export const api = {
   getActivityDetail: (id: string) => j<ActivityDetailPayload>(`/api/app/activity/${id}`),
   listAgents: () => j<{ agents: AgentRecord[] }>("/api/app/agents").then((payload) => payload.agents),
   listGeneratedApps: () => j<{ generatedApps: GeneratedAppSummary[] }>("/api/app/generated-apps").then((payload) => payload.generatedApps),
+  createPreviewToken: (appId: string, options: { ttlSeconds?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.ttlSeconds && Number.isFinite(options.ttlSeconds) && options.ttlSeconds > 0) {
+      params.set("ttl", String(Math.floor(options.ttlSeconds)));
+    }
+    const qs = params.toString();
+    return j<{ token: string; expiresAt: string; previewUrl: string }>(
+      `/api/app/generated-apps/${encodeURIComponent(appId)}/preview-token${qs ? `?${qs}` : ""}`,
+      { method: "POST" },
+    );
+  },
   getAgent: (id: string) => j<{ agent: AgentRecord; runs: AgentRunRecord[] }>(`/api/app/agents/${id}`),
   createAgent: (body: SaveAgentInput) => j<{ agent: AgentRecord }>("/api/app/agents", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
   generateAgentFromPrompt: (body: { prompt: string; create?: boolean; approve?: boolean; providerId?: string; model?: string; status?: AgentRecord["status"]; runPreview?: boolean; sampleInputs?: Record<string, unknown> }) =>
