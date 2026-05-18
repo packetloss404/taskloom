@@ -2257,23 +2257,18 @@ function previewTokenHmac(appId: string, expirySec: number): string {
 }
 
 function buildPreviewToken(appId: string, expirySec: number): string {
-  return `${PREVIEW_TOKEN_PREFIX}${appId}_${expirySec}_${previewTokenHmac(appId, expirySec)}`;
+  // Use "." as the separator: it's NOT in the base64url alphabet
+  // (which is A-Za-z0-9_-), so the HMAC chunk can never collide with it.
+  // Generated app ids look like `gapp_<hex>` and never contain dots either.
+  return `${PREVIEW_TOKEN_PREFIX}${appId}.${expirySec}.${previewTokenHmac(appId, expirySec)}`;
 }
 
 function parsePreviewToken(token: string): { appId: string; expirySec: number; hmac: string } | null {
   if (!token.startsWith(PREVIEW_TOKEN_PREFIX)) return null;
   const remainder = token.slice(PREVIEW_TOKEN_PREFIX.length);
-  // appId is everything before the LAST two underscore-separated segments
-  // (expiry + hmac). This tolerates appIds that themselves contain underscores
-  // (e.g. `gapp_alpha_summary_route_test`).
-  const lastUnderscore = remainder.lastIndexOf("_");
-  if (lastUnderscore <= 0) return null;
-  const hmac = remainder.slice(lastUnderscore + 1);
-  const head = remainder.slice(0, lastUnderscore);
-  const secondLastUnderscore = head.lastIndexOf("_");
-  if (secondLastUnderscore <= 0) return null;
-  const expiryRaw = head.slice(secondLastUnderscore + 1);
-  const appId = head.slice(0, secondLastUnderscore);
+  const parts = remainder.split(".");
+  if (parts.length !== 3) return null;
+  const [appId, expiryRaw, hmac] = parts;
   const expirySec = Number.parseInt(expiryRaw, 10);
   if (!Number.isFinite(expirySec) || expirySec <= 0) return null;
   if (!appId || !hmac) return null;

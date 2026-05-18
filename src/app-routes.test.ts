@@ -2081,7 +2081,7 @@ test("preview route accepts a freshly minted token without a session cookie", as
 
 test("preview route rejects an expired token with a friendly 401", async () => {
   const { app, alpha, applied } = await setupGeneratedAppForPreviewTokenTests();
-  // Build an expired token directly via HMAC (mirrors the server's tk_<appId>_<expirySec>_<hmac> shape).
+  // Build an expired token directly via HMAC (mirrors the server's tk_<appId>.<expirySec>.<hmac> shape).
   const crypto = await import("node:crypto");
   const secret =
     process.env.TASKLOOM_PREVIEW_TOKEN_SECRET?.trim()
@@ -2090,7 +2090,7 @@ test("preview route rejects an expired token with a friendly 401", async () => {
   const expirySec = Math.floor(Date.now() / 1000) - 60;
   const hmac = crypto.createHmac("sha256", secret).update(`${applied.app.id}.${expirySec}`).digest("base64")
     .replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const token = `tk_${applied.app.id}_${expirySec}_${hmac}`;
+  const token = `tk_${applied.app.id}.${expirySec}.${hmac}`;
 
   const previewResponse = await app.request(
     `/api/app/generated-apps/${applied.app.id}/preview/?token=${encodeURIComponent(token)}`,
