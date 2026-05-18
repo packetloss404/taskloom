@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { networkInterfaces as defaultNetworkInterfaces } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -553,6 +553,7 @@ appRoutes.get("/app/generated-apps/:appId/source", async (c) => getGeneratedAppS
 appRoutes.get("/app/generated-apps/:appId/source-files", async (c) => getGeneratedAppSourceFiles(c));
 appRoutes.get("/app/generated-apps/:appId/preview", async (c) => previewGeneratedApp(c));
 appRoutes.get("/app/generated-apps/:appId/preview/*", async (c) => previewGeneratedApp(c));
+appRoutes.post("/app/generated-apps/:appId/preview-token", async (c) => createGeneratedAppPreviewToken(c));
 appRoutes.post("/app/builder/app-draft/apply", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-draft/approve", async (c) => applyAppBuilderDraft(c));
 appRoutes.post("/app/builder/app-iteration", async (c) => generateAppIteration(c));
@@ -2056,17 +2057,37 @@ async function getGeneratedAppSourceFiles(c: Context) {
 
 async function previewGeneratedApp(c: Context) {
   try {
-    const context = await requireAuthenticatedContextAsync(c);
-    await requireWorkspacePermission(context, "viewWorkspace");
-    const record = await findGeneratedAppRecord(context, c.req.param("appId"), c.req.query("checkpointId"));
-    if (!record) throw httpRouteError(404, "generated app not found");
+    const appIdParam = c.req.param("appId") ?? "";
+    const tokenQuery = c.req.query("token");
+    let workspaceId: string;
+    let record: GeneratedAppRecordWithRuntime;
+
+    // Token-based auth path (read-only). Lets phones / other devices on the
+    // LAN load the preview without a workspace session cookie.
+    if (tokenQuery) {
+      const verification = await verifyPreviewToken(tokenQuery, appIdParam);
+      if (!verification.ok) {
+        c.status(401);
+        return c.json({ error: "preview link expired or invalid" });
+      }
+      record = verification.record;
+      workspaceId = record.workspaceId;
+    } else {
+      const context = await requireAuthenticatedContextAsync(c);
+      await requireWorkspacePermission(context, "viewWorkspace");
+      const found = await findGeneratedAppRecord(context, appIdParam, c.req.query("checkpointId"));
+      if (!found) throw httpRouteError(404, "generated app not found");
+      record = found;
+      workspaceId = context.workspace.id;
+    }
+
     const checkpoint = checkpointForPublish(record, c.req.query("checkpointId"));
     if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
     const artifact = generatedAppRuntimeArtifact(record, checkpoint);
-    const requestedPath = c.req.param("*") || generatedAppPreviewPathFromRequest(c, c.req.param("appId") ?? "");
+    const requestedPath = c.req.param("*") || generatedAppPreviewPathFromRequest(c, appIdParam);
     const resolved = resolveGeneratedAppPreviewFile({
       appId: record.id,
-      workspaceId: context.workspace.id,
+      workspaceId,
       checkpointId: checkpoint.id,
       artifact,
       requestedPath,
@@ -2105,7 +2126,7 @@ async function previewGeneratedApp(c: Context) {
     if (!("file" in resolved) && requestedPath && !requestedPath.includes(".")) {
       const fallback = resolveGeneratedAppPreviewFile({
         appId: record.id,
-        workspaceId: context.workspace.id,
+        workspaceId,
         checkpointId: checkpoint.id,
         artifact,
       });
@@ -2131,6 +2152,119 @@ function wantsGeneratedAppPreviewReadiness(c: Context) {
   if (format === "json" || format === "1" || format === "true") return true;
   const accept = c.req.header("accept") ?? "";
   return accept.includes("application/json") && !accept.includes("text/html");
+}
+
+// --- Signed preview tokens ------------------------------------------------
+// Stateless HMAC-SHA256 tokens that grant read-only access to a single
+// generated app's preview route. Token format:
+//   tk_<appId>_<expiryUnixSec>_<base64urlHmac>
+// HMAC covers `${appId}.${expiryUnixSec}` so a token for one app can't be
+// reused for another and tampering with the expiry invalidates it. Tokens
+// are NOT stored — verification is purely cryptographic + time check.
+const PREVIEW_TOKEN_PREFIX = "tk_";
+const PREVIEW_TOKEN_DEFAULT_TTL_SECONDS = 60 * 60; // 1 hour
+const PREVIEW_TOKEN_MAX_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+const PREVIEW_TOKEN_DEV_FALLBACK_SECRET = "taskloom-preview-token-dev-fallback-DO-NOT-USE-IN-PROD";
+let previewTokenFallbackWarned = false;
+
+function previewTokenSecret(): string {
+  const fromPreview = (process.env.TASKLOOM_PREVIEW_TOKEN_SECRET ?? "").trim();
+  if (fromPreview) return fromPreview;
+  const fromMaster = (process.env.TASKLOOM_MASTER_KEY ?? "").trim();
+  if (fromMaster) return fromMaster;
+  if (!previewTokenFallbackWarned) {
+    previewTokenFallbackWarned = true;
+    console.warn(
+      "[preview-token] No TASKLOOM_PREVIEW_TOKEN_SECRET or TASKLOOM_MASTER_KEY set — falling back to an in-process dev secret. Do NOT run this in production without configuring one of those env vars.",
+    );
+  }
+  return PREVIEW_TOKEN_DEV_FALLBACK_SECRET;
+}
+
+function base64UrlEncode(value: Buffer): string {
+  return value.toString("base64").replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function previewTokenHmac(appId: string, expirySec: number): string {
+  return base64UrlEncode(
+    createHmac("sha256", previewTokenSecret()).update(`${appId}.${expirySec}`).digest(),
+  );
+}
+
+function buildPreviewToken(appId: string, expirySec: number): string {
+  return `${PREVIEW_TOKEN_PREFIX}${appId}_${expirySec}_${previewTokenHmac(appId, expirySec)}`;
+}
+
+function parsePreviewToken(token: string): { appId: string; expirySec: number; hmac: string } | null {
+  if (!token.startsWith(PREVIEW_TOKEN_PREFIX)) return null;
+  const remainder = token.slice(PREVIEW_TOKEN_PREFIX.length);
+  // appId is everything before the LAST two underscore-separated segments
+  // (expiry + hmac). This tolerates appIds that themselves contain underscores
+  // (e.g. `gapp_alpha_summary_route_test`).
+  const lastUnderscore = remainder.lastIndexOf("_");
+  if (lastUnderscore <= 0) return null;
+  const hmac = remainder.slice(lastUnderscore + 1);
+  const head = remainder.slice(0, lastUnderscore);
+  const secondLastUnderscore = head.lastIndexOf("_");
+  if (secondLastUnderscore <= 0) return null;
+  const expiryRaw = head.slice(secondLastUnderscore + 1);
+  const appId = head.slice(0, secondLastUnderscore);
+  const expirySec = Number.parseInt(expiryRaw, 10);
+  if (!Number.isFinite(expirySec) || expirySec <= 0) return null;
+  if (!appId || !hmac) return null;
+  return { appId, expirySec, hmac };
+}
+
+async function verifyPreviewToken(
+  rawToken: string,
+  routeAppId: string,
+): Promise<{ ok: true; record: GeneratedAppRecordWithRuntime } | { ok: false }> {
+  const parsed = parsePreviewToken(rawToken);
+  if (!parsed) return { ok: false };
+  if (parsed.appId !== routeAppId) return { ok: false };
+  if (parsed.expirySec * 1000 < Date.now()) return { ok: false };
+  const expected = previewTokenHmac(parsed.appId, parsed.expirySec);
+  const provided = parsed.hmac;
+  if (expected.length !== provided.length) return { ok: false };
+  let equal = false;
+  try {
+    equal = timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+  } catch {
+    return { ok: false };
+  }
+  if (!equal) return { ok: false };
+  const data = await loadStoreAsync();
+  const record = ((data.generatedApps ?? []) as GeneratedAppRecordWithRuntime[])
+    .find((entry) => entry.id === parsed.appId);
+  if (!record) return { ok: false };
+  return { ok: true, record };
+}
+
+async function createGeneratedAppPreviewToken(c: Context) {
+  try {
+    const context = await requireAuthenticatedContextAsync(c);
+    await requireWorkspacePermission(context, "viewWorkspace");
+    const appIdParam = c.req.param("appId") ?? "";
+    const record = await findGeneratedAppRecord(context, appIdParam);
+    if (!record) throw httpRouteError(404, "generated app not found");
+
+    const ttlRaw = Number.parseInt(c.req.query("ttl") ?? "", 10);
+    const ttlSeconds = Number.isFinite(ttlRaw) && ttlRaw > 0
+      ? Math.min(ttlRaw, PREVIEW_TOKEN_MAX_TTL_SECONDS)
+      : PREVIEW_TOKEN_DEFAULT_TTL_SECONDS;
+    const expirySec = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const token = buildPreviewToken(record.id, expirySec);
+    const previewUrl =
+      `/api/app/generated-apps/${encodeURIComponent(record.id)}/preview/?token=${encodeURIComponent(token)}`;
+
+    return c.json({
+      token,
+      expiresAt: new Date(expirySec * 1000).toISOString(),
+      previewUrl,
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
 }
 
 // Import map injected into generated-app HTML so the browser can resolve
