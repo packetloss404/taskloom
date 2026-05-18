@@ -1779,6 +1779,41 @@ test("builder app-draft/stream echoes the chosen routing preset in step events",
   }
 });
 
+test("builder app-draft/stream narrates the template fallback path with prose events", async () => {
+  resetStoreForTests();
+  const previousStepMs = process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+  const previousApiKey = process.env.ANTHROPIC_API_KEY;
+  process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = "0";
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const response = await app.request("/api/app/builder/app-draft/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a small CRM for renewals and contacts." }),
+    });
+    assert.equal(response.status, 200);
+    const events = await readSseEvents(response.body!);
+    const proseEvents = events.filter((e) => e.type === "prose") as Array<{ type: "prose"; text: string }>;
+    assert.ok(proseEvents.length >= 3, `expected at least 3 prose events, got ${proseEvents.length}`);
+    const draftEvent = events.find((e) => e.type === "draft") as
+      | { type: "draft"; source: string; draft: { app: { name: string } } }
+      | undefined;
+    assert.ok(draftEvent, "expected a draft event");
+    assert.equal(draftEvent.source, "template");
+    const allProseConcat = proseEvents.map((e) => e.text).join("");
+    assert.match(allProseConcat, /task_tracker|crm|booking|dashboard|portal/i);
+  } finally {
+    if (previousStepMs === undefined) delete process.env.TASKLOOM_BUILDER_CHAT_STEP_MS;
+    else process.env.TASKLOOM_BUILDER_CHAT_STEP_MS = previousStepMs;
+    if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previousApiKey;
+  }
+});
+
 test("checkpoint branch creates a new app with previousCheckpointId chain", async () => {
   resetStoreForTests();
   const app = createTestApp();
