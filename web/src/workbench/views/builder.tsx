@@ -925,6 +925,28 @@ export function BuilderView() {
             </div>
 
             <div style={{ padding: 12, borderTop: "1px solid var(--line)", background: "var(--bg)" }}>
+              {!state.appId && mode === "drafted" && state.draft && (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 12px",
+                  marginBottom: 10,
+                  background: "rgba(184,242,92,0.08)",
+                  border: "1px solid var(--green-deep)",
+                  borderRadius: 8,
+                }}>
+                  <I.check size={14} style={{ color: "var(--green)", flexShrink: 0 }}/>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--silver-50)" }}>Ready to approve</div>
+                    <div className="muted" style={{ fontSize: 11.5 }}>Saves the source, runs quality checks, and creates a save.</div>
+                  </div>
+                  <button className="btn btn-primary" disabled={working} onClick={() => { void approve(); }}>
+                    {working ? <span className="spin"><I.refresh size={13}/></span> : <I.check size={13}/>}
+                    {working ? " Applying…" : " Approve"}
+                  </button>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                 {iterationTargetOptions.map((t) => {
                   const active = selectedIterationTarget.id === t.id && !selectedElement;
