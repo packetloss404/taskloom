@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { I, type IconKey } from "../icons";
+import { I } from "../icons";
 import { Topbar } from "../Shell";
 import { useWorkbench } from "../WorkbenchContext";
 import { api } from "@/lib/api";
@@ -19,10 +19,25 @@ import type {
   AgentTriggerKind,
   AvailableTool,
   ProviderRecord,
+  RunAgentResponse,
   SaveAgentInput,
+  ToolCapabilityApprovalRequest,
+  ToolCapabilityApprovalTool,
+  ToolCapabilityRisk,
 } from "@/lib/types";
 
 const FIELD_TYPES: AgentInputFieldType[] = ["string", "number", "boolean", "url", "enum"];
+
+type RunInputPayload = Record<string, string | number | boolean>;
+type ToolRisk = ToolCapabilityRisk;
+
+interface PendingRunApproval {
+  approval: ToolCapabilityApprovalRequest;
+  inputs: RunInputPayload;
+  triggerKind: AgentTriggerKind;
+}
+
+type RunAgentResult = RunAgentResponse;
 
 function webhookOrigin(): string {
   return typeof window === "undefined" ? "" : window.location.origin;
@@ -55,12 +70,19 @@ export function AgentEditorView() {
   const [message, setMessage] = useState<string | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [scheduleTouched, setScheduleTouched] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<PendingRunApproval | null>(null);
+  const [playbookValidationVisible, setPlaybookValidationVisible] = useState(false);
+  const [playbookReviewRunId, setPlaybookReviewRunId] = useState<string | null>(null);
+  const toolSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
     const load = async () => {
       setLoading(true);
       setError(null);
+      setPendingApproval(null);
+      setPlaybookValidationVisible(false);
+      setPlaybookReviewRunId(null);
       try {
         const [providerList, detail, tools] = await Promise.all([
           api.listProviders(),
@@ -121,6 +143,17 @@ export function AgentEditorView() {
       setMessage(null);
       return;
     }
+    const missingPlaybookTitles = missingPlaybookTitleIndexes(playbook);
+    if (missingPlaybookTitles.length > 0) {
+      setPlaybookValidationVisible(true);
+      setError(
+        missingPlaybookTitles.length === 1
+          ? `Playbook step ${formatStepList(missingPlaybookTitles)} needs a title before saving. Add a title or remove the step.`
+          : `Playbook steps ${formatStepList(missingPlaybookTitles)} need titles before saving. Add titles or remove those steps.`,
+      );
+      setMessage(null);
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const body: SaveAgentInput = {
       name: fieldValue(form, "name"),
@@ -131,7 +164,11 @@ export function AgentEditorView() {
       tools: fieldValue(form, "tools").split(",").map((t) => t.trim()).filter(Boolean),
       schedule: fieldValue(form, "schedule") || undefined,
       triggerKind,
-      playbook: playbook.filter((s) => s.title.trim().length > 0),
+      playbook: playbook.map((step) => ({
+        ...step,
+        title: step.title.trim(),
+        instruction: step.instruction.trim(),
+      })),
       status: fieldValue(form, "status") as AgentStatus,
       inputSchema,
       enabledTools,
@@ -147,6 +184,7 @@ export function AgentEditorView() {
     setSaving(true);
     setError(null);
     setMessage(null);
+    setPlaybookValidationVisible(false);
     try {
       const nextAgent = isNew ? await api.createAgent(body) : await api.updateAgent(id!, body);
       setAgent(nextAgent);
@@ -156,6 +194,8 @@ export function AgentEditorView() {
       setInputSchema(nextAgent.inputSchema ?? []);
       setEnabledTools(nextAgent.enabledTools ?? []);
       setRunInputs(seedRunInputs(nextAgent.inputSchema ?? []));
+      setPendingApproval(null);
+      setPlaybookReviewRunId(null);
       setMessage(isNew ? "Agent created." : "Agent saved.");
       if (isNew) navigate(`/agents/${nextAgent.id}`, { replace: true });
     } catch (saveError) {
@@ -210,13 +250,19 @@ export function AgentEditorView() {
   };
 
   const recordAsPlaybook = async (runId: string) => {
-    if (!canRunAgent) return;
+    if (!canManageAgent) {
+      setError("admin role is required to replace an agent playbook");
+      setMessage(null);
+      return;
+    }
     setRecordingRunId(runId);
     setError(null);
     try {
       const updated = await api.recordRunAsPlaybook(runId);
       setAgent(updated);
       setPlaybook(updated.playbook ?? []);
+      setPlaybookValidationVisible(false);
+      setPlaybookReviewRunId(null);
       setMessage("Run captured as playbook.");
     } catch (e) {
       setError((e as Error).message);
@@ -225,23 +271,144 @@ export function AgentEditorView() {
     }
   };
 
+  const updateEnabledTools = (next: string[]) => {
+    setEnabledTools(next);
+    if (pendingApproval) {
+      setPendingApproval(null);
+      setError(null);
+      setMessage("Enabled tools changed. Save the agent, then execute again.");
+    }
+  };
+
+  const clearPendingApprovalForRunConfigChange = () => {
+    if (!pendingApproval) return;
+    setPendingApproval(null);
+    setError(null);
+    setMessage("Run inputs changed. Execute again to refresh tool approval.");
+  };
+
+  const updateRunInputValue = (key: string, next: string) => {
+    setRunInputs((prev) => ({ ...prev, [key]: next }));
+    clearPendingApprovalForRunConfigChange();
+  };
+
+  const updateInputSchema = (next: AgentInputField[]) => {
+    setInputSchema(next);
+    clearPendingApprovalForRunConfigChange();
+  };
+
+  const updateTriggerKind = (next: AgentTriggerKind) => {
+    setTriggerKind(next);
+    clearPendingApprovalForRunConfigChange();
+  };
+
+  const completeRunRequest = async (
+    agentId: string,
+    result: RunAgentResult,
+    inputs: RunInputPayload,
+    requestTriggerKind: AgentTriggerKind,
+    approvalMessage: string,
+    successMessage: string,
+  ) => {
+    if (isApprovalResult(result)) {
+      setPendingApproval({
+        approval: result.approval,
+        inputs,
+        triggerKind: result.approval.triggerKind ?? requestTriggerKind,
+      });
+      setMessage(approvalMessage);
+      return;
+    }
+
+    const newRun = runFromAgentResult(result);
+    if (!newRun) throw new Error("Run response did not include a run or approval request.");
+
+    const detail = await api.getAgent(agentId);
+    setAgent(detail.agent);
+    setRuns(detail.runs);
+    setExpandedRun(newRun.id);
+    setPendingApproval(null);
+    setMessage(successMessage);
+  };
+
   const runNow = async () => {
     if (!agent || !canRunAgent) return;
+    const requestTriggerKind: AgentTriggerKind = "manual";
     setRunning(true);
     setError(null);
     setMessage(null);
+    setPendingApproval(null);
     try {
       const inputs = buildRunInputPayload(inputSchema, runInputs);
-      const newRun = await api.runAgent(agent.id, { triggerKind: "manual", inputs });
-      const detail = await api.getAgent(agent.id);
-      setRuns(detail.runs);
-      setExpandedRun(newRun.id);
-      setMessage("Agent run recorded.");
+      const result = await api.runAgent(agent.id, { triggerKind: requestTriggerKind, inputs });
+      await completeRunRequest(
+        agent.id,
+        result,
+        inputs,
+        requestTriggerKind,
+        "Tool approval required before launch.",
+        "Agent run recorded.",
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setRunning(false);
     }
+  };
+
+  const launchPendingApproval = async () => {
+    if (!agent || !canRunAgent || !pendingApproval) return;
+    const pending = pendingApproval;
+    setRunning(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await api.runAgent(agent.id, {
+        triggerKind: pending.triggerKind,
+        inputs: pending.inputs,
+        toolApproval: {
+          decision: "launch",
+          token: pending.approval.approvalToken,
+          approvedTools: pending.approval.tools.map((tool) => tool.name),
+        },
+      });
+      await completeRunRequest(
+        agent.id,
+        result,
+        pending.inputs,
+        pending.triggerKind,
+        "Tool approval was refreshed. Review the updated request before launching.",
+        "Agent run launched.",
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const editPendingTools = () => {
+    setError(null);
+    toolSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => {
+      toolSectionRef.current?.querySelector<HTMLInputElement>("input[type='checkbox']")?.focus();
+    }, 250);
+    setMessage(
+      canManageAgent
+        ? "Adjust enabled tools in the registry, save the agent, then execute again."
+        : "Admin role required to adjust enabled tools.",
+    );
+  };
+
+  const cancelPendingApproval = () => {
+    setPendingApproval(null);
+    setError(null);
+    setMessage("Tool approval canceled.");
+  };
+
+  const updatePlaybook = (next: AgentPlaybookStep[]) => {
+    setPlaybook(next);
+    if (missingPlaybookTitleIndexes(next).length === 0) setPlaybookValidationVisible(false);
   };
 
   const webhookPathToken = agent?.webhookToken ?? agent?.webhookTokenPreview;
@@ -288,7 +455,7 @@ export function AgentEditorView() {
         )}
 
         {!loading && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 1fr))", gap: 24, alignItems: "start" }}>
             <form onSubmit={saveAgent}>
               <fieldset disabled={!canManageAgent} style={{ border: 0, padding: 0, margin: 0 }}>
                 <Section number="01 / 05" kicker="CONFIGURATION" title="Identity & instructions">
@@ -329,7 +496,7 @@ export function AgentEditorView() {
                         <button
                           type="button"
                           key={kind}
-                          onClick={() => setTriggerKind(kind)}
+                          onClick={() => updateTriggerKind(kind)}
                           className={active ? "btn-primary btn btn-sm" : "btn btn-sm"}
                         >
                           {triggerLabel(kind)}
@@ -383,15 +550,17 @@ export function AgentEditorView() {
                 </Section>
 
                 <Section number="03 / 05" kicker={`PLAYBOOK · ${playbook.length} STEP${playbook.length === 1 ? "" : "S"}`} title="Ordered steps">
-                  <PlaybookEditor steps={playbook} onChange={setPlaybook}/>
+                  <PlaybookEditor steps={playbook} showValidation={playbookValidationVisible} onChange={updatePlaybook}/>
                 </Section>
 
-                <Section number="04 / 05" kicker={`TOOLS · ${enabledTools.length} ENABLED`} title="Available tool registry" sub="Enabling any tool runs the agent through the tool-use loop on save.">
-                  <ToolPicker tools={availableTools} enabled={enabledTools} onChange={setEnabledTools}/>
-                </Section>
+                <div ref={toolSectionRef}>
+                  <Section number="04 / 05" kicker={`TOOLS · ${enabledTools.length} ENABLED`} title="Available tool registry" sub="Enabling any tool runs the agent through the tool-use loop on save.">
+                    <ToolPicker tools={availableTools} enabled={enabledTools} onChange={updateEnabledTools}/>
+                  </Section>
+                </div>
 
                 <Section number="05 / 05" kicker="INPUT SCHEMA" title="Typed parameters" sub="Validated server-side. Coerced into typed inputs on every run.">
-                  <InputSchemaEditor schema={inputSchema} onChange={setInputSchema}/>
+                  <InputSchemaEditor schema={inputSchema} onChange={updateInputSchema}/>
                 </Section>
 
                 <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)", display: "flex", justifyContent: "flex-end" }}>
@@ -416,7 +585,7 @@ export function AgentEditorView() {
                           key={f.key}
                           field={f}
                           value={runInputs[f.key] ?? ""}
-                          onChange={(next) => setRunInputs((prev) => ({ ...prev, [f.key]: next }))}
+                          onChange={(next) => updateRunInputValue(f.key, next)}
                         />
                       ))}
                     </div>
@@ -431,6 +600,17 @@ export function AgentEditorView() {
                     {running ? <span className="spin"><I.refresh size={13}/></span> : <I.play size={13}/>}
                     {canRunAgent ? " Execute" : " Member role required"}
                   </button>
+                  {pendingApproval && (
+                    <ApprovalPanel
+                      pending={pendingApproval}
+                      running={running}
+                      saving={saving}
+                      canRunAgent={canRunAgent}
+                      onLaunch={() => { void launchPendingApproval(); }}
+                      onEditTools={editPendingTools}
+                      onCancel={cancelPendingApproval}
+                    />
+                  )}
                 </div>
               )}
 
@@ -446,7 +626,10 @@ export function AgentEditorView() {
                         <div key={r.id} className="card" style={{ padding: 12 }}>
                           <button
                             type="button"
-                            onClick={() => setExpandedRun(expanded ? null : r.id)}
+                            onClick={() => {
+                              setExpandedRun(expanded ? null : r.id);
+                              if (expanded && playbookReviewRunId === r.id) setPlaybookReviewRunId(null);
+                            }}
                             style={{ background: "transparent", border: "none", padding: 0, color: "var(--silver-100)", cursor: "pointer", textAlign: "left", width: "100%", display: "flex", gap: 8, alignItems: "flex-start" }}
                           >
                             <div style={{ flex: 1, minWidth: 0 }}>
@@ -471,12 +654,24 @@ export function AgentEditorView() {
                                     <button
                                       type="button"
                                       className="btn btn-sm"
-                                      onClick={() => { void recordAsPlaybook(r.id); }}
-                                      disabled={!canRunAgent || recordingRunId === r.id}
+                                      onClick={() => setPlaybookReviewRunId(r.id)}
+                                      disabled={!canManageAgent || recordingRunId === r.id}
+                                      title="Review the replacement playbook before updating this agent"
                                     >
-                                      {recordingRunId === r.id ? "Recording…" : "Record as playbook"}
+                                      {recordingRunId === r.id ? <span className="spin"><I.refresh size={11}/></span> : <I.eye size={11}/>}
+                                      {recordingRunId === r.id ? " Replacing..." : " Review replacement"}
                                     </button>
                                   </div>
+                                  {playbookReviewRunId === r.id && (
+                                    <PlaybookReplacementReview
+                                      run={r}
+                                      currentStepCount={playbook.length}
+                                      recording={recordingRunId === r.id}
+                                      canRunAgent={canManageAgent}
+                                      onConfirm={() => { void recordAsPlaybook(r.id); }}
+                                      onCancel={() => setPlaybookReviewRunId(null)}
+                                    />
+                                  )}
                                   <ToolCallTimeline calls={r.toolCalls}/>
                                 </div>
                               )}
@@ -563,8 +758,199 @@ function buildRunInputPayload(schema: AgentInputField[], values: Record<string, 
   return payload;
 }
 
+function missingPlaybookTitleIndexes(steps: AgentPlaybookStep[]) {
+  return steps.flatMap((step, index) => step.title.trim().length > 0 ? [] : [index]);
+}
+
+function formatStepNumber(index: number) {
+  return String(index + 1).padStart(2, "0");
+}
+
+function formatStepList(indexes: number[]) {
+  const labels = indexes.slice(0, 4).map(formatStepNumber);
+  if (indexes.length <= labels.length) return labels.join(", ");
+  return `${labels.join(", ")} +${indexes.length - labels.length} more`;
+}
+
+function isApprovalResult(result: RunAgentResult | null | undefined): result is Extract<RunAgentResult, { approval: ToolCapabilityApprovalRequest }> {
+  return Boolean(result && typeof result === "object" && "approval" in result && result.approval);
+}
+
+function runFromAgentResult(result: RunAgentResult | null | undefined): AgentRunRecord | null {
+  if (!result || typeof result !== "object") return null;
+  if ("approval" in result) return null;
+  return result.run;
+}
+
+function riskForApprovalTool(tool: ToolCapabilityApprovalTool): ToolRisk {
+  if (tool.risk === "low" || tool.risk === "medium" || tool.risk === "high") return tool.risk;
+  if (tool.side === "exec") return "high";
+  if (tool.side === "write") return "medium";
+  return "low";
+}
+
+function riskPillClass(risk: ToolRisk) {
+  if (risk === "high") return "danger";
+  if (risk === "medium") return "warn";
+  return "good";
+}
+
+function formatApprovalExpiry(expiresAt: string) {
+  const time = Date.parse(expiresAt);
+  if (!Number.isFinite(time)) return expiresAt;
+  return new Date(time).toLocaleString();
+}
+
+function ApprovalPanel({
+  pending,
+  running,
+  saving,
+  canRunAgent,
+  onLaunch,
+  onEditTools,
+  onCancel,
+}: {
+  pending: PendingRunApproval;
+  running: boolean;
+  saving: boolean;
+  canRunAgent: boolean;
+  onLaunch: () => void;
+  onEditTools: () => void;
+  onCancel: () => void;
+}) {
+  const { approval } = pending;
+  return (
+    <div className="card" style={{ marginTop: 10, padding: 12, borderColor: "rgba(242,196,92,0.32)", background: "rgba(242,196,92,0.045)" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <I.shield size={14} style={{ color: "var(--warn)", marginTop: 1 }}/>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="kicker" style={{ color: "var(--warn)", marginBottom: 4 }}>TOOL APPROVAL</div>
+          <div className="mono" style={{ fontSize: 11, color: "var(--silver-200)" }}>
+            {triggerLabel(approval.triggerKind)} run · {approval.tools.length} tool{approval.tools.length === 1 ? "" : "s"}
+          </div>
+        </div>
+      </div>
+
+      {approval.summary && (
+        <p style={{ margin: "9px 0 0", fontSize: 12, lineHeight: 1.45, color: "var(--silver-300)" }}>{approval.summary}</p>
+      )}
+
+      <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8, display: "grid", gap: 6 }}>
+        {approval.tools.map((tool) => {
+          const risk = riskForApprovalTool(tool);
+          return (
+            <div key={tool.name} style={{ display: "grid", gap: 3 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <span className="mono" style={{ fontSize: 11.5, color: "var(--silver-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool.name}</span>
+                <span className={`pill ${riskPillClass(risk)}`} style={{ fontSize: 9, padding: "1px 5px", flexShrink: 0 }}>{risk}/{tool.side}</span>
+              </div>
+              <div className="muted" style={{ fontSize: 10.5, lineHeight: 1.35 }}>{tool.riskSummary || tool.description}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mono muted" style={{ marginTop: 9, fontSize: 10 }}>expires {formatApprovalExpiry(approval.expiresAt)}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+        <button type="button" className="btn btn-sm btn-primary" onClick={onLaunch} disabled={!canRunAgent || running || saving}>
+          {running ? <span className="spin"><I.refresh size={11}/></span> : <I.rocket size={11}/>} Launch
+        </button>
+        <button type="button" className="btn btn-sm" onClick={onEditTools} disabled={running}>
+          <I.edit size={11}/> Edit tools
+        </button>
+        <button type="button" className="btn btn-sm" onClick={onCancel} disabled={running} style={{ color: "var(--danger)" }}>
+          <I.close size={11}/> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlaybookReplacementReview({
+  run,
+  currentStepCount,
+  recording,
+  canRunAgent,
+  onConfirm,
+  onCancel,
+}: {
+  run: AgentRunRecord;
+  currentStepCount: number;
+  recording: boolean;
+  canRunAgent: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const preview = playbookPreviewFromToolCalls(run.toolCalls ?? []);
+  if (preview.length === 0) return null;
+  return (
+    <div role="group" aria-label="Review playbook replacement" style={{ border: "1px solid rgba(242,196,92,0.32)", background: "rgba(242,196,92,0.045)", borderRadius: 6, padding: 10, display: "grid", gap: 9 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <I.alert size={13} style={{ color: "var(--warn)", marginTop: 1, flexShrink: 0 }}/>
+        <div>
+          <div className="kicker" style={{ color: "var(--warn)", marginBottom: 4 }}>REVIEW REPLACEMENT</div>
+          <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.45, color: "var(--silver-300)" }}>
+            This will replace the current {formatStepCount(currentStepCount)} with {formatStepCount(preview.length)} captured from this run.
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gap: 6 }}>
+        {preview.slice(0, 5).map((step, index) => (
+          <div key={`${step.title}-${index}`} style={{ display: "grid", gridTemplateColumns: "26px 1fr", gap: 8, alignItems: "start" }}>
+            <span className="mono muted" style={{ fontSize: 10.5 }}>{formatStepNumber(index)}</span>
+            <span style={{ minWidth: 0 }}>
+              <span className="mono" style={{ display: "block", fontSize: 11.5, color: "var(--silver-100)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.title}</span>
+              <span className="muted" style={{ display: "block", fontSize: 10.5, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.instruction}</span>
+            </span>
+          </div>
+        ))}
+        {preview.length > 5 && <div className="mono muted" style={{ fontSize: 10.5 }}>+{preview.length - 5} more steps</div>}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-sm btn-primary" onClick={onConfirm} disabled={!canRunAgent || recording}>
+          {recording ? <span className="spin"><I.refresh size={11}/></span> : <I.check size={11}/>}
+          {recording ? " Replacing..." : " Confirm replace"}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={onCancel} disabled={recording}>
+          <I.close size={11}/> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function playbookPreviewFromToolCalls(calls: AgentRunToolCall[]) {
+  return calls.slice(0, 20).map((call, index) => ({
+    title: `${index + 1}. ${call.toolName}`,
+    instruction: `Call ${call.toolName} with: ${stringifyToolCallInput(call.input).slice(0, 380)}`,
+  }));
+}
+
+function stringifyToolCallInput(input: unknown) {
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return String(input);
+  }
+}
+
+function formatStepCount(count: number) {
+  return `${count} step${count === 1 ? "" : "s"}`;
+}
+
 // ─── PlaybookEditor ─────────────────────────────────────────────────────────
-function PlaybookEditor({ steps, onChange }: { steps: AgentPlaybookStep[]; onChange: (next: AgentPlaybookStep[]) => void }) {
+function PlaybookEditor({
+  steps,
+  showValidation,
+  onChange,
+}: {
+  steps: AgentPlaybookStep[];
+  showValidation: boolean;
+  onChange: (next: AgentPlaybookStep[]) => void;
+}) {
+  const [touchedTitleIds, setTouchedTitleIds] = useState<Set<string>>(() => new Set());
   const update = (index: number, patch: Partial<AgentPlaybookStep>) => {
     const next = steps.slice();
     next[index] = { ...next[index]!, ...patch };
@@ -579,26 +965,98 @@ function PlaybookEditor({ steps, onChange }: { steps: AgentPlaybookStep[]; onCha
     [next[index], next[target]] = [next[target]!, next[index]!];
     onChange(next);
   };
+  const missingTitles = missingPlaybookTitleIndexes(steps);
+  const touchTitle = (stepId: string) => {
+    setTouchedTitleIds((previous) => {
+      const next = new Set(previous);
+      next.add(stepId);
+      return next;
+    });
+  };
   return (
     <div>
+      {showValidation && missingTitles.length > 0 && (
+        <div role="alert" style={{ border: "1px solid rgba(242,107,92,0.34)", background: "rgba(242,107,92,0.06)", borderRadius: 6, padding: "9px 10px", marginBottom: 10, display: "flex", gap: 8, alignItems: "flex-start", color: "var(--danger)" }}>
+          <I.alert size={13} style={{ marginTop: 1, flexShrink: 0 }}/>
+          <span className="mono" style={{ fontSize: 11, lineHeight: 1.4 }}>
+            {missingTitles.length === 1
+              ? `Step ${formatStepList(missingTitles)} needs a title before this playbook can be saved.`
+              : `Steps ${formatStepList(missingTitles)} need titles before this playbook can be saved.`}
+          </span>
+        </div>
+      )}
       {steps.length === 0 ? (
         <div className="card muted" style={{ padding: "12px 14px", textAlign: "center", fontSize: 12 }}>— empty playbook · add a step so each run produces a transcript —</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {steps.map((step, index) => (
-            <div key={step.id} className="card" style={{ padding: 12, display: "grid", gridTemplateColumns: "32px 1fr 80px", gap: 10 }}>
-              <div className="mono muted" style={{ fontSize: 11, paddingTop: 6 }}>{String(index + 1).padStart(2, "0")}</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <input className="field" placeholder="Step title" value={step.title} onChange={(e) => update(index, { title: e.target.value })}/>
-                <textarea className="field" rows={2} placeholder="What the agent should do" value={step.instruction} onChange={(e) => update(index, { instruction: e.target.value })}/>
+          {steps.map((step, index) => {
+            const stepNumber = formatStepNumber(index);
+            const missingTitle = step.title.trim().length === 0;
+            const showTitleError = missingTitle && (showValidation || touchedTitleIds.has(step.id) || step.instruction.trim().length > 0);
+            const titleErrorId = `playbook_${step.id}_title_error`;
+            return (
+              <div key={step.id} className="card" style={{ padding: 12, display: "grid", gridTemplateColumns: "32px 1fr 36px", gap: 10, borderColor: showTitleError ? "rgba(242,107,92,0.38)" : undefined }}>
+                <div className="mono muted" style={{ fontSize: 11, paddingTop: 21 }}>{stepNumber}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span className="label">Title</span>
+                    <input
+                      className="field"
+                      placeholder="Step title"
+                      value={step.title}
+                      aria-invalid={showTitleError}
+                      aria-describedby={showTitleError ? titleErrorId : undefined}
+                      onBlur={() => touchTitle(step.id)}
+                      onChange={(e) => update(index, { title: e.target.value })}
+                    />
+                    {showTitleError && (
+                      <span id={titleErrorId} role="alert" className="mono" style={{ fontSize: 10.5, color: "var(--danger)" }}>
+                        ERR · Step {stepNumber} needs a title or should be removed.
+                      </span>
+                    )}
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span className="label">Instruction</span>
+                    <textarea className="field" rows={2} placeholder="What the agent should do" value={step.instruction} onChange={(e) => update(index, { instruction: e.target.value })}/>
+                  </label>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, fontSize: 11, paddingTop: 18 }}>
+                  <button
+                    type="button"
+                    onClick={() => move(index, -1)}
+                    disabled={index === 0}
+                    aria-label={`Move step ${stepNumber} up`}
+                    title={`Move step ${stepNumber} up`}
+                    className="btn btn-sm"
+                    style={{ width: 30, height: 26, padding: 0, justifyContent: "center", opacity: index === 0 ? 0.3 : 1 }}
+                  >
+                    <I.arrowUp size={11}/>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => move(index, 1)}
+                    disabled={index === steps.length - 1}
+                    aria-label={`Move step ${stepNumber} down`}
+                    title={`Move step ${stepNumber} down`}
+                    className="btn btn-sm"
+                    style={{ width: 30, height: 26, padding: 0, justifyContent: "center", opacity: index === steps.length - 1 ? 0.3 : 1 }}
+                  >
+                    <I.chevDown size={12}/>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeStep(index)}
+                    aria-label={`Remove step ${stepNumber}`}
+                    title={`Remove step ${stepNumber}`}
+                    className="btn btn-sm"
+                    style={{ width: 30, height: 26, padding: 0, justifyContent: "center", color: "var(--danger)" }}
+                  >
+                    <I.trash size={11}/>
+                  </button>
+                </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, fontSize: 11 }}>
-                <button type="button" onClick={() => move(index, -1)} disabled={index === 0} className="btn btn-sm" style={{ padding: "2px 6px", opacity: index === 0 ? 0.3 : 1 }}>↑</button>
-                <button type="button" onClick={() => move(index, 1)} disabled={index === steps.length - 1} className="btn btn-sm" style={{ padding: "2px 6px", opacity: index === steps.length - 1 ? 0.3 : 1 }}>↓</button>
-                <button type="button" onClick={() => removeStep(index)} className="btn btn-sm" style={{ padding: "2px 6px", color: "var(--danger)" }}>×</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <div style={{ marginTop: 10 }}>
@@ -621,7 +1079,7 @@ function ToolPicker({ tools, enabled, onChange }: { tools: AvailableTool[]; enab
     else onChange([...enabled, name]);
   };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
       {(["read", "write", "exec"] as const).map((side) => (
         <div key={side} className="card" style={{ padding: 12 }}>
           <div className="kicker" style={{ marginBottom: 8, color: "var(--green)" }}>{side.toUpperCase()} · {groups[side].length}</div>

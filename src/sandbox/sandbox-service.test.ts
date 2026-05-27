@@ -151,6 +151,7 @@ test("sandbox service: happy path stdout exit 0 → success", async () => {
   assert.equal(final?.exitCode, 0);
   assert.ok(final?.stdoutPreview?.includes("hello"));
   assert.equal(final?.driver, "native");
+  assert.equal(driver.startedSpecs[0]?.workingDir, process.cwd());
 });
 
 test("sandbox service: cancel stops the exec and reports canceled", async () => {

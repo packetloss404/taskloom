@@ -14,6 +14,7 @@ import {
   deleteWorkspaceEnvVarByIdAsync,
   generateAgentFromPromptAsync,
   getAgentAsync,
+  getAgentRunDetailAsync,
   getIntegrationReadinessAsync,
   getPublicActivationSummary,
   handleInvitationEmailJob,
@@ -28,6 +29,7 @@ import {
   retryAgentRun,
   recordRunAsPlaybookAsync,
   runAgent,
+  type RunAgentInput,
   updateAgentAsync,
   updateProviderAsync,
   updateWorkspaceEnvVarAsync,
@@ -173,12 +175,14 @@ app.delete("/api/app/agents/:agentId", async (c) => {
 
 app.post("/api/app/agents/:agentId/runs", async (c) => {
   try {
-    const body = (await readJsonBody(c)) as { triggerKind?: string; inputs?: Record<string, unknown> };
+    const body = (await readJsonBody(c)) as Partial<RunAgentInput>;
     const inputs = body && typeof body.inputs === "object" && body.inputs !== null ? body.inputs : {};
-    return c.json(await runAgent(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("agentId"), {
+    const result = await runAgent(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("agentId"), {
       triggerKind: body?.triggerKind,
       inputs,
-    }), 201);
+      toolApproval: body?.toolApproval,
+    });
+    return c.json(result, "approval" in result ? 200 : 201);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -238,6 +242,14 @@ app.get("/api/app/agent-runs", async (c) => {
   }
 });
 
+app.get("/api/app/agent-runs/:runId/detail", async (c) => {
+  try {
+    return c.json(await getAgentRunDetailAsync(await requirePrivateWorkspaceRoleAsync(c, "viewer"), c.req.param("runId")));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
 app.post("/api/app/agent-runs/:runId/cancel", async (c) => {
   try {
     return c.json(await cancelAgentRunAsync(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("runId")));
@@ -256,7 +268,7 @@ app.post("/api/app/agent-runs/:runId/retry", async (c) => {
 
 app.post("/api/app/agent-runs/:runId/record-as-playbook", async (c) => {
   try {
-    return c.json(await recordRunAsPlaybookAsync(await requirePrivateWorkspaceRoleAsync(c, "member"), c.req.param("runId")));
+    return c.json(await recordRunAsPlaybookAsync(await requirePrivateWorkspaceRoleAsync(c, "admin"), c.req.param("runId")));
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -379,7 +391,16 @@ scheduler.register({
     const result = await runAgent(context as never, agent.id, {
       triggerKind: payload.triggerKind,
       inputs: payload.inputs,
+      toolApproval: undefined,
     });
+    if ("approval" in result) {
+      return {
+        agentId: agent.id,
+        status: "approval_required",
+        approvalRequired: true,
+        tools: result.approval.tools.map((tool) => tool.name),
+      };
+    }
     return { runId: result.run.id, status: result.run.status };
   },
 });
@@ -437,6 +458,10 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     try {
       const { shutdownAllBrowserSessions } = await import("./tools/browser-runtime.js");
       await shutdownAllBrowserSessions();
+    } catch { /* ignore */ }
+    try {
+      const { shutdownDefaultGeneratedAppRuntimeProcessPool } = await import("./generated-app-runtime/server.js");
+      await shutdownDefaultGeneratedAppRuntimeProcessPool();
     } catch { /* ignore */ }
     process.exit(0);
   };

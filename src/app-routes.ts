@@ -24,8 +24,10 @@ import {
 } from "./app-preview-readiness.js";
 import {
   applyAppIterationToDraft,
+  applyAppIterationViaFileTree,
   applyAppIterationViaLLM,
   buildAppIterationPlan,
+  shouldUseFileTreeIteration,
   type AppIterationAction,
   type AppIterationChangeRequest,
   type AppIterationDiffHunk,
@@ -35,6 +37,8 @@ import {
   type AppIterationTargetInput,
   type GeneratedAppDraftLike,
 } from "./app-iteration-service.js";
+import { deriveDraftFromFiles } from "./codegen/derived-draft.js";
+import type { GeneratedFile } from "./codegen/llm-author.js";
 import { derivePreviewRefreshState } from "./app-preview-iteration.js";
 import { inspectAppIterationTools } from "./app-iteration-tools.js";
 import {
@@ -58,6 +62,8 @@ import { buildModelRoutingPresets } from "./model-routing-presets.js";
 import { buildAppPublishValidation, type PublishArtifactObservation } from "./app-publish-service.js";
 import {
   buildGeneratedAppRuntimeArtifact,
+  buildGeneratedAppRuntimeArtifactFromFiles,
+  buildGeneratedAppRuntimeModel,
   findGeneratedAppSourceFile,
   summarizeGeneratedAppSourceFiles,
   writeGeneratedAppRuntimeWorkspace,
@@ -65,6 +71,7 @@ import {
   type GeneratedAppSourceFileRecord,
   type GeneratedAppSourceFileSummary,
 } from "./generated-app-runtime.js";
+import { getDefaultGeneratedAppRuntimeProcessPool } from "./generated-app-runtime/server.js";
 import {
   buildGeneratedAppPreviewReadiness,
   resolveGeneratedAppPreviewFile,
@@ -526,16 +533,18 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
       // is configured, otherwise falls back to the deterministic template path.
       // The emit callback forwards model prose token-by-token to the UI as SSE
       // "prose" events so the chat bubble streams as the model thinks.
-      const { draft, source } = await generateAppDraftWithLLM(
+      const { draft, source, files, validationErrors } = await generateAppDraftWithLLM(
         prompt,
         { preset: body.preset },
         async (text) => {
           await sse.writeSSE({ event: "prose", data: JSON.stringify({ type: "prose", text }) });
         },
       );
-      await emitStep(sse, source === "llm"
-        ? `Drafted with Claude (${draft.templateId} shape)`
-        : `Selected the ${draft.templateId} template`);
+      await emitStep(sse, source === "llm-filetree"
+        ? `Authored ${files?.length ?? 0} generated files`
+        : source === "llm"
+          ? `Drafted with AI (${draft.templateId} shape)`
+          : `Selected the ${draft.templateId} template`);
       await chatStreamDelay();
       await emitStep(sse, "Building data schema and API routes");
       await chatStreamDelay();
@@ -546,7 +555,18 @@ appRoutes.post("/app/builder/app-draft/stream", async (c) => {
       if (source === "template") {
         await streamTemplateNarration(sse, draft);
       }
-      await sse.writeSSE({ event: "draft", data: JSON.stringify({ type: "draft", draft: built, source }) });
+      const sourceArtifact = files?.length ? buildGeneratedAppRuntimeArtifactFromFiles(files) : undefined;
+      await sse.writeSSE({
+        event: "draft",
+        data: JSON.stringify({
+          type: "draft",
+          draft: built,
+          source,
+          files,
+          sourceFiles: sourceArtifact ? summarizeGeneratedAppSourceFiles(sourceArtifact.files) : undefined,
+          validationErrors,
+        }),
+      });
       await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
     } catch (error) {
       await sse.writeSSE({ event: "error", data: JSON.stringify({ type: "error", error: redactedErrorMessage(error) }) });
@@ -616,6 +636,12 @@ async function streamTemplateNarration(
 appRoutes.get("/app/generated-apps", async (c) => listGeneratedApps(c));
 appRoutes.get("/app/generated-apps/:appId/source", async (c) => getGeneratedAppSourceFiles(c));
 appRoutes.get("/app/generated-apps/:appId/source-files", async (c) => getGeneratedAppSourceFiles(c));
+appRoutes.get("/app/generated-apps/:appId/api", async (c) => handleGeneratedAppRuntimeApi(c));
+appRoutes.get("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+appRoutes.post("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+appRoutes.put("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+appRoutes.patch("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+appRoutes.delete("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
 appRoutes.get("/app/generated-apps/:appId/preview", async (c) => previewGeneratedApp(c));
 appRoutes.get("/app/generated-apps/:appId/preview/*", async (c) => previewGeneratedApp(c));
 appRoutes.post("/app/generated-apps/:appId/preview-token", async (c) => createGeneratedAppPreviewToken(c));
@@ -648,6 +674,9 @@ appRoutes.post("/app/builder/app-iteration/stream", async (c) => {
         await chatStreamDelay();
       }, useLLM ? async (chunk) => { await emitProse(sse, chunk); } : undefined);
       await sse.writeSSE({ event: "diff", data: JSON.stringify({ type: "diff", iteration: result }) });
+      if (result.validationErrors?.length) {
+        await sse.writeSSE({ event: "validation", data: JSON.stringify({ type: "validation", errors: result.validationErrors }) });
+      }
       await sse.writeSSE({ event: "done", data: JSON.stringify({ type: "done" }) });
     } catch (error) {
       await sse.writeSSE({ event: "error", data: JSON.stringify({ type: "error", error: redactedErrorMessage(error) }) });
@@ -813,13 +842,16 @@ appRoutes.delete("/app/members/:userId", async (c) => {
 type AuthenticatedRouteContext = Awaited<ReturnType<typeof requireAuthenticatedContextAsync>>;
 type AppBuilderCheckStatus = "pending" | "pass" | "warn" | "fail";
 type AppBuilderDraftContract = ReturnType<typeof buildAppBuilderDraft>;
+type AppDraftSource = "llm" | "template" | "llm-filetree";
 type GeneratedAppCheckpointWithRuntime = GeneratedAppCheckpointRecord & {
   runtimeArtifact?: GeneratedAppRuntimeArtifactRecord;
   sourceFiles?: GeneratedAppSourceFileRecord[];
+  codegenSource?: AppDraftSource;
 };
 type GeneratedAppRecordWithRuntime = GeneratedAppRecord & {
   runtimeArtifact?: GeneratedAppRuntimeArtifactRecord;
   sourceFiles?: GeneratedAppSourceFileRecord[];
+  codegenSource?: AppDraftSource;
   checkpoints?: GeneratedAppCheckpointWithRuntime[];
 };
 interface GeneratedAppWorkspaceManifest {
@@ -863,6 +895,8 @@ interface AppIterationRouteRequest {
   appId?: string;
   checkpointId?: string;
   draft?: AppBuilderDraftContract;
+  draftSource?: AppDraftSource;
+  fileTree?: GeneratedFile[];
   target?: AppBuilderIterationTarget;
   prompt?: string;
   agentId?: string;
@@ -926,6 +960,9 @@ interface AppIterationRouteResult {
   files: AppIterationDiffFile[];
   sourceDiffFiles?: AppIterationDiffFile[];
   sourceFiles?: ReturnType<typeof summarizeGeneratedAppSourceFiles>;
+  fileTree?: GeneratedFile[];
+  draftSource?: AppDraftSource;
+  validationErrors?: string[];
   artifact?: {
     entrypoint?: string;
     renderedAt?: string;
@@ -968,11 +1005,14 @@ async function applyAppBuilderDraft(c: Context) {
     const body = (await c.req.json()) as {
       prompt?: string;
       draft?: AppBuilderDraftContract;
+      source?: AppDraftSource;
+      files?: GeneratedFile[];
       runBuild?: boolean;
       runSmoke?: boolean;
       targetStatus?: GeneratedAppStatus;
     };
     const draft = body.draft ?? buildAppBuilderDraft(generateAppDraftFromPrompt(promptFromBody(body.prompt)), context);
+    const fileTreeFiles = body.source === "llm-filetree" ? generatedFilesFromUnknown(body.files) : undefined;
     const runSmoke = Boolean(body.runSmoke || body.runBuild);
     const smokeBuild = await runAppSmokeViaSandbox(draft, context, runSmoke);
     const previewUrl = smokeBuild.status === "pass" ? previewUrlForDraft(draft, context, stableGeneratedAppId(draft, context)) : undefined;
@@ -981,6 +1021,8 @@ async function applyAppBuilderDraft(c: Context) {
       previewUrl,
       smokeStatus: smokeBuild.status,
       buildStatus: runSmoke ? "passed" : "not_run",
+      codegenSource: fileTreeFiles ? "llm-filetree" : body.source,
+      fileTreeFiles,
     });
     const checkpoint = checkpointForPublish(record, record.checkpointId);
     if (!checkpoint || !record.runtimeArtifact) throw httpRouteError(500, "generated app runtime artifact missing");
@@ -991,6 +1033,8 @@ async function applyAppBuilderDraft(c: Context) {
         ...draft,
         smokeBuildStatus: smokeBuild,
       },
+      draftSource: fileTreeFiles ? "llm-filetree" : body.source,
+      fileTree: fileTreeFiles,
       created: true,
       applied: true,
       app: {
@@ -1056,23 +1100,6 @@ async function runAppIterationCore(
   const targetForService = appIterationTargetForService(body.target);
   const changeText = body.sourceError?.prompt ? `${prompt}\n\nSource error: ${body.sourceError.message}` : prompt;
 
-  // Try the real LLM first; fall back to the deterministic regex pipeline on failure.
-  let llmResult: AppIterationLLMResult | null = null;
-  try {
-    llmResult = await applyAppIterationViaLLM(
-      iterationDraft,
-      targetForService,
-      changeText,
-      {
-        workspaceId: context.workspace.id,
-        preset: body.preset as AppIterationPresetId | undefined,
-      },
-      onProse ? async (chunk) => { await onProse(chunk); } : undefined,
-    );
-  } catch {
-    llmResult = null;
-  }
-
   const request: AppIterationChangeRequest = {
     draftId: body.checkpointId ?? record?.checkpointId ?? body.appId,
     workspaceId: context.workspace.id,
@@ -1081,10 +1108,6 @@ async function runAppIterationCore(
   };
   await onStep?.("Building plan");
   const plan = buildAppIterationPlan(iterationDraft, request);
-  await onStep?.("Generating diff");
-  const dryRun = applyAppIterationToDraft(iterationDraft, plan);
-  const candidateDraft = fromGeneratedAppDraftLike(draft, dryRun.draft);
-  const smoke = buildAppSmokeStatusFromDraft(candidateDraft, context, false);
   const previousSnapshot = latestPreviewSnapshot(record);
   const sourceAppId = record?.id ?? body.appId ?? stableGeneratedAppId(draft, context);
   const previousCheckpoint = record ? checkpointForPublish(record, body.checkpointId ?? record.checkpointId) : null;
@@ -1096,28 +1119,7 @@ async function runAppIterationCore(
       checkpointId: body.checkpointId ?? "draft",
       draft,
     });
-  const candidateArtifact = buildGeneratedAppRuntimeArtifact({
-    appId: sourceAppId,
-    workspaceId: context.workspace.id,
-    checkpointId: plan.rollbackCheckpoint.checkpointId,
-    draft: candidateDraft,
-  });
-  const sourceDiffFiles = diffGeneratedAppSourceFiles(previousArtifact, candidateArtifact);
-  const snapshot = buildAppPreviewSnapshotMetadata({
-    workspaceId: context.workspace.id,
-    appId: sourceAppId,
-    appSlug: draft.app.slug,
-    appName: draft.app.name,
-    checkpointId: plan.rollbackCheckpoint.checkpointId,
-    checkpointSavedAt: new Date().toISOString(),
-    buildStatus: "queued",
-    smokeStatus: smoke.status,
-    previewUrl: record?.previewUrl ?? body.previewUrl,
-    generatedFiles: sourceDiffFiles.map((file) => file.path),
-    source: "builder",
-    createdByUserId: context.user.id,
-  });
-  const comparison = compareAppPreviewSnapshots(snapshot, previousSnapshot);
+
   await onStep?.("Checking integrations");
   const integrationReadiness = await getIntegrationReadinessAsync(context);
   const tools = inspectAppIterationTools({
@@ -1143,6 +1145,122 @@ async function runAppIterationCore(
       writable: true,
     },
   });
+
+  const fileTreeInput = fileTreeForIteration(body, record, previousCheckpoint);
+  if (shouldUseFileTreeIteration({
+    flagOn: process.env.TASKLOOM_LEGACY_TEMPLATES !== "1",
+    draftSource: fileTreeInput.source,
+    files: fileTreeInput.files,
+  })) {
+    await onStep?.("Updating generated file tree");
+    let fileTreeResult: Awaited<ReturnType<typeof applyAppIterationViaFileTree>> | null = null;
+    try {
+      fileTreeResult = await applyAppIterationViaFileTree(
+        fileTreeInput.files!,
+        changeText,
+        {
+          workspaceId: context.workspace.id,
+          preset: body.preset as AppIterationPresetId | undefined,
+        },
+        onProse ? async (chunk) => { await onProse(chunk); } : undefined,
+      );
+    } catch {
+      fileTreeResult = null;
+    }
+
+    if (fileTreeResult) {
+      const appDraft = deriveDraftFromFiles(fileTreeResult.newFiles, draft.prompt, fileTreeResult.changedSummary);
+      const candidateDraft = buildAppBuilderDraft(appDraft, context);
+      const smoke = buildAppSmokeStatusFromDraft(candidateDraft, context, false);
+      const candidateArtifact = buildGeneratedAppRuntimeArtifactFromFiles(fileTreeResult.newFiles);
+      const sourceDiffFiles = diffGeneratedAppSourceFiles(previousArtifact, candidateArtifact);
+      const snapshot = buildAppPreviewSnapshotMetadata({
+        workspaceId: context.workspace.id,
+        appId: sourceAppId,
+        appSlug: candidateDraft.app.slug,
+        appName: candidateDraft.app.name,
+        checkpointId: plan.rollbackCheckpoint.checkpointId,
+        checkpointSavedAt: new Date().toISOString(),
+        buildStatus: "queued",
+        smokeStatus: smoke.status,
+        previewUrl: record?.previewUrl ?? body.previewUrl,
+        generatedFiles: sourceDiffFiles.map((file) => file.path),
+        source: "builder",
+        createdByUserId: context.user.id,
+      });
+      const comparison = compareAppPreviewSnapshots(snapshot, previousSnapshot);
+      return appIterationResponse({
+        context,
+        body,
+        draft: candidateDraft,
+        plan,
+        status: plan.canApply && tools.canProceed ? "generated" : "blocked",
+        previewUrl: record?.previewUrl ?? body.previewUrl,
+        smoke,
+        logs: [
+          ...plan.warnings.map((warning) => routeLog("warn", warning)),
+          ...plan.risks.map((risk) => routeLog(risk.severity === "high" ? "warn" : "info", risk.message)),
+          ...tools.requests.map((request) => routeLog(request.ready ? "info" : "warn", request.rationale)),
+          routeLog("info", `Generated ${sourceDiffFiles.length} source file diff${sourceDiffFiles.length === 1 ? "" : "s"} from the file tree.`),
+          routeLog("info", comparison.summary),
+          routeLog("info", `File-tree iteration via ${fileTreeResult.model}: ${fileTreeResult.changedSummary}`),
+        ],
+        snapshot,
+        tools,
+        sourceDiffFiles,
+        sourceFiles: candidateArtifact.files,
+        artifact: candidateArtifact,
+        llmResult: fileTreeResult,
+        validationErrors: fileTreeResult.validationErrors,
+        fileTree: fileTreeResult.newFiles,
+        draftSource: "llm-filetree",
+      });
+    }
+  }
+
+  // Try the real structured-draft LLM next; fall back to the deterministic regex pipeline on failure.
+  let llmResult: AppIterationLLMResult | null = null;
+  try {
+    llmResult = await applyAppIterationViaLLM(
+      iterationDraft,
+      targetForService,
+      changeText,
+      {
+        workspaceId: context.workspace.id,
+        preset: body.preset as AppIterationPresetId | undefined,
+      },
+      onProse ? async (chunk) => { await onProse(chunk); } : undefined,
+    );
+  } catch {
+    llmResult = null;
+  }
+
+  await onStep?.("Generating diff");
+  const dryRun = applyAppIterationToDraft(iterationDraft, plan);
+  const candidateDraft = fromGeneratedAppDraftLike(draft, dryRun.draft);
+  const smoke = buildAppSmokeStatusFromDraft(candidateDraft, context, false);
+  const candidateArtifact = buildGeneratedAppRuntimeArtifact({
+    appId: sourceAppId,
+    workspaceId: context.workspace.id,
+    checkpointId: plan.rollbackCheckpoint.checkpointId,
+    draft: candidateDraft,
+  });
+  const sourceDiffFiles = diffGeneratedAppSourceFiles(previousArtifact, candidateArtifact);
+  const snapshot = buildAppPreviewSnapshotMetadata({
+    workspaceId: context.workspace.id,
+    appId: sourceAppId,
+    appSlug: draft.app.slug,
+    appName: draft.app.name,
+    checkpointId: plan.rollbackCheckpoint.checkpointId,
+    checkpointSavedAt: new Date().toISOString(),
+    buildStatus: "queued",
+    smokeStatus: smoke.status,
+    previewUrl: record?.previewUrl ?? body.previewUrl,
+    generatedFiles: sourceDiffFiles.map((file) => file.path),
+    source: "builder",
+    createdByUserId: context.user.id,
+  });
+  const comparison = compareAppPreviewSnapshots(snapshot, previousSnapshot);
   return appIterationResponse({
     context,
     body,
@@ -1189,6 +1307,7 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
     const previousCheckpoint = checkpointForPublish(targetRecord, targetCheckpointId ?? targetRecord.checkpointId);
     if (!previousCheckpoint) throw httpRouteError(404, "checkpoint not found");
     const previousArtifact = generatedAppRuntimeArtifact(targetRecord, previousCheckpoint);
+    const fileTreeFiles = diff.draftSource === "llm-filetree" ? generatedFilesFromUnknown(diff.fileTree) : undefined;
 
     const runSmoke = body.runSmoke ?? body.runBuild ?? true;
     const smoke = await runAppSmokeViaSandbox(draft, context, runSmoke, { appId: targetAppId, checkpointId: targetCheckpointId });
@@ -1200,6 +1319,8 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
       smokeStatus: smoke.status,
       checkpointLabel: diff ? `Apply iteration: ${diff.summary}` : "Apply generated app iteration",
       checkpointSource: "iteration",
+      codegenSource: fileTreeFiles ? "llm-filetree" : diff.draftSource,
+      fileTreeFiles,
     });
     const newCheckpoint = checkpointForPublish(record, record.checkpointId);
     const newArtifact = newCheckpoint ? generatedAppRuntimeArtifact(record, newCheckpoint) : record.runtimeArtifact;
@@ -1249,6 +1370,8 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
           files: mergedFiles,
           sourceDiffFiles,
           sourceFiles: summarizeGeneratedAppSourceFiles(newArtifact?.files ?? []),
+          fileTree: fileTreeFiles,
+          draftSource: fileTreeFiles ? "llm-filetree" : diff.draftSource,
           artifact: {
             entrypoint: newArtifact?.entrypoint,
             renderedAt: newArtifact?.renderedAt,
@@ -1294,6 +1417,8 @@ async function applyAppIteration(c: Context, responseShape: "iteration" | "chang
       files: mergedFiles,
       sourceDiffFiles,
       sourceFiles: summarizeGeneratedAppSourceFiles(newArtifact?.files ?? []),
+      fileTree: fileTreeFiles,
+      draftSource: fileTreeFiles ? "llm-filetree" : diff.draftSource,
       artifact: {
         entrypoint: newArtifact?.entrypoint,
         renderedAt: newArtifact?.renderedAt,
@@ -1511,6 +1636,7 @@ async function rollbackAppCheckpoint(c: Context) {
       app.checkpointId = restoredCheckpointId;
       app.runtimeArtifact = runtimeArtifact;
       app.sourceFiles = runtimeArtifact.files;
+      app.codegenSource = target.codegenSource;
       app.previewUrl = target.previewUrl;
       app.buildStatus = target.buildStatus;
       app.smokeStatus = target.smokeStatus;
@@ -1557,6 +1683,8 @@ async function rollbackAppCheckpoint(c: Context) {
       build: { status: rolledBack.buildStatus ?? "not_run" },
       smoke: (rolledBack.draft as AppBuilderDraftContract).smokeBuildStatus,
       draft: rolledBack.draft,
+      draftSource: rolledBack.codegenSource,
+      fileTree: rolledBack.codegenSource === "llm-filetree" ? generatedFilesFromSourceRecords(rolledBack.sourceFiles) : undefined,
       artifact: {
         entrypoint: rolledBack.runtimeArtifact?.entrypoint,
         renderedAt: rolledBack.runtimeArtifact?.renderedAt,
@@ -1588,6 +1716,7 @@ async function branchAppCheckpoint(c: Context) {
           draft: sourceRecord.draft,
           runtimeArtifact: sourceRecord.runtimeArtifact,
           sourceFiles: sourceRecord.sourceFiles,
+          codegenSource: sourceRecord.codegenSource,
           previewUrl: sourceRecord.previewUrl,
           buildStatus: sourceRecord.buildStatus,
           smokeStatus: sourceRecord.smokeStatus,
@@ -1607,13 +1736,18 @@ async function branchAppCheckpoint(c: Context) {
       const branchSlug = `${sourceRecord.slug}-branch-${stableHash(branchSeed).slice(0, 6)}`;
       const branchName = sourceRecord.name.endsWith(" (branch)") ? sourceRecord.name : `${sourceRecord.name} (branch)`;
       const branchDraft = branchDraftForGeneratedApp(sourceCheckpoint.draft, branchSlug, branchName);
-      const runtimeArtifact = buildGeneratedAppRuntimeArtifact({
-        appId: newAppId,
-        workspaceId: context.workspace.id,
-        checkpointId: newCheckpointId,
-        draft: branchDraft as unknown as AppBuilderDraftContract,
-        renderedAt: timestamp,
-      });
+      const sourceFiles = sourceCheckpoint.runtimeArtifact?.files?.length
+        ? sourceCheckpoint.runtimeArtifact.files
+        : sourceCheckpoint.sourceFiles;
+      const runtimeArtifact = sourceFiles?.length
+        ? runtimeArtifactFromSourceFiles(sourceFiles.map((file) => ({ ...file })), timestamp)
+        : buildGeneratedAppRuntimeArtifact({
+            appId: newAppId,
+            workspaceId: context.workspace.id,
+            checkpointId: newCheckpointId,
+            draft: branchDraft as unknown as AppBuilderDraftContract,
+            renderedAt: timestamp,
+          });
       const initialCheckpoint: GeneratedAppCheckpointWithRuntime = {
         id: newCheckpointId,
         appId: newAppId,
@@ -1622,6 +1756,7 @@ async function branchAppCheckpoint(c: Context) {
         draft: branchDraft,
         runtimeArtifact,
         sourceFiles: runtimeArtifact.files,
+        codegenSource: sourceCheckpoint.codegenSource,
         previewUrl: previewUrlForDraft(branchDraft as unknown as AppBuilderDraftContract, context, newAppId),
         buildStatus: sourceCheckpoint.buildStatus,
         smokeStatus: sourceCheckpoint.smokeStatus,
@@ -1643,6 +1778,7 @@ async function branchAppCheckpoint(c: Context) {
         checkpointId: newCheckpointId,
         runtimeArtifact,
         sourceFiles: runtimeArtifact.files,
+        codegenSource: sourceCheckpoint.codegenSource,
         previewUrl: initialCheckpoint.previewUrl,
         buildStatus: sourceCheckpoint.buildStatus,
         smokeStatus: sourceCheckpoint.smokeStatus,
@@ -2120,6 +2256,58 @@ async function getGeneratedAppSourceFiles(c: Context) {
   }
 }
 
+async function handleGeneratedAppRuntimeApi(c: Context) {
+  try {
+    const appIdParam = c.req.param("appId") ?? "";
+    const tokenQuery = c.req.query("token");
+    let record: GeneratedAppRecordWithRuntime;
+    let workspaceId: string;
+
+    if (tokenQuery) {
+      const verification = await verifyPreviewToken(tokenQuery, appIdParam);
+      if (!verification.ok) {
+        c.status(401);
+        return c.json({ error: "preview link expired or invalid" });
+      }
+      if (!isGeneratedAppReadOnlyMethod(c.req.method)) {
+        c.status(403);
+        return c.json({ error: "preview links can only read generated app runtime data" });
+      }
+      record = verification.record;
+      workspaceId = record.workspaceId;
+    } else {
+      const context = await requireAuthenticatedContextAsync(c);
+      await requireWorkspacePermission(context, "viewWorkspace");
+      const found = await findGeneratedAppRecord(context, appIdParam, c.req.query("checkpointId"));
+      if (!found) throw httpRouteError(404, "generated app not found");
+      record = found;
+      workspaceId = context.workspace.id;
+    }
+
+    const checkpoint = checkpointForPublish(record, c.req.query("checkpointId"));
+    if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
+    const model = buildGeneratedAppRuntimeModel(checkpoint.draft as unknown as AppBuilderDraftContract);
+    const result = await getDefaultGeneratedAppRuntimeProcessPool().request({
+      appId: record.id,
+      workspaceId,
+      model,
+      runtimeRoot: process.env.TASKLOOM_GENERATED_APP_RUNTIME_DIR,
+      method: c.req.method,
+      path: generatedAppRuntimeApiPathFromRequest(c, appIdParam) || model.primaryEntity,
+      body: await readGeneratedAppRuntimeBody(c),
+    });
+    c.status(result.status as any);
+    c.header("Cache-Control", "no-store");
+    c.header("X-Taskloom-Generated-App-Id", record.id);
+    c.header("X-Taskloom-Generated-App-Checkpoint", checkpoint.id);
+    c.header("X-Taskloom-Generated-App-Runtime", "server-sqlite-process");
+    if (result.process.pid) c.header("X-Taskloom-Generated-App-Runtime-Pid", String(result.process.pid));
+    return c.json(result.body);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
 async function previewGeneratedApp(c: Context) {
   try {
     const appIdParam = c.req.param("appId") ?? "";
@@ -2400,6 +2588,39 @@ function generatedAppPreviewPathFromRequest(c: Context, appId: string): string {
   return decodeURIComponent(path.slice(path.indexOf(marker) + marker.length));
 }
 
+function generatedAppRuntimeApiPathFromRequest(c: Context, appId: string): string {
+  const wildcard = c.req.param("*");
+  if (wildcard) return wildcard.replace(/^\/+/, "");
+  const path = new URL(c.req.url).pathname.replace(/\\/g, "/");
+  const markers = [
+    `/api/app/generated-apps/${encodeURIComponent(appId)}/api/`,
+    `/app/generated-apps/${encodeURIComponent(appId)}/api/`,
+    `/api/app/generated-apps/${appId}/api/`,
+    `/app/generated-apps/${appId}/api/`,
+    `/api/app/generated-apps/${encodeURIComponent(appId)}/api`,
+    `/app/generated-apps/${encodeURIComponent(appId)}/api`,
+    `/api/app/generated-apps/${appId}/api`,
+    `/app/generated-apps/${appId}/api`,
+  ];
+  const marker = markers.find((candidate) => path.includes(candidate));
+  if (!marker) return "";
+  return decodeURIComponent(path.slice(path.indexOf(marker) + marker.length)).replace(/^\/+/, "");
+}
+
+async function readGeneratedAppRuntimeBody(c: Context): Promise<Record<string, unknown> | undefined> {
+  if (isGeneratedAppReadOnlyMethod(c.req.method)) return undefined;
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) return undefined;
+  const parsed = await c.req.json().catch(() => undefined) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
+}
+
+function isGeneratedAppReadOnlyMethod(method: string): boolean {
+  return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
+}
+
 function checkpointForPublish(record: GeneratedAppRecordWithRuntime, checkpointId: string | undefined): GeneratedAppCheckpointWithRuntime | null {
   if (!checkpointId || checkpointId === record.checkpointId) {
     return (record.checkpoints ?? []).find((checkpoint) => checkpoint.id === record.checkpointId) ?? {
@@ -2412,6 +2633,7 @@ function checkpointForPublish(record: GeneratedAppRecordWithRuntime, checkpointI
       buildStatus: record.buildStatus,
       smokeStatus: record.smokeStatus,
       source: "initial",
+      codegenSource: record.codegenSource,
       createdByUserId: record.createdByUserId,
       createdAt: record.updatedAt,
     };
@@ -2433,6 +2655,45 @@ function generatedAppRuntimeArtifact(record: GeneratedAppRecordWithRuntime, chec
     draft: checkpoint.draft as unknown as AppBuilderDraftContract,
     renderedAt: checkpoint.createdAt,
   });
+}
+
+function fileTreeForIteration(
+  body: AppIterationRouteRequest,
+  record: GeneratedAppRecordWithRuntime | undefined,
+  checkpoint: GeneratedAppCheckpointWithRuntime | null,
+): { source?: AppDraftSource; files?: GeneratedFile[] } {
+  const bodyFiles = generatedFilesFromUnknown(body.fileTree);
+  if (bodyFiles?.length) {
+    return { source: body.draftSource ?? "llm-filetree", files: bodyFiles };
+  }
+
+  const source = body.draftSource ?? checkpoint?.codegenSource ?? record?.codegenSource;
+  if (source !== "llm-filetree") return { source };
+
+  const recordFiles = checkpoint?.sourceFiles?.length
+    ? checkpoint.sourceFiles
+    : checkpoint?.id === record?.checkpointId && record?.sourceFiles?.length
+      ? record.sourceFiles
+      : record?.sourceFiles;
+  return { source, files: generatedFilesFromSourceRecords(recordFiles) };
+}
+
+function generatedFilesFromUnknown(value: unknown): GeneratedFile[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const files: GeneratedFile[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const path = (entry as Record<string, unknown>).path;
+    const content = (entry as Record<string, unknown>).content;
+    if (typeof path !== "string" || typeof content !== "string") continue;
+    files.push({ path, content });
+  }
+  return files.length > 0 ? files : undefined;
+}
+
+function generatedFilesFromSourceRecords(records: GeneratedAppSourceFileRecord[] | undefined): GeneratedFile[] | undefined {
+  if (!records?.length) return undefined;
+  return records.map((file) => ({ path: file.path, content: file.content }));
 }
 
 function runtimeArtifactFromSourceFiles(files: GeneratedAppSourceFileRecord[], renderedAt: string): GeneratedAppRuntimeArtifactRecord {
@@ -3136,6 +3397,9 @@ function appIterationResponse(input: {
   sourceFiles?: GeneratedAppSourceFileRecord[];
   artifact?: GeneratedAppRuntimeArtifactRecord;
   llmResult?: AppIterationLLMResult | null;
+  validationErrors?: string[];
+  fileTree?: GeneratedFile[];
+  draftSource?: AppDraftSource;
 }): AppIterationRouteResult & { rollback: AppIterationPlan["rollbackCheckpoint"]; snapshot: unknown; tools: unknown } {
   const preview = derivePreviewRefreshState({
     appId: input.body.appId ?? stableGeneratedAppId(input.draft, input.context),
@@ -3183,6 +3447,9 @@ function appIterationResponse(input: {
     ),
     sourceDiffFiles: input.sourceDiffFiles ?? [],
     sourceFiles: summarizeGeneratedAppSourceFiles(input.sourceFiles ?? []),
+    fileTree: input.fileTree,
+    draftSource: input.draftSource,
+    validationErrors: input.validationErrors,
     artifact: {
       entrypoint: input.artifact?.entrypoint,
       renderedAt: input.artifact?.renderedAt,
@@ -3583,6 +3850,8 @@ async function persistGeneratedAppDraft(
     smokeStatus: string;
     checkpointLabel?: string;
     checkpointSource?: GeneratedAppCheckpointRecord["source"];
+    codegenSource?: AppDraftSource;
+    fileTreeFiles?: GeneratedFile[];
   },
 ) {
   const timestamp = new Date().toISOString();
@@ -3595,13 +3864,15 @@ async function persistGeneratedAppDraft(
     const existing = data.generatedApps.find((entry) => entry.workspaceId === context.workspace.id && entry.slug === slug);
     const previousCheckpointId = existing?.checkpointId;
     const appId = existing?.id ?? stableGeneratedAppId(draft, context);
-    const runtimeArtifact = buildGeneratedAppRuntimeArtifact({
-      appId,
-      workspaceId: context.workspace.id,
-      checkpointId,
-      draft,
-      renderedAt: timestamp,
-    });
+    const runtimeArtifact = input.fileTreeFiles?.length
+      ? buildGeneratedAppRuntimeArtifactFromFiles(input.fileTreeFiles, timestamp)
+      : buildGeneratedAppRuntimeArtifact({
+          appId,
+          workspaceId: context.workspace.id,
+          checkpointId,
+          draft,
+          renderedAt: timestamp,
+        });
     const checkpoint = {
       id: checkpointId,
       appId,
@@ -3614,6 +3885,7 @@ async function persistGeneratedAppDraft(
       buildStatus: input.buildStatus,
       smokeStatus: input.smokeStatus,
       source: input.checkpointSource ?? "initial",
+      codegenSource: input.codegenSource,
       previousCheckpointId,
       createdByUserId: context.user.id,
       createdAt: timestamp,
@@ -3632,6 +3904,7 @@ async function persistGeneratedAppDraft(
       checkpointId,
       runtimeArtifact,
       sourceFiles: runtimeArtifact.files,
+      codegenSource: input.codegenSource,
       previewUrl: input.previewUrl,
       buildStatus: input.buildStatus,
       smokeStatus: input.smokeStatus,

@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { Hono } from "hono";
 import { SESSION_COOKIE_NAME } from "./auth-utils";
 import { appRoutes, setHostInfoSourcesForTests } from "./app-routes";
+import { shutdownDefaultGeneratedAppRuntimeProcessPool } from "./generated-app-runtime/server.js";
 import { login } from "./taskloom-services";
 import {
   clearStoreCacheForTests,
@@ -767,6 +768,66 @@ test("generated app source routes are workspace-scoped", async () => {
   const betaBody = await betaResponse.json() as { error?: string };
   assert.equal(betaResponse.status, 404);
   assert.equal(betaBody.error, "generated app not found");
+});
+
+test("generated app runtime API persists records through per-app SQLite", async () => {
+  resetStoreForTests();
+  const previousRuntimeRoot = process.env.TASKLOOM_GENERATED_APP_RUNTIME_DIR;
+  const previousLegacyTemplates = process.env.TASKLOOM_LEGACY_TEMPLATES;
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "taskloom-generated-runtime-"));
+  process.env.TASKLOOM_GENERATED_APP_RUNTIME_DIR = runtimeRoot;
+  process.env.TASKLOOM_LEGACY_TEMPLATES = "1";
+  try {
+    const app = createTestApp();
+    const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const headers = { ...authHeaders(alpha.cookieValue), "Content-Type": "application/json" };
+
+    const draftResponse = await app.request("/api/app/builder/app-draft", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Build a CRM app for accounts and deals." }),
+    });
+    const draftBody = await draftResponse.json() as { draft?: unknown };
+    const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ draft: draftBody.draft }),
+    });
+    const applied = await applyResponse.json() as { app: { id: string } };
+
+    const firstListResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/api/account`, { headers });
+    const firstList = await firstListResponse.json() as Array<{ id?: string; name?: string }>;
+    assert.equal(firstListResponse.status, 200);
+    assert.equal(firstListResponse.headers.get("x-taskloom-generated-app-runtime"), "server-sqlite-process");
+    assert.ok(firstListResponse.headers.get("x-taskloom-generated-app-runtime-pid"));
+    assert.ok(firstList.some((record) => record.name === "Account 1"));
+
+    const createResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/api/account`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Shared Farm Co",
+        ownerId: "user_test",
+        status: "active",
+        createdAt: "2026-05-18T12:00:00.000Z",
+      }),
+    });
+    const created = await createResponse.json() as { id?: string; name?: string };
+    assert.equal(createResponse.status, 201);
+    assert.equal(created.name, "Shared Farm Co");
+
+    const secondListResponse = await app.request(`/api/app/generated-apps/${applied.app.id}/api/account`, { headers });
+    const secondList = await secondListResponse.json() as Array<{ id?: string; name?: string }>;
+    assert.equal(secondListResponse.status, 200);
+    assert.ok(secondList.some((record) => record.id === created.id && record.name === "Shared Farm Co"));
+  } finally {
+    await shutdownDefaultGeneratedAppRuntimeProcessPool();
+    if (previousRuntimeRoot === undefined) delete process.env.TASKLOOM_GENERATED_APP_RUNTIME_DIR;
+    else process.env.TASKLOOM_GENERATED_APP_RUNTIME_DIR = previousRuntimeRoot;
+    if (previousLegacyTemplates === undefined) delete process.env.TASKLOOM_LEGACY_TEMPLATES;
+    else process.env.TASKLOOM_LEGACY_TEMPLATES = previousLegacyTemplates;
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
 });
 
 test("builder preview refresh rewrites generated app workspace files", async () => {
@@ -1826,11 +1887,16 @@ test("checkpoint branch creates a new app with previousCheckpointId chain", asyn
     body: JSON.stringify({ prompt: "Build a public booking app with services and appointments." }),
   });
   const draftBody = await draftResponse.json() as { draft: unknown };
+  const authoredFiles = [
+    { path: "index.html", content: "<div id=\"root\"></div>" },
+    { path: "src/App.tsx", content: "export default function App(){ return <main>Branched booking app</main>; }\n" },
+    { path: "package.json", content: "{\"scripts\":{\"build\":\"vite build\"},\"dependencies\":{\"@vitejs/plugin-react\":\"latest\",\"vite\":\"latest\",\"typescript\":\"latest\",\"react\":\"latest\",\"react-dom\":\"latest\"},\"devDependencies\":{}}\n" },
+  ];
 
   const applyResponse = await app.request("/api/app/builder/app-draft/apply", {
     method: "POST",
     headers,
-    body: JSON.stringify({ draft: draftBody.draft, runSmoke: true }),
+    body: JSON.stringify({ draft: draftBody.draft, source: "llm-filetree", files: authoredFiles, runSmoke: true }),
   });
   const applied = await applyResponse.json() as { app: { id: string; name: string }; checkpoint: { id: string } };
   assert.equal(applyResponse.status, 201);
@@ -1864,6 +1930,10 @@ test("checkpoint branch creates a new app with previousCheckpointId chain", asyn
   assert.ok(branchInitial, "branch app has its own initial checkpoint");
   assert.equal(branchInitial.source, "branch");
   assert.equal(branchInitial.previousCheckpointId, applied.checkpoint.id);
+  assert.equal(branchInitial.codegenSource, "llm-filetree");
+  assert.equal(branchInitial.sourceFiles?.find((file) => file.path === "src/App.tsx")?.content, authoredFiles[1]?.content);
+  assert.equal(branchApp.codegenSource, "llm-filetree");
+  assert.equal(branchApp.sourceFiles?.find((file) => file.path === "src/App.tsx")?.content, authoredFiles[1]?.content);
 });
 
 test("checkpoint branch requires authentication", async () => {

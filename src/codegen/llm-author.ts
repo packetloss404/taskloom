@@ -42,6 +42,12 @@ import type {
   ProviderStreamChunk,
   ProviderToolDef,
 } from "../providers/types.js";
+import {
+  validateFileTree,
+  type ValidateOptions,
+  type ValidationError,
+  type ValidationResult,
+} from "./validate.js";
 
 // =============================================================================
 // Public types
@@ -81,6 +87,25 @@ export interface AuthorAppOptions {
   router?: ProviderRouter;
   /** Optional override of the prompt resolver (for tests). */
   resolvePrompts?: () => ResolvedPrompts;
+}
+
+export type AuthorAppFn = typeof authorAppViaLLM;
+export type ValidateFileTreeFn = typeof validateFileTree;
+
+export interface AuthorAndValidateAppOptions extends AuthorAppOptions {
+  /** Test-only override. Production callers should use the default author. */
+  authorFn?: AuthorAppFn;
+  /** Test-only override. Production callers should use the real validator. */
+  validateFn?: ValidateFileTreeFn;
+  validateOptions?: ValidateOptions;
+  /** Number of repair passes after the initial authoring attempt. */
+  maxValidationFixAttempts?: number;
+}
+
+export interface AuthorAndValidateAppResult extends AuthorAppResult {
+  validation: ValidationResult;
+  repairAttempts: number;
+  stoppedReason?: "max-attempts" | "repeated-errors" | "repair-author-failed";
 }
 
 // =============================================================================
@@ -181,6 +206,8 @@ export const MAX_FILES_PER_WRITE_CHUNK = 8;
  * generation latency unchanged.
  */
 const CHUNK_WRITE_THRESHOLD = 10;
+const DEFAULT_VALIDATION_FIX_ATTEMPTS = 2;
+const REPAIR_PROMPT_FILE_BUDGET_BYTES = 60_000;
 
 // =============================================================================
 // Tool definition
@@ -609,6 +636,55 @@ export async function authorAppViaLLM(
   };
 }
 
+export async function authorAndValidateAppViaLLM(
+  userGoal: string,
+  options: AuthorAndValidateAppOptions,
+  emit: (chunk: string) => void | Promise<void>,
+): Promise<AuthorAndValidateAppResult | null> {
+  const author = options.authorFn ?? authorAppViaLLM;
+  const validate = options.validateFn ?? validateFileTree;
+  const maxRepairAttempts = Math.max(0, options.maxValidationFixAttempts ?? DEFAULT_VALIDATION_FIX_ATTEMPTS);
+  const authorOptions = authorOptionsOnly(options);
+  const validateOptions = validationOptionsOnly(options);
+  const seenSignatures = new Set<string>();
+
+  let result = await author(userGoal, authorOptions, emit);
+  if (!result) return null;
+
+  for (let repairAttempts = 0; ; repairAttempts++) {
+    const validation = await runValidation(validate, result.files, validateOptions);
+    if (validation.ok || validation.source !== "real" || validation.errors.length === 0) {
+      return { ...result, validation, repairAttempts };
+    }
+
+    const signature = validationErrorSignature(validation);
+    if (seenSignatures.has(signature)) {
+      return { ...result, validation, repairAttempts, stoppedReason: "repeated-errors" };
+    }
+    seenSignatures.add(signature);
+
+    if (repairAttempts >= maxRepairAttempts) {
+      return { ...result, validation, repairAttempts, stoppedReason: "max-attempts" };
+    }
+
+    try {
+      await emit(
+        `\n\nBuild validation found ${validation.errors.length} issue${validation.errors.length === 1 ? "" : "s"}. ` +
+        `Trying repair pass ${repairAttempts + 1} of ${maxRepairAttempts}.\n\n`,
+      );
+    } catch {
+      // emit must not break generation
+    }
+
+    const repairGoal = buildValidationRepairGoal(userGoal, result.files, validation, repairAttempts + 1);
+    const repaired = await author(repairGoal, authorOptions, emit);
+    if (!repaired) {
+      return { ...result, validation, repairAttempts, stoppedReason: "repair-author-failed" };
+    }
+    result = repaired;
+  }
+}
+
 function buildSummary(
   userGoal: string,
   plan: PlannedFile[],
@@ -621,4 +697,115 @@ function buildSummary(
       ? `${fileCount} files`
       : `${fileCount}/${plan.length} files`;
   return `LLM-authored app for: ${goalSnippet} (${plannedNote})`;
+}
+
+function authorOptionsOnly(options: AuthorAndValidateAppOptions): AuthorAppOptions {
+  const out: AuthorAppOptions = { workspaceId: options.workspaceId };
+  if (options.preset) out.preset = options.preset;
+  if (options.signal) out.signal = options.signal;
+  if (options.router) out.router = options.router;
+  if (options.resolvePrompts) out.resolvePrompts = options.resolvePrompts;
+  return out;
+}
+
+function validationOptionsOnly(options: AuthorAndValidateAppOptions): ValidateOptions {
+  const out: ValidateOptions = { ...(options.validateOptions ?? {}) };
+  if (options.signal && !out.signal) out.signal = options.signal;
+  return out;
+}
+
+async function runValidation(
+  validate: ValidateFileTreeFn,
+  files: GeneratedFile[],
+  options: ValidateOptions,
+): Promise<ValidationResult> {
+  try {
+    return await validate(files, options);
+  } catch (error) {
+    return {
+      ok: false,
+      source: "real",
+      errors: [{
+        file: "<validator>",
+        message: error instanceof Error ? error.message : String(error),
+        severity: "error",
+        phase: "typecheck",
+      }],
+      warnings: [],
+      durationMs: 0,
+      phases: { typecheck: "failed", build: "skipped" },
+    };
+  }
+}
+
+function validationErrorSignature(validation: ValidationResult): string {
+  return validation.errors
+    .slice(0, 12)
+    .map((error) => [
+      error.phase,
+      error.file,
+      error.line ?? "",
+      error.column ?? "",
+      normalizeValidationMessage(error.message),
+    ].join(":"))
+    .join("|");
+}
+
+function normalizeValidationMessage(message: string): string {
+  return message
+    .replace(/\b\d+:\d+\b/g, "N:N")
+    .replace(/\b\d+\b/g, "N")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+
+function buildValidationRepairGoal(
+  originalGoal: string,
+  files: GeneratedFile[],
+  validation: ValidationResult,
+  attempt: number,
+): string {
+  const renderedFiles = renderFilesForRepairPrompt(files, REPAIR_PROMPT_FILE_BUDGET_BYTES);
+  return [
+    "Repair the generated Vite + React app file tree.",
+    "",
+    `Original user goal: ${originalGoal}`,
+    `Repair attempt: ${attempt}`,
+    "",
+    "The previous file tree failed validation. Return a COMPLETE corrected file tree using `write_file` calls.",
+    "Keep the app's intended behavior, but fix the TypeScript/build errors. Do not explain instead of writing files.",
+    "",
+    "Validation errors:",
+    ...validation.errors.map(formatValidationErrorForPrompt),
+    "",
+    "Current file tree:",
+    renderedFiles,
+  ].join("\n");
+}
+
+function formatValidationErrorForPrompt(error: ValidationError): string {
+  const location = `${error.file}${error.line ? `:${error.line}` : ""}${error.column ? `:${error.column}` : ""}`;
+  return `- [${error.phase}] ${location}: ${error.message}`;
+}
+
+function renderFilesForRepairPrompt(files: GeneratedFile[], budgetBytes: number): string {
+  const chunks: string[] = [];
+  let used = 0;
+  for (const file of files) {
+    const header = `\n--- ${file.path}\n\`\`\`\n`;
+    const footer = "\n```\n";
+    const remaining = budgetBytes - used - Buffer.byteLength(header) - Buffer.byteLength(footer);
+    if (remaining <= 0) {
+      chunks.push(`\n... ${files.length - chunks.length} more file(s) omitted due to prompt budget.\n`);
+      break;
+    }
+    const contentBytes = Buffer.byteLength(file.content);
+    const content = contentBytes > remaining
+      ? `${file.content.slice(0, Math.max(0, remaining))}\n... truncated ...`
+      : file.content;
+    chunks.push(`${header}${content}${footer}`);
+    used += Buffer.byteLength(chunks[chunks.length - 1] ?? "");
+  }
+  return chunks.join("");
 }

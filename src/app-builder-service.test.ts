@@ -315,3 +315,36 @@ test("generateAppDraftWithLLM backward compat: TASKLOOM_FILETREE_CODEGEN=1 is a 
     },
   );
 });
+
+test("generateAppDraftWithLLM file-tree path returns files and validation errors", async () => {
+  await withScrubbedEnv({}, async () => {
+    const result = await generateAppDraftWithLLM(
+      "Build a focused dashboard for shop-floor maintenance tasks.",
+      {
+        fileTreeAuthorFn: async () => ({
+          files: [
+            { path: "index.html", content: "<div id=\"root\"></div>" },
+            { path: "src/App.tsx", content: "export default function App(){ return <main>Maintenance</main>; }" },
+          ],
+          summary: "Maintenance dashboard",
+          source: "llm",
+          validation: {
+            ok: false,
+            source: "real",
+            errors: [{ file: "src/App.tsx", line: 1, message: "JSX namespace missing", severity: "error", phase: "typecheck" }],
+            warnings: [],
+            durationMs: 15,
+            phases: { typecheck: "failed", build: "skipped" },
+          },
+          repairAttempts: 2,
+          stoppedReason: "max-attempts",
+        }),
+      },
+    );
+
+    assert.equal(result.source, "llm-filetree");
+    assert.equal(result.files?.length, 2);
+    assert.deepEqual(result.validationErrors, ["src/App.tsx:1: JSX namespace missing"]);
+    assert.equal(result.draft.appName.length > 0, true);
+  });
+});

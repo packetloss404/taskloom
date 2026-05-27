@@ -23,7 +23,7 @@ These items are complete and shipped to `main`. They are kept here for traceabil
 - **Builder empty state redesigned.** Direction A composer + four starter chips, matching the twin.so / Lovable shape.
 - **App-preview header replaced.** Minimal header in the preview pane instead of the workbench Topbar.
 - **Fork B positioning docs.** `CLOUD.md` inventories hosted-only capabilities; `docs/SELF_HOST.md` is the canonical setup guide; README reframed as self-host first.
-- **Generated app generator quality.** sql.js persistence (note: from a jsdelivr CDN — known issue, scheduled for replacement in Phase 3 Track C), realistic seed data, typed form controls, no Taskloom eyebrow.
+- **Generated app generator quality.** New deterministic generated apps now use the Taskloom per-app SQLite runtime API instead of sql.js; the API is served by supervised per-app Node workers kept warm in an LRU pool. Continue improving realistic seed data, typed form controls, and generated UI polish.
 - **OSS launch basics.** MIT license, security policy, `.env.example`, Dockerfile, Docker Compose starter, production startup hardening.
 - **File-tree codegen orchestrator (Phase 3 Track B).** Plan-then-write loop drives the LLM through `write_file(path, content)` tool calls; lives in `src/codegen/llm-author.ts` with system prompts in `src/codegen/prompts.ts`.
 - **File-tree codegen as the default path.** Runs by default when a BYOK provider key is configured; opt-out via `TASKLOOM_LEGACY_TEMPLATES=1`. The previous `TASKLOOM_FILETREE_CODEGEN=1` opt-in flag is preserved as a no-op.
@@ -33,6 +33,11 @@ These items are complete and shipped to `main`. They are kept here for traceabil
 - **Chunked planning for large apps.** Plans with more than 10 files are batched across multiple LLM rounds (chunks of up to 8 files each) with early-stop when a chunk returns nothing.
 - **Vite-build validation alongside tsc.** `src/codegen/validate.ts` runs `tsc --noEmit` and then `vite build`; diagnostics are tagged with `phase: "typecheck" | "build"`. Both phases are gated on `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`.
 - **Inline error UX in the Builder chat thread.** Validation errors from the file-tree path render inline as a warn-toned card with a "Fix these errors" button that triggers an iteration using the errors as the prompt.
+- **Agent tool catalog adapters.** Track D's first six runtime tools are registered: `http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, and `shell_for_agent`, each with deterministic unit coverage and agent-builder recommendation hooks.
+- **Agent tool launch approval UX.** Tool-enabled manual agent runs now return a signed, expiring capability approval request before execution. The agent editor shows Launch / Edit tools / Cancel, Launch replays the run with the approved tool set, and the backend verifies the token against workspace, agent, trigger, inputs, and registered tools.
+- **Agent/playbook builder parity.** `/builder` now routes app and agent intents separately; agent mode opens the agent builder instead of starting app generation. Generated agent drafts include readiness, typed inputs, schedules/webhook guidance, playbook steps, and optional preview runs.
+- **Run trace inspector.** Agent run detail now returns derived trace spans from run metadata, inputs, transcript, tool calls, logs, output, error, model, and cost. The run detail view renders the trace timeline with legacy fallbacks plus retry/cancel/diagnose actions.
+- **Playbook authoring polish.** The agent editor validates playbook steps, trims saved instructions, improves reorder/remove controls, and requires a review step before replacing a playbook from a prior run.
 
 ## Still planned
 
@@ -51,22 +56,19 @@ The router, preset resolver, and six adapters are shipped (see "Done in this pas
 
 The orchestrator, default-on flip, path validator, derived-draft projection, iteration parity, chunked planning, vite-build validation, and inline error UX are shipped (see "Done in this pass"). What remains:
 
-- Multi-round auto-fix loop on broken TypeScript. The validator currently runs once; errors surface to chat via the new "Fix these errors" button and iteration is user-driven.
+- Broaden the multi-round auto-fix loop with more targeted repair prompts once real-world generated apps expose common failure clusters. A bounded repair loop now runs automatically before surfacing errors.
 - Iteration on legacy-template drafts (drafts where `source === "template"` or `source === "llm"`) still uses the regex pipeline. Only file-tree drafts get the new iteration path.
 - Streaming per-file progress in the Files tab as the tree lands. Today the Files tab updates after the write phase finishes rather than file-by-file.
 
 ### Real persistence + per-app runtime (Phase 3 Track C)
 
-- Replace metadata-only `src/generated-app-runtime.ts` with a real per-app runtime. Each app gets its own Node child process started on first request, kept warm with an LRU pool.
-- Per-app `better-sqlite3` (or `node:sqlite`) file on disk, keyed by appId, with a `__schema_version` table. Drop-on-schema-change documented as constraint, not silent corruption.
-- Generated app template emits `fetch('/api/...')` calls instead of sql.js + localStorage. Kills the jsdelivr CDN dependency.
+- Shipped: generated app templates emit same-origin `fetch('/api/...')` calls, the server owns a per-app `node:sqlite` file with `__schema_version`, schema changes drop and reseed app data, and each app runtime is isolated in a Node child process started on first request and kept warm with an LRU pool.
+- Remaining: add runtime health/metrics surfaces, document `TASKLOOM_GENERATED_APP_RUNTIME_MAX_PROCESSES`, and carry the separate-origin preview/CSRF hardening item from the security backlog.
 
 ### Agent path (Phase 3 Track D)
 
-- Six new tools: `http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, `shell_for_agent`. Each capability-scoped via the existing `src/tools/registry.ts`.
-- Agent-builder UI parity with app-builder: same chat-thread composer switches between app and agent intent based on chip-derived prompt.
-- Tool-permissions inline prompt (twin.so pattern): first-call Launch / Edit / Cancel surfaces in chat.
-- Agent intent → LLM system prompt produces an `AgentTemplate` shape instead of an `AppBuilderDraft`.
+- Shipped: six new tools are registered in the default runtime catalog (`http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, and `shell_for_agent`), manual tool-enabled runs now have the first-call Launch / Edit tools / Cancel approval flow, `/builder` separates app and agent intent, and run detail exposes a trace inspector.
+- Remaining hardening: resource-scoped runtime enforcement per tool call, live SMTP adapter wiring, LLM-authored agent-template generation beyond the current heuristic draft builder, and broader end-to-end agent happy-path tests.
 
 ### Sandbox + farm (Phase 3 Track E)
 

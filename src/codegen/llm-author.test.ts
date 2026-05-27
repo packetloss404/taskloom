@@ -9,12 +9,14 @@ import type {
   ProviderStreamChunk,
 } from "../providers/types.js";
 import {
+  authorAndValidateAppViaLLM,
   authorAppViaLLM,
   isSafePath,
   MAX_FILES_PER_WRITE_CHUNK,
   parsePlan,
   type ResolvedPrompts,
 } from "./llm-author.js";
+import type { ValidateOptions, ValidationResult } from "./validate.js";
 
 // ---------------------------------------------------------------------------
 // Mock provider scaffolding
@@ -106,10 +108,10 @@ function planJson(plan: Array<{ path: string; purpose: string }>): string {
 
 const ORIGINAL_ANTHROPIC = process.env.ANTHROPIC_API_KEY;
 
-function withFakeAnthropicKey<T>(fn: () => T): T {
+async function withFakeAnthropicKey<T>(fn: () => T | Promise<T>): Promise<T> {
   process.env.ANTHROPIC_API_KEY = "test";
   try {
-    return fn();
+    return await fn();
   } finally {
     if (ORIGINAL_ANTHROPIC === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = ORIGINAL_ANTHROPIC;
@@ -541,4 +543,109 @@ test("authorAppViaLLM: preset routes through the registered provider", async () 
   );
   assert.ok(result);
   assert.equal(provider.calls[0]?.model, "qwen2.5-coder:32b");
+});
+
+test("authorAndValidateAppViaLLM: repairs once after validation failure", async () => {
+  await withFakeAnthropicKey(async () => {
+    const initialPlan = [{ path: "src/App.tsx", purpose: "broken root" }];
+    const repairedPlan = [{ path: "src/App.tsx", purpose: "fixed root" }];
+    const provider = new MockProvider({
+      name: "anthropic",
+      turns: [
+        [{ delta: planJson(initialPlan) }],
+        [{
+          toolCall: {
+            id: "w1",
+            name: "write_file",
+            input: { path: "src/App.tsx", content: "export default function App(){ return missing; }\n" },
+          },
+        }],
+        [{ delta: planJson(repairedPlan) }],
+        [{
+          toolCall: {
+            id: "w2",
+            name: "write_file",
+            input: { path: "src/App.tsx", content: "export default function App(){ return null; }\n" },
+          },
+        }],
+      ],
+    });
+    const validations: ValidationResult[] = [
+      {
+        ok: false,
+        source: "real",
+        errors: [{ file: "src/App.tsx", line: 1, message: "Cannot find name 'missing'.", severity: "error", phase: "typecheck" }],
+        warnings: [],
+        durationMs: 12,
+        phases: { typecheck: "failed", build: "skipped" },
+      },
+      {
+        ok: true,
+        source: "real",
+        errors: [],
+        warnings: [],
+        durationMs: 20,
+        phases: { typecheck: "passed", build: "passed" },
+      },
+    ];
+    const validateFn = async (_files: Array<{ path: string; content: string }>, _options: ValidateOptions = {}) =>
+      validations.shift() ?? validations[validations.length - 1]!;
+
+    const emitted: string[] = [];
+    const result = await authorAndValidateAppViaLLM(
+      "Build a tiny app.",
+      {
+        workspaceId: "ws",
+        router: makeRouterWithProvider(provider),
+        resolvePrompts: fixedPrompts,
+        validateFn,
+      },
+      (chunk) => { emitted.push(chunk); },
+    );
+
+    assert.ok(result);
+    assert.equal(result!.repairAttempts, 1);
+    assert.equal(result!.validation.ok, true);
+    assert.match(result!.files[0]!.content, /return null/);
+    assert.ok(emitted.some((chunk) => chunk.includes("Trying repair pass 1 of 2")));
+  });
+});
+
+test("authorAndValidateAppViaLLM: stops on repeated validation signature", async () => {
+  await withFakeAnthropicKey(async () => {
+    const plan = [{ path: "src/App.tsx", purpose: "root" }];
+    const provider = new MockProvider({
+      name: "anthropic",
+      turns: [
+        [{ delta: planJson(plan) }],
+        [{ toolCall: { id: "w1", name: "write_file", input: { path: "src/App.tsx", content: "broken one" } } }],
+        [{ delta: planJson(plan) }],
+        [{ toolCall: { id: "w2", name: "write_file", input: { path: "src/App.tsx", content: "broken two" } } }],
+      ],
+    });
+    const repeated: ValidationResult = {
+      ok: false,
+      source: "real",
+      errors: [{ file: "src/App.tsx", line: 3, message: "Cannot find name 'missing'.", severity: "error", phase: "typecheck" }],
+      warnings: [],
+      durationMs: 1,
+      phases: { typecheck: "failed", build: "skipped" },
+    };
+
+    const result = await authorAndValidateAppViaLLM(
+      "Build a tiny app.",
+      {
+        workspaceId: "ws",
+        router: makeRouterWithProvider(provider),
+        resolvePrompts: fixedPrompts,
+        validateFn: async () => repeated,
+      },
+      () => {},
+    );
+
+    assert.ok(result);
+    assert.equal(result!.repairAttempts, 1);
+    assert.equal(result!.stoppedReason, "repeated-errors");
+    assert.equal(provider.calls.length, 4);
+  });
 });

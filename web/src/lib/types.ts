@@ -319,7 +319,7 @@ export interface AgentRunRecord {
   transcript?: AgentRunStep[];
   startedAt?: string;
   completedAt?: string;
-  inputs?: Record<string, string | number | boolean>;
+  inputs?: Record<string, unknown>;
   output?: string;
   error?: string;
   logs?: AgentRunLogEntry[];
@@ -332,6 +332,136 @@ export interface AgentRunRecord {
   canCancel?: boolean;
   canRetry?: boolean;
 }
+
+export type AgentRunTraceSpanStatus =
+  | "queued"
+  | "running"
+  | "success"
+  | "ok"
+  | "failed"
+  | "error"
+  | "warn"
+  | "info"
+  | "timeout"
+  | "canceled"
+  | "skipped"
+  | "unknown";
+
+export type AgentRunTraceSpanKind =
+  | "run"
+  | "input"
+  | "step"
+  | "model"
+  | "tool"
+  | "tool_call"
+  | "log"
+  | "error"
+  | "output";
+
+export interface AgentRunTraceEvent {
+  at?: string;
+  name: string;
+  level?: AgentRunLogLevel | "debug" | string;
+  message?: string;
+  attributes?: Record<string, unknown>;
+}
+
+export interface AgentRunTraceSpan {
+  id: string;
+  sequence?: number;
+  parentId?: string | null;
+  name?: string;
+  title?: string;
+  kind?: AgentRunTraceSpanKind | string;
+  type?: AgentRunTraceSpanKind | string;
+  status?: AgentRunTraceSpanStatus | string;
+  startedAt?: string;
+  endedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  summary?: string | null;
+  data?: Record<string, unknown>;
+  model?: string;
+  modelUsed?: string | null;
+  toolName?: string;
+  costUsd?: number | null;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  attributes?: Record<string, unknown>;
+  events?: AgentRunTraceEvent[];
+}
+
+export interface AgentRunTrace {
+  id?: string;
+  runId?: string;
+  status?: AgentRunStatus;
+  source?: "runtime" | "legacy" | string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number | null;
+  generatedAt?: string;
+  summary?: {
+    spans?: number;
+    spanCount?: number;
+    modelCalls?: number;
+    toolCalls?: number;
+    toolCallCount?: number;
+    stepCount?: number;
+    logCount?: number;
+    inputCount?: number;
+    errorCount?: number;
+    warningCount?: number;
+    hasOutput?: boolean;
+    modelUsed?: string;
+    costUsd?: number;
+    durationMs?: number | null;
+  };
+  spans?: AgentRunTraceSpan[];
+}
+
+export interface AgentRunDetailPayload {
+  run: AgentRunRecord;
+  trace?: AgentRunTrace | null;
+  agentName?: string;
+}
+
+export type ToolCapabilityRisk = "low" | "medium" | "high";
+
+export interface ToolCapabilityApprovalTool {
+  name: string;
+  side: "read" | "write" | "exec";
+  description: string;
+  risk: ToolCapabilityRisk;
+  riskSummary: string;
+}
+
+export interface ToolCapabilityApprovalRequest {
+  required: true;
+  agentId: string;
+  workspaceId: string;
+  triggerKind: AgentTriggerKind;
+  tools: ToolCapabilityApprovalTool[];
+  summary: string;
+  approvalToken: string;
+  expiresAt: string;
+}
+
+export interface ToolCapabilityApprovalInput {
+  decision: "launch" | "cancel";
+  token?: string;
+  approvedTools?: string[];
+}
+
+export type RunAgentInput = {
+  triggerKind?: AgentTriggerKind;
+  inputs?: Record<string, string | number | boolean>;
+  toolApproval?: ToolCapabilityApprovalInput;
+};
+
+export type RunAgentResponse =
+  | { run: AgentRunRecord; approval?: undefined }
+  | { approval: ToolCapabilityApprovalRequest; run?: undefined };
 
 export type WorkspaceEnvVarScope = "all" | "build" | "runtime";
 
@@ -577,6 +707,13 @@ export interface AppBuilderSourceFileSummary {
   role: "entrypoint" | "source" | "manifest" | "config" | "docs" | string;
 }
 
+export type AppBuilderDraftSource = "llm" | "template" | "llm-filetree";
+
+export interface AppBuilderGeneratedFile {
+  path: string;
+  content: string;
+}
+
 export interface AppBuilderArtifactSummary {
   entrypoint?: string;
   renderedAt?: string;
@@ -604,6 +741,8 @@ export interface AppBuilderApproveResult {
   draft: AppBuilderDraft;
   created: true;
   applied: true;
+  draftSource?: AppBuilderDraftSource;
+  fileTree?: AppBuilderGeneratedFile[];
   app?: {
     id: string;
     slug: string;
@@ -665,6 +804,9 @@ export interface AppBuilderIterationResult {
   files: AppBuilderIterationDiffFile[];
   sourceDiffFiles?: AppBuilderIterationDiffFile[];
   sourceFiles?: AppBuilderSourceFileSummary[];
+  fileTree?: AppBuilderGeneratedFile[];
+  draftSource?: AppBuilderDraftSource;
+  validationErrors?: string[];
   artifact?: AppBuilderArtifactSummary;
   draft?: AppBuilderDraft;
   preview?: {
@@ -704,6 +846,8 @@ export interface AppBuilderIterationRequest {
   appId?: string;
   checkpointId?: string;
   draft: AppBuilderDraft;
+  draftSource?: AppBuilderDraftSource;
+  fileTree?: AppBuilderGeneratedFile[];
   target: AppBuilderIterationTarget;
   prompt: string;
   sourceError?: AppBuilderIterationResult["errorFix"];
@@ -750,6 +894,8 @@ export interface AppBuilderIterationApplyResult {
   };
   artifact?: AppBuilderArtifactSummary;
   sourceFiles?: AppBuilderSourceFileSummary[];
+  fileTree?: AppBuilderGeneratedFile[];
+  draftSource?: AppBuilderDraftSource;
   workspace?: AppBuilderWorkspaceSummary;
 }
 
@@ -791,6 +937,10 @@ export interface AppBuilderRollbackResult {
   build?: { status: string };
   smoke?: AppBuilderSmokeBuildStatus;
   draft?: AppBuilderDraft;
+  artifact?: AppBuilderArtifactSummary;
+  sourceFiles?: AppBuilderSourceFileSummary[];
+  fileTree?: AppBuilderGeneratedFile[];
+  draftSource?: AppBuilderDraftSource;
 }
 
 export interface AppBuilderFixPromptResult {

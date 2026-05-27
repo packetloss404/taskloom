@@ -85,7 +85,12 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const runAgentCommand = async (agentId: string) => {
     setRunningAgentId(agentId);
     try {
-      await api.runAgent(agentId);
+      const response = await api.runAgent(agentId);
+      if (response.approval) {
+        window.alert("Tool access approval required. Open the agent editor to approve tools before running this agent.");
+        setRunningAgentId(null);
+        return;
+      }
       onClose();
       navigate("/runs");
     } catch {

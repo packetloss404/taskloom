@@ -20,21 +20,21 @@ Every generated app must include this baseline:
 - \`tsconfig.json\` - strict TypeScript, ESNext modules, JSX preserved for Vite.
 - \`tailwind.config.ts\` - extends the default theme to alias the chosen accent color (see "Design system contract" below) and sets \`darkMode: 'class'\`. This file is REQUIRED, not optional.
 - \`postcss.config.js\` - the standard Tailwind + Autoprefixer config (required because \`tailwind.config.ts\` is present).
-- \`index.html\` - Vite entry, mounts \`#root\`, includes the Tailwind stylesheet link, and (only when the app needs client-side persistence) loads sql.js from a CDN \`<script>\` tag.
+- \`index.html\` - Vite entry, mounts \`#root\`, includes the Tailwind stylesheet link, and does not load persistence libraries from a CDN.
 - \`src/main.tsx\` - boots React, imports \`./index.css\` (Tailwind directives), renders \`<App />\`.
 - \`src/App.tsx\` - the root component implementing the requested feature.
 
 You may add any of these when they help the design:
 - \`src/components/*.tsx\` - reusable presentational pieces.
-- \`src/data/*.ts\` - typed mock data, sql.js bootstrap helpers, or small in-memory stores.
+- \`src/data/*.ts\` - typed schema, starter records, and small browser helpers.
 
 Constraints
 -----------
 - TypeScript only. No \`.js\`/\`.jsx\` source files except the optional \`postcss.config.js\`.
 - No external runtime dependencies beyond React, ReactDOM, Vite, and Tailwind.
-- If the app needs persistence, load sql.js via a CDN \`<script>\` tag in \`index.html\` and access it through \`window.initSqlJs\`. Known issue: this is browser-only state; server-side persistence is planned but not yet wired.
+- If the app needs persistence, use the Taskloom-served generated app API with \`fetch('/api/app/generated-apps/' + appId + '/api/...')\`. Read \`appId\` from \`document.body.dataset.appId\`. Do not use sql.js, IndexedDB, localStorage, or browser-only persistence as the source of truth.
 - Do not invent extra config files (no ESLint, Prettier, Vitest, etc.) - the harness does not consume them.
-- Keep code paths deterministic and avoid network calls aside from the sql.js CDN.
+- Keep code paths deterministic and avoid network calls except same-origin calls to the generated app runtime API.
 
 Design system contract (NON-NEGOTIABLE - this is what makes the app feel real)
 ------------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildGeneratedAppRuntimeArtifact,
+  buildGeneratedAppRuntimeArtifactFromFiles,
   findGeneratedAppSourceFile,
   type GeneratedAppRuntimeDraft,
 } from "./generated-app-runtime";
@@ -88,18 +89,18 @@ test("generated runtime emits a self-contained local CRUD app bundle", () => {
   assert.ok(paths.includes("vite.config.ts"));
 
   const appFile = findGeneratedAppSourceFile(artifact, "src/App.tsx")?.content ?? "";
-  assert.match(appFile, /useState<SeedData>/);
-  assert.match(appFile, /function handleCreate/);
-  assert.match(appFile, /function handleEdit/);
-  assert.match(appFile, /function archiveRecord/);
+  assert.match(appFile, /listGeneratedRecords/);
+  assert.match(appFile, /async function handleCreate/);
+  assert.match(appFile, /async function handleEdit/);
+  assert.match(appFile, /async function archiveRecord/);
   assert.match(appFile, /Dashboard summary/);
-  assert.match(appFile, /seedData as SeedData/);
+  assert.match(appFile, /Server runtime/);
 
   const apiFile = findGeneratedAppSourceFile(artifact, "src/api/generated-api.ts")?.content ?? "";
-  assert.match(apiFile, /handleGeneratedApiRequest/);
-  assert.match(apiFile, /method === "POST"/);
-  assert.match(apiFile, /method === "PATCH"/);
-  assert.match(apiFile, /method === "DELETE"/);
+  assert.match(apiFile, /fetch\(runtimeApiUrl/);
+  assert.match(apiFile, /createGeneratedRecord/);
+  assert.match(apiFile, /updateGeneratedRecord/);
+  assert.match(apiFile, /archiveGeneratedRecord/);
 
   const seedFile = findGeneratedAppSourceFile(artifact, "src/data/seed-data.json")?.content ?? "";
   assert.match(seedFile, /"account_001"/);
@@ -108,6 +109,7 @@ test("generated runtime emits a self-contained local CRUD app bundle", () => {
   const schemaFile = findGeneratedAppSourceFile(artifact, "src/data/schema.ts")?.content ?? "";
   assert.match(schemaFile, /primaryEntity/);
   assert.match(schemaFile, /editableFields/);
+  assert.match(schemaFile, /server-sqlite/);
 
   const migrationFile = findGeneratedAppSourceFile(artifact, "src/db/migrations/0001_initial.sql")?.content ?? "";
   assert.match(migrationFile, /CREATE TABLE IF NOT EXISTS account/);
@@ -117,3 +119,17 @@ test("generated runtime emits a self-contained local CRUD app bundle", () => {
   assert.match(packageFile, /"build": "vite build"/);
 });
 
+test("generated runtime can wrap an LLM-authored file tree as the artifact", () => {
+  const artifact = buildGeneratedAppRuntimeArtifactFromFiles([
+    { path: "index.html", content: "<div id=\"root\"></div>" },
+    { path: "src/App.tsx", content: "export default function App(){ return null; }" },
+    { path: "tsconfig.json", content: "{}" },
+  ], "2026-05-12T12:00:00.000Z");
+
+  assert.equal(artifact.entrypoint, "index.html");
+  assert.equal(artifact.renderedAt, "2026-05-12T12:00:00.000Z");
+  assert.equal(findGeneratedAppSourceFile(artifact, "src/App.tsx")?.role, "source");
+  assert.equal(findGeneratedAppSourceFile(artifact, "tsconfig.json")?.role, "config");
+  assert.equal(findGeneratedAppSourceFile(artifact, "index.html")?.role, "entrypoint");
+  assert.match(findGeneratedAppSourceFile(artifact, "src/App.tsx")?.sha256 ?? "", /^[a-f0-9]{64}$/);
+});

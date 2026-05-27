@@ -254,7 +254,7 @@ export class SandboxService {
       driver: driver.id,
       runtime,
       command: request.command,
-      workingDir: request.workingDir ?? "/workspace",
+      workingDir: request.workingDir ?? defaultWorkingDirForDriver(driver.id),
       status: "queued",
       cpuLimitMs: timeoutMs,
       memoryLimitMb: memoryMb,
@@ -603,6 +603,10 @@ function clampPositive(value: number | undefined, fallback: number, min: number,
 function isTruthy(value: string | undefined): boolean {
   if (!value) return false;
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function defaultWorkingDirForDriver(driver: SandboxDriverId): string {
+  return driver === "native" ? process.cwd() : "/workspace";
 }
 
 let defaultInstance: SandboxService | null = null;

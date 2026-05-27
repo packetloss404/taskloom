@@ -6,6 +6,7 @@ import type {
   AgentBuilderDraftResult,
   AgentPromptDraftResult,
   AgentRecord,
+  AgentRunDetailPayload,
   AgentRunRecord,
   AgentTemplate,
   GeneratedAppSummary,
@@ -17,8 +18,10 @@ import type {
   AppBuilderChangeSetResult,
   AppBuilderCheckpointListResult,
   AppBuilderDraft,
+  AppBuilderDraftSource,
   AppBuilderDraftResult,
   AppBuilderFixPromptResult,
+  AppBuilderGeneratedFile,
   AppBuilderIterationApplyRequest,
   AppBuilderIterationApplyResult,
   AppBuilderIterationRequest,
@@ -35,6 +38,8 @@ import type {
   ProviderRecord,
   PublicDashboardPayload,
   ReleaseHistoryPayload,
+  RunAgentInput,
+  RunAgentResponse,
   SaveAgentInput,
   SaveProviderInput,
   SaveWorkflowBlockerInput,
@@ -157,7 +162,14 @@ function csrfTokenForRequest(init?: RequestInit) {
 export type BuilderStreamEvent =
   | { type: "step"; text: string }
   | { type: "prose"; text: string }
-  | { type: "draft"; draft: AppBuilderDraft; validationErrors?: string[] }
+  | {
+      type: "draft";
+      draft: AppBuilderDraft;
+      source?: AppBuilderDraftSource;
+      files?: AppBuilderGeneratedFile[];
+      sourceFiles?: AppBuilderApproveResult["sourceFiles"];
+      validationErrors?: string[];
+    }
   | { type: "diff"; iteration: AppBuilderIterationResult }
   | { type: "validation"; errors: string[] }
   | { type: "done" }
@@ -305,7 +317,7 @@ export const api = {
     j<AppBuilderDraftResult>("/api/app/builder/app-draft", { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.draft),
   streamAppBuilderDraft: (body: { prompt: string; preset?: BuilderModelPresetId }, onEvent: (event: BuilderStreamEvent) => void, signal?: AbortSignal) =>
     streamSse("/api/app/builder/app-draft/stream", body, onEvent, signal),
-  approveAppBuilderDraft: (body: { prompt?: string; draft?: AppBuilderDraft; runBuild?: boolean; runSmoke?: boolean; targetStatus?: AppBuilderApplyStatus }) =>
+  approveAppBuilderDraft: (body: { prompt?: string; draft?: AppBuilderDraft; source?: AppBuilderDraftSource; files?: AppBuilderGeneratedFile[]; runBuild?: boolean; runSmoke?: boolean; targetStatus?: AppBuilderApplyStatus }) =>
     j<AppBuilderApproveResult>("/api/app/builder/app-draft/apply", { method: "POST", body: JSON.stringify(body) }),
   generateAppBuilderIteration: (body: AppBuilderIterationRequest & { preset?: BuilderModelPresetId }) =>
     j<AppBuilderIterationResult>("/api/app/builder/app-iteration", { method: "POST", body: JSON.stringify(body) }),
@@ -358,8 +370,8 @@ export const api = {
   updateAgent: (id: string, body: Partial<SaveAgentInput>) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.agent),
   archiveAgent: (id: string) => j<{ agent: AgentRecord }>(`/api/app/agents/${id}`, { method: "DELETE" }).then((payload) => payload.agent),
-  runAgent: (id: string, body?: { triggerKind?: string; inputs?: Record<string, string | number | boolean> }) =>
-    j<{ run: AgentRunRecord }>(`/api/app/agents/${id}/runs`, { method: "POST", body: JSON.stringify(body ?? {}) }).then((payload) => payload.run),
+  runAgent: (id: string, body?: RunAgentInput) =>
+    j<RunAgentResponse>(`/api/app/agents/${id}/runs`, { method: "POST", body: JSON.stringify(body ?? {}) }),
   listAgentTemplates: () => j<{ templates: AgentTemplate[] }>("/api/app/agent-templates").then((payload) => payload.templates),
   createAgentFromTemplate: (templateId: string, body: { name?: string; providerId?: string; model?: string } = {}) =>
     j<{ agent: AgentRecord }>(`/api/app/agents/from-template/${templateId}`, { method: "POST", body: JSON.stringify(body) }).then((payload) => payload.agent),
@@ -382,6 +394,8 @@ export const api = {
   updateProvider: (id: string, body: Partial<SaveProviderInput>) =>
     j<{ provider: ProviderRecord }>(`/api/app/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.provider),
   listAgentRuns: () => j<{ runs: AgentRunRecord[] }>("/api/app/agent-runs").then((payload) => payload.runs),
+  getAgentRunDetail: (runId: string) =>
+    j<AgentRunDetailPayload>(`/api/app/agent-runs/${encodeURIComponent(runId)}/detail`),
   cancelAgentRun: (runId: string) =>
     j<{ run: AgentRunRecord }>(`/api/app/agent-runs/${runId}/cancel`, { method: "POST" }).then((payload) => payload.run),
   retryAgentRun: (runId: string) =>
