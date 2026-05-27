@@ -1,7 +1,8 @@
-import { authorAppViaLLM } from "../codegen/llm-author.js";
-import { validateFileTree } from "../codegen/validate.js";
+import {
+  authorAndValidateAppViaLLM,
+  type AuthorAndValidateAppOptions,
+} from "../codegen/llm-author.js";
 import { deriveDraftFromFiles } from "../codegen/derived-draft.js";
-import type { ModelRoutingPresetId } from "../model-routing-presets.js";
 import type {
   AppDraftEmit,
   AppDraftLLMOptions,
@@ -31,24 +32,19 @@ export async function tryFileTreeCodegen(
 ): Promise<GenerateAppDraftResult | null> {
   try {
     const workspaceId = options.workspaceId ?? "";
-    const authorOptions: { preset?: ModelRoutingPresetId; workspaceId: string; signal?: AbortSignal } = { workspaceId };
+    const authorOptions: AuthorAndValidateAppOptions = { workspaceId };
     if (options.preset) authorOptions.preset = options.preset;
     if (options.signal) authorOptions.signal = options.signal;
     const noopEmit = (_: string) => {};
-    const result = await authorAppViaLLM(prompt, authorOptions, emit ?? noopEmit);
+    const author = options.fileTreeAuthorFn ?? authorAndValidateAppViaLLM;
+    const result = await author(prompt, authorOptions, emit ?? noopEmit);
     if (!result) return null;
 
-    const validateOptions: { signal?: AbortSignal } = {};
-    if (options.signal) validateOptions.signal = options.signal;
-    const validation = await validateFileTree(result.files, validateOptions);
+    const validation = result.validation;
 
-    // 1-retry policy: surface errors and let the caller decide. There is no
-    // auto-fix loop in this skeleton — the LLM may have produced a tree that
-    // does not compile, and we want the UI to show that rather than silently
-    // ship something broken.
     if (!validation.ok && validation.source === "real") {
       console.warn(
-        `[codegen] file-tree validation failed: ${validation.errors.length} error(s) in ${validation.durationMs}ms`,
+        `[codegen] file-tree validation failed after ${result.repairAttempts} repair attempt(s): ${validation.errors.length} error(s) in ${validation.durationMs}ms`,
       );
     }
 

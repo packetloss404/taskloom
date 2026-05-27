@@ -93,8 +93,12 @@ export function agentEditorPath(agentId: string | undefined): string {
   return agentId ? `/agents/${agentId}` : "/agents";
 }
 
-export function formatSampleValue(value: string | number | boolean): string {
+export function formatSampleValue(value: unknown): string {
   if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (value === null || value === undefined) return "";
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "object") return safeJson(value);
   return String(value);
 }
 

@@ -1,6 +1,8 @@
 import { api } from "@/lib/api";
 import type {
   AppBuilderDraft,
+  AppBuilderDraftSource,
+  AppBuilderGeneratedFile,
   AppBuilderIterationResult,
   AppBuilderIterationTarget,
   AppBuilderPublishState,
@@ -35,11 +37,13 @@ export interface ChatMessage {
   checkpointId?: string;
 }
 
-export type Mode = "empty" | "drafting" | "drafted" | "applying" | "applied" | "iterating";
+export type Mode = "empty" | "agent" | "drafting" | "drafted" | "applying" | "applied" | "iterating";
 export type BuilderKind = "app" | "agent";
 
 export interface BuilderState {
   draft: AppBuilderDraft | null;
+  draftSource: AppBuilderDraftSource | null;
+  generatedFiles: AppBuilderGeneratedFile[];
   appId: string | null;
   checkpointId: string | null;
   previewUrl: string | null;

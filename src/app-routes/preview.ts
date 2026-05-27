@@ -3,12 +3,17 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { requireAuthenticatedContextAsync } from "../taskloom-services.js";
 import { loadStoreAsync } from "../taskloom-store.js";
 import { resolveGeneratedAppPreviewFile } from "../generated-app-process.js";
-import { summarizeGeneratedAppSourceFiles } from "../generated-app-runtime.js";
+import {
+  buildGeneratedAppRuntimeModel,
+  summarizeGeneratedAppSourceFiles,
+} from "../generated-app-runtime.js";
+import { getDefaultGeneratedAppRuntimeProcessPool } from "../generated-app-runtime/server.js";
 import { errorResponse, httpRouteError, requireWorkspacePermission } from "./shared.js";
 import {
   checkpointForPublish,
   findGeneratedAppRecord,
   generatedAppRuntimeArtifact,
+  type AppBuilderDraftContract,
   type GeneratedAppRecordWithRuntime,
 } from "./builder-core.js";
 
@@ -99,6 +104,58 @@ async function previewGeneratedApp(c: Context) {
     const { content: outContent, contentType: outType } = await transformPreviewFile(resolved.file.path, resolved.file.content, resolved.file.contentType);
     c.header("Content-Type", outType);
     return c.body(outContent);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+async function handleGeneratedAppRuntimeApi(c: Context) {
+  try {
+    const appIdParam = c.req.param("appId") ?? "";
+    const tokenQuery = c.req.query("token");
+    let record: GeneratedAppRecordWithRuntime;
+    let workspaceId: string;
+
+    if (tokenQuery) {
+      const verification = await verifyPreviewToken(tokenQuery, appIdParam);
+      if (!verification.ok) {
+        c.status(401);
+        return c.json({ error: "preview link expired or invalid" });
+      }
+      if (!isGeneratedAppReadOnlyMethod(c.req.method)) {
+        c.status(403);
+        return c.json({ error: "preview links can only read generated app runtime data" });
+      }
+      record = verification.record;
+      workspaceId = record.workspaceId;
+    } else {
+      const context = await requireAuthenticatedContextAsync(c);
+      await requireWorkspacePermission(context, "viewWorkspace");
+      const found = await findGeneratedAppRecord(context, appIdParam, c.req.query("checkpointId"));
+      if (!found) throw httpRouteError(404, "generated app not found");
+      record = found;
+      workspaceId = context.workspace.id;
+    }
+
+    const checkpoint = checkpointForPublish(record, c.req.query("checkpointId"));
+    if (!checkpoint) throw httpRouteError(404, "checkpoint not found");
+    const model = buildGeneratedAppRuntimeModel(checkpoint.draft as unknown as AppBuilderDraftContract);
+    const result = await getDefaultGeneratedAppRuntimeProcessPool().request({
+      appId: record.id,
+      workspaceId,
+      model,
+      runtimeRoot: process.env.TASKLOOM_GENERATED_APP_RUNTIME_DIR,
+      method: c.req.method,
+      path: generatedAppRuntimeApiPathFromRequest(c, appIdParam) || model.primaryEntity,
+      body: await readGeneratedAppRuntimeBody(c),
+    });
+    c.status(result.status as any);
+    c.header("Cache-Control", "no-store");
+    c.header("X-Taskloom-Generated-App-Id", record.id);
+    c.header("X-Taskloom-Generated-App-Checkpoint", checkpoint.id);
+    c.header("X-Taskloom-Generated-App-Runtime", "server-sqlite-process");
+    if (result.process.pid) c.header("X-Taskloom-Generated-App-Runtime-Pid", String(result.process.pid));
+    return c.json(result.body);
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -308,8 +365,47 @@ function generatedAppPreviewPathFromRequest(c: Context, appId: string): string {
   return decodeURIComponent(path.slice(path.indexOf(marker) + marker.length));
 }
 
+function generatedAppRuntimeApiPathFromRequest(c: Context, appId: string): string {
+  const wildcard = c.req.param("*");
+  if (wildcard) return wildcard.replace(/^\/+/, "");
+  const path = new URL(c.req.url).pathname.replace(/\\/g, "/");
+  const markers = [
+    `/api/app/generated-apps/${encodeURIComponent(appId)}/api/`,
+    `/app/generated-apps/${encodeURIComponent(appId)}/api/`,
+    `/api/app/generated-apps/${appId}/api/`,
+    `/app/generated-apps/${appId}/api/`,
+    `/api/app/generated-apps/${encodeURIComponent(appId)}/api`,
+    `/app/generated-apps/${encodeURIComponent(appId)}/api`,
+    `/api/app/generated-apps/${appId}/api`,
+    `/app/generated-apps/${appId}/api`,
+  ];
+  const marker = markers.find((candidate) => path.includes(candidate));
+  if (!marker) return "";
+  return decodeURIComponent(path.slice(path.indexOf(marker) + marker.length)).replace(/^\/+/, "");
+}
+
+async function readGeneratedAppRuntimeBody(c: Context): Promise<Record<string, unknown> | undefined> {
+  if (isGeneratedAppReadOnlyMethod(c.req.method)) return undefined;
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) return undefined;
+  const parsed = await c.req.json().catch(() => undefined) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
+}
+
+function isGeneratedAppReadOnlyMethod(method: string): boolean {
+  return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
+}
+
 export function registerPreviewRoutes(app: Hono): void {
   app.get("/app/generated-apps/:appId/preview", async (c) => previewGeneratedApp(c));
   app.get("/app/generated-apps/:appId/preview/*", async (c) => previewGeneratedApp(c));
   app.post("/app/generated-apps/:appId/preview-token", async (c) => createGeneratedAppPreviewToken(c));
+  app.get("/app/generated-apps/:appId/api", async (c) => handleGeneratedAppRuntimeApi(c));
+  app.get("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+  app.post("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+  app.put("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+  app.patch("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
+  app.delete("/app/generated-apps/:appId/api/*", async (c) => handleGeneratedAppRuntimeApi(c));
 }

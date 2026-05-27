@@ -18,6 +18,15 @@ sandbox, and a Windows-aware path validator. The legacy 5-template path
 is preserved behind `TASKLOOM_LEGACY_TEMPLATES=1`. A one-step launcher
 (`./scripts/run.sh` / `run.ps1`) probes the configured provider key
 before starting the dev server.
+Tool-enabled manual agent runs now pause on a signed capability approval
+request before execution; the agent editor shows Launch / Edit tools / Cancel
+and revalidates the approval token against the current trigger, inputs, and
+registered tool set.
+`/builder` now separates app and agent intent, so agent starter prompts open
+the agent builder instead of starting app generation. Agent drafts carry
+readiness, typed inputs, schedule/webhook guidance, and ordered playbooks.
+Run detail has a trace inspector derived from existing run metadata,
+transcript, tool calls, logs, output, model, and cost.
 
 ## Open items, ranked
 
@@ -26,9 +35,8 @@ P0 / P1 are the wife-can-finish gaps. P2+ are bigger lifts from
 
 | # | Item | Lift | Where |
 |---|---|---|---|
-| P0 | Multi-round auto-fix on broken tsc output (currently capped at 1 retry; surfaces "Fix these errors" button instead). The cap was intentional per Reviewer E to avoid a multi-week sinkhole, but the UX cliff for non-technical users is real. | 2–4d | `src/codegen/llm-author.ts` + `src/codegen/validate.ts` |
-| P1 | Per-app server-side SQLite + runtime (Track C from PHASE3_SCOPE.md). Generated apps still use sql.js-in-browser loaded from jsdelivr CDN — kills the "from my own farm" promise. | 5–7d | new `src/generated-app-runtime/server.ts` + `src/generated-app-runtime/sqlite.ts` |
-| P1 | Agent tool catalog (Track D). Slack, GitHub, email, generic SQL tools. The scheduler / webhook intake / tool registry already exist (`src/jobs/cron.ts`, `src/webhook-routes.ts`, `src/tools/registry.ts`). | 5–7d | new `src/tools/*.ts` (one per tool) |
+| P1 | Agent runtime hardening. The agent builder path, first six tool adapters, manual Launch / Edit tools / Cancel approval flow, playbook editor polish, and run trace inspector are shipped; remaining work is deeper resource-scoped enforcement, live SMTP wiring, LLM-authored agent-template generation, and end-to-end happy-path coverage. | 3–5d | agent runtime + `src/tools/*.ts` |
+| P1 | Runtime/security hardening after generated app persistence. Per-app SQLite now runs in supervised child processes with an LRU pool; remaining work is observability, pool tuning docs, and the separate-origin preview/CSRF hardening item in the security backlog. | 1–2d | `src/generated-app-runtime/server.ts` + `src/app-routes.ts` |
 | P2 | Anthropic prompt caching breakpoint. The SYSTEM_PROMPT is ~750 tokens, just under the AnthropicProvider's auto-cache threshold (~1k). Lower the threshold or pass explicit `cache_control` blocks. | 0.5d | `src/providers/anthropic.ts` + `src/codegen/prompts.ts` |
 | P2 | First-run tour pointer alignment. Reviewer B noted step 1's callout sits below the composer rather than over it. | 0.5d | `web/src/workbench/views/builder-tour.tsx` |
 | P3 | Iteration UX on legacy-template drafts still uses the regex pipeline (`src/app-iteration-service.ts`). The file-tree path handles llm-filetree drafts. Migrating legacy drafts is deferred. | 3–4d | `src/app-iteration-service.ts` |
@@ -100,8 +108,9 @@ For deeper context on any of these, see `docs/PHASE3_SCOPE.md` v2.
 
 7. **The "wife test" is the bar.** When evaluating a change, ask "could
    a non-technical user finish without asking the owner?" The current
-   answer is "getting closer, not yet." The P0 + P1 open items are
-   the gap to "yes."
+   answer is "getting closer, not yet." The next biggest gaps are resource-scoped
+   tool enforcement, live connector setup, and a real end-to-end agent happy path
+   with configured tools.
 
 ## Where to look for what
 
@@ -115,6 +124,9 @@ For deeper context on any of these, see `docs/PHASE3_SCOPE.md` v2.
 | Codegen architecture (file-tree path) | `docs/CODEGEN_FILETREE.md` |
 | Hosted-only features deferred to Taskloom Cloud | `CLOUD.md` |
 | Builder UI | `web/src/workbench/views/builder.tsx` |
+| Agent builder | `web/src/workbench/views/builder-agent.tsx` |
+| Agent editor/playbooks | `web/src/workbench/views/agent-editor.tsx` |
+| Run trace inspector | `web/src/workbench/views/run-deep.tsx` + `src/agent-run-trace.ts` |
 | Admin tabs | `web/src/workbench/views/admin.tsx` |
 | LLM file-tree author | `src/codegen/llm-author.ts` |
 | BYOK provider router | `src/providers/router.ts` + `src/providers/preset-resolver.ts` |
@@ -127,9 +139,9 @@ npm test
 npm run build:web
 ```
 
-Expected baseline: 1499 pass / 0 fail / 1 skipped (backend), 17 pass
-(web), build clean. Anything beyond those skips/fails is a regression
-your change introduced.
+Expected baseline: 751 pass / 0 fail / 0 skipped (backend), 25 pass
+(web), build clean. Anything beyond those fails is a regression your
+change introduced.
 
 ## Don't do these without asking
 

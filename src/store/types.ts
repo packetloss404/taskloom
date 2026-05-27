@@ -461,6 +461,7 @@ export interface GeneratedAppCheckpointRecord {
   buildStatus?: string;
   smokeStatus?: string;
   source: "initial" | "iteration" | "rollback" | "branch";
+  codegenSource?: "llm" | "template" | "llm-filetree";
   previousCheckpointId?: string;
   createdByUserId: string;
   createdAt: string;
@@ -482,6 +483,7 @@ export interface GeneratedAppRecord {
   previewUrl?: string;
   buildStatus?: string;
   smokeStatus?: string;
+  codegenSource?: "llm" | "template" | "llm-filetree";
   checkpoints?: GeneratedAppCheckpointRecord[];
   previewSnapshots?: Record<string, unknown>[];
   publishHistory?: GeneratedAppPublishRecord[];

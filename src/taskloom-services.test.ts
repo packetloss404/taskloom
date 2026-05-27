@@ -8,6 +8,7 @@ import {
   createWorkspaceEnvVar,
   deleteWorkspaceEnvVarById,
   getAgent,
+  getAgentRunDetail,
   getIntegrationReadiness,
   getPrivateBootstrap,
   getWorkspaceActivityDetail,
@@ -21,13 +22,56 @@ import {
   listWorkspaceEnvVarsForUser,
   login,
   register,
+  recordRunAsPlaybook,
   retryAgentRun,
   runAgent,
   updateAgent,
   updateWorkspace,
   updateWorkspaceEnvVar,
 } from "./taskloom-services";
+import type { RunAgentResult, RunAgentToolApprovalPayload } from "./taskloom-services";
+import { SESSION_COOKIE_NAME } from "./auth-utils";
 import { loadStore, resetStoreForTests, snapshotForWorkspace } from "./taskloom-store";
+import { registerDefaultTools } from "./tools/bootstrap";
+import { getDefaultToolRegistry, resetDefaultToolRegistryForTests } from "./tools/registry";
+
+type RunAgentRunResult = Extract<RunAgentResult, { run: unknown }>["run"];
+type RunAgentApprovalResult = Extract<RunAgentResult, { approval: unknown }>["approval"];
+
+function expectRun(result: RunAgentResult): RunAgentRunResult {
+  assert.ok("run" in result, `expected a run result, received ${JSON.stringify(result)}`);
+  return result.run;
+}
+
+function expectApproval(result: RunAgentResult): RunAgentApprovalResult {
+  assert.ok("approval" in result, `expected an approval result, received ${JSON.stringify(result)}`);
+  return result.approval;
+}
+
+function approveToolCapabilityRequest(approval: RunAgentApprovalResult): RunAgentToolApprovalPayload {
+  return {
+    decision: "launch",
+    token: approval.approvalToken,
+    approvedTools: approval.tools.map((tool) => tool.name),
+  };
+}
+
+function installOnlyTestToolRegistry(toolNames: string[]) {
+  const previousTools = getDefaultToolRegistry().list();
+  resetDefaultToolRegistryForTests();
+  getDefaultToolRegistry().registerMany(toolNames.map((name) => ({
+    name,
+    description: `${name} test tool`,
+    inputSchema: {},
+    side: "read" as const,
+    handle: async () => ({ ok: true, output: {} }),
+  })));
+
+  return () => {
+    resetDefaultToolRegistryForTests();
+    getDefaultToolRegistry().registerMany(previousTools);
+  };
+}
 
 test("register creates a new user and workspace", async () => {
   resetStoreForTests();
@@ -124,7 +168,30 @@ test("agent tool runtime settings persist on create and update", () => {
   assert.equal(updated.agent.routeKey, "agent.fast");
 });
 
-test("agent runs with enabled tools fail as setup-required instead of falling back to a stub", async () => {
+test("agent runs with enabled tools request launch approval before execution", async () => {
+  registerDefaultTools();
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Runtime Approval Check",
+    description: "Exercises approval behavior.",
+    instructions: "Use runtime tools only after launch approval.",
+    enabledTools: ["read_workflow_brief", "missing_runtime_tool"],
+    routeKey: "agent.reasoning",
+  });
+
+  const runsBefore = getAgent(auth.context, created.agent.id).runs.length;
+  const approval = expectApproval(await runAgent(auth.context, created.agent.id, { toolApproval: undefined }));
+  const approvalPayload = JSON.stringify(approval);
+
+  assert.equal(getAgent(auth.context, created.agent.id).runs.length, runsBefore);
+  assert.match(approvalPayload, /read_workflow_brief/);
+  assert.doesNotMatch(approvalPayload, /missing_runtime_tool/);
+});
+
+test("valid tool launch approval reaches setup-required execution blockers", async () => {
+  registerDefaultTools();
   resetStoreForTests();
   const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
 
@@ -132,18 +199,45 @@ test("agent runs with enabled tools fail as setup-required instead of falling ba
     name: "Runtime Setup Check",
     description: "Exercises setup-required execution behavior.",
     instructions: "Use runtime tools only when the provider and tools are actually available.",
-    enabledTools: ["missing_runtime_tool"],
+    enabledTools: ["read_workflow_brief", "missing_runtime_tool"],
     routeKey: "agent.reasoning",
   });
 
-  const result = await runAgent(auth.context, created.agent.id);
+  const approval = expectApproval(await runAgent(auth.context, created.agent.id, { toolApproval: undefined }));
+  const result = expectRun(await runAgent(auth.context, created.agent.id, {
+    toolApproval: approveToolCapabilityRequest(approval),
+  }));
 
-  assert.equal(result.run.status, "failed");
-  assert.match(result.run.title, /setup required/);
-  assert.match(result.run.error ?? "", /setup required/i);
-  assert.equal(result.run.output, undefined);
-  assert.ok(result.run.logs.some((entry) => /not registered|setup/i.test(entry.message)));
-  assert.equal((result.run.toolCalls ?? []).length, 0);
+  assert.equal(result.status, "failed");
+  assert.match(result.title, /setup required/);
+  assert.match(result.error ?? "", /setup required/i);
+  assert.equal(result.output, undefined);
+  assert.ok(result.logs.some((entry) => /not registered|setup/i.test(entry.message)));
+  assert.equal((result.toolCalls ?? []).length, 0);
+});
+
+test("canceling tool launch approval records a canceled run", async () => {
+  registerDefaultTools();
+  resetStoreForTests();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const created = createAgent(auth.context, {
+    name: "Runtime Cancel Check",
+    description: "Exercises canceled tool launch behavior.",
+    instructions: "Stop before executing runtime tools when the launch is canceled.",
+    enabledTools: ["read_workflow_brief"],
+    routeKey: "agent.reasoning",
+  });
+
+  const run = expectRun(await runAgent(auth.context, created.agent.id, {
+    toolApproval: { decision: "cancel" },
+  }));
+
+  assert.equal(run.status, "canceled");
+  assert.match(run.error ?? "", /canceled before execution/i);
+  assert.ok(run.logs.some((entry) => /canceled before execution/i.test(entry.message)));
+  assert.equal((run.toolCalls ?? []).length, 0);
+  assert.equal(getAgent(auth.context, created.agent.id).runs[0].id, run.id);
 });
 
 test("integration readiness summarizes generated plan tool and provider setup gaps", () => {
@@ -186,11 +280,57 @@ test("agent prompt generation returns a structured builder draft", async () => {
   assert.match(draft.agent.name ?? "", /Support|agent/i);
   assert.ok(draft.agent.instructions?.includes("User request"));
   assert.ok(draft.agent.enabledTools?.includes("list_blockers"));
-  assert.ok(draft.agent.playbook && draft.agent.playbook.length >= 3);
-  assert.ok(draft.agent.inputSchema?.some((field) => field.key === "mailbox"));
+  assert.deepEqual(draft.agent.playbook.map((step) => step.title), [
+    "Understand request",
+    "Collect context",
+    "Produce output",
+    "Report result",
+  ]);
+  assert.deepEqual(
+    draft.agent.inputSchema.map((field) => ({ key: field.key, type: field.type, required: field.required })),
+    [
+      { key: "mailbox", type: "string", required: true },
+      { key: "urgency_threshold", type: "enum", required: true },
+    ],
+  );
+  assert.deepEqual(draft.sampleInputs, { mailbox: "support", urgency_threshold: "medium" });
   assert.ok(draft.plan.steps.length >= 3);
+  assert.equal(draft.readiness.webhook.recommended, false);
+  assert.equal(draft.readiness.schedule.recommended, true);
+  assert.equal(draft.readiness.schedule.readyAfterSave, true);
+  assert.equal(draft.readiness.schedule.cron, "0 8 * * 1-5");
+  assert.match(draft.readiness.schedule.planDetail, /0 8 \* \* 1-5/);
   assert.equal(draft.readiness.provider.configured, true);
   assert.ok(draft.readiness.firstRun.blockers.length >= 0);
+});
+
+test("agent builder drafts surface missing tool setup as first-run blockers", async () => {
+  resetStoreForTests();
+  const restoreTools = installOnlyTestToolRegistry(["read_workflow_brief"]);
+
+  try {
+    const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+    const draft = await generateAgentBuilderDraftAsync(auth.context, {
+      prompt: "Send Slack notifications for GitHub pull requests and email owners when review is needed.",
+    });
+
+    assert.ok(draft.readiness.tools.recommended.includes("slack_post_webhook"));
+    assert.ok(draft.readiness.tools.recommended.includes("github_api"));
+    assert.ok(draft.readiness.tools.recommended.includes("email_send"));
+    assert.deepEqual(draft.readiness.tools.available, []);
+    assert.ok(draft.readiness.tools.missing.includes("slack_post_webhook"));
+    assert.ok(draft.readiness.tools.missing.includes("github_api"));
+    assert.ok(draft.readiness.tools.missing.includes("email_send"));
+    assert.deepEqual(draft.agent.enabledTools, []);
+    assert.equal(draft.readiness.provider.configured, true);
+    assert.equal(draft.readiness.firstRun.canRun, false);
+    assert.ok(draft.readiness.firstRun.blockers.some((blocker) =>
+      blocker.includes("slack_post_webhook") && blocker.includes("github_api")
+    ));
+    assert.match(draft.readiness.tools.message, /not registered yet/);
+  } finally {
+    restoreTools();
+  }
 });
 
 test("agent builder drafts carry phase 71 integration flows and env setup references", async () => {
@@ -252,6 +392,16 @@ test("agent prompt generation can create an approved agent", async () => {
   assert.equal(result.agent.status, "active");
   assert.equal(result.agent.triggerKind, "webhook");
   assert.equal(result.draft.readiness.webhook.recommended, true);
+  assert.equal(result.draft.readiness.webhook.tokenRequired, true);
+  assert.equal(result.draft.readiness.webhook.publicTriggerRoute, "/api/public/webhooks/agents/:token");
+  assert.deepEqual(result.draft.readiness.webhook.publishSteps, [
+    "Save the agent",
+    "Create or rotate the webhook token",
+    "Send a test payload",
+    "Rotate the token before sharing broadly",
+  ]);
+  assert.equal(result.draft.readiness.schedule.recommended, false);
+  assert.ok(result.draft.plan.steps.some((step) => step.title === "Prepare webhook publish readiness"));
 
   const detail = getAgent(auth.context, result.agent.id);
   assert.equal(detail.agent.id, result.agent.id);
@@ -288,6 +438,7 @@ test("agent builder preview respects first-run readiness blockers", async () => 
   const draft = await generateAgentBuilderDraftAsync(auth.context, {
     prompt: "Create a research assistant agent that reviews a source URL and reports the next action.",
   });
+  const runsBefore = listAgentRuns(auth.context).runs.length;
 
   const result = await approveAgentBuilderDraftAsync(auth.context, {
     draft: {
@@ -306,6 +457,8 @@ test("agent builder preview respects first-run readiness blockers", async () => 
 
   assert.equal(result.created, true);
   assert.equal(result.firstRun, undefined);
+  assert.equal(getAgent(auth.context, result.agent.id).runs.length, 0);
+  assert.equal(listAgentRuns(auth.context).runs.length, runsBefore);
 });
 
 test("buildAgentSampleInputs returns valid typed defaults for run previews", () => {
@@ -582,6 +735,145 @@ test("agent runs: list adds duration and capability flags; cancel and retry beha
   assert.equal(snapshotForWorkspace(store, "beta").retryCount, store.activationSignals.filter((entry) => entry.workspaceId === "beta" && entry.kind === "retry").length);
   assert.equal(retrySignals[0].origin, "user_entered");
   assert.equal(retrySignals[0].data?.origin, "user_action");
+});
+
+test("agent run retry rejects tool-enabled agents that need fresh approval", async () => {
+  resetStoreForTests();
+  registerDefaultTools();
+  const auth = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const agent = createAgent(auth.context, {
+    name: "Approval retry agent",
+    description: "Has a registered tool.",
+    instructions: "Use approved tools only.",
+    enabledTools: ["read_workflow_brief"],
+  }).agent;
+  const timestamp = new Date().toISOString();
+  loadStore().agentRuns.unshift({
+    id: "run_retry_tool_enabled",
+    workspaceId: auth.context.workspace.id,
+    agentId: agent.id,
+    title: "Approval retry failed",
+    status: "failed",
+    triggerKind: "manual",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    error: "Previous failure.",
+    logs: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  await assert.rejects(
+    () => retryAgentRun(auth.context, "run_retry_tool_enabled"),
+    /fresh launch approval/,
+  );
+});
+
+test("record-as-playbook requires admin route access and redacts tool input secrets", async () => {
+  resetStoreForTests();
+  const owner = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const agent = createAgent(owner.context, {
+    name: "Playbook Secret Check",
+    description: "Checks redaction.",
+    instructions: "Record safe playbooks.",
+  }).agent;
+  const timestamp = new Date().toISOString();
+  loadStore().agentRuns.unshift({
+    id: "run_secret_tool_input",
+    workspaceId: owner.context.workspace.id,
+    agentId: agent.id,
+    title: "Secret tool run",
+    status: "success",
+    triggerKind: "manual",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    logs: [],
+    toolCalls: [
+      {
+        id: "tool_secret_1",
+        toolName: "github_api",
+        input: {
+          endpoint: "/repos/acme/private",
+          token: "ghp_super_secret_token",
+          headers: { authorization: "Bearer hidden-secret" },
+        },
+        output: { ok: true },
+        durationMs: 12,
+        startedAt: timestamp,
+        completedAt: timestamp,
+        status: "ok",
+      },
+    ],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  const updated = recordRunAsPlaybook(owner.context, "run_secret_tool_input");
+  const instruction = updated.agent.playbook?.[0]?.instruction ?? "";
+  assert.match(instruction, /github_api/);
+  assert.doesNotMatch(instruction, /ghp_super_secret_token|hidden-secret/);
+  assert.match(instruction, /\[redacted\]|•/);
+
+  const data = loadStore();
+  const membership = data.memberships.find((entry) => entry.workspaceId === "alpha" && entry.userId === "user_alpha");
+  assert.ok(membership);
+  membership.role = "member";
+  const member = login({ email: "alpha@taskloom.local", password: "demo12345" });
+  const { app } = await import("./server");
+  const response = await app.request("/api/app/agent-runs/run_secret_tool_input/record-as-playbook", {
+    method: "POST",
+    headers: { Cookie: `${SESSION_COOKIE_NAME}=${member.cookieValue}` },
+  });
+  assert.equal(response.status, 403);
+  const body = await response.json() as { error: string };
+  assert.match(body.error, /admin/);
+});
+
+test("agent run detail is workspace scoped and returns derived trace spans", async () => {
+  resetStoreForTests();
+  const alpha = login({ email: "alpha@taskloom.local", password: "demo12345" });
+
+  const detail = getAgentRunDetail(alpha.context, "run_alpha_support_latest");
+  assert.equal(detail.run.id, "run_alpha_support_latest");
+  assert.equal(detail.agentName, "Support inbox triage");
+  assert.equal(detail.trace.runId, detail.run.id);
+  assert.equal(detail.trace.source, "legacy");
+  assert.equal(detail.trace.summary.stepCount, 4);
+  assert.equal(detail.trace.summary.logCount, 3);
+  assert.equal(detail.trace.summary.inputCount, 2);
+  assert.ok(detail.trace.spans.some((span) => span.kind === "run" && span.name === "Support inbox scanned"));
+  assert.ok(detail.trace.spans.some((span) => span.kind === "step" && span.name === "Read new inbox messages"));
+  assert.ok(detail.trace.spans.some((span) => span.kind === "output" && String(span.output).includes("Scanned 18 messages")));
+
+  assert.throws(
+    () => getAgentRunDetail(alpha.context, "missing-run"),
+    /agent run not found/,
+  );
+  assert.throws(
+    () => getAgentRunDetail(alpha.context, "run_beta_dependency_latest"),
+    /agent run not found/,
+  );
+
+  const { app } = await import("./server");
+  const routeResponse = await app.request("/api/app/agent-runs/run_alpha_support_latest/detail", {
+    headers: { Cookie: `${SESSION_COOKIE_NAME}=${alpha.cookieValue}` },
+  });
+  const routeBody = await routeResponse.json() as {
+    run: { id: string };
+    trace: { spans: Array<{ kind: string; name: string }>; summary: { spans: number } };
+  };
+  assert.equal(routeResponse.status, 200);
+  assert.equal(routeBody.run.id, "run_alpha_support_latest");
+  assert.equal((routeBody as { agentName?: string }).agentName, "Support inbox triage");
+  assert.ok(routeBody.trace.summary.spans > 0);
+  assert.ok(routeBody.trace.spans.some((span) => span.kind === "log"));
+
+  const scopedResponse = await app.request("/api/app/agent-runs/run_beta_dependency_latest/detail", {
+    headers: { Cookie: `${SESSION_COOKIE_NAME}=${alpha.cookieValue}` },
+  });
+  const scopedBody = await scopedResponse.json() as { error: string };
+  assert.equal(scopedResponse.status, 404);
+  assert.equal(scopedBody.error, "agent run not found");
 });
 
 test("release history exposes preflight and prior confirmations", async () => {

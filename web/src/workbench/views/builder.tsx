@@ -47,9 +47,60 @@ export {
   publishReadinessHeading,
 } from "./builder/helpers";
 
+export const BUILDER_STARTER_PROMPTS: Array<{ kind: BuilderKind; label: string; prompt: string }> = [
+  {
+    kind: "app",
+    label: "Lightweight CRM",
+    prompt: "Build a lightweight CRM for account managers to track companies, contacts, opportunities, and renewal risk.",
+  },
+  {
+    kind: "app",
+    label: "Customer portal",
+    prompt: "Build a customer portal where customers can manage profile details, open requests, and upload documents.",
+  },
+  {
+    kind: "agent",
+    label: "Standup digest agent",
+    prompt: "Build an agent that posts a daily standup digest summarising the team's overnight progress and today's plan.",
+  },
+  {
+    kind: "agent",
+    label: "Support triage agent",
+    prompt: "Create a webhook agent to triage customer incidents, open blockers for critical risks, and post a summary to Slack.",
+  },
+];
+
+export function shouldRouteToAgentBuilder(prompt: string): boolean {
+  const text = prompt.toLowerCase().replace(/[\u2019']/g, "'").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+
+  const appSurfaceRequest = /\b(?:build|create|make|design|draft|configure|generate|set up|setup)\s+(?:me\s+)?(?:a|an|the)?\s*(?:[a-z0-9-]+\s+){0,3}(?:app|application|portal|dashboard|crm|website|site|tool|system)\b/;
+  if (appSurfaceRequest.test(text)) return false;
+
+  const appSurfaceAfterAgent = /\b(?:agent|assistant|bot|chatbot)\s+(?:app|application|portal|dashboard|crm|website|site|tool|system)\b/;
+  if (appSurfaceAfterAgent.test(text)) return false;
+
+  return [
+    /\b(?:build|create|make|design|draft|configure|generate|set up|setup)\s+(?:me\s+)?(?:a|an|the)?\s*(?:ai\s+)?(?:[a-z0-9-]+\s+){0,3}(?:agent|assistant|bot|chatbot)\b/,
+    /\b(?:need|want|looking for|would like)\s+(?:me\s+)?(?:a|an|the|my|our)?\s*(?:ai\s+)?(?:[a-z0-9-]+\s+){0,4}(?:agent|assistant|bot|chatbot)\b/,
+    /\b(?:a|an|the|my|our)\s+(?:ai\s+)?(?:[a-z0-9-]+\s+){0,3}(?:agent|assistant|bot|chatbot)\s+(?:that|to|which)\b/,
+    /\bwebhook\s+(?:agent|assistant|bot)\b/,
+  ].some((pattern) => pattern.test(text));
+}
+
+export function resolveBuilderStartKind(prompt: string): BuilderKind {
+  return shouldRouteToAgentBuilder(prompt) ? "agent" : "app";
+}
+
+export function builderPrimaryActionCopy(prompt: string, working: boolean): string {
+  if (working) return "Generating";
+  return shouldRouteToAgentBuilder(prompt) ? "Open agent builder" : "Build";
+}
+
 export function BuilderView() {
   const [mode, setMode] = useState<Mode>("empty");
   const [builderKind, setBuilderKind] = useState<BuilderKind>("app");
+  const [agentAutoGenerate, setAgentAutoGenerate] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [iterPrompt, setIterPrompt] = useState("");
   const [iterTargetId, setIterTargetId] = useState<string>("app:draft");
@@ -60,7 +111,7 @@ export function BuilderView() {
   const [publishState, setPublishState] = useState<AppBuilderPublishState | null>(null);
 
   const [state, setState] = useState<BuilderState>({
-    draft: null, appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null, sourceFiles: [], workspace: null,
+    draft: null, draftSource: null, generatedFiles: [], appId: null, checkpointId: null, previewUrl: null, smoke: null, iteration: null, sourceFiles: [], workspace: null,
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composerPreset, setComposerPreset] = useState<BuilderModelPresetId>("smart");
@@ -118,6 +169,46 @@ export function BuilderView() {
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
   const pushSystemStatus = (text: string, tone: "info" | "warn" | "error" | "ok" = "info") =>
     appendMessage({ id: newId(), role: "system", body: { kind: "status", text, tone } });
+
+  const openAgentBuilder = (nextPrompt: string, autoGenerate = false) => {
+    const seededPrompt = nextPrompt.trim();
+    if (!seededPrompt || working) return;
+    lastPromptRef.current = null;
+    setBuilderKind("agent");
+    setPrompt(nextPrompt);
+    setError(null);
+    setMessages([]);
+    setCheckpoints([]);
+    setPublishState(null);
+    setSelectedElement(null);
+    setState({
+      draft: null,
+      draftSource: null,
+      generatedFiles: [],
+      appId: null,
+      checkpointId: null,
+      previewUrl: null,
+      smoke: null,
+      iteration: null,
+      sourceFiles: [],
+      workspace: null,
+    });
+    setAgentAutoGenerate(autoGenerate);
+    setMode("agent");
+  };
+
+  const submitInitialPrompt = () => {
+    const nextPrompt = prompt.trim();
+    if (!nextPrompt || working) return;
+    const nextKind = resolveBuilderStartKind(nextPrompt);
+    setBuilderKind(nextKind);
+    if (nextKind === "agent") {
+      openAgentBuilder(nextPrompt, true);
+      return;
+    }
+    void generate();
+  };
+
   /**
    * Stamp the most recent plan/diff message that does not yet carry a checkpointId.
    * Called after `approve` / `applyIteration` succeeds so the matching chat entry
@@ -177,12 +268,14 @@ export function BuilderView() {
           setPrompt(event.draft.prompt || nextPrompt);
           setState({
             draft: event.draft,
+            draftSource: event.source ?? null,
+            generatedFiles: event.files ?? [],
             appId: null,
             checkpointId: null,
             previewUrl: null,
             smoke: null,
             iteration: null,
-            sourceFiles: [],
+            sourceFiles: event.sourceFiles ?? [],
             workspace: null,
           });
           setCheckpoints([]);
@@ -227,9 +320,21 @@ export function BuilderView() {
     setError(null);
     setMode("applying");
     try {
-      const result: AppBuilderApproveResult = await api.approveAppBuilderDraft({ prompt: state.draft.prompt, draft: state.draft, runBuild: true, runSmoke: true, targetStatus: "built" });
+      const currentGeneratedFiles = state.generatedFiles;
+      const currentDraftSource = state.draftSource;
+      const result: AppBuilderApproveResult = await api.approveAppBuilderDraft({
+        prompt: state.draft.prompt,
+        draft: state.draft,
+        source: currentDraftSource ?? undefined,
+        files: currentGeneratedFiles.length > 0 ? currentGeneratedFiles : undefined,
+        runBuild: true,
+        runSmoke: true,
+        targetStatus: "built",
+      });
       setState({
         draft: result.draft,
+        draftSource: result.draftSource ?? currentDraftSource,
+        generatedFiles: result.fileTree ?? currentGeneratedFiles,
         appId: result.app?.id ?? null,
         checkpointId: result.checkpoint?.id ?? null,
         previewUrl: result.previewUrl ?? result.app?.previewUrl ?? null,
@@ -288,6 +393,8 @@ export function BuilderView() {
         appId: state.appId ?? undefined,
         checkpointId: state.checkpointId ?? undefined,
         draft: state.draft,
+        draftSource: state.draftSource ?? undefined,
+        fileTree: state.generatedFiles.length > 0 ? state.generatedFiles : undefined,
         target,
         prompt: composedPrompt,
         preset: effectivePreset,
@@ -350,6 +457,8 @@ export function BuilderView() {
       setState((prev) => ({
         ...prev,
         draft: result.diff?.draft ?? prev.draft,
+        draftSource: result.diff?.draftSource ?? result.draftSource ?? prev.draftSource,
+        generatedFiles: result.diff?.fileTree ?? result.fileTree ?? prev.generatedFiles,
         appId: result.app?.id ?? prev.appId,
         checkpointId: result.checkpoint?.id ?? prev.checkpointId,
         previewUrl: result.preview?.previewUrl ?? result.previewUrl ?? result.app?.previewUrl ?? prev.previewUrl,
@@ -385,7 +494,9 @@ export function BuilderView() {
         previewUrl: result.preview?.url ?? result.app?.previewUrl ?? prev.previewUrl,
         smoke: result.smoke ?? prev.smoke,
         iteration: null,
-        sourceFiles: prev.sourceFiles,
+        generatedFiles: result.fileTree ?? prev.generatedFiles,
+        draftSource: result.draftSource ?? prev.draftSource,
+        sourceFiles: result.sourceFiles ?? result.artifact?.files ?? prev.sourceFiles,
         workspace: prev.workspace,
       }));
       setSelectedElement(null);
@@ -418,6 +529,8 @@ export function BuilderView() {
       const result = await api.branchBuilderCheckpoint(checkpointId, { appId: state.appId });
       setState({
         draft: result.draft,
+        draftSource: null,
+        generatedFiles: [],
         appId: result.app.id,
         checkpointId: result.checkpoint.id,
         previewUrl: result.app.previewUrl ?? null,
@@ -521,7 +634,7 @@ export function BuilderView() {
               ‹
             </a>
           )}
-          <span className="text-silver-50">{state.draft?.app.name ?? "New build"}</span>
+          <span className="text-silver-50">{state.draft?.app.name ?? (builderKind === "agent" && mode === "agent" ? "New agent" : "New build")}</span>
         </div>
         <span className="text-silver-400">⋯</span>
       </header>
@@ -536,7 +649,11 @@ export function BuilderView() {
               placeholder="Describe what you want to build..."
               className="w-full resize-none bg-transparent px-5 pt-5 pb-2 text-[16px] leading-relaxed placeholder:text-silver-500 focus:outline-none min-h-[112px]"
               value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => {
+                const nextPrompt = event.target.value;
+                setPrompt(nextPrompt);
+                setBuilderKind(resolveBuilderStartKind(nextPrompt));
+              }}
             />
             <div className="flex items-center justify-between px-3 pb-3">
               {/* TODO Phase 2: kind + preset popover */}
@@ -549,53 +666,32 @@ export function BuilderView() {
               >
                 ⚙
               </button>
-              <button className="btn-primary btn" disabled={!prompt.trim() || working} onClick={() => { void generate(); }}>
-                {working ? <><span className="spin"><I.refresh size={13}/></span> Generating</> : <><I.arrowUp size={13}/> Build</>}
+              <button className="btn-primary btn" disabled={!prompt.trim() || working} onClick={submitInitialPrompt}>
+                {working
+                  ? <><span className="spin"><I.refresh size={13}/></span> {builderPrimaryActionCopy(prompt, working)}</>
+                  : <>{resolveBuilderStartKind(prompt) === "agent" ? <I.bot size={13}/> : <I.arrowUp size={13}/>} {builderPrimaryActionCopy(prompt, working)}</>}
               </button>
             </div>
           </div>
 
           <div data-tour="chips" className="mt-4 grid grid-cols-2 gap-2 max-w-[720px] mx-auto w-full">
-            <button
-              type="button"
-              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
-              onClick={() => {
-                setBuilderKind("app");
-                setPrompt("Build a lightweight CRM for account managers to track companies, contacts, opportunities, and renewal risk.");
-              }}
-            >
-              Lightweight CRM
-            </button>
-            <button
-              type="button"
-              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
-              onClick={() => {
-                setBuilderKind("app");
-                setPrompt("Build a customer portal where customers can manage profile details, open requests, and upload documents.");
-              }}
-            >
-              Customer portal
-            </button>
-            <button
-              type="button"
-              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
-              onClick={() => {
-                setBuilderKind("agent");
-                setPrompt("Build an agent that posts a daily standup digest summarising the team's overnight progress and today's plan.");
-              }}
-            >
-              Standup digest agent
-            </button>
-            <button
-              type="button"
-              className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
-              onClick={() => {
-                setBuilderKind("agent");
-                setPrompt("Create a webhook agent to triage customer incidents, open blockers for critical risks, and post a summary to Slack.");
-              }}
-            >
-              Support triage agent
-            </button>
+            {BUILDER_STARTER_PROMPTS.map((starter) => (
+              <button
+                key={starter.label}
+                type="button"
+                className="rounded-xl border border-line bg-panel/40 px-4 py-3 text-left text-sm hover:border-green-deep/40 hover:bg-panel transition"
+                onClick={() => {
+                  if (starter.kind === "agent") {
+                    openAgentBuilder(starter.prompt);
+                  } else {
+                    setBuilderKind("app");
+                    setPrompt(starter.prompt);
+                  }
+                }}
+              >
+                {starter.label}
+              </button>
+            ))}
           </div>
 
           <div className="mt-3 max-w-[720px] mx-auto w-full flex justify-center">
@@ -621,7 +717,7 @@ export function BuilderView() {
       )}
 
       {builderKind === "agent" && mode !== "empty" && (
-        <AgentBuilderPanel initialPrompt={prompt} embedded />
+        <AgentBuilderPanel initialPrompt={prompt} embedded autoGenerate={agentAutoGenerate} />
       )}
 
       {(mode === "drafted" || mode === "applying" || mode === "applied" || mode === "iterating") && draft && (

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ToolRegistry } from "../registry.js";
 import { executeTool } from "../executor.js";
+import { listDefaultToolSummaries } from "../bootstrap.js";
 import type { ToolDefinition } from "../types.js";
 
 const echoTool: ToolDefinition = {
@@ -67,6 +68,20 @@ test("filter returns only known names in order", () => {
   assert.equal(tools.length, 2);
   assert.equal(tools[0].name, "echo");
   assert.equal(tools[1].name, "slow");
+});
+
+test("default tool summaries include the Track D agent catalog", () => {
+  const names = new Set(listDefaultToolSummaries().map((tool) => tool.name));
+  for (const name of [
+    "http_fetch",
+    "slack_post_webhook",
+    "github_api",
+    "email_send",
+    "sql_query",
+    "shell_for_agent",
+  ]) {
+    assert.equal(names.has(name), true, `${name} should be registered in the default catalog`);
+  }
 });
 
 test("executeTool returns ok status with output", async () => {

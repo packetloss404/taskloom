@@ -6,6 +6,7 @@ import {
   type ModelPreset,
 } from "./providers/preset-resolver.js";
 import {
+  authorAndValidateAppViaLLM,
   authorAppViaLLM,
   type AuthorAppOptions,
   type AuthorAppResult,
@@ -14,7 +15,6 @@ import {
 } from "./codegen/llm-author.js";
 import {
   validateFileTree,
-  type ValidateOptions,
   type ValidationResult,
 } from "./codegen/validate.js";
 
@@ -1118,11 +1118,11 @@ function normalizeLLMFile(entry: Record<string, unknown>): AppIterationLLMResult
 // =============================================================================
 //
 // Mirror of `applyAppIterationViaLLM` for the file-tree codegen path. When the
-// `TASKLOOM_FILETREE_CODEGEN=1` flag is on AND the draft being iterated on was
-// generated via the file-tree path, the HTTP route should prefer this entry
-// point. The orchestrator is asked to re-emit the FULL new tree; we then diff
-// the old and new trees to produce `AppIterationLLMResult`-shaped entries
-// suitable for the existing UI/storage layer.
+// draft being iterated on was generated via the file-tree path, the HTTP route
+// should prefer this entry point. The orchestrator is asked to re-emit the FULL
+// new tree; we then diff the old and new trees to produce
+// `AppIterationLLMResult`-shaped entries suitable for the existing UI/storage
+// layer.
 // =============================================================================
 
 /** Default budget for inlining file contents in the iteration prompt. */
@@ -1166,7 +1166,7 @@ export interface AppIterationFileTreeResult {
 /**
  * Returns true when the HTTP route layer should use the file-tree iteration
  * path. The three required conditions are:
- *   1. The opt-in flag is on.
+ *   1. The file-tree path has not been disabled by the legacy escape hatch.
  *   2. The draft being iterated was generated via the file-tree path (so the
  *      caller has the canonical file tree, not just a derived `AppDraft`).
  *   3. The caller actually passes a non-empty `files` array alongside the
@@ -1345,9 +1345,13 @@ export async function applyAppIterationViaFileTree(
   if (options.signal) authorOptions.signal = options.signal;
   if (options.router) authorOptions.router = options.router;
 
-  let result: AuthorAppResult | null;
+  let result: (AuthorAppResult & { validation: ValidationResult; repairAttempts: number }) | null;
   try {
-    result = await author(userGoal, authorOptions, emitFn);
+    result = await authorAndValidateAppViaLLM(userGoal, {
+      ...authorOptions,
+      authorFn: author,
+      validateFn: validate,
+    }, emitFn);
   } catch (error) {
     console.warn(`[app-iteration-filetree] orchestrator threw: ${(error as Error).message}`);
     return null;
@@ -1356,29 +1360,7 @@ export async function applyAppIterationViaFileTree(
     return null;
   }
 
-  const validateOptions: ValidateOptions = {};
-  if (options.signal) validateOptions.signal = options.signal;
-  let validation: ValidationResult;
-  try {
-    validation = await validate(result.files, validateOptions);
-  } catch (error) {
-    console.warn(`[app-iteration-filetree] validator threw: ${(error as Error).message}`);
-    // Validator failure should not block iteration; treat as no errors and
-    // surface the error message in validationErrors so the UI can display it.
-    validation = {
-      ok: false,
-      source: "real",
-      errors: [{
-        file: "<validator>",
-        message: (error as Error).message,
-        severity: "error",
-        phase: "typecheck",
-      }],
-      warnings: [],
-      durationMs: 0,
-      phases: { typecheck: "failed", build: "skipped" },
-    };
-  }
+  const validation = result.validation;
 
   const diffEntries = diffFileTrees(currentFiles, result.files);
 

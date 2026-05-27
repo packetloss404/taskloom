@@ -13,7 +13,11 @@ import {
   APP_BUILDER_TOOL_NAME,
 } from "../app-builder-llm-prompts.js";
 import type { ModelRoutingPresetId } from "../model-routing-presets.js";
-import type { GeneratedFile } from "../codegen/llm-author.js";
+import type {
+  AuthorAndValidateAppOptions,
+  AuthorAndValidateAppResult,
+  GeneratedFile,
+} from "../codegen/llm-author.js";
 import type {
   ApiRouteStub,
   AppDraft,
@@ -54,6 +58,12 @@ export interface AppDraftLLMOptions {
   clientFactory?: AnthropicClientFactory;
   /** Force the API key (test-only when paired with `clientFactory`). */
   apiKey?: string;
+  /** Test-only override for the file-tree author/validate loop. */
+  fileTreeAuthorFn?: (
+    prompt: string,
+    options: AuthorAndValidateAppOptions,
+    emit: AppDraftEmit,
+  ) => Promise<AuthorAndValidateAppResult | null>;
 }
 
 export type AppDraftEmit = (text: string) => void | Promise<void>;

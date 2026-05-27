@@ -331,11 +331,13 @@ function createTestApp(modules: RuntimeModules) {
   });
   app.post("/api/app/agents/:agentId/runs", async (c) => {
     try {
-      const body = await readJsonBody(c) as { triggerKind?: string; inputs?: Record<string, unknown> };
-      return c.json(await modules.services.runAgent(modules.rbacModule.requirePrivateWorkspaceRole(c, "member"), c.req.param("agentId"), {
+      const body = await readJsonBody(c) as { triggerKind?: string; inputs?: Record<string, unknown>; toolApproval?: unknown };
+      const result = await modules.services.runAgent(modules.rbacModule.requirePrivateWorkspaceRole(c, "member"), c.req.param("agentId"), {
         triggerKind: body.triggerKind,
         inputs: body.inputs ?? {},
-      }), 201);
+        toolApproval: body.toolApproval as never,
+      });
+      return c.json(result, "approval" in result ? 200 : 201);
     } catch (error) {
       return errorResponse(c, error);
     }

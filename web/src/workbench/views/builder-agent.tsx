@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { AgentBuilderApproveResult, AgentBuilderDraft, AgentInputField, AgentRecord, AgentRunRecord } from "@/lib/types";
@@ -26,10 +26,11 @@ type BuilderMode = "empty" | "drafting" | "drafted" | "saving" | "saved";
 export interface AgentBuilderPanelProps {
   initialPrompt?: string;
   embedded?: boolean;
+  autoGenerate?: boolean;
   onAgentSaved?: (agent: AgentRecord, result: AgentBuilderApproveResult) => void;
 }
 
-export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgentSaved }: AgentBuilderPanelProps) {
+export function AgentBuilderPanel({ initialPrompt = "", embedded = false, autoGenerate = false, onAgentSaved }: AgentBuilderPanelProps) {
   const navigate = useNavigate();
   const [mode, setMode] = useState<BuilderMode>("empty");
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -39,6 +40,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
   const [savedAgent, setSavedAgent] = useState<AgentRecord | null>(null);
   const [firstRun, setFirstRun] = useState<AgentRunRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const autoGenerateStarted = useRef(false);
 
   const working = mode === "drafting" || mode === "saving";
   const schemaByKey = useMemo(() => {
@@ -71,6 +73,12 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
       setMode(draft ? "drafted" : "empty");
     }
   };
+
+  useEffect(() => {
+    if (!autoGenerate || autoGenerateStarted.current || !prompt.trim() || working || draft || savedAgent) return;
+    autoGenerateStarted.current = true;
+    void generateDraft();
+  }, [autoGenerate, prompt, working, draft, savedAgent]);
 
   const approveDraft = async () => {
     if (!draft || working) return;
@@ -122,7 +130,7 @@ export function AgentBuilderPanel({ initialPrompt = "", embedded = false, onAgen
         </div>
       )}
 
-      <div style={{ padding: embedded ? "14px 18px 16px" : "22px 28px", borderTop: embedded ? "1px solid var(--line)" : undefined, display: "grid", gridTemplateColumns: draft ? "minmax(340px, 440px) minmax(0, 1fr)" : "minmax(0, 760px)", gap: 18, alignItems: "start", justifyContent: draft ? "stretch" : "center" }}>
+      <div style={{ padding: embedded ? "14px 18px 16px" : "22px 28px", borderTop: embedded ? "1px solid var(--line)" : undefined, display: "grid", gridTemplateColumns: draft ? "repeat(auto-fit, minmax(min(100%, 340px), 1fr))" : "minmax(0, 760px)", gap: 18, alignItems: "start", justifyContent: draft ? "stretch" : "center" }}>
         <section className="card" style={{ padding: 14 }}>
           <div className="kicker" style={{ marginBottom: 8 }}>Prompt</div>
           <textarea
@@ -204,7 +212,7 @@ function DraftSummary({ draft, savedAgent }: { draft: AgentBuilderDraft; savedAg
 
 function ReadinessGrid({ draft }: { draft: AgentBuilderDraft }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: 10 }}>
       <ReadinessCard
         icon={<I.key size={14}/>}
         label="Provider"
@@ -270,7 +278,7 @@ function DraftPlan({ draft }: { draft: AgentBuilderDraft }) {
         ))}
       </div>
       {(draft.plan.acceptanceChecks.length > 0 || draft.plan.openQuestions.length > 0) && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 12, marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
           <ListBlock label="Acceptance" items={draft.plan.acceptanceChecks}/>
           <ListBlock label="Open questions" items={draft.plan.openQuestions}/>
         </div>
@@ -284,7 +292,7 @@ function AgentConfiguration({ draft }: { draft: AgentBuilderDraft }) {
   return (
     <div className="card" style={{ padding: 16 }}>
       <div className="kicker" style={{ marginBottom: 10 }}>Agent configuration</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 12 }}>
         <ConfigLine label="Description" value={draft.agent.description || "No description generated."}/>
         <ConfigLine label="Trigger" value={draft.agent.triggerKind ?? "manual"}/>
         <ConfigLine label="Schedule" value={draft.agent.schedule ?? "manual runs only"}/>
@@ -332,7 +340,7 @@ function SampleInputs({ draft, sampleInputs, issues, onUpdate }: { draft: AgentB
       {schema.length === 0 && looseKeys.length === 0 ? (
         <div className="mono muted" style={{ fontSize: 11, padding: "8px 10px", border: "1px dashed var(--line-2)", borderRadius: 6 }}>No run inputs needed for this draft.</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
           {schema.map((field) => (
             <SampleInputControl key={field.key} field={field} value={sampleInputs[field.key]} issue={issuesByKey.get(field.key)} onUpdate={onUpdate}/>
           ))}
@@ -442,7 +450,7 @@ function FirstRunPanel({ run, agent }: { run: AgentRunRecord | null; agent: Agen
         <div className="kicker">First run</div>
         <span className={`pill ${runStatusTone(run)}`} style={{ marginLeft: "auto" }}><span className="dot"></span>{run.status}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 12 }}>
         <div>
           <div className="label">Run</div>
           <div className="mono" style={{ fontSize: 11, color: "var(--silver-200)" }}>{run.title || run.id}</div>

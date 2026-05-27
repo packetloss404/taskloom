@@ -1,6 +1,7 @@
 import {
   findAgentForWorkspaceIndexed,
   findAgentRunForWorkspaceIndexed,
+  findAgentRunForWorkspaceIndexedAsync,
   deleteWorkspaceEnvVar,
   findAgent,
   findProvider,
@@ -38,6 +39,11 @@ import {
   upsertProvider,
   upsertWorkspaceEnvVar,
 } from "../taskloom-store";
+import {
+  deriveAgentRunTraceSpans as deriveStoredAgentRunTraceSpans,
+  type AgentRunTraceSpan as StoredAgentRunTraceSpan,
+  type AgentRunTraceSpanType as StoredAgentRunTraceSpanType,
+} from "../agent-run-trace.js";
 import { AGENT_TEMPLATES, findAgentTemplate } from "../agent-templates.js";
 import { DEFAULT_PROVIDER_NAMES } from "../providers/bootstrap.js";
 import { getDefaultRouter } from "../providers/router.js";
@@ -45,6 +51,8 @@ import type { ProviderName } from "../providers/types.js";
 import { listDefaultToolSummaries } from "../tools/bootstrap.js";
 import { buildWebhookTriggerReadiness, type WebhookTriggerReadiness } from "../webhook-readiness.js";
 import { getDefaultToolRegistry } from "../tools/registry.js";
+import type { ToolCapabilityApprovalInput, ToolCapabilityApprovalRequest } from "../tools/approval.js";
+import type { ToolDefinition } from "../tools/types.js";
 import { maintainScheduledAgentJobs } from "../jobs/store.js";
 import { detectPhase71Integrations, type Phase71IntegrationMetadata } from "../app-builder-service.js";
 import { isSensitiveKey, maskSecret as maskBearerSecret, redactSensitiveString, redactSensitiveValue } from "../security/redaction.js";
@@ -121,6 +129,14 @@ interface AgentBuilderWebhookTriggerReadiness extends WebhookTriggerReadiness {
   publishSteps: string[];
 }
 
+interface AgentBuilderScheduleTriggerReadiness {
+  recommended: boolean;
+  readyAfterSave: boolean;
+  cron?: string;
+  message: string;
+  planDetail: string;
+}
+
 interface AgentBuilderDraftPlan {
   title: string;
   steps: Array<{ title: string; detail: string }>;
@@ -165,6 +181,7 @@ export interface AgentBuilderDraft {
       message: string;
     };
     webhook: AgentBuilderWebhookTriggerReadiness;
+    schedule: AgentBuilderScheduleTriggerReadiness;
     firstRun: {
       canRun: boolean;
       blockers: string[];
@@ -188,6 +205,61 @@ export interface AgentBuilderApproveResult {
   firstRun?: ReturnType<typeof decorateRun>;
   sampleInputs?: Record<string, string | number | boolean>;
 }
+
+export type AgentRunTraceSpanKind = "run" | "input" | "step" | "tool" | "log" | "output" | "error" | string;
+export type AgentRunTraceSpanStatus = StoredAgentRunTraceSpan["status"] | "unknown" | string;
+
+export interface AgentRunTraceSpan {
+  id: string;
+  parentId?: string | null;
+  name: string;
+  kind?: AgentRunTraceSpanKind;
+  status?: AgentRunTraceSpanStatus;
+  startedAt?: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  model?: string;
+  toolName?: string;
+  costUsd?: number | null;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  attributes?: Record<string, unknown>;
+  events?: Array<{
+    at?: string;
+    name: string;
+    level?: AgentRunLogEntry["level"] | "debug" | string;
+    message?: string;
+    attributes?: Record<string, unknown>;
+  }>;
+}
+
+export interface AgentRunTraceDetail {
+  id: string;
+  runId: string;
+  source: "legacy";
+  generatedAt: string;
+  summary: {
+    spans: number;
+    spanCount: number;
+    modelCalls: number;
+    toolCalls: number;
+    stepCount: number;
+    logCount: number;
+    inputCount: number;
+    errorCount: number;
+    warningCount: number;
+    costUsd: number | null;
+    durationMs: number | null;
+  };
+  spans: AgentRunTraceSpan[];
+}
+
+export type AgentRunDetail = {
+  run: ReturnType<typeof decorateRun>;
+  trace: AgentRunTraceDetail;
+  agentName?: string;
+};
 
 export function listAgents(context: AuthenticatedContext) {
   const providersById = new Map(listProvidersForWorkspaceIndexed(context.workspace.id).map((provider) => [provider.id, provider]));
@@ -530,11 +602,34 @@ export async function archiveAgentAsync(context: AuthenticatedContext, agentId: 
   return result;
 }
 
+export interface RunAgentInput {
+  triggerKind?: string;
+  inputs?: Record<string, unknown>;
+  toolApproval?: RunAgentToolApprovalPayload | null;
+}
+
+export type RunAgentToolApprovalPayload = Partial<ToolCapabilityApprovalInput> & {
+  approvalToken?: string;
+  tools?: unknown;
+};
+
+export type RunAgentResult = { run: ReturnType<typeof decorateRun> } | { approval: ToolCapabilityApprovalRequest };
+
 export async function runAgent(
   context: AuthenticatedContext,
   agentId: string,
-  input: { triggerKind?: string; inputs?: Record<string, unknown> } = {},
-) {
+  input?: Omit<RunAgentInput, "toolApproval">,
+): Promise<{ run: ReturnType<typeof decorateRun> }>;
+export async function runAgent(
+  context: AuthenticatedContext,
+  agentId: string,
+  input: RunAgentInput,
+): Promise<RunAgentResult>;
+export async function runAgent(
+  context: AuthenticatedContext,
+  agentId: string,
+  input: RunAgentInput = {},
+): Promise<RunAgentResult> {
   const timestamp = now();
   const requestedTriggerRaw = stringOrUndefined(input?.triggerKind);
   const triggerKind: AgentTriggerKind = requestedTriggerRaw && (TRIGGER_KINDS as string[]).includes(requestedTriggerRaw)
@@ -552,6 +647,32 @@ export async function runAgent(
   const useToolLoop = enabledTools.length > 0;
 
   if (useToolLoop) {
+    if (getToolApprovalDecision(input.toolApproval) === "cancel") {
+      const { run } = await recordCanceledAgentExecutionRun({
+        context,
+        agent,
+        inputs,
+        triggerKind,
+        timestamp,
+      });
+      return { run: decorateRun(run) };
+    }
+
+    const registeredEnabledTools = resolveRegisteredToolDefinitions(enabledTools);
+    if (registeredEnabledTools.length > 0) {
+      const approvalInput = buildToolCapabilityApprovalContext({
+        context,
+        agent,
+        inputs,
+        triggerKind,
+        tools: registeredEnabledTools,
+      });
+      const hasLaunchApproval = await hasValidToolLaunchApproval(input.toolApproval, approvalInput);
+      if (!hasLaunchApproval) {
+        return { approval: await buildAgentToolCapabilityApprovalRequest(approvalInput) };
+      }
+    }
+
     const { run } = await runAgentWithToolLoop({
       context,
       agent,
@@ -617,6 +738,128 @@ export async function runAgent(
 
     return { run: decorateRun(run) };
   });
+}
+
+type AgentToolCapabilityApprovalContext = {
+  workspaceId: string;
+  workspaceName: string;
+  userId: string;
+  agentId: string;
+  agentName: string;
+  triggerKind: AgentTriggerKind;
+  inputs: Record<string, string | number | boolean>;
+  tools: Array<Pick<ToolDefinition, "name" | "description" | "side" | "inputSchema">>;
+};
+
+function resolveRegisteredToolDefinitions(toolNames: string[]): ToolDefinition[] {
+  const registry = getDefaultToolRegistry();
+  const seen = new Set<string>();
+  const tools: ToolDefinition[] = [];
+  for (const toolName of toolNames) {
+    if (seen.has(toolName)) continue;
+    seen.add(toolName);
+    const definition = registry.get(toolName);
+    if (definition) tools.push(definition);
+  }
+  return tools;
+}
+
+function buildToolCapabilityApprovalContext(input: {
+  context: AuthenticatedContext;
+  agent: AgentRecord;
+  inputs: Record<string, string | number | boolean>;
+  triggerKind: AgentTriggerKind;
+  tools: ToolDefinition[];
+}): AgentToolCapabilityApprovalContext {
+  return {
+    workspaceId: input.context.workspace.id,
+    workspaceName: input.context.workspace.name,
+    userId: input.context.user.id,
+    agentId: input.agent.id,
+    agentName: input.agent.name,
+    triggerKind: input.triggerKind,
+    inputs: input.inputs,
+    tools: input.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      side: tool.side,
+      inputSchema: tool.inputSchema,
+    })),
+  };
+}
+
+async function buildAgentToolCapabilityApprovalRequest(
+  input: AgentToolCapabilityApprovalContext,
+): Promise<ToolCapabilityApprovalRequest> {
+  const { buildToolCapabilityApprovalRequest } = await import("../tools/approval.js");
+  return Promise.resolve(buildToolCapabilityApprovalRequest({
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    agentId: input.agentId,
+    triggerKind: input.triggerKind,
+    tools: input.tools,
+    inputs: input.inputs,
+  }));
+}
+
+async function hasValidToolLaunchApproval(
+  toolApproval: RunAgentToolApprovalPayload | null | undefined,
+  approvalInput: AgentToolCapabilityApprovalContext,
+): Promise<boolean> {
+  if (!toolApproval || getToolApprovalDecision(toolApproval) !== "launch") return false;
+  try {
+    const { verifyToolCapabilityApproval } = await import("../tools/approval.js");
+    const result = await Promise.resolve(verifyToolCapabilityApproval(normalizeToolApprovalPayload(toolApproval), {
+      workspaceId: approvalInput.workspaceId,
+      userId: approvalInput.userId,
+      agentId: approvalInput.agentId,
+      triggerKind: approvalInput.triggerKind,
+      tools: approvalInput.tools,
+      inputs: approvalInput.inputs,
+      consume: true,
+    }));
+    return approvalVerificationPassed(result);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeToolApprovalPayload(toolApproval: RunAgentToolApprovalPayload): ToolCapabilityApprovalInput {
+  const approval = toolApproval as RunAgentToolApprovalPayload & { approvalToken?: unknown };
+  const token = typeof approval.token === "string"
+    ? approval.token
+    : typeof approval.approvalToken === "string"
+      ? approval.approvalToken
+      : "";
+  const approvedTools = Array.isArray(approval.approvedTools)
+    ? approval.approvedTools
+    : Array.isArray(approval.tools)
+      ? approval.tools
+          .map((tool) => typeof tool === "object" && tool !== null && "name" in tool ? String((tool as { name: unknown }).name) : "")
+          .filter(Boolean)
+      : [];
+  return {
+    decision: approval.decision as ToolCapabilityApprovalInput["decision"],
+    token,
+    approvedTools,
+  };
+}
+
+function getToolApprovalDecision(toolApproval: RunAgentToolApprovalPayload | null | undefined): string | undefined {
+  if (!toolApproval || typeof toolApproval !== "object") return undefined;
+  const decision = (toolApproval as { decision?: unknown }).decision;
+  return typeof decision === "string" ? decision : undefined;
+}
+
+function approvalVerificationPassed(result: unknown): boolean {
+  if (typeof result === "boolean") return result;
+  if (!result || typeof result !== "object") return false;
+  const verification = result as { ok?: unknown; valid?: unknown; approved?: unknown; verified?: unknown };
+  if (typeof verification.ok === "boolean") return verification.ok;
+  if (typeof verification.valid === "boolean") return verification.valid;
+  if (typeof verification.approved === "boolean") return verification.approved;
+  if (typeof verification.verified === "boolean") return verification.verified;
+  return false;
 }
 
 async function runAgentWithToolLoop(args: {
@@ -742,7 +985,7 @@ async function runAgentWithToolLoop(args: {
       displayName: context.user.displayName,
     }, { title: run.title, agentId: agent.id, runId: run.id, status: run.status, triggerKind }, timestamp));
 
-    return { run: decorateRun(run) };
+    return { run };
   });
 }
 
@@ -797,6 +1040,58 @@ function resolveAgentExecutionTarget(
 function providerNameForKind(kind: ProviderKind): ProviderName | null {
   if (kind === "openai" || kind === "anthropic" || kind === "minimax" || kind === "ollama" || kind === "gemini") return kind;
   return null;
+}
+
+async function recordCanceledAgentExecutionRun(input: {
+  context: AuthenticatedContext;
+  agent: AgentRecord;
+  inputs: Record<string, string | number | boolean>;
+  triggerKind: AgentTriggerKind;
+  timestamp: string;
+}): Promise<{ run: AgentRunRecord }> {
+  const completedAt = new Date().toISOString();
+  const message = "Tool run was canceled before execution.";
+  return mutateStoreAsync((store) => {
+    const run = upsertAgentRun(store, {
+      workspaceId: input.context.workspace.id,
+      agentId: input.agent.id,
+      title: `${input.agent.name} run canceled`,
+      status: "canceled",
+      triggerKind: input.triggerKind,
+      startedAt: input.timestamp,
+      completedAt,
+      inputs: Object.keys(input.inputs).length ? input.inputs : undefined,
+      transcript: [
+        {
+          id: generateId(),
+          title: "Approve tool execution",
+          status: "skipped",
+          output: message,
+          durationMs: 0,
+          startedAt: input.timestamp,
+        },
+        ...(input.agent.playbook ?? []).map((step) => ({
+          id: generateId(),
+          title: step.title,
+          status: "skipped" as const,
+          output: message,
+          durationMs: 0,
+          startedAt: input.timestamp,
+        })),
+      ],
+      error: message,
+      logs: [{ at: input.timestamp, level: "warn", message }],
+      toolCalls: [],
+    }, input.timestamp);
+
+    recordActivity(store, makeActivity(input.context.workspace.id, "workspace", "agent.run", {
+      type: "user",
+      id: input.context.user.id,
+      displayName: input.context.user.displayName,
+    }, { title: run.title, agentId: input.agent.id, runId: run.id, status: run.status, triggerKind: input.triggerKind }, input.timestamp));
+
+    return { run };
+  });
 }
 
 async function recordFailedAgentExecutionRun(input: {
@@ -900,6 +1195,7 @@ export async function generateAgentBuilderDraftAsync(context: AuthenticatedConte
   const triggerKind = inferAgentTriggerKind(intent, prompt);
   const schedule = triggerKind === "schedule" ? inferAgentSchedule(prompt) : undefined;
   const webhookReadiness = buildAgentBuilderWebhookReadiness(triggerKind);
+  const scheduleReadiness = buildAgentBuilderScheduleReadiness(triggerKind, schedule);
   const name = buildAgentBuilderName(prompt, intent);
   const playbook = applyAgentIntegrationPlaybookSteps(buildAgentBuilderPlaybook(intent, prompt), integrationMetadata);
   const missingTools = recommendedTools.filter((tool) => !availableTools.includes(tool));
@@ -936,7 +1232,7 @@ export async function generateAgentBuilderDraftAsync(context: AuthenticatedConte
         { title: "Capture the job", detail: "Turn the prompt into clear agent instructions, typed inputs, and a first-run sample." },
         { title: "Wire useful tools", detail: recommendedTools.length > 0 ? `Enable ${recommendedTools.join(", ")} for the first run.` : "Keep the first draft tool-light until an integration is selected." },
         ...buildAgentBuilderIntegrationPlanSteps(integrationMetadata),
-        { title: "Choose the trigger", detail: triggerKind === "schedule" ? `Run on ${schedule}.` : triggerKind === "webhook" ? webhookReadiness.planDetail : "Start with manual runs while the draft is validated." },
+        { title: "Choose the trigger", detail: triggerKind === "schedule" ? scheduleReadiness.planDetail : triggerKind === "webhook" ? webhookReadiness.planDetail : "Start with manual runs while the draft is validated." },
         ...(triggerKind === "webhook" ? [{ title: "Prepare webhook publish readiness", detail: webhookReadiness.message }] : []),
         { title: "Run once", detail: "Save the draft, run it with sample inputs, then inspect transcript, tool calls, and output." },
       ],
@@ -971,6 +1267,7 @@ export async function generateAgentBuilderDraftAsync(context: AuthenticatedConte
           : `Some requested tools are not registered yet: ${missingTools.join(", ")}.`,
       },
       webhook: webhookReadiness,
+      schedule: scheduleReadiness,
       firstRun: {
         canRun: blockers.length === 0,
         blockers,
@@ -1141,7 +1438,12 @@ function inferAgentSchedule(prompt: string): string {
 function recommendAgentTools(intent: string, prompt: string, availableTools: string[]): string[] {
   const lower = prompt.toLowerCase();
   const desired = new Set<string>();
-  if (["research", "lead_enrichment"].includes(intent) || /\b(url|website|web|scrape|research)\b/.test(lower)) desired.add("http_get");
+  if (["research", "lead_enrichment"].includes(intent) || /\b(url|website|web|scrape|research|fetch)\b/.test(lower)) desired.add("http_fetch");
+  if (/\b(slack|notify|notification|message|webhook)\b/.test(lower)) desired.add("slack_post_webhook");
+  if (/\b(github|pull request|pull requests|\bpr\b|\bprs\b|issue|issues|comment)\b/.test(lower)) desired.add("github_api");
+  if (/\b(email|mail|inbox|reply|send)\b/.test(lower)) desired.add("email_send");
+  if (/\b(sql|sqlite|database|table|query)\b/.test(lower)) desired.add("sql_query");
+  if (/\b(shell|command|script|terminal|npm|git)\b/.test(lower)) desired.add("shell_for_agent");
   if (["reporting", "release"].includes(intent) || /\b(workflow|requirement|plan|blocker|release)\b/.test(lower)) {
     desired.add("read_workflow_brief");
     desired.add("list_requirements");
@@ -1204,6 +1506,25 @@ function buildAgentBuilderWebhookReadiness(triggerKind: AgentTriggerKind): Agent
     publishSteps: readiness.recommended
       ? ["Save the agent", "Create or rotate the webhook token", "Send a test payload", "Rotate the token before sharing broadly"]
       : [],
+  };
+}
+
+function buildAgentBuilderScheduleReadiness(
+  triggerKind: AgentTriggerKind,
+  schedule?: string,
+): AgentBuilderScheduleTriggerReadiness {
+  const recommended = triggerKind === "schedule";
+  const cronLabel = schedule ?? "the generated cron schedule";
+  return {
+    recommended,
+    readyAfterSave: recommended && Boolean(schedule),
+    ...(schedule ? { cron: schedule } : {}),
+    message: recommended
+      ? `Save the agent with ${cronLabel}; confirm provider and tool setup before activating scheduled execution.`
+      : "Schedule setup is optional for this draft.",
+    planDetail: recommended
+      ? `Run on ${cronLabel}; verify the cron cadence before activating scheduled execution.`
+      : "No schedule is required unless the draft changes to recurring automation.",
   };
 }
 
@@ -1355,7 +1676,12 @@ function inferAgentTools(prompt: string): string[] {
   if (/\b(blocker|question|risk|escalat|urgent|incident)\b/i.test(prompt)) tools.add("list_blockers");
   if (/\b(create|open|update|write|log|blocker|question|plan item|follow-up|follow up)\b/i.test(prompt)) tools.add("create_blocker");
   if (/\b(note|log|summary|summarize|report)\b/i.test(prompt)) tools.add("log_note");
-  if (/\b(url|website|page|site|http|research|fetch)\b/i.test(prompt)) tools.add("http_get");
+  if (/\b(url|website|page|site|http|research|fetch)\b/i.test(prompt)) tools.add("http_fetch");
+  if (/\b(slack|notify|notification|message|webhook)\b/i.test(prompt)) tools.add("slack_post_webhook");
+  if (/\b(github|pull request|pull requests|\bpr\b|\bprs\b|issue|issues|comment)\b/i.test(prompt)) tools.add("github_api");
+  if (/\b(email|mail|inbox|reply|send)\b/i.test(prompt)) tools.add("email_send");
+  if (/\b(sql|sqlite|database|table|query)\b/i.test(prompt)) tools.add("sql_query");
+  if (/\b(shell|command|script|terminal|npm|git)\b/i.test(prompt)) tools.add("shell_for_agent");
   if (/\b(browser|click|form|screenshot|page|website)\b/i.test(prompt)) {
     tools.add("browser_goto");
     tools.add("browser_extract");
@@ -1644,6 +1970,39 @@ export async function listAgentRunsAsync(context: AuthenticatedContext) {
   };
 }
 
+export function getAgentRunDetail(context: AuthenticatedContext, runId: string): AgentRunDetail {
+  const run = findAgentRunForWorkspaceIndexed(context.workspace.id, runId);
+  if (!run) {
+    throw httpError(404, "agent run not found");
+  }
+  const data = loadStore();
+  return buildAgentRunDetail(run, findRunAgentName(data, context.workspace.id, run));
+}
+
+export async function getAgentRunDetailAsync(context: AuthenticatedContext, runId: string): Promise<AgentRunDetail> {
+  const run = await findAgentRunForWorkspaceIndexedAsync(context.workspace.id, runId);
+  if (!run) {
+    throw httpError(404, "agent run not found");
+  }
+  const data = await loadStoreAsync();
+  return buildAgentRunDetail(run, findRunAgentName(data, context.workspace.id, run));
+}
+
+function buildAgentRunDetail(run: AgentRunRecord, agentName?: string): AgentRunDetail {
+  const decorated = decorateRun(run);
+  return {
+    run: decorated,
+    trace: deriveAgentRunTrace(decorated),
+    ...(agentName ? { agentName } : {}),
+  };
+}
+
+function findRunAgentName(data: TaskloomData, workspaceId: string, run: AgentRunRecord): string | undefined {
+  if (!run.agentId) return undefined;
+  const agent = findAgent(data, run.agentId);
+  return agent && agent.workspaceId === workspaceId ? agent.name : undefined;
+}
+
 export function cancelAgentRun(context: AuthenticatedContext, runId: string) {
   const timestamp = now();
   const run = findAgentRunForWorkspaceIndexed(context.workspace.id, runId);
@@ -1709,7 +2068,7 @@ export function recordRunAsPlaybook(context: AuthenticatedContext, runId: string
     const playbook: AgentPlaybookStep[] = run.toolCalls.map((call, index) => ({
       id: generateId(),
       title: `${index + 1}. ${call.toolName}`,
-      instruction: `Call ${call.toolName} with: ${JSON.stringify(call.input).slice(0, 380)}`,
+      instruction: `Call ${call.toolName} with: ${formatRedactedPlaybookToolInput(call.input)}`,
     }));
     agent.playbook = playbook.slice(0, 20);
     agent.updatedAt = now();
@@ -1728,7 +2087,7 @@ export async function recordRunAsPlaybookAsync(context: AuthenticatedContext, ru
     const playbook: AgentPlaybookStep[] = run.toolCalls.map((call, index) => ({
       id: generateId(),
       title: `${index + 1}. ${call.toolName}`,
-      instruction: `Call ${call.toolName} with: ${JSON.stringify(call.input).slice(0, 380)}`,
+      instruction: `Call ${call.toolName} with: ${formatRedactedPlaybookToolInput(call.input)}`,
     }));
     agent.playbook = playbook.slice(0, 20);
     agent.updatedAt = now();
@@ -1744,6 +2103,10 @@ export async function retryAgentRun(context: AuthenticatedContext, runId: string
   }
   if (!previous.agentId) {
     throw httpError(400, "this run is not linked to an agent and cannot be retried");
+  }
+  const agent = data.agents.find((entry) => entry.id === previous.agentId && entry.workspaceId === context.workspace.id);
+  if (agent?.enabledTools && agent.enabledTools.length > 0) {
+    throw httpError(409, "tool-enabled runs require a fresh launch approval from the agent editor before retrying");
   }
   const timestamp = now();
   await mutateStoreAsync((store) => {
@@ -1782,6 +2145,11 @@ export async function retryAgentRun(context: AuthenticatedContext, runId: string
     }, timestamp, activationActivityId(context.workspace.id, "agent.run.retry", signal.id)));
   });
   return runAgent(context, previous.agentId);
+}
+
+function formatRedactedPlaybookToolInput(input: unknown): string {
+  const serialized = JSON.stringify(redactSensitiveValue(input));
+  return (serialized ?? "null").slice(0, 380);
 }
 
 export function listWorkspaceEnvVarsForUser(context: AuthenticatedContext) {
@@ -2062,6 +2430,82 @@ function maskSecret(value: string): string {
   if (!value) return "";
   if (value.length <= 4) return "•".repeat(value.length);
   return `${"•".repeat(Math.max(value.length - 4, 4))}${value.slice(-4)}`;
+}
+
+type DecoratedAgentRun = AgentRunDetail["run"];
+
+function deriveAgentRunTrace(run: DecoratedAgentRun): AgentRunTraceDetail {
+  const storedSpans = deriveStoredAgentRunTraceSpans(run);
+  const spans = storedSpans.map(toAgentRunTraceSpan);
+  const costUsd = typeof run.costUsd === "number"
+    ? run.costUsd
+    : sumNullableNumbers(storedSpans.map((span) => span.costUsd));
+  return {
+    id: `${run.id}:trace`,
+    runId: run.id,
+    source: "legacy",
+    generatedAt: now(),
+    summary: {
+      spans: spans.length,
+      spanCount: spans.length,
+      modelCalls: run.modelUsed || storedSpans.some((span) => span.modelUsed) ? 1 : 0,
+      toolCalls: storedSpans.filter((span) => span.type === "tool_call").length,
+      stepCount: storedSpans.filter((span) => span.type === "step").length,
+      logCount: storedSpans.filter((span) => span.type === "log").length,
+      inputCount: Object.keys(run.inputs ?? {}).length,
+      errorCount: storedSpans.filter(isStoredErrorTraceSpan).length,
+      warningCount: spans.filter((span) => span.status === "warn").length,
+      costUsd,
+      durationMs: run.durationMs,
+    },
+    spans,
+  };
+}
+
+function toAgentRunTraceSpan(span: StoredAgentRunTraceSpan): AgentRunTraceSpan {
+  return omitUndefined({
+    id: span.id,
+    name: span.title,
+    kind: traceKindFromStoredType(span.type),
+    status: span.status,
+    startedAt: span.startedAt ?? undefined,
+    endedAt: span.completedAt,
+    durationMs: span.durationMs,
+    model: span.modelUsed ?? undefined,
+    toolName: span.toolName ?? undefined,
+    costUsd: span.costUsd,
+    input: span.input === null ? undefined : span.input,
+    output: span.output === null ? undefined : span.output,
+    error: span.error ?? undefined,
+    attributes: omitUndefined({
+      sequence: span.sequence,
+      spanType: span.type,
+      summary: span.summary ?? undefined,
+    }),
+  });
+}
+
+function traceKindFromStoredType(type: StoredAgentRunTraceSpanType): AgentRunTraceSpanKind {
+  return type === "tool_call" ? "tool" : type;
+}
+
+function isStoredErrorTraceSpan(span: StoredAgentRunTraceSpan): boolean {
+  return span.type === "error" || span.status === "failed" || span.status === "error" || span.status === "timeout";
+}
+
+function sumNullableNumbers(values: Array<number | null | undefined>): number | null {
+  let total = 0;
+  let seen = false;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    total += value;
+    seen = true;
+  }
+  return seen ? total : null;
+}
+
+function omitUndefined<T extends Record<string, unknown>>(record: T): T {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
 }
 
 function decorateRun(run: AgentRunRecord) {

@@ -92,7 +92,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     summary: "Summarize a long URL into a structured note.",
     description: "Reads a URL or document, returns a structured summary with key findings, risks, and follow-up questions.",
     instructions: "Read the source. Produce sections: Summary (3 bullets), Key findings, Risks, Follow-up questions.",
-    tools: ["http_get"],
+    tools: ["http_fetch"],
     inputSchema: [
       { key: "source_url", label: "Source URL", type: "url", required: true },
       { key: "depth", label: "Depth", type: "enum", required: false, options: ["quick", "deep"], defaultValue: "quick" },

@@ -5,6 +5,7 @@ import {
   type GeneratedAppWorkspaceResolveOptions,
   type GeneratedAppWorkspaceWriteResult,
 } from "./generated-app-workspace.js";
+import { validateWorkspacePath } from "./codegen/path-validator.js";
 
 export interface GeneratedAppSourceFileRecord {
   path: string;
@@ -85,10 +86,10 @@ export interface GeneratedAppRuntimeWorkspaceInput extends GeneratedAppWorkspace
 
 export type GeneratedAppRuntimeWorkspaceManifest = GeneratedAppWorkspaceManifest;
 
-type RuntimeRecordValue = string | number | boolean | null;
-type RuntimeSeedRecord = Record<string, RuntimeRecordValue>;
+export type RuntimeRecordValue = string | number | boolean | null;
+export type RuntimeSeedRecord = Record<string, RuntimeRecordValue>;
 
-type RuntimeSchemaEntity = {
+export type RuntimeSchemaEntity = {
   name: string;
   label: string;
   fields: Array<{ name: string; type: string; required: boolean; notes?: string }>;
@@ -97,7 +98,7 @@ type RuntimeSchemaEntity = {
   relationships: string[];
 };
 
-type RuntimeModel = {
+export type GeneratedAppRuntimeModel = {
   primaryEntity: string;
   schema: RuntimeSchemaEntity[];
   seedData: Record<string, RuntimeSeedRecord[]>;
@@ -113,7 +114,7 @@ export interface GeneratedAppSourceFileSummary {
 
 export function buildGeneratedAppRuntimeArtifact(input: GeneratedAppRuntimeInput): GeneratedAppRuntimeArtifactRecord {
   const renderedAt = input.renderedAt ?? new Date().toISOString();
-  const model = buildRuntimeModel(input.draft);
+  const model = buildGeneratedAppRuntimeModel(input.draft);
   const previewData = {
     appId: input.appId,
     workspaceId: input.workspaceId,
@@ -146,6 +147,35 @@ export function buildGeneratedAppRuntimeArtifact(input: GeneratedAppRuntimeInput
     files,
     renderedAt,
   };
+}
+
+export function buildGeneratedAppRuntimeArtifactFromFiles(
+  files: Array<{ path: string; content: string }>,
+  renderedAt = new Date().toISOString(),
+): GeneratedAppRuntimeArtifactRecord {
+  const byPath = new Map<string, GeneratedAppSourceFileRecord>();
+  for (const file of files) {
+    const record = generatedAppSourceFileFromContent(file.path, file.content);
+    byPath.set(record.path, record);
+  }
+  const records = [...byPath.values()];
+  const entrypoint =
+    records.find((file) => file.path === "index.html")?.path
+    ?? records.find((file) => file.role === "entrypoint")?.path
+    ?? records[0]?.path
+    ?? "index.html";
+  return { entrypoint, files: records, renderedAt };
+}
+
+export function generatedAppSourceFileFromContent(
+  rawPath: string,
+  content: string,
+): GeneratedAppSourceFileRecord {
+  const validated = validateWorkspacePath(rawPath);
+  if (!validated.ok || !validated.normalized) {
+    throw new Error(`invalid generated app source path ${JSON.stringify(rawPath)}: ${validated.reason ?? "unknown reason"}`);
+  }
+  return sourceFile(validated.normalized, content, roleForGeneratedSourcePath(validated.normalized));
 }
 
 export function summarizeGeneratedAppSourceFiles(files: GeneratedAppSourceFileRecord[]): GeneratedAppSourceFileSummary[] {
@@ -203,6 +233,36 @@ function sourceFile(
     size: Buffer.byteLength(content),
     sha256: createHash("sha256").update(content).digest("hex"),
   };
+}
+
+function roleForGeneratedSourcePath(path: string): GeneratedAppSourceFileRecord["role"] {
+  const lower = path.toLowerCase();
+  if (lower === "index.html") return "entrypoint";
+  if (lower === "readme.md" || lower.startsWith("docs/")) return "docs";
+  if (
+    lower.endsWith(".config.ts")
+    || lower.endsWith(".config.js")
+    || lower.endsWith(".config.mjs")
+    || lower.endsWith(".config.cjs")
+    || lower === "tsconfig.json"
+    || lower === "vite.config.ts"
+    || lower === "postcss.config.js"
+    || lower === "tailwind.config.js"
+    || lower === "tailwind.config.ts"
+    || lower.startsWith(".")
+  ) {
+    return "config";
+  }
+  if (
+    lower === "package.json"
+    || lower.endsWith("/package.json")
+    || lower.endsWith(".json")
+    || lower.includes("/data/")
+    || lower.includes("/seed")
+  ) {
+    return "manifest";
+  }
+  return "source";
 }
 
 function renderPreviewHtml(input: {
@@ -295,7 +355,7 @@ function renderPreviewHtml(input: {
         '<header><div><h1>' + escapeHtml(payload.draft.app.name) + '</h1><p class="muted">' + escapeHtml(payload.draft.app.description) + '</p></div><span class="badge mono">' + escapeHtml(payload.appId) + '</span></header>',
         '<main>',
           '<section class="grid" aria-label="Dashboard summary">',
-            card("Active " + schema.label, '<strong>' + active.length + '</strong><p class="muted">Visible records in local state.</p>'),
+            card("Active " + schema.label, '<strong>' + active.length + '</strong><p class="muted">Visible records from the server runtime.</p>'),
             card("Archived", '<strong>' + archivedCount + '</strong><p class="muted">Hidden without deleting seed history.</p>'),
             card("API routes", '<strong>' + payload.draft.app.apiRoutes.length + '</strong><p class="muted">Handler module included in source.</p>'),
           '</section>',
@@ -394,7 +454,7 @@ export const generatedAppSlug = ${JSON.stringify(draft.app.slug)};
 `;
 }
 
-function renderAppTsx(draft: GeneratedAppRuntimeDraft, model: RuntimeModel) {
+function renderAppTsx(draft: GeneratedAppRuntimeDraft, model: GeneratedAppRuntimeModel) {
   const appName = JSON.stringify(draft.app.name);
   const description = JSON.stringify(draft.app.description);
   const summary = JSON.stringify(draft.summary);
@@ -402,10 +462,15 @@ function renderAppTsx(draft: GeneratedAppRuntimeDraft, model: RuntimeModel) {
   const pageMap = JSON.stringify(draft.app.pages, null, 2);
   const pageCount = draft.app.pages.length;
   const apiCount = draft.app.apiRoutes.length;
-  return `import { FormEvent, useMemo, useState } from "react";
-import { apiRoutes } from "./api/generated-api";
+  return `import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  apiRoutes,
+  archiveGeneratedRecord,
+  createGeneratedRecord,
+  listGeneratedRecords,
+  updateGeneratedRecord,
+} from "./api/generated-api";
 import { generatedSchema, primaryEntity as defaultEntity } from "./data/schema";
-import seedData from "./data/seed-data.json";
 import "./styles.css";
 
 type RecordValue = string | number | boolean | null;
@@ -417,13 +482,16 @@ const description = ${description};
 const summary = ${summary};
 const preferredEntity = ${primaryEntity};
 const generatedPages = ${pageMap};
-const typedSeedData = seedData as SeedData;
 
 export function GeneratedApp() {
   const [selectedEntity, setSelectedEntity] = useState(preferredEntity || defaultEntity);
-  const [recordsByEntity, setRecordsByEntity] = useState<SeedData>(() => cloneSeedData(typedSeedData));
+  const [recordsByEntity, setRecordsByEntity] = useState<SeedData>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftValues, setDraftValues] = useState<Record<string, string>>(() => emptyDraft(selectedEntity));
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const schema = entitySchema(selectedEntity);
   const activeRecords = useMemo(
     () => (recordsByEntity[selectedEntity] ?? []).filter((record) => !record.archived && !record.archivedAt),
@@ -432,55 +500,102 @@ export function GeneratedApp() {
   const archivedCount = (recordsByEntity[selectedEntity] ?? []).length - activeRecords.length;
   const requiredCount = schema.requiredFields.length;
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    listGeneratedRecords(selectedEntity)
+      .then((records) => {
+        if (!cancelled) setEntityRecords(selectedEntity, records);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load records from the server runtime.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEntity]);
+
   function selectEntity(entityName: string) {
     setSelectedEntity(entityName);
     setEditingId(null);
     setDraftValues(emptyDraft(entityName));
+    setNotice("");
   }
 
-  function handleCreate(event: FormEvent<HTMLFormElement>) {
+  async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = formValues(event.currentTarget);
-    const id = nextRecordId(selectedEntity);
-    setRecordsByEntity((current) => ({
-      ...current,
-      [selectedEntity]: [{ id, ...values }, ...(current[selectedEntity] ?? [])],
-    }));
-    setDraftValues(emptyDraft(selectedEntity));
+    setSubmitting(true);
+    setError("");
+    try {
+      const record = await createGeneratedRecord(selectedEntity, values);
+      setRecordsByEntity((current) => ({
+        ...current,
+        [selectedEntity]: [record, ...(current[selectedEntity] ?? [])],
+      }));
+      setDraftValues(emptyDraft(selectedEntity));
+      setNotice("Record saved to the server runtime.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create the record.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function startEdit(record: GeneratedRecord) {
     setEditingId(String(record.id ?? ""));
     setDraftValues(Object.fromEntries(schema.editableFields.map((field) => [field, String(record[field] ?? "")])));
+    setNotice("");
   }
 
-  function handleEdit(event: FormEvent<HTMLFormElement>) {
+  async function handleEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editingId) return;
     const values = formValues(event.currentTarget);
-    setRecordsByEntity((current) => ({
-      ...current,
-      [selectedEntity]: (current[selectedEntity] ?? []).map((record) => (
-        String(record.id) === editingId ? { ...record, ...values } : record
-      )),
-    }));
-    setEditingId(null);
-    setDraftValues(emptyDraft(selectedEntity));
-  }
-
-  function archiveRecord(recordId: string) {
-    setRecordsByEntity((current) => ({
-      ...current,
-      [selectedEntity]: (current[selectedEntity] ?? []).map((record) => (
-        String(record.id) === recordId
-          ? { ...record, archived: true, archivedAt: new Date().toISOString() }
-          : record
-      )),
-    }));
-    if (editingId === recordId) {
+    setSubmitting(true);
+    setError("");
+    try {
+      const updated = await updateGeneratedRecord(selectedEntity, editingId, values);
+      setRecordsByEntity((current) => ({
+        ...current,
+        [selectedEntity]: (current[selectedEntity] ?? []).map((record) => (
+          String(record.id) === editingId ? updated : record
+        )),
+      }));
       setEditingId(null);
       setDraftValues(emptyDraft(selectedEntity));
+      setNotice("Changes saved to SQLite.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update the record.");
+    } finally {
+      setSubmitting(false);
     }
+  }
+
+  async function archiveRecord(recordId: string) {
+    setError("");
+    try {
+      await archiveGeneratedRecord(selectedEntity, recordId);
+      setRecordsByEntity((current) => ({
+        ...current,
+        [selectedEntity]: (current[selectedEntity] ?? []).filter((record) => String(record.id) !== recordId),
+      }));
+      if (editingId === recordId) {
+        setEditingId(null);
+        setDraftValues(emptyDraft(selectedEntity));
+      }
+      setNotice("Record archived in SQLite.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not archive the record.");
+    }
+  }
+
+  function setEntityRecords(entityName: string, records: GeneratedRecord[]) {
+    setRecordsByEntity((current) => ({ ...current, [entityName]: records }));
   }
 
   return (
@@ -577,8 +692,12 @@ export function GeneratedApp() {
               />
             </label>
           ))}
+          {error ? <p className="runtime-error">{error}</p> : null}
+          {notice ? <p className="runtime-success">{notice}</p> : null}
           <div className="button-row">
-            <button className="primary" type="submit">{editingId ? "Save changes" : "Create"}</button>
+            <button className="primary" type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : editingId ? "Save changes" : "Create"}
+            </button>
             {editingId ? (
               <button type="button" onClick={() => { setEditingId(null); setDraftValues(emptyDraft(selectedEntity)); }}>
                 Cancel
@@ -590,12 +709,18 @@ export function GeneratedApp() {
         <section className="panel record-list">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Local state</p>
+              <p className="eyebrow">Server runtime</p>
               <h2>{schema.label} list</h2>
             </div>
             <span>{activeRecords.length} active</span>
           </div>
-          {activeRecords.map((record) => (
+          {loading ? (
+            <div className="loading-stack" aria-label="Loading records">
+              <span />
+              <span />
+              <span />
+            </div>
+          ) : activeRecords.map((record) => (
             <article key={String(record.id)} className="record-row">
               <div>
                 <h3>{recordTitle(record)}</h3>
@@ -607,22 +732,15 @@ export function GeneratedApp() {
               </div>
             </article>
           ))}
-          {activeRecords.length === 0 ? <p className="empty">No active records. Create one to repopulate the list.</p> : null}
+          {!loading && activeRecords.length === 0 ? <p className="empty">No active records. Create one to repopulate the list.</p> : null}
         </section>
       </section>
     </main>
   );
 }
 
-function cloneSeedData(data: SeedData): SeedData {
-  return Object.fromEntries(Object.entries(data).map(([entity, records]) => [
-    entity,
-    records.map((record) => ({ ...record })),
-  ]));
-}
-
 function entitySchema(entityName: string) {
-  return generatedSchema.entities.find((entity) => entity.name === entityName) ?? generatedSchema.entities[0];
+  return generatedSchema.entities.find((entity) => entity.name === entityName) ?? generatedSchema.entities[0]!;
 }
 
 function emptyDraft(entityName: string): Record<string, string> {
@@ -631,10 +749,6 @@ function emptyDraft(entityName: string): Record<string, string> {
 
 function formValues(form: HTMLFormElement): GeneratedRecord {
   return Object.fromEntries(new FormData(form).entries()) as GeneratedRecord;
-}
-
-function nextRecordId(entityName: string): string {
-  return entityName.slice(0, 4).toLowerCase() + "_" + Math.random().toString(36).slice(2, 9);
 }
 
 function recordTitle(record: GeneratedRecord): string {
@@ -885,6 +999,42 @@ dd {
   flex-wrap: wrap;
 }
 
+.runtime-error,
+.runtime-success {
+  border-radius: 8px;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.runtime-error {
+  background: #fff1f2;
+  color: #b42318;
+}
+
+.runtime-success {
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.loading-stack {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.loading-stack span {
+  animation: pulse 1.4s ease-in-out infinite;
+  background: #edf2f7;
+  border-radius: 8px;
+  display: block;
+  height: 54px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
 @media (max-width: 840px) {
   .app-shell {
     padding: 18px;
@@ -902,82 +1052,76 @@ dd {
 `;
 }
 
-function renderApiHandlerTs(model: RuntimeModel) {
-  return `import seedData from "../data/seed-data.json";
-import { generatedSchema, primaryEntity } from "../data/schema";
+function renderApiHandlerTs(model: GeneratedAppRuntimeModel) {
+  return `export type GeneratedRecord = Record<string, string | number | boolean | null | undefined>;
 
-export type GeneratedApiRequest = {
-  method: string;
-  path: string;
-  body?: Record<string, unknown>;
-};
+export const apiRoutes = [
+  { method: "GET", path: "/api/:entity" },
+  { method: "POST", path: "/api/:entity" },
+  { method: "PATCH", path: "/api/:entity/:id" },
+  { method: "DELETE", path: "/api/:entity/:id" },
+] as const;
 
-type GeneratedRecord = Record<string, string | number | boolean | null | undefined>;
-
-const recordsByEntity: Record<string, GeneratedRecord[]> = Object.fromEntries(
-  Object.entries(seedData as Record<string, GeneratedRecord[]>).map(([entity, records]) => [
-    entity,
-    records.map((record) => ({ ...record })),
-  ]),
-);
-
-export async function handleGeneratedApiRequest(request: GeneratedApiRequest) {
-  const entity = entityForPath(request.path);
-  if (!entity) return { status: 404, body: { error: "No generated entity route matched." } };
-
-  const method = request.method.toUpperCase();
-  const segments = request.path.split("/").filter(Boolean);
-  const id = segments.at(-1);
-  const records = recordsByEntity[entity.name] ?? [];
-  const normalizedLastSegment = String(id ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const normalizedEntity = entity.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const collectionRequest = !id || normalizedLastSegment === normalizedEntity || normalizedLastSegment === normalizedEntity + "s";
-
-  if (method === "GET") {
-    const active = records.filter((record) => !record.archived && !record.archivedAt);
-    return { status: 200, body: collectionRequest ? active : active.find((record) => String(record.id) === id) ?? null };
-  }
-
-  const missingFields = entity.requiredFields.filter((field) => request.body?.[field] === undefined);
-  if (missingFields.length > 0) return { status: 400, body: { error: "Missing required fields.", missingFields } };
-
-  if (method === "POST") {
-    const record = { id: entity.name.slice(0, 4).toLowerCase() + "_" + Date.now(), ...(request.body ?? {}) };
-    recordsByEntity[entity.name] = [record, ...records];
-    return { status: 201, body: record };
-  }
-
-  if (method === "PATCH" && id) {
-    const updated = records.map((record) => String(record.id) === id ? { ...record, ...(request.body ?? {}) } : record);
-    recordsByEntity[entity.name] = updated;
-    return { status: 200, body: updated.find((record) => String(record.id) === id) ?? null };
-  }
-
-  if (method === "DELETE" && id) {
-    recordsByEntity[entity.name] = records.map((record) => String(record.id) === id ? { ...record, archived: true, archivedAt: new Date().toISOString() } : record);
-    return { status: 200, body: { ok: true, archivedId: id } };
-  }
-
-  return { status: 405, body: { error: "Unsupported generated API method." } };
+export async function listGeneratedRecords(entity: string): Promise<GeneratedRecord[]> {
+  return requestGeneratedApi<GeneratedRecord[]>(entity);
 }
 
-function entityForPath(path: string) {
-  const normalizedPath = path.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return generatedSchema.entities.find((entity) => {
-    const normalizedEntity = entity.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-    return normalizedPath.includes(normalizedEntity) || normalizedPath.includes(normalizedEntity + "s");
+export async function createGeneratedRecord(entity: string, body: GeneratedRecord): Promise<GeneratedRecord> {
+  return requestGeneratedApi<GeneratedRecord>(entity, {
+    method: "POST",
+    body,
   });
+}
+
+export async function updateGeneratedRecord(entity: string, id: string, body: GeneratedRecord): Promise<GeneratedRecord> {
+  return requestGeneratedApi<GeneratedRecord>(entity + "/" + encodeURIComponent(id), {
+    method: "PATCH",
+    body,
+  });
+}
+
+export async function archiveGeneratedRecord(entity: string, id: string): Promise<{ ok: boolean; archivedId: string }> {
+  return requestGeneratedApi<{ ok: boolean; archivedId: string }>(entity + "/" + encodeURIComponent(id), {
+    method: "DELETE",
+  });
+}
+
+async function requestGeneratedApi<T>(path: string, options: { method?: string; body?: GeneratedRecord } = {}): Promise<T> {
+  const response = await fetch(runtimeApiUrl(path), {
+    method: options.method ?? "GET",
+    credentials: "same-origin",
+    headers: {
+      "Accept": "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+  });
+  const payload = await response.json().catch(() => null) as { error?: string } | T | null;
+  if (!response.ok) {
+    const message = payload && typeof payload === "object" && "error" in payload
+      ? String(payload.error)
+      : "Generated app runtime request failed.";
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+function runtimeApiUrl(path: string): string {
+  const appId = document.body.dataset.appId ?? "";
+  const token = new URLSearchParams(window.location.search).get("token");
+  const query = token ? "?token=" + encodeURIComponent(token) : "";
+  return "/api/app/generated-apps/" + encodeURIComponent(appId) + "/api/" + path.replace(/^\\/+/, "") + query;
 }
 
 export const generatedApiPrimaryEntity = ${JSON.stringify(model.primaryEntity)};
 `;
 }
 
-function renderSchemaTs(model: RuntimeModel) {
+function renderSchemaTs(model: GeneratedAppRuntimeModel) {
   return `export const primaryEntity = ${JSON.stringify(model.primaryEntity)} as const;
 
 export const generatedSchema = {
-  database: "local-state",
+  database: "server-sqlite",
   primaryEntity,
   entities: ${JSON.stringify(model.schema, null, 2)}
 } as const;
@@ -988,7 +1132,7 @@ export type GeneratedSchemaEntity = typeof schema[number];
 `;
 }
 
-function renderMigrationSql(model: RuntimeModel) {
+function renderMigrationSql(model: GeneratedAppRuntimeModel) {
   return model.schema.map((entity) => {
     const fieldNames = new Set(entity.fields.map((field) => snakeCase(field.name)));
     const columns = entity.fields.map((field) => `  ${snakeCase(field.name)} ${sqlType(field.type)}${field.name === "id" ? " PRIMARY KEY" : field.required ? " NOT NULL" : ""}`);
@@ -1001,7 +1145,7 @@ ${columns.join(",\n")}
   }).join("\n\n");
 }
 
-function renderSeedTs(model: RuntimeModel) {
+function renderSeedTs(model: GeneratedAppRuntimeModel) {
   const entityNames = model.schema.map((entity) => entity.name);
   return `import seedData from "../data/seed-data.json";
 
@@ -1013,7 +1157,7 @@ export function loadGeneratedSeedData() {
 `;
 }
 
-function renderReadme(draft: GeneratedAppRuntimeDraft, appId: string, checkpointId: string, model?: RuntimeModel) {
+function renderReadme(draft: GeneratedAppRuntimeDraft, appId: string, checkpointId: string, model?: GeneratedAppRuntimeModel) {
   return `# ${draft.app.name}
 
 Generated app artifact for \`${appId}\` at checkpoint \`${checkpointId}\`.
@@ -1022,16 +1166,16 @@ ${draft.summary}
 
 Primary entity: \`${model?.primaryEntity ?? draft.app.dataSchema[0]?.name ?? "record"}\`.
 
-## Local CRUD
+## Server-backed CRUD
 
-The generated app runs with local React state seeded from \`src/data/seed-data.json\`.
-It includes dashboard counts, entity switching, create, edit, and archive actions for the primary entity.
+The generated app talks to Taskloom's per-app SQLite runtime through \`/api/app/generated-apps/:appId/api/*\`.
+Data survives page reloads and is shared across browser tabs for the same generated app.
 
 ## Data Files
 
-- \`src/data/schema.ts\` - typed local schema.
-- \`src/data/seed-data.json\` - starter records.
-- \`src/api/generated-api.ts\` - simple CRUD-ish handler.
+- \`src/data/schema.ts\` - typed server-runtime schema.
+- \`src/data/seed-data.json\` - starter records used to initialize SQLite.
+- \`src/api/generated-api.ts\` - browser client for the Taskloom runtime API.
 - \`src/db/migrations/0001_initial.sql\` - starter table DDL.
 - \`src/db/seed.ts\` - seed loader helper.
 
@@ -1045,7 +1189,7 @@ ${draft.app.apiRoutes.map((route) => `- \`${route.method} ${route.path}\` - ${ro
 `;
 }
 
-function buildRuntimeModel(draft: GeneratedAppRuntimeDraft): RuntimeModel {
+export function buildGeneratedAppRuntimeModel(draft: GeneratedAppRuntimeDraft): GeneratedAppRuntimeModel {
   const primaryEntity = draft.app.crudFlows[0]?.entity
     ?? draft.app.dataSchema[0]?.name
     ?? "record";
