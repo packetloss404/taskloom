@@ -1,20 +1,38 @@
 # Taskloom
 
-**Self-hosted, open-source workbench for building internal apps and agents. Bring your own LLM key, own your runtime, own your source code.**
+**Self-hosted, open-source workbench for building internal apps and agents — backed by a production-grade platform layer (provider router, agent runtime, encrypted vault, distributed scheduler, dual-write Postgres migration, and a release-readiness evidence framework). Bring your own LLM key, own your runtime, own your source code.**
 
 Taskloom is a self-hosted workbench for drafting internal apps and agents from natural-language prompts. The builder is a full-bleed surface at `/builder` — chat thread, streamed prose, draft, plan, generated files, and a saved local preview. The rest of the workbench (Projects, Runs, and a consolidated Admin) lives behind a four-item sidebar so operators can keep most of their day inside the builder.
 
+Underneath the builder sits a substantial internal-developer-platform: a Hono REST+SSE API (`src/server.ts`), a provider-agnostic LLM router across six backends, a tool-using agent loop with a cost ledger, a Playwright browser runtime, a Docker/native command sandbox, an AES-256-GCM secrets vault, RBAC, inbound/outbound webhooks, a job scheduler with distributed leader election, a zero-downtime SQLite→Postgres dual-write migration engine, and a release-gating / evidence platform. It is hand-built, multi-phase product engineering — roughly 73K LOC of non-test TypeScript source backed by ~1,500 test cases — not a scaffold.
+
 The builder routes through `ProviderRouter` and supports **six BYOK providers** end-to-end: Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM provider that can talk to Ollama, vLLM, LM Studio, or llama.cpp — on `localhost` or on a separate GPU box on your LAN. Anthropic stays the default; operators can re-order priority with `TASKLOOM_PROVIDER_PRIORITY` or pick the `local` preset to force the local provider. Without any key configured, the builder falls back to deterministic template-only generation, which is enough to verify the loop but not enough to produce real apps from open-ended prompts.
 
-This is "Fork B": self-host first, MIT licensed, no telemetry, no vendor in the path. Hosted-only conveniences (free public subdomains, pre-wired OAuth, managed App Store submission, hosted browser-agent farms, cross-tenant memory, vendor-managed credit meters) are intentionally out of scope — they are inventoried in [CLOUD.md](CLOUD.md) for reference, not as a roadmap commitment.
+This is "Fork B": self-host first, MIT licensed, no telemetry, no vendor in the path. Hosted-only conveniences (free public subdomains, pre-wired OAuth, managed App Store submission, cross-tenant memory, vendor-managed credit meters) are intentionally out of scope — they are inventoried in [CLOUD.md](CLOUD.md) for reference, not as a roadmap commitment.
+
+## What's actually inside
+
+Taskloom's headline is "self-host app builder," but the surrounding platform is the larger story. Every subsystem below is wired into `src/server.ts`, exercised by tests, and shipped — not aspirational.
+
+- **Two-phase LLM file-tree codegen** (`src/codegen/llm-author.ts`). The LLM authors whole React/Vite file trees via `write_file` tool calls: JSON plan parsing (fenced + bracket-scan fallback, one retry), token-budgeted chunked write rounds (`MAX_FILES_PER_WRITE_CHUNK=8`, `CHUNK_WRITE_THRESHOLD=10`), partial-result tolerance, and a workspace-escape `isSafePath` guard. `AppBuilderDraft` is a derived view; generated files land under `data/generated-apps/.../workspace` with sha256 manifests.
+- **Provider-agnostic router** (`src/providers/router.ts`). Route-key → provider/model dispatch, six real BYOK clients, `preset-resolver.ts` (cheap/fast/smart/local presets walking a priority list), `ledger.ts` cost recording, and an always-present `stub` fallback so the loop runs without keys.
+- **Tool-using agent loop** (`src/tools/agent-loop.ts`). Provider-routed, cost-ledger-wrapped, registered tool execution with tool-result feedback, abort signals, and capped turns. Tool registry/executor and read/write/browser builtins under `src/tools/`.
+- **Real Playwright browser runtime** (`src/tools/browser-runtime.ts`). Headless chromium, per-run page sessions, screenshot artifacts to `data/artifacts/<runId>`, graceful shutdown on SIGINT/SIGTERM.
+- **Command sandbox** (`src/sandbox/`). A driver abstraction with a Docker driver (`--network=none`, cpu/memory caps, read-only rootfs) and a native child-process fallback that does cross-platform process-tree kill (`taskkill` on Windows, SIGKILL elsewhere) with timeout-forced termination.
+- **AES-256-GCM secrets vault** (`src/security/vault.ts`). PBKDF2 100k iterations, auth-tag validation, masking, and a production `MASTER_KEY` enforcement guard. Backs the Integrations secret store.
+- **Zero-downtime SQLite→Postgres dual-write migration engine** (`src/repositories/*`, `src/db/`). Per-entity repositories (jobs, agent-runs, activities, alert-events, provider-calls, invitation-email-deliveries) with `*-read.ts` read models, dual-write handlers, and `*.dual-write.test.ts` + `*.read-parity.test.ts` suites proving SQLite/Postgres parity. `src/db/postgres-client.ts` pools connections; `db:backfill-*` / `db:verify-*` scripts cover 8+ entity types. 17 SQL migrations in `src/db/migrations`.
+- **Distributed job scheduler** (`src/jobs/`). Persisted queue with five-field cron, exponential retry, and dead-letter — plus three leader-election strategies for multi-node coordination: a file TTL lock (`scheduler-lock.ts`), an HTTP coordinator (`scheduler-http-coordinator.ts`), and a noop, selected via `scheduler-leader-selection.ts`. Registers cron, metrics-snapshot, and alert evaluate/deliver job types.
+- **Release-readiness / evidence platform** (`src/deployment/`, `operations-status.ts`). A release-gating, runtime-guard, and topology-verification framework (~17K LOC) with its own CLIs (`deployment:check-*`, `release-evidence-cli`) that emit release-gating evidence bundles. Managed-database topology and runtime guards, storage-topology checks, and release-evidence reporting back the Releases / Operations admin surfaces.
+- **Integration connector verifier** (`src/codegen/integration-sandbox.ts`). Deterministically pre-flights model / db / email / webhook / payment / github / browser connector readiness before preview/runtime.
+- **RBAC, webhooks, share links, activation analytics.** `rbac.ts` (viewer/member/admin/owner, server-enforced), API-key auth, inbound webhooks that trigger agent runs, outbound webhooks (alerts + invitation-email delivery) with retry/dead-letter/signing, public share links, and an onboarding/activation analytics subsystem (`src/activation/*`).
 
 ## How it compares
 
 Taskloom is not trying to match hosted AI app builders (twin.so, Replit Agents, Lovable, v0, anything.com) feature-for-feature. It is a different category — a self-host workbench, not a hosted SaaS — and the tradeoffs are deliberate.
 
-- **What self-host gives up.** No free public subdomain with auto TLS (you bring your own DNS and certificate). No pre-wired OAuth connectors (you register your own OAuth clients with each provider). No one-click App Store / Play Store submission (no managed macOS build farm). No hosted browser-agent farm with persistent sessions. No cross-tenant user memory. No vendor-hosted credit meter. No vendor-amortized LLM key — you bring your own across any of six providers (Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, or a local Ollama / vLLM / LM Studio / llama.cpp endpoint).
+- **What self-host gives up.** No free public subdomain with auto TLS (you bring your own DNS and certificate). No pre-wired OAuth connectors (you register your own OAuth clients with each provider). No one-click App Store / Play Store submission (no managed macOS build farm). No cross-tenant user memory. No vendor-hosted credit meter. No vendor-amortized LLM key — you bring your own across any of six providers (Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, or a local Ollama / vLLM / LM Studio / llama.cpp endpoint).
 - **What self-host gains.** Your data, your source code, your LLM key, and your deploy target — all on infrastructure you own. No vendor in the path between you and your customers. No per-seat pricing. No rate limits beyond what your own LLM provider imposes on your own key. The local-LLM provider can be pointed at a separate GPU box on your LAN, so the workbench laptop stays cheap while inference runs where the silicon is. Single MIT-licensed binary that runs anywhere Node 22 runs — laptop, container, VPS, homelab, behind a VPN.
-- **Honest about what is not built yet.** Whole-file-tree codegen authored by the LLM via `write_file` tool calls is now the default path when a BYOK key is configured (see [docs/CODEGEN_FILETREE.md](docs/CODEGEN_FILETREE.md)); the deterministic template path remains as a fallback and as an explicit opt-out via `TASKLOOM_LEGACY_TEMPLATES=1`. Iteration parity, chunked planning for large apps, and `vite build` validation alongside `tsc --noEmit` are wired in, but multi-round auto-fix on broken TypeScript is not — validation errors surface inline in the Builder chat thread for user-driven iteration. Generated apps persist data in the browser via sql.js loaded from a jsdelivr CDN — known issue, scheduled to move to a per-app server runtime with SQLite on disk in Phase 3 Track C. The agent tool catalog today is limited to workspace introspection; outbound capabilities (`http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, `shell_for_agent`) are Track D.
+- **Honest about what is not built yet.** Whole-file-tree codegen authored by the LLM via `write_file` tool calls is the default path when a BYOK key is configured (see [docs/CODEGEN_FILETREE.md](docs/CODEGEN_FILETREE.md)); the deterministic template path remains as a fallback and as an explicit opt-out via `TASKLOOM_LEGACY_TEMPLATES=1`. Iteration parity, chunked planning for large apps, and `vite build` validation alongside `tsc --noEmit` are wired in, but multi-round auto-fix on broken TypeScript is not — validation errors surface inline in the Builder chat thread for user-driven iteration. Generated apps persist data in the browser via sql.js loaded from a jsdelivr CDN — known issue, scheduled to move to a per-app server runtime with SQLite on disk in Phase 3 Track C. The agent tool catalog today is workspace-introspection plus the in-box browser runtime; outbound capabilities (`http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, `shell_for_agent`) are Track D.
 - **Honest about the gap with hosted.** The deferred hosted-only capabilities and what a future "Taskloom Cloud" product would need to ship them are inventoried in [CLOUD.md](CLOUD.md). That document is for strategic reference, not a roadmap commitment — self-host stays the default.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
@@ -39,9 +57,9 @@ Taskloom is not trying to match hosted AI app builders (twin.so, Replit Agents, 
 
 ## Why Taskloom
 
-Most prompt-to-app builders are hosted SaaS that own your data, your runtime, your model relationships, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, behind your VPN, or on a colo box you own. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, and audit included.
+Most prompt-to-app builders are hosted SaaS that own your data, your runtime, your model relationships, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, behind your VPN, or on a colo box you own. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, audit, and release-readiness tooling included.
 
-This is a deliberate category split. If a free public URL, pre-wired OAuth connectors, a hosted browser farm, or one-click App Store submission is what you actually need, a hosted vendor will serve you better — those features are structurally easier when a vendor owns the runtime. See [CLOUD.md](CLOUD.md) for a full inventory of what self-host gives up. If instead you want to own your data, your source code, and your LLM key end-to-end with no vendor in the path, Taskloom is built for that.
+This is a deliberate category split. If a free public URL, pre-wired OAuth connectors, or one-click App Store submission is what you actually need, a hosted vendor will serve you better — those features are structurally easier when a vendor owns the runtime. See [CLOUD.md](CLOUD.md) for a full inventory of what self-host gives up. If instead you want to own your data, your source code, and your LLM key end-to-end with no vendor in the path, Taskloom is built for that.
 
 ## Getting started
 
@@ -111,26 +129,30 @@ You can also register a new account from the sign-up page. To reset local data b
 
 ### Build
 
-- **Prompt-to-app and prompt-to-agent.** Describe an internal app or agent in plain language; Taskloom drafts a brief, page map, data model, and acceptance checks.
+- **Prompt-to-app and prompt-to-agent.** Describe an internal app or agent in plain language; Taskloom drafts a brief, page map, data model, and acceptance checks, then has the LLM author the file tree directly.
+- **Two-phase file-tree codegen.** Plan-then-write orchestrator with chunked planning for larger apps, partial-result tolerance, workspace-escape guards, and `tsc --noEmit` + `vite build` validation (phase-tagged, surfaced inline in chat).
 - **Draft, preview, iterate, publish handoff.** Diff-review every change before applying. Each apply creates a checkpoint with source files on disk, a Taskloom-served local preview, smoke checks, and rollback metadata.
 - **Template gallery.** Six ready-to-edit agent templates ship in the box (see below). Use them as starting points or compose from scratch.
 - **First-class scoped iteration.** Targeted change prompts edit one slice of the app instead of regenerating everything.
+- **Connector pre-flight.** The integration sandbox deterministically verifies model / db / email / webhook / payment / github / browser connector readiness before preview/runtime.
 
 ### Run
 
 - **Workflows.** Briefs, requirements, plans, blockers, open questions, validation evidence, and release confirmation — all editable in the workbench, all versioned.
-- **Agent runs and runs activity.** Drilldown view at `/runs/:id` with transcript, tool-call timeline, logs, and a one-click failure-diagnostic helper.
+- **Agent runs and runs activity.** Drilldown view at `/runs/:id` with transcript, tool-call timeline, logs, and a one-click failure-diagnostic helper. Runs execute through a real provider-routed tool-use loop with per-call cost accounting.
 - **Multi-provider routing.** Six providers wired through `ProviderRouter`: Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM provider (Ollama / vLLM / LM Studio / llama.cpp). Switch per-agent; bring your own keys.
-- **Browser tools.** Optional Playwright-backed `browser_goto`, screenshots, and DOM tools for agent runs (artifacts persisted under `data/artifacts/`).
+- **Browser tools.** Playwright-backed `browser_goto`, screenshots, and DOM tools for agent runs — real per-run headless chromium sessions with artifacts persisted under `data/artifacts/<runId>`.
 
 ### Operate
 
-- **Encrypted secrets vault** with AES-256-GCM at rest.
+- **Encrypted secrets vault** — AES-256-GCM at rest, PBKDF2 100k iterations, auth-tag validation, masking, production `MASTER_KEY` enforcement.
 - **Audit log** for workspace actions, role changes, and sensitive mutations.
 - **Webhooks in and out.** Inbound public webhooks trigger agent runs; outbound webhooks deliver alerts and invitation events with retry, dead-letter, and shared-secret signing.
-- **Persistent jobs queue + cron.** Five-field cron expressions for any registered job type, with scheduler leader election for multi-process deployments.
+- **Persistent jobs queue + cron + distributed leader election.** Five-field cron for any registered job type, exponential retry, dead-letter, plus three leader-election strategies (file TTL lock, HTTP coordinator, noop) for multi-process / multi-node deployments.
+- **Release-readiness & evidence tooling.** A release-gating / runtime-guard / topology-verification framework (`src/deployment/`, `operations-status.ts`) with CLIs (`deployment:check-*`, `release-evidence-cli`) that emit release-gating evidence bundles — surfaced through the Releases and Operations admin tabs.
+- **Alert engine.** `evaluateAlerts` + a delivery pipeline with metrics snapshots, scheduled as job types.
 - **SSE run streaming** for live transcripts and tool-call output.
-- **RBAC** with viewer / member / admin / owner roles, enforced server-side.
+- **RBAC** with viewer / member / admin / owner roles, enforced server-side, plus API-key auth.
 - **Consolidated Admin.** Sixteen operator surfaces (Roles, SSO, Secrets, Rate limits, Webhooks, Releases, Storage, Backups, Notifications, Operations, Integrations, Activation, Sandbox, Workflows, Billing, Alerts) live under a single tabbed `/admin/:tab` page. The sidebar collapses to four items: Build, Projects, Runs, Admin. Back-compat redirects keep the old per-page URLs working.
 - **Command palette** (Cmd/Ctrl-K) for fast navigation and run shortcuts.
 
@@ -139,7 +161,18 @@ You can also register a new account from the sign-up page. To reset local data b
 - **MIT licensed**, single-binary friendly, runs anywhere Node 22 runs.
 - **No telemetry.** Nothing phones home.
 - **BYO keys.** No vendored model relationships; no proxy in the middle.
-- **JSON, SQLite, or managed Postgres.** Default is file-backed JSON for contributor flow; flip to SQLite for single-node deployments or managed Postgres for horizontal app writers.
+- **JSON, SQLite, or managed Postgres.** Default is file-backed JSON for contributor flow; flip to SQLite for single-node deployments or managed Postgres for horizontal app writers — backed by a dual-write migration engine with read-parity test suites (see below).
+
+## Data layer: SQLite → managed Postgres
+
+Taskloom runs on Node's built-in `node:sqlite` (`DatabaseSync`, WAL, foreign keys on, busy_timeout) and ships a production-grade, zero-downtime path to managed Postgres:
+
+- **Per-entity repositories** (`src/repositories/*`) for jobs, agent-runs, activities, alert-events, provider-calls, and invitation-email-deliveries, each with a `*-read.ts` read model.
+- **Dual-write handlers** that write to both SQLite and Postgres during migration, with `*.dual-write.test.ts` and `*.read-parity.test.ts` suites proving the two stores stay in parity.
+- **Pooled Postgres client** (`src/db/postgres-client.ts`) plus managed-database topology and runtime-guard checks under `src/deployment/`.
+- **Backfill / verify CLIs** (`db:backfill-*`, `db:verify-*`) covering 8+ entity types, and 17 ordered SQL migrations in `src/db/migrations`.
+
+Managed Postgres is gated behind explicit startup flags; the distributed scheduler and these repositories are what make multi-node operation real rather than aspirational.
 
 ## Agent templates
 
@@ -160,7 +193,7 @@ Every template is editable; instantiate one and tune the instructions, tools, sc
 
 A first-class sandbox runtime ships under `/api/app/sandbox/*` with a `/sandbox` view in the workbench. It powers ad-hoc command execution and (opt-in) the app-builder smoke pipeline that verifies generated apps before publish handoff.
 
-- **Drivers.** `docker` (default) runs `docker run --rm -i --network=none --cpus --memory --read-only --tmpfs /tmp` against runtimes `node-20`, `python-3.11`, `ubuntu-22`. A `native` host-process fallback is available and clearly marked **insecure** in the UI.
+- **Drivers.** `docker` (default) runs `docker run --rm -i --network=none --cpus --memory --read-only --tmpfs /tmp` against runtimes `node-20`, `python-3.11`, `ubuntu-22`. A `native` host-process fallback is available and clearly marked **insecure** in the UI; it does cross-platform process-tree termination (`taskkill` on Windows, SIGKILL elsewhere) with timeout-forced kill.
 - **Endpoints.** `GET /status`, `GET /runtimes`, `POST /exec`, `GET /exec`, `GET /exec/:id`, `POST /exec/:id/cancel`, `GET /exec/:id/stream` (SSE).
 - **Workbench UI.** Status panel, runtime readiness, command composer, exec history, and a live log viewer with stdout / stderr tabs and follow-tail. The Builder also gains a per-app Sandbox tab.
 - **Smoke integration.** With `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`, draft-apply, change-apply, and preview-refresh route every smoke check through the sandbox. Per-check details get `sandbox: exit N · Mms` appended and the message is suffixed with `(verified via sandbox · driver=…)`. Off by default — enable once Docker is available.
@@ -190,14 +223,22 @@ Common environment variables:
 | `LOCAL_LLM_API_FORMAT` | `ollama` | `ollama` (native `/api/chat`) or `openai` (`/v1/chat/completions`). Set to `openai` for vLLM / LM Studio / llama.cpp. |
 | `LOCAL_LLM_MODEL` | _unset_ | Pins the model name when the remote server only loads one specific model. |
 
-Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` / `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `MINIMAX_API_KEY`) are configured per-workspace under **Admin → Integrations**, stored in the encrypted secrets vault, and never logged.
+Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` / `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `MINIMAX_API_KEY`) are configured per-workspace under **Admin → Integrations**, stored in the encrypted secrets vault, and never logged. A production `MASTER_KEY` is required to unseal the vault.
 
 ## Architecture
 
-- **Frontend.** React 19 + Vite, mounted at `/`. Tailwind CSS, Geist fonts, a silver / grey / green-light theme. `/builder` is a full-bleed route outside the workbench Shell (chat thread, streamed prose, split preview). The rest of the workbench lives behind a four-item sidebar (Build, Projects, Runs, Admin); sixteen operator surfaces are tabbed under `/admin/:tab`.
-- **Backend.** Hono on `@hono/node-server`. Routes for `/api/health`, `/api/auth/*`, `/api/app/*` (with cross-origin and CSRF enforcement), `/api/public/share`, public webhooks, and sandbox.
-- **Persistence.** File-backed JSON for contributor flow; SQLite (WAL, foreign keys on, busy_timeout) for single-node deployments; managed Postgres for horizontal app writers.
-- **Jobs.** Persisted queue with five-field cron, exponential retry, dead-letter, and optional file- or HTTP-based scheduler leader election.
+- **Frontend.** React 19 + react-router 7 + Vite 7, mounted at `/`. Tailwind CSS, Geist fonts, a silver / grey / green-light theme. `/builder` is a full-bleed route outside the workbench Shell (chat thread, streamed prose, split preview). The rest of the workbench lives behind a four-item sidebar (Build, Projects, Runs, Admin); sixteen operator surfaces are tabbed under `/admin/:tab`.
+- **Backend.** Hono on `@hono/node-server`. `src/server.ts` mounts ~20 route groups (`app-routes`, `workflow-routes`, `webhook-routes`, `share-routes`, `sandbox-routes`, four `operations-*-routes`, and more) with access-log middleware, redacted error envelopes, `enforcePrivateAppMutationSecurity` on `/api/app/*`, cross-origin/CSRF enforcement, public webhooks, and static serving of the built web + run artifacts.
+- **LLM layer.** `ProviderRouter` route-key dispatch over six BYOK clients, `preset-resolver` priority walking, and a cost `ledger`. A `stub` provider keeps the loop runnable with zero keys.
+- **Codegen + agents.** `src/codegen/` (plan/write/chunk orchestrator, path validator, derived-draft, app-builder/iteration services, generated-app runtime/workspace, preview/snapshot/publish-readiness) and `src/tools/` (agent loop, registry/executor, read/write/browser builtins, Playwright runtime) plus `src/sandbox/`.
+- **Persistence.** File-backed JSON for contributor flow; `node:sqlite` (WAL, foreign keys on, busy_timeout) for single-node; managed Postgres via per-entity repositories with dual-write + read-parity. 17 SQL migrations.
+- **Jobs / ops.** Persisted queue with five-field cron, exponential retry, dead-letter, three-way scheduler leader election, an alert engine, metrics snapshots, and a deployment release-readiness / evidence subsystem.
+
+## Engineering & testing
+
+Taskloom is hand-crafted, senior-level TypeScript (ESM, Node ≥22.5): strict typing, narrow interfaces, dependency injection for testability (clock / spawn / prompt overrides), and consistent error redaction at the API boundary. Structure is feature-sliced (`providers/`, `tools/`, `jobs/`, `sandbox/`, `deployment/`, `repositories/`, `activation/`, `codegen/`, `security/`) with near-zero dead code.
+
+Testing is first-class: **~1,500 test cases across ~143 test files** (node:test) — roughly a 0.7:1 test-to-source ratio — including SQLite/Postgres parity suites, async-boundary tests, and managed-Postgres transaction/concurrency tests. Biggest modules by LOC: `operations-status` (5,069), `taskloom-store` (4,941), `app-routes` (4,176), `release-readiness` (3,431), `app-builder-service` (3,255).
 
 ## Development
 
@@ -227,11 +268,11 @@ Generated `web/dist/` is gitignored; rebuild locally rather than committing it.
 
 - **File-tree codegen is the default path; legacy templates remain as a fallback.** When a BYOK provider key is configured, the LLM authors the file tree directly via `write_file` tool calls and `AppBuilderDraft` is computed as a derived view (see [docs/CODEGEN_FILETREE.md](docs/CODEGEN_FILETREE.md)). Setting `TASKLOOM_LEGACY_TEMPLATES=1` forces the older template path; the previous opt-in flag `TASKLOOM_FILETREE_CODEGEN=1` is preserved as a no-op. Multi-round auto-fix on broken TypeScript is not yet wired — validation errors (tsc + vite build, phase-tagged) surface inline in the Builder chat thread for user-driven iteration. See [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md) for the broader scope.
 - **Generated apps use sql.js loaded from a jsdelivr CDN.** Each generated app's index loads `sql-wasm.js` and the matching wasm file from `cdn.jsdelivr.net` and persists rows in browser `localStorage`. That means generated apps phone home on first load and lose data when the browser store is cleared. Replacing this with a per-app server runtime backed by SQLite on disk is Phase 3 Track C.
-- **Agent tool catalog is workspace-introspection only.** Agents can read workspace state (workflows, runs, blockers, audit) but cannot yet make outbound HTTP calls, post to Slack, hit GitHub, send email, run arbitrary SQL, or execute shell. The six outbound tools (`http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, `shell_for_agent`) are Phase 3 Track D.
+- **Agent tool catalog is workspace-introspection plus the in-box browser runtime.** Agents can read workspace state (workflows, runs, blockers, audit) and drive the Playwright browser runtime, but cannot yet make arbitrary outbound HTTP calls, post to Slack, hit GitHub, send email, run arbitrary SQL, or execute shell as a first-class agent tool. The six outbound tools (`http_fetch`, `slack_post_webhook`, `github_api`, `email_send`, `sql_query`, `shell_for_agent`) are Phase 3 Track D.
 - **Preview is local.** Builder preview routes serve generated source files from disk through Taskloom. They are not public deployments unless you configure and validate a public URL.
 - **Publish is a handoff.** The publish surface records package metadata, artifact manifests, validation state, compose guidance, history, and rollback targets. Operators still run the self-hosted runtime and networking.
 - **Sandbox smoke is opt-in.** Docker-backed smoke checks require Docker and `TASKLOOM_SANDBOX_SMOKE_ENABLED=1`; otherwise statuses should remain explicit about pending, blocked, or fallback checks.
-- **Self-host is the category, not a step toward hosted.** Taskloom is not pursuing parity with Replit, v0, Bolt, Lovable, or anything.com. Hosted-only capabilities (free public subdomain, pre-wired OAuth, managed App Store submission, hosted browser farm) are inventoried in [CLOUD.md](CLOUD.md) and intentionally out of scope.
+- **Self-host is the category, not a step toward hosted.** Taskloom is not pursuing parity with Replit, v0, Bolt, Lovable, or anything.com. Hosted-only capabilities (free public subdomain, pre-wired OAuth, managed App Store submission) are inventoried in [CLOUD.md](CLOUD.md) and intentionally out of scope.
 
 ### SQLite mode
 
@@ -241,13 +282,13 @@ npm run db:migrate
 npm run db:seed
 ```
 
-`npm run db:reset` recreates the schema and reseeds. `npm run db:backup` and `npm run db:restore` snapshot and restore the SQLite file. See `npm run` for the full list of database commands, including managed-Postgres backfill helpers.
+`npm run db:reset` recreates the schema and reseeds. `npm run db:backup` and `npm run db:restore` snapshot and restore the SQLite file. See `npm run` for the full list of database commands, including managed-Postgres backfill (`db:backfill-*`) and verify (`db:verify-*`) helpers.
 
 ## Project status
 
-Taskloom is in active development under the Fork B (self-host first) positioning. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
+Taskloom is in active development under the Fork B (self-host first) positioning. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox, release-readiness tooling) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates, backed by the dual-write migration engine; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
 
-Multi-provider BYOK at the builder is now done — six providers (Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM endpoint) route through `ProviderRouter`. File-tree codegen now runs by default when a BYOK key is configured: plan-then-write orchestrator, chunked planning for larger apps, iteration parity, and `vite build` validation alongside `tsc --noEmit` all landed in this round. The remaining planned chunk — multi-round auto-fix on broken TypeScript, real per-app SQLite runtime, a fuller agent tool catalog, and the cross-cutting security hardening that goes with all of the above — is scoped in [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md) (29–39 focused days, 6–9 calendar weeks for a solo engineer).
+Multi-provider BYOK at the builder is done — six providers (Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM endpoint) route through `ProviderRouter`. File-tree codegen runs by default when a BYOK key is configured: plan-then-write orchestrator, chunked planning for larger apps, iteration parity, and `vite build` validation alongside `tsc --noEmit`. The remaining planned chunk — multi-round auto-fix on broken TypeScript, a real per-app SQLite runtime, a fuller outbound agent tool catalog, and the cross-cutting security hardening that goes with all of the above — is scoped in [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md) (29–39 focused days, 6–9 calendar weeks for a solo engineer).
 
 For current product changes, see [CHANGELOG.md](CHANGELOG.md). For the remaining MVP and post-MVP work, see [BACKLOG.md](BACKLOG.md), the [project website](https://packetloss404.github.io/taskloom/), and the [GitHub Issues](https://github.com/packetloss404/taskloom/issues) tab.
 
