@@ -408,10 +408,26 @@ scheduler.register({
   },
 });
 app.use("/data/artifacts/*", async (c, next) => {
+  // Gated behind an explicit opt-in flag (default OFF, even in dev) — see
+  // artifactServingEnabled(). Static artifacts are not tenant-scoped here:
+  // anyone who can reach the route can read any artifact. Today this is only
+  // intended to back the local preview flow when the operator opts in.
+  // TODO(security): add per-tenant auth-scoping so a session/preview token is
+  // required and only the owning workspace's artifacts are served.
   if (!artifactServingEnabled()) return c.text("not found", 404);
   await next();
 });
-app.use("/data/artifacts/*", serveStatic({ root: "./" }));
+// Scope the static root to the artifacts directory itself (NOT "./") so a
+// crafted path can't traverse out into the repo/source tree. The URL keeps the
+// "/data/artifacts" prefix for callers, but we strip it before resolving on disk
+// so files resolve relative to the artifacts dir.
+app.use(
+  "/data/artifacts/*",
+  serveStatic({
+    root: "./data/artifacts",
+    rewriteRequestPath: (path) => path.replace(/^\/data\/artifacts/, ""),
+  }),
+);
 
 if (existsSync("./web/dist/index.html")) {
   app.use("/*", serveStatic({ root: "./web/dist" }));
@@ -450,10 +466,12 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
 }
 
 export function artifactServingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const configured = env.TASKLOOM_ARTIFACT_SERVING_ENABLED;
-  if (isEnvTruthy(configured)) return true;
-  if (isEnvFalsey(configured)) return false;
-  return env.NODE_ENV !== "production";
+  // Require an EXPLICIT opt-in regardless of NODE_ENV. Previously this
+  // defaulted ON whenever NODE_ENV !== "production", silently exposing
+  // unauthenticated artifact serving in dev. Now it is OFF unless the operator
+  // sets TASKLOOM_ARTIFACT_SERVING_ENABLED to a truthy value (matching the
+  // default-off documentation in .env.example).
+  return isEnvTruthy(env.TASKLOOM_ARTIFACT_SERVING_ENABLED);
 }
 
 function isExecutedDirectly(): boolean {

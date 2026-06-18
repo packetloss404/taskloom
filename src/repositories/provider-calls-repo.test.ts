@@ -172,6 +172,36 @@ test("list applies only positive limits after filtering", () => {
   });
 });
 
+test("list with since and limit returns correct bounded results", () => {
+  runOnBoth((repo) => {
+    repo.insertMany([
+      makeRecord({ id: "t08", workspaceId: "ws_a", completedAt: "2026-04-26T08:00:00.000Z" }),
+      makeRecord({ id: "t10", workspaceId: "ws_a", completedAt: "2026-04-26T10:00:00.000Z" }),
+      makeRecord({ id: "t12", workspaceId: "ws_a", completedAt: "2026-04-26T12:00:00.000Z" }),
+      makeRecord({ id: "t14", workspaceId: "ws_a", completedAt: "2026-04-26T14:00:00.000Z" }),
+      // Different workspace must never leak into the result.
+      makeRecord({ id: "other", workspaceId: "ws_b", completedAt: "2026-04-26T13:00:00.000Z" }),
+    ]);
+
+    // since is inclusive on completedAt and the LIMIT bounds the newest rows.
+    assert.deepEqual(
+      repo.list({ workspaceId: "ws_a", since: "2026-04-26T10:00:00.000Z" }).map((entry) => entry.id),
+      ["t14", "t12", "t10"],
+    );
+    assert.deepEqual(
+      repo
+        .list({ workspaceId: "ws_a", since: "2026-04-26T10:00:00.000Z", limit: 2 })
+        .map((entry) => entry.id),
+      ["t14", "t12"],
+    );
+    // since that excludes everything returns an empty result.
+    assert.deepEqual(
+      repo.list({ workspaceId: "ws_a", since: "2026-04-26T15:00:00.000Z" }),
+      [],
+    );
+  });
+});
+
 test("list sorts by completedAt descending then id descending", () => {
   runOnBoth((repo) => {
     repo.insertMany([

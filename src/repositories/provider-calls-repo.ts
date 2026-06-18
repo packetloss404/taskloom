@@ -188,17 +188,25 @@ export function sqliteProviderCallsRepository(
     list(filter) {
       const db = openDatabase(dbPath);
       try {
-        const sql: string[] = [
-          "select * from provider_calls where workspace_id = ? order by completed_at desc, id desc",
-        ];
+        // Push the `since` predicate and LIMIT into SQL so the
+        // idx_provider_calls_workspace_completed index bounds the rows read,
+        // instead of loading the whole workspace partition and filtering in JS.
+        // completed_at is stored as an ISO-8601 string, so the lexical
+        // `completed_at >= ?` comparison matches the prior JS predicate
+        // (Date.parse(completedAt) >= Date.parse(since)) for ISO values.
+        const sql: string[] = ["select * from provider_calls where workspace_id = ?"];
         const params: Array<string | number> = [filter.workspaceId];
-        if (filter.since === undefined && isPositiveLimit(filter.limit)) {
+        if (filter.since !== undefined) {
+          sql.push("and completed_at >= ?");
+          params.push(filter.since);
+        }
+        sql.push("order by completed_at desc, id desc");
+        if (isPositiveLimit(filter.limit)) {
           sql.push("limit ?");
           params.push(filter.limit);
         }
         const rows = db.prepare(sql.join(" ")).all(...params) as unknown as ProviderCallRow[];
-        const records = rows.map(rowToRecord);
-        return applySinceAndLimit(records, filter.since, filter.limit);
+        return rows.map(rowToRecord);
       } finally {
         db.close();
       }

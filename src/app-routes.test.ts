@@ -2141,3 +2141,114 @@ test("preview route rejects a tampered or wrong-app token with a friendly 401", 
   assert.equal(wrongAppResponse.status, 401);
   assert.deepEqual(await wrongAppResponse.json(), { error: "preview link expired or invalid" });
 });
+
+// --- Issue 1: rate-limit identity scoping --------------------------------
+
+test("auth:login limiter scopes the bucket by submitted email so one attacker can't lock everyone out", async (t) => {
+  resetStoreForTests();
+  const previousMax = process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+  process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS = "1";
+  t.after(() => {
+    if (previousMax === undefined) delete process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+    else process.env.TASKLOOM_AUTH_RATE_LIMIT_MAX_ATTEMPTS = previousMax;
+  });
+  const app = createTestApp();
+
+  const attempt = (email: string) =>
+    app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password: "wrong-password" }),
+    });
+
+  // All requests share the same (test) network identity, so without email
+  // scoping they'd all land in one bucket. With max=1 the attacker's first
+  // attempt is allowed through to auth (401), the second is rate limited (429).
+  const attacker1 = await attempt("attacker@taskloom.local");
+  assert.equal(attacker1.status, 401, "first attacker attempt should reach auth, not the limiter");
+  const attacker2 = await attempt("attacker@taskloom.local");
+  assert.equal(attacker2.status, 429, "second attacker attempt should be rate limited");
+
+  // A different victim email must NOT be collateral-damaged by the attacker's
+  // exhausted bucket — it gets its own bucket and reaches auth (401, not 429).
+  const victim = await attempt("victim@taskloom.local");
+  assert.equal(victim.status, 401, "victim should not inherit the attacker's exhausted bucket");
+});
+
+// --- Issue 3: preview-token production secret refusal ---------------------
+
+test("preview-token minting refuses the baked-in fallback secret in production", async (t) => {
+  const previousEnv = process.env.NODE_ENV;
+  const previousPreview = process.env.TASKLOOM_PREVIEW_TOKEN_SECRET;
+  const previousMaster = process.env.TASKLOOM_MASTER_KEY;
+  t.after(() => {
+    if (previousEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousEnv;
+    if (previousPreview === undefined) delete process.env.TASKLOOM_PREVIEW_TOKEN_SECRET;
+    else process.env.TASKLOOM_PREVIEW_TOKEN_SECRET = previousPreview;
+    if (previousMaster === undefined) delete process.env.TASKLOOM_MASTER_KEY;
+    else process.env.TASKLOOM_MASTER_KEY = previousMaster;
+  });
+
+  const { app, alpha, applied } = await setupGeneratedAppForPreviewTokenTests();
+
+  // No real secret configured + production => minting must refuse, not forge.
+  process.env.NODE_ENV = "production";
+  delete process.env.TASKLOOM_PREVIEW_TOKEN_SECRET;
+  delete process.env.TASKLOOM_MASTER_KEY;
+
+  const refused = await app.request(`/api/app/generated-apps/${applied.app.id}/preview-token`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(refused.status, 500);
+  const refusedBody = await refused.json() as { error: string };
+  assert.match(refusedBody.error, /preview tokens are unavailable/);
+
+  // Once a real secret is configured, production minting works again.
+  process.env.TASKLOOM_PREVIEW_TOKEN_SECRET = "a-real-production-preview-secret";
+  const ok = await app.request(`/api/app/generated-apps/${applied.app.id}/preview-token`, {
+    method: "POST",
+    headers: authHeaders(alpha.cookieValue),
+  });
+  assert.equal(ok.status, 200);
+  const okBody = await ok.json() as { token: string };
+  assert.match(okBody.token, /^tk_/);
+});
+
+test("preview verification refuses fallback-forged tokens in production", async (t) => {
+  const previousEnv = process.env.NODE_ENV;
+  const previousPreview = process.env.TASKLOOM_PREVIEW_TOKEN_SECRET;
+  const previousMaster = process.env.TASKLOOM_MASTER_KEY;
+  t.after(() => {
+    if (previousEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousEnv;
+    if (previousPreview === undefined) delete process.env.TASKLOOM_PREVIEW_TOKEN_SECRET;
+    else process.env.TASKLOOM_PREVIEW_TOKEN_SECRET = previousPreview;
+    if (previousMaster === undefined) delete process.env.TASKLOOM_MASTER_KEY;
+    else process.env.TASKLOOM_MASTER_KEY = previousMaster;
+  });
+
+  const { app, applied } = await setupGeneratedAppForPreviewTokenTests();
+
+  // Forge a token against the baked-in dev fallback secret (what an attacker
+  // who read the source would do).
+  const crypto = await import("node:crypto");
+  const fallback = "taskloom-preview-token-dev-fallback-DO-NOT-USE-IN-PROD";
+  const expirySec = Math.floor(Date.now() / 1000) + 3600;
+  const hmac = crypto.createHmac("sha256", fallback).update(`${applied.app.id}.${expirySec}`).digest("base64")
+    .replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const forged = `tk_${applied.app.id}.${expirySec}.${hmac}`;
+
+  // In production with no real secret, verification must refuse (401), not
+  // accept the fallback-forged token.
+  process.env.NODE_ENV = "production";
+  delete process.env.TASKLOOM_PREVIEW_TOKEN_SECRET;
+  delete process.env.TASKLOOM_MASTER_KEY;
+
+  const previewResponse = await app.request(
+    `/api/app/generated-apps/${applied.app.id}/preview/?token=${encodeURIComponent(forged)}`,
+  );
+  assert.equal(previewResponse.status, 401);
+  assert.deepEqual(await previewResponse.json(), { error: "preview link expired or invalid" });
+});

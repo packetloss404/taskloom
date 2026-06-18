@@ -149,6 +149,19 @@ test("isSafePath: rejects absolute paths, .. and empty input", () => {
   assert.equal(isSafePath("src/../../escape"), false);
 });
 
+test("isSafePath: rejects the hardened validator's vectors (NUL/ADS/reserved/trailing-dot)", () => {
+  // These are the previously-missed cases now covered because isSafePath
+  // delegates to the shared hardened validateWorkspacePath().
+  assert.equal(isSafePath("src/App\0.tsx"), false, "NUL byte");
+  assert.equal(isSafePath("foo/bar/../../../etc/passwd"), false, "post-normalize ..");
+  assert.equal(isSafePath("src/CON.tsx"), false, "Windows reserved name");
+  assert.equal(isSafePath("nul"), false, "bare Windows reserved name");
+  assert.equal(isSafePath("notes.txt:hidden.exe"), false, "NTFS ADS via ':'");
+  assert.equal(isSafePath("src/app.tsx."), false, "trailing dot aliasing");
+  assert.equal(isSafePath("src/app.tsx "), false, "trailing whitespace aliasing");
+  assert.equal(isSafePath("\\\\server\\share\\f.ts"), false, "UNC path");
+});
+
 // ---------------------------------------------------------------------------
 // authorAppViaLLM: happy path
 // ---------------------------------------------------------------------------
@@ -314,6 +327,57 @@ test("authorAppViaLLM: invalid paths are skipped, not aborted", async () => {
       () => {},
     );
     assert.ok(result);
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0]?.path, "src/App.tsx");
+  });
+});
+
+test("authorAppViaLLM: write path rejects hardened-validator vectors via write_file", async () => {
+  await withFakeAnthropicKey(async () => {
+    const plan = [{ path: "src/App.tsx", purpose: "root" }];
+    // Previously-missed traversal vectors the inline placeholder accepted.
+    const unsafePaths = [
+      "src/App\0.tsx", // NUL byte
+      "foo/../../../etc/passwd", // post-normalize ..
+      "src/CON.tsx", // Windows reserved device name
+      "notes.txt:hidden.exe", // NTFS alternate data stream
+      "src/app.tsx.", // trailing-dot aliasing
+    ];
+    const unsafeCalls: ScriptedChunk[] = unsafePaths.map((p, idx) => ({
+      toolCall: {
+        id: `bad-${idx}`,
+        name: "write_file",
+        input: { path: p, content: "// nope\n" },
+      },
+    }));
+    const provider = new MockProvider({
+      name: "anthropic",
+      turns: [
+        [
+          { delta: planJson(plan) },
+          { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } },
+        ],
+        [
+          {
+            toolCall: {
+              id: "ok",
+              name: "write_file",
+              input: { path: "src/App.tsx", content: "// ok\n" },
+            },
+          },
+          ...unsafeCalls,
+          { done: true, usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 } },
+        ],
+      ],
+    });
+    const router = makeRouterWithProvider(provider);
+    const result = await authorAppViaLLM(
+      "build app",
+      { workspaceId: "w", preset: "fast", router, resolvePrompts: fixedPrompts },
+      () => {},
+    );
+    assert.ok(result);
+    // Only the single safe file survives; every unsafe vector is dropped.
     assert.equal(result.files.length, 1);
     assert.equal(result.files[0]?.path, "src/App.tsx");
   });

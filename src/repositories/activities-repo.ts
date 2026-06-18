@@ -153,7 +153,7 @@ export function sqliteActivitiesRepository(deps: ActivitiesRepositoryDeps = {}):
       const db = openDatabase(dbPath);
       try {
         const sql: string[] = [
-          "select payload from activities where workspace_id = ? order by occurred_at desc, id desc",
+          "select id, workspace_id, occurred_at, type, payload from activities where workspace_id = ? order by occurred_at desc, id desc",
         ];
         const params: Array<string | number> = [filter.workspaceId];
         if (isPositiveLimit(filter.limit)) {
@@ -169,9 +169,9 @@ export function sqliteActivitiesRepository(deps: ActivitiesRepositoryDeps = {}):
     find(id) {
       const db = openDatabase(dbPath);
       try {
-        const row = db.prepare("select payload from activities where id = ?").get(id) as
-          | ActivityRow
-          | undefined;
+        const row = db
+          .prepare("select id, workspace_id, occurred_at, type, payload from activities where id = ?")
+          .get(id) as ActivityRow | undefined;
         return row ? rowToRecord(row) : null;
       } finally {
         db.close();
@@ -212,11 +212,29 @@ export function sqliteActivitiesRepository(deps: ActivitiesRepositoryDeps = {}):
 }
 
 interface ActivityRow {
+  id: string;
+  workspace_id: string;
+  occurred_at: string;
+  type: string;
   payload: string;
 }
 
 function rowToRecord(row: ActivityRow): ActivityRecord {
-  return JSON.parse(row.payload) as ActivityRecord;
+  try {
+    return JSON.parse(row.payload) as ActivityRecord;
+  } catch {
+    // A corrupt payload must not break list()/find() for the whole workspace.
+    // Fall back to a minimally-valid record reconstructed from the indexed columns.
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      scope: "workspace",
+      event: row.type,
+      occurredAt: row.occurred_at,
+      actor: { type: "system", id: "system" },
+      data: {},
+    };
+  }
 }
 
 function userId(record: ActivityRecord): string | null {

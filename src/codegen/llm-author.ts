@@ -42,6 +42,7 @@ import type {
   ProviderStreamChunk,
   ProviderToolDef,
 } from "../providers/types.js";
+import { validateWorkspacePath } from "./path-validator.js";
 
 // =============================================================================
 // Public types
@@ -88,34 +89,21 @@ export interface AuthorAppOptions {
 // =============================================================================
 
 /**
- * Path safety check. B2 will replace this import with the shared
- * `./path-validator.js`. Until then, a minimal local guard keeps us from
- * accepting paths that obviously escape the workspace root.
+ * Path safety check for the `write_file` handler.
  *
- * Rejects:
- *   - Empty strings
- *   - Absolute paths (POSIX `/foo` or Windows `C:\foo`)
- *   - Paths containing `..` segments
- *   - Backslash-only paths (normalise to forward slash first)
+ * This is a thin boolean wrapper over the hardened, shared
+ * `validateWorkspacePath()` in `./path-validator.js` — the single source of
+ * truth for workspace-path safety. It defends against every traversal trick
+ * the security review surfaced (NUL bytes, `..` escape after normalization,
+ * absolute/UNC/extended paths, Windows reserved device names, NTFS alternate
+ * data streams via `:`, and trailing-dot/whitespace aliasing).
+ *
+ * The write handler calls `validateWorkspacePath()` directly so it can log the
+ * specific rejection reason; this wrapper exists so callers that only need a
+ * yes/no answer keep a stable surface.
  */
 export function isSafePath(input: string): boolean {
-  if (typeof input !== "string") return false;
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return false;
-  // Normalise Windows-style separators so the segment check works on either.
-  const normalised = trimmed.replace(/\\/g, "/");
-  if (normalised.startsWith("/")) return false;
-  if (/^[a-zA-Z]:\//.test(normalised)) return false;
-  const segments = normalised.split("/");
-  for (const segment of segments) {
-    if (segment === "..") return false;
-    if (segment === "" && segments.indexOf(segment) !== segments.length - 1) {
-      // Empty middle segments imply `//` which is suspicious. Trailing empty
-      // (from a trailing slash) is just a directory marker; allow it.
-      return false;
-    }
-  }
-  return true;
+  return validateWorkspacePath(input).ok;
 }
 
 /**
@@ -431,9 +419,10 @@ async function runSingleWriteRound(
           );
           continue;
         }
-        if (!isSafePath(path)) {
+        const pathCheck = validateWorkspacePath(path);
+        if (!pathCheck.ok) {
           console.warn(
-            `[llm-author] write_file rejected unsafe path: ${path}`,
+            `[llm-author] write_file rejected unsafe path: ${path} (${pathCheck.reason})`,
           );
           continue;
         }

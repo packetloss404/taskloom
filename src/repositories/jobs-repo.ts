@@ -349,20 +349,41 @@ export function sqliteJobsRepository(deps: JobsRepositoryDeps = {}): JobsReposit
       try {
         db.exec("begin immediate");
         try {
-          const queued = db
-            .prepare("select * from jobs where status = 'queued'")
-            .all() as unknown as JobRow[];
           const nowMs = now.getTime();
-          const candidate = queued
-            .filter((row) => {
-              const scheduledMs = Date.parse(row.scheduled_at);
-              return !Number.isNaN(scheduledMs) && scheduledMs <= nowMs;
-            })
-            .sort((left, right) => {
-              const cmp = Date.parse(left.scheduled_at) - Date.parse(right.scheduled_at);
-              if (cmp !== 0) return cmp;
-              return left.id.localeCompare(right.id);
-            })[0];
+          // Push the claimable predicate + ordering + limit into SQL so the
+          // idx_jobs_status_scheduled index does the work instead of scanning
+          // every queued row and sorting in JS. The predicate mirrors the old
+          // JS filter (status = 'queued' and scheduledAt due now) and the
+          // ordering mirrors the old sort (oldest scheduledAt first, then id).
+          //
+          // scheduled_at is stored as an ISO-8601 string, for which lexical
+          // ordering and the `<= ?` comparison match chronological order, so
+          // the index range scan returns the correct due row for ISO values.
+          const isoCandidate = db
+            .prepare(
+              `select * from jobs
+                 where status = 'queued' and scheduled_at <= ?
+                 order by scheduled_at, id
+                 limit 1`,
+            )
+            .get(now.toISOString()) as JobRow | undefined;
+          // Also recover any due row whose scheduled_at is a non-ISO (but
+          // Date.parse-valid) string that the lexical `<= ?` comparison skips,
+          // then pick the global Date.parse-minimum across both candidates so
+          // semantics exactly match the prior JS implementation.
+          const nonIsoCandidate = claimNextNonIsoFallback(db, nowMs);
+          // Defensive chronological guard: the lexical `scheduled_at <= ?` query
+          // can return a row that is actually in the future when scheduled_at
+          // carries a non-UTC offset (e.g. `...T09:00:00.000-05:00` sorts before
+          // an ISO `now` but is chronologically later). Enqueue normalizes new
+          // rows to canonical UTC, so this only guards legacy/edge rows — but it
+          // guarantees we never claim a not-yet-due job (matching the JSON
+          // backend and the old JS semantics).
+          const dueIsoCandidate =
+            isoCandidate && Date.parse(isoCandidate.scheduled_at) <= nowMs
+              ? isoCandidate
+              : undefined;
+          const candidate = pickEarlierCandidate(dueIsoCandidate, nonIsoCandidate);
           if (!candidate) {
             db.exec("commit");
             return null;
@@ -445,6 +466,37 @@ interface JobRow {
   cancel_requested: number | null;
   created_at: string;
   updated_at: string;
+}
+
+function pickEarlierCandidate(
+  left: JobRow | undefined,
+  right: JobRow | undefined,
+): JobRow | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  const cmp = Date.parse(left.scheduled_at) - Date.parse(right.scheduled_at);
+  if (cmp !== 0) return cmp < 0 ? left : right;
+  return left.id.localeCompare(right.id) <= 0 ? left : right;
+}
+
+function claimNextNonIsoFallback(db: DatabaseSync, nowMs: number): JobRow | undefined {
+  // Only reached when the indexed `scheduled_at <= ?` lexical query found no
+  // candidate. Recovers queued rows whose scheduled_at is Date.parse-valid but
+  // not lexically comparable to the ISO `now` (e.g. RFC-2822 timestamps).
+  const isoNow = new Date(nowMs).toISOString();
+  const rows = db
+    .prepare("select * from jobs where status = 'queued' and scheduled_at > ?")
+    .all(isoNow) as unknown as JobRow[];
+  return rows
+    .filter((row) => {
+      const scheduledMs = Date.parse(row.scheduled_at);
+      return !Number.isNaN(scheduledMs) && scheduledMs <= nowMs;
+    })
+    .sort((left, right) => {
+      const cmp = Date.parse(left.scheduled_at) - Date.parse(right.scheduled_at);
+      if (cmp !== 0) return cmp;
+      return left.id.localeCompare(right.id);
+    })[0];
 }
 
 function upsertRow(db: DatabaseSync, record: JobRecord): void {

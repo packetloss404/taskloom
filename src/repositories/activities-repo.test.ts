@@ -286,6 +286,47 @@ test("sqlite stores null user_id for system actors", () => {
   });
 });
 
+test("a corrupt payload row does not break list() or find()", () => {
+  withTempSqlite((repo, dbPath) => {
+    repo.upsert(
+      makeRecord({ id: "good_1", workspaceId: "ws_a", occurredAt: "2026-04-26T10:00:00.000Z" }),
+    );
+    repo.upsert(
+      makeRecord({ id: "good_2", workspaceId: "ws_a", occurredAt: "2026-04-26T12:00:00.000Z" }),
+    );
+    // Corrupt the payload of one row directly so JSON.parse will throw.
+    // The table has a check(json_valid(payload)) constraint guarding new
+    // writes; bypass it here to simulate a row that predates the constraint
+    // or was written through another path.
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec("pragma ignore_check_constraints = true");
+      db.prepare(
+        `insert into activities (id, workspace_id, occurred_at, type, payload, user_id, related_subject)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      ).run("corrupt", "ws_a", "2026-04-26T11:00:00.000Z", "activity.broken", "{not valid json", null, null);
+    } finally {
+      db.close();
+    }
+
+    // list() must still return every row (corrupt one falls back, not throws).
+    const rows = repo.list({ workspaceId: "ws_a" });
+    assert.deepEqual(rows.map((entry) => entry.id), ["good_2", "corrupt", "good_1"]);
+    const corrupt = rows.find((entry) => entry.id === "corrupt");
+    assert.ok(corrupt);
+    assert.equal(corrupt?.workspaceId, "ws_a");
+    assert.equal(corrupt?.event, "activity.broken");
+    assert.equal(corrupt?.occurredAt, "2026-04-26T11:00:00.000Z");
+    assert.deepEqual(corrupt?.data, {});
+
+    // find() on the corrupt row also falls back instead of throwing.
+    const found = repo.find("corrupt");
+    assert.ok(found);
+    assert.equal(found?.id, "corrupt");
+    assert.equal(found?.event, "activity.broken");
+  });
+});
+
 test("createActivitiesRepository selects JSON implementation by default", () => {
   const prevStore = process.env.TASKLOOM_STORE;
   try {

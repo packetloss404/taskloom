@@ -336,6 +336,85 @@ test("sqlite recordActivity writes activities to the dedicated table only", () =
   }
 });
 
+test("sqlite: a failing dedicated-table dual-write flush does NOT make the primary mutation throw", () => {
+  const previousStore = process.env.TASKLOOM_STORE;
+  const previousDbPath = process.env.TASKLOOM_DB_PATH;
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-store-flush-failure-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+
+  try {
+    process.env.TASKLOOM_STORE = "sqlite";
+    process.env.TASKLOOM_DB_PATH = dbPath;
+    resetStoreForTests();
+
+    // Make ONLY the post-commit dual-write flush fail, while the canonical
+    // commit succeeds. The canonical commit persists dedicated rows via
+    // "delete from activities" then a fresh insert (the row does not yet
+    // exist), so this trigger does not fire there. The deferred flush then
+    // opens a SEPARATE connection and re-inserts the already-committed row, at
+    // which point the row exists and the trigger aborts -> flush throws.
+    {
+      const setup = new DatabaseSync(dbPath);
+      try {
+        setup.exec(
+          "create trigger activities_block_reinsert before insert on activities when exists(select 1 from activities where id = new.id) begin select raise(abort, 'dedicated activities table is offline'); end",
+        );
+      } finally {
+        setup.close();
+      }
+    }
+
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(" "));
+    };
+
+    // Must NOT throw even though the dedicated-table flush fails.
+    assert.doesNotThrow(() => {
+      mutateStore((data) => {
+        recordActivity(data, {
+          id: "activity_flush_failure",
+          workspaceId: "alpha",
+          scope: "workspace",
+          event: "workspace.updated",
+          occurredAt: "2026-04-26T12:00:00.000Z",
+          actor: { type: "user", id: "user_alpha", displayName: "Alpha User" },
+          data: { title: "Workspace updated" },
+        });
+      });
+    });
+
+    console.warn = originalWarn;
+
+    // Primary write committed: the canonical commit persisted the dedicated
+    // activities row BEFORE the (failing) deferred flush ran, so the row is
+    // present and durable despite the flush failure.
+    const db = new DatabaseSync(dbPath);
+    try {
+      const row = db
+        .prepare("select workspace_id, type from activities where id = ?")
+        .get("activity_flush_failure") as { workspace_id: string; type: string } | undefined;
+      assert.ok(row, "primary write should persist the activity row");
+      assert.equal(row?.workspace_id, "alpha");
+      assert.equal(row?.type, "workspace.updated");
+    } finally {
+      db.close();
+    }
+
+    // The dual-write failure was logged, not swallowed silently.
+    assert.ok(warnings.some((message) => message.includes("dual-write flush failed")));
+  } finally {
+    console.warn = originalWarn;
+    clearStoreCacheForTests();
+    if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
+    else process.env.TASKLOOM_STORE = previousStore;
+    if (previousDbPath === undefined) delete process.env.TASKLOOM_DB_PATH;
+    else process.env.TASKLOOM_DB_PATH = previousDbPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("sqlite store hydrates retired relational collections from dedicated tables", () => {
   const previousStore = process.env.TASKLOOM_STORE;
   const previousDbPath = process.env.TASKLOOM_DB_PATH;

@@ -55,6 +55,22 @@ export interface JobSchedulerStorage {
   sweepStaleRunningJobs(staleAfterMs?: number, now?: Date): Promise<number>;
 }
 
+/**
+ * Canonicalize a caller-supplied scheduledAt to UTC ISO-8601 (`...Z`). Callers
+ * may pass any Date.parse-able string (e.g. a `-05:00` offset or an RFC-2822
+ * date); storing it verbatim breaks the claimNext index scan, which relies on
+ * lexical order matching chronological order. Normalizing to canonical UTC here
+ * keeps every stored scheduled_at lexically comparable in BOTH the JSON and
+ * SQLite backends (preserving read-parity). Returns undefined for absent or
+ * unparseable input so the caller falls back to "now".
+ */
+function normalizeScheduledAt(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return undefined;
+  return new Date(ms).toISOString();
+}
+
 export function enqueueJob(input: EnqueueJobInput): JobRecord {
   const ts = nowIso();
   const record: JobRecord = {
@@ -65,7 +81,7 @@ export function enqueueJob(input: EnqueueJobInput): JobRecord {
     status: "queued",
     attempts: 0,
     maxAttempts: input.maxAttempts ?? 3,
-    scheduledAt: input.scheduledAt ?? ts,
+    scheduledAt: normalizeScheduledAt(input.scheduledAt) ?? ts,
     ...(input.cron ? { cron: input.cron } : {}),
     createdAt: ts,
     updatedAt: ts,
@@ -322,7 +338,7 @@ async function enqueueJobViaAsyncStore(input: EnqueueJobInput): Promise<JobRecor
     status: "queued",
     attempts: 0,
     maxAttempts: input.maxAttempts ?? 3,
-    scheduledAt: input.scheduledAt ?? ts,
+    scheduledAt: normalizeScheduledAt(input.scheduledAt) ?? ts,
     ...(input.cron ? { cron: input.cron } : {}),
     createdAt: ts,
     updatedAt: ts,

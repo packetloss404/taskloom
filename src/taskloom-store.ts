@@ -19,6 +19,7 @@ import { createInvitationEmailDeliveriesRepository } from "./repositories/invita
 import { findJobViaRepository, listJobsForWorkspaceViaRepository } from "./jobs-read.js";
 import { listInvitationEmailDeliveriesViaRepository } from "./invitation-email-deliveries-read.js";
 import { listProviderCallsForWorkspaceViaRepository } from "./provider-calls-read.js";
+import { redactedErrorMessage } from "./security/redaction.js";
 
 export interface UserRecord {
   id: string;
@@ -945,13 +946,28 @@ async function mutateSqliteStoreAsync<T>(dbPath: string, mutator: (data: Taskloo
   }
 }
 
+// Dedicated tables are secondary/derived copies of the canonical store, which
+// commits FIRST (see mutateSqliteStore*). These flushes run post-commit and are
+// best-effort: if a dedicated-table upsert throws, the primary write already
+// succeeded, so the error must NOT propagate to the caller (which would falsely
+// report the whole op as failed) — log it (redacted) and continue so the other
+// dedicated tables still flush. Dedicated tables can be reconciled out-of-band
+// (e.g. repair-activation-read-models / reconcile-invitation-emails in jobs.ts).
+function logDualWriteFlushFailure(table: string, error: unknown): void {
+  console.warn(`[taskloom-store] dedicated ${table} dual-write flush failed (primary write already committed): ${redactedErrorMessage(error)}`);
+}
+
 function flushPendingActivityDualWrites(): void {
   if (pendingActivityDualWrites.length === 0) return;
   const drained = pendingActivityDualWrites.splice(0, pendingActivityDualWrites.length);
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
-  const repo = createActivitiesRepository({});
-  for (const record of drained) {
-    repo.upsert(record);
+  try {
+    const repo = createActivitiesRepository({});
+    for (const record of drained) {
+      repo.upsert(record);
+    }
+  } catch (error) {
+    logDualWriteFlushFailure("activities", error);
   }
 }
 
@@ -959,20 +975,24 @@ function flushPendingActivationSignalDualWrites(): void {
   if (pendingActivationSignalDualWrites.length === 0) return;
   const drained = pendingActivationSignalDualWrites.splice(0, pendingActivationSignalDualWrites.length);
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
-  const db = openStoreDatabase(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
   try {
-    db.exec("begin immediate");
+    const db = openStoreDatabase(resolve(process.env.TASKLOOM_DB_PATH ?? DEFAULT_DB_FILE));
     try {
-      for (const record of drained) {
-        upsertDedicatedActivationSignal(db, record);
+      db.exec("begin immediate");
+      try {
+        for (const record of drained) {
+          upsertDedicatedActivationSignal(db, record);
+        }
+        db.exec("commit");
+      } catch (error) {
+        db.exec("rollback");
+        throw error;
       }
-      db.exec("commit");
-    } catch (error) {
-      db.exec("rollback");
-      throw error;
+    } finally {
+      db.close();
     }
-  } finally {
-    db.close();
+  } catch (error) {
+    logDualWriteFlushFailure("activation_signals", error);
   }
 }
 
@@ -980,9 +1000,13 @@ function flushPendingAgentRunDualWrites(): void {
   if (pendingAgentRunDualWrites.length === 0) return;
   const drained = pendingAgentRunDualWrites.splice(0, pendingAgentRunDualWrites.length);
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
-  const repo = createAgentRunsRepository({});
-  for (const record of drained) {
-    repo.upsert(record);
+  try {
+    const repo = createAgentRunsRepository({});
+    for (const record of drained) {
+      repo.upsert(record);
+    }
+  } catch (error) {
+    logDualWriteFlushFailure("agent_runs", error);
   }
 }
 
@@ -990,9 +1014,13 @@ function flushPendingInvitationEmailDeliveryDualWrites(): void {
   if (pendingInvitationEmailDeliveryDualWrites.length === 0) return;
   const drained = pendingInvitationEmailDeliveryDualWrites.splice(0, pendingInvitationEmailDeliveryDualWrites.length);
   if (process.env.TASKLOOM_STORE !== "sqlite") return;
-  const repo = createInvitationEmailDeliveriesRepository({});
-  for (const record of drained) {
-    repo.upsert(record);
+  try {
+    const repo = createInvitationEmailDeliveriesRepository({});
+    for (const record of drained) {
+      repo.upsert(record);
+    }
+  } catch (error) {
+    logDualWriteFlushFailure("invitation_email_deliveries", error);
   }
 }
 

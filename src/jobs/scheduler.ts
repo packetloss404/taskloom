@@ -32,6 +32,16 @@ function backoffMs(attempt: number): number {
   return Math.min(BACKOFF_BASE_MS * Math.pow(2, attempt - 1), BACKOFF_CAP_MS);
 }
 
+/**
+ * Identifies the fail-closed error thrown by the HTTP leader coordinator on a
+ * 401/403 (see scheduler-http-coordinator.ts). That error is raised deliberately
+ * so the scheduler does NOT treat an auth failure as "I am the leader". We must
+ * never swallow it silently.
+ */
+function isCoordinatorAuthError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("scheduler leader coordinator returned ");
+}
+
 export class JobScheduler {
   private handlers = new Map<string, JobHandler>();
   private polling = false;
@@ -93,11 +103,22 @@ export class JobScheduler {
         }
         const job = await claimNextJobAsync(new Date());
         if (job) {
-          void this.runJob(job);
+          void this.runJob(job).catch((error) => {
+            console.warn(`scheduler: unhandled error running job ${job.id} (${redactedErrorMessage(error)})`);
+          });
           this.scheduleNext(0);
           return;
         }
-      } catch { /* ignore */ }
+      } catch (error) {
+        // Surface outages and coordinator failures instead of silently spinning.
+        // The HTTP leader coordinator intentionally throws on 401/403 so that an
+        // auth failure does NOT fail-open to "everyone is leader"; make it loud.
+        if (isCoordinatorAuthError(error)) {
+          console.error(`scheduler: leader coordinator authentication failed; refusing to fail open (${redactedErrorMessage(error)})`);
+        } else {
+          console.warn(`scheduler: tick failed (${redactedErrorMessage(error)})`);
+        }
+      }
       this.scheduleNext(this.pollIntervalMs);
     } finally {
       recordTickEnd();
@@ -142,25 +163,44 @@ export class JobScheduler {
       recordTerminal("success");
       await updateJobAsync(job.id, { status: "success", result, completedAt: new Date().toISOString() });
       if (job.cron) {
+        let next: Date;
         try {
-          const next = nextAfter(job.cron, new Date());
+          next = nextAfter(job.cron, new Date());
+        } catch (cronError) {
+          // Invalid cron expression: stop recurring (terminal, not transient).
+          console.warn(`scheduler: stopping recurrence for job ${job.id}; invalid cron expression (${redactedErrorMessage(cronError)})`);
+          return;
+        }
+        try {
           await enqueueRecurringJobAsync(job, next.toISOString());
-        } catch { /* invalid cron => stop recurring */ }
+        } catch (enqueueError) {
+          // Transient store failure: surface it rather than silently dropping the
+          // schedule, which would stop recurrence forever.
+          console.warn(`scheduler: failed to re-enqueue recurring job ${job.id} (${redactedErrorMessage(enqueueError)})`);
+        }
       }
     } catch (error) {
-      const fresh = await findJobAsync(job.id);
-      if (fresh?.cancelRequested || ctrl.signal.aborted) {
-        recordTerminal("canceled");
-        await updateJobAsync(job.id, { status: "canceled", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
-        return;
-      }
-      if (job.attempts < job.maxAttempts) {
-        // retry path: do not record metrics; only terminal outcomes are tracked.
-        const next = new Date(Date.now() + backoffMs(job.attempts));
-        await updateJobAsync(job.id, { status: "queued", error: redactedErrorMessage(error), scheduledAt: next.toISOString(), startedAt: undefined });
-      } else {
-        recordTerminal("failed");
-        await updateJobAsync(job.id, { status: "failed", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
+      // Failure-handling itself awaits store writes; if those reject the rejection
+      // would otherwise escape this async method and (with Node's default
+      // unhandledRejection=throw) crash the scheduler process. Guard them so a
+      // store error while handling a job failure can never escape.
+      try {
+        const fresh = await findJobAsync(job.id);
+        if (fresh?.cancelRequested || ctrl.signal.aborted) {
+          recordTerminal("canceled");
+          await updateJobAsync(job.id, { status: "canceled", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
+          return;
+        }
+        if (job.attempts < job.maxAttempts) {
+          // retry path: do not record metrics; only terminal outcomes are tracked.
+          const next = new Date(Date.now() + backoffMs(job.attempts));
+          await updateJobAsync(job.id, { status: "queued", error: redactedErrorMessage(error), scheduledAt: next.toISOString(), startedAt: undefined });
+        } else {
+          recordTerminal("failed");
+          await updateJobAsync(job.id, { status: "failed", error: redactedErrorMessage(error), completedAt: new Date().toISOString() });
+        }
+      } catch (storeError) {
+        console.warn(`scheduler: failed to persist failure outcome for job ${job.id} (${redactedErrorMessage(storeError)})`);
       }
     } finally {
       clearInterval(cancelWatcher);

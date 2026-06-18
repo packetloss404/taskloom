@@ -406,6 +406,58 @@ test("claimNext skips jobs scheduled in the future", () => {
   });
 });
 
+test("claimNext respects scheduledAt ordering and never claims future jobs early", () => {
+  runOnBoth((repo) => {
+    repo.upsert(
+      makeRecord({ id: "due_late", workspaceId: "ws_a", scheduledAt: "2026-04-26T09:45:00.000Z" }),
+    );
+    repo.upsert(
+      makeRecord({ id: "due_early", workspaceId: "ws_a", scheduledAt: "2026-04-26T09:00:00.000Z" }),
+    );
+    repo.upsert(
+      makeRecord({ id: "due_mid", workspaceId: "ws_a", scheduledAt: "2026-04-26T09:30:00.000Z" }),
+    );
+    repo.upsert(
+      makeRecord({ id: "future", workspaceId: "ws_a", scheduledAt: "2026-04-26T10:30:00.000Z" }),
+    );
+
+    const now = new Date("2026-04-26T10:00:00.000Z");
+    // Claims should come out in scheduledAt order, oldest first.
+    assert.equal(repo.claimNext(now)?.id, "due_early");
+    assert.equal(repo.claimNext(now)?.id, "due_mid");
+    assert.equal(repo.claimNext(now)?.id, "due_late");
+    // The future-scheduled job is never claimable at this `now`.
+    assert.equal(repo.claimNext(now), null);
+    assert.equal(repo.find("future")?.status, "queued");
+
+    // Once time advances past its schedule, the future job becomes claimable.
+    const later = new Date("2026-04-26T11:00:00.000Z");
+    assert.equal(repo.claimNext(later)?.id, "future");
+  });
+});
+
+test("claimNext never claims a future job whose scheduledAt carries a non-UTC offset", () => {
+  // Regression: a negative-offset timestamp sorts lexically before an ISO `now`
+  // but is chronologically later, so the indexed `scheduled_at <= ?` scan would
+  // otherwise claim it early — diverging from the JSON backend / old semantics.
+  runOnBoth((repo) => {
+    // 2026-04-26T09:00:00.000-05:00 === 14:00Z, i.e. four hours in the FUTURE
+    // relative to the 10:00Z `now`, yet lexically "...T09..." < "...T10:00Z".
+    repo.upsert(
+      makeRecord({
+        id: "future_offset",
+        workspaceId: "ws_a",
+        scheduledAt: "2026-04-26T09:00:00.000-05:00",
+      }),
+    );
+    const now = new Date("2026-04-26T10:00:00.000Z");
+    assert.equal(repo.claimNext(now), null);
+    assert.equal(repo.find("future_offset")?.status, "queued");
+    // It becomes claimable only once `now` passes 14:00Z.
+    assert.equal(repo.claimNext(new Date("2026-04-26T14:30:00.000Z"))?.id, "future_offset");
+  });
+});
+
 test("claimNext invoked twice picks two different jobs", () => {
   runOnBoth((repo) => {
     repo.upsert(

@@ -4,8 +4,9 @@ import { listInvitationEmailDeliveriesIndexed, resetStoreForTests } from "../../
 import { createAgent, createWorkspaceInvitation, handleInvitationEmailJob, INVITATION_EMAIL_JOB_TYPE, login, resendWorkspaceInvitation, updateAgent } from "../../taskloom-services.js";
 import { TASKLOOM_INVITATION_EMAIL_MODE_ENV, TASKLOOM_INVITATION_EMAIL_RETRY_MAX_ATTEMPTS_ENV, TASKLOOM_INVITATION_EMAIL_WEBHOOK_URL_ENV } from "../../invitation-email.js";
 import { resetInvitationEmailDeliveryForTests, setInvitationEmailFetchForTests } from "../../invitation-email-delivery.js";
-import { enqueueJob, enqueueRecurringJob, findJob, listJobs, maintainScheduledAgentJobs, updateJob } from "../store.js";
+import { defaultJobSchedulerStorage, enqueueJob, enqueueRecurringJob, findJob, listJobs, maintainScheduledAgentJobs, updateJob } from "../store.js";
 import { JobScheduler } from "../scheduler.js";
+import type { SchedulerLeaderLock } from "../scheduler-lock.js";
 import { __resetSchedulerMetricsForTests, getJobTypeMetrics } from "../scheduler-metrics.js";
 import { __resetSchedulerHeartbeatForTests, getSchedulerHeartbeat } from "../scheduler-heartbeat.js";
 import { getOperationsStatus } from "../../operations-status.js";
@@ -369,4 +370,124 @@ test("recurring scheduled agent jobs preserve payload inputs", () => {
   assert.deepEqual(next?.payload.inputs, { mailbox: "support@example.com" });
   assert.equal(next?.payload.agentId, agent.id);
   assert.equal(next?.payload.triggerKind, "schedule");
+});
+
+// --- Reliability bug regression tests ---------------------------------------
+
+function captureConsole(method: "warn" | "error"): { lines: string[]; restore: () => void } {
+  const lines: string[] = [];
+  const original = console[method];
+  console[method] = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  return { lines, restore: () => { console[method] = original; } };
+}
+
+test("store error while handling a job failure does not crash the scheduler (rejection handled)", async () => {
+  resetStoreForTests();
+  __resetSchedulerMetricsForTests();
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+
+  const originalUpdate = defaultJobSchedulerStorage.updateJob;
+  const originalFind = defaultJobSchedulerStorage.findJob;
+  const captured = captureConsole("warn");
+  try {
+    // The handler throws so we enter runJob's failure path; the store writes in
+    // that path then reject. Before the fix the rejection escaped runJob (launched
+    // with `void this.runJob(job)` and no .catch) and crashed the process.
+    defaultJobSchedulerStorage.findJob = async () => { throw new Error("store offline"); };
+    defaultJobSchedulerStorage.updateJob = async () => { throw new Error("store offline"); };
+
+    const scheduler = new JobScheduler({ pollIntervalMs: 20 });
+    scheduler.register({
+      type: "test.storefail",
+      async handle() { throw new Error("handler boom"); },
+    });
+    enqueueJob({ workspaceId: "alpha", type: "test.storefail" });
+    scheduler.start();
+    // Let the scheduler claim + run the job and continue ticking afterwards.
+    await wait(300);
+    await scheduler.stop();
+
+    assert.deepEqual(unhandled, [], `expected no unhandled rejections, got: ${unhandled.map(String).join(", ")}`);
+    // The store error during failure-handling must be surfaced, not swallowed.
+    assert.ok(
+      captured.lines.some((line) => /failed to persist failure outcome/.test(line)),
+      `expected a logged store-failure warning, got: ${JSON.stringify(captured.lines)}`,
+    );
+  } finally {
+    captured.restore();
+    defaultJobSchedulerStorage.updateJob = originalUpdate;
+    defaultJobSchedulerStorage.findJob = originalFind;
+    process.removeListener("unhandledRejection", onUnhandled);
+  }
+});
+
+test("tick surfaces a leader-coordinator auth error instead of silently swallowing it", async () => {
+  resetStoreForTests();
+  __resetSchedulerMetricsForTests();
+  const captured = captureConsole("error");
+  // Coordinator throws the fail-closed auth error (see scheduler-http-coordinator.ts);
+  // tick() must surface it rather than treating it as "not leader, keep spinning".
+  const authError = new Error("scheduler leader coordinator returned 401");
+  let acquireCalls = 0;
+  const failingLock: SchedulerLeaderLock = {
+    async acquire() { acquireCalls++; throw authError; },
+    async release() { /* noop */ },
+    isHeld() { return false; },
+  };
+  const scheduler = new JobScheduler({ pollIntervalMs: 20, leaderLock: failingLock });
+  try {
+    scheduler.start();
+    for (let i = 0; i < 30; i++) {
+      if (acquireCalls >= 1 && captured.lines.length >= 1) break;
+      await wait(20);
+    }
+  } finally {
+    await scheduler.stop();
+    captured.restore();
+  }
+  assert.ok(acquireCalls >= 1, "expected the leader lock to be acquired at least once");
+  assert.ok(
+    captured.lines.some((line) => /coordinator authentication failed/.test(line)),
+    `expected a logged coordinator auth error, got: ${JSON.stringify(captured.lines)}`,
+  );
+});
+
+test("recurring re-enqueue store failure is logged, not silently dropped", async () => {
+  resetStoreForTests();
+  __resetSchedulerMetricsForTests();
+  const originalEnqueueRecurring = defaultJobSchedulerStorage.enqueueRecurringJob;
+  const captured = captureConsole("warn");
+  try {
+    // Valid cron, but the store rejects when re-enqueuing the next occurrence.
+    // Before the fix this transient error was swallowed by the same catch that
+    // handles an invalid cron, silently stopping recurrence forever.
+    defaultJobSchedulerStorage.enqueueRecurringJob = async () => { throw new Error("store offline"); };
+
+    const scheduler = new JobScheduler({ pollIntervalMs: 20 });
+    scheduler.register({
+      type: "test.cronfail",
+      async handle() { return "ok"; },
+    });
+    const job = enqueueJob({ workspaceId: "alpha", type: "test.cronfail", cron: "*/5 * * * *" });
+    scheduler.start();
+    for (let i = 0; i < 40; i++) {
+      if (findJob(job.id)?.status === "success") break;
+      await wait(20);
+    }
+    // Give the re-enqueue attempt a moment to run after the success update.
+    await wait(60);
+    await scheduler.stop();
+
+    // The original job still completes (re-enqueue failure must not abort the run).
+    assert.equal(findJob(job.id)?.status, "success");
+    assert.ok(
+      captured.lines.some((line) => /failed to re-enqueue recurring job/.test(line)),
+      `expected a logged re-enqueue failure, got: ${JSON.stringify(captured.lines)}`,
+    );
+  } finally {
+    captured.restore();
+    defaultJobSchedulerStorage.enqueueRecurringJob = originalEnqueueRecurring;
+  }
 });

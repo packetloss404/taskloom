@@ -8,6 +8,36 @@ import { migrateDatabase } from "../db/cli.js";
 import { recordAlerts, updateAlertDeliveryStatus } from "./alert-store.js";
 import type { AlertEvent } from "./alert-engine.js";
 import type { AlertEventRecord, TaskloomData } from "../taskloom-store.js";
+import type { AlertEventsRepository } from "../repositories/alert-events-repo.js";
+
+// A dedicated-table repository whose writes always fail, to simulate a
+// secondary-store failure that must not surface as a primary failure.
+function throwingAlertEventsRepository(): AlertEventsRepository {
+  const boom = (): never => {
+    throw new Error("dedicated alert_events table is offline");
+  };
+  return {
+    list: () => [],
+    count: () => 0,
+    insertMany: boom,
+    updateDeliveryStatus: boom,
+    prune: boom,
+  };
+}
+
+function captureConsoleWarn(): { messages: string[]; restore: () => void } {
+  const messages: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    messages.push(args.map((arg) => String(arg)).join(" "));
+  };
+  return {
+    messages,
+    restore: () => {
+      console.warn = original;
+    },
+  };
+}
 
 interface AlertEventRow {
   id: string;
@@ -324,6 +354,90 @@ test("recordAlerts is a no-op for the dedicated alert_events table in JSON-defau
   } finally {
     if (previousStore === undefined) delete process.env.TASKLOOM_STORE;
     else process.env.TASKLOOM_STORE = previousStore;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("recordAlerts: a failing dedicated alert_events write does NOT throw and primary JSON store still persists", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-alert-dual-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+  migrateDatabase({ dbPath });
+  const restore = withSqliteEnv(dbPath);
+  const warn = captureConsoleWarn();
+  try {
+    const data = makeStore();
+    const events: AlertEvent[] = [makeEvent({ id: "evt_a" }), makeEvent({ id: "evt_b" })];
+
+    // Must NOT throw even though the dedicated-table write fails.
+    const result = recordAlerts(
+      events,
+      true,
+      undefined,
+      { retentionDays: 0, now: () => new Date("2026-04-26T12:30:00.000Z") },
+      { ...makeStoreDeps(data), alertEventsRepository: throwingAlertEventsRepository() },
+    );
+
+    // Primary write succeeded -> reports success and JSON store is persisted.
+    assert.equal(result.stored, 2);
+    assert.equal(data.alertEvents.length, 2);
+    // Dedicated table received nothing (the write threw).
+    assert.equal(readDedicated(dbPath).length, 0);
+    // Failure was logged, not swallowed silently.
+    assert.ok(warn.messages.some((m) => m.includes("dual-write failed")));
+  } finally {
+    warn.restore();
+    restore();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("updateAlertDeliveryStatus: a failing dedicated-table write does NOT throw and primary JSON update still persists", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-alert-dual-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+  migrateDatabase({ dbPath });
+  const restore = withSqliteEnv(dbPath);
+  const warn = captureConsoleWarn();
+  try {
+    const seeded = makeRecord({ id: "evt_a", observedAt: "2026-04-26T12:00:00.000Z", delivered: false });
+    const data = makeStore([seeded]);
+
+    const result = updateAlertDeliveryStatus(
+      { alertId: "evt_a", delivered: true, attemptedAt: "2026-04-26T13:00:00.000Z" },
+      { ...makeStoreDeps(data), alertEventsRepository: throwingAlertEventsRepository() },
+    );
+
+    assert.ok(result);
+    assert.equal(result?.delivered, true);
+    assert.equal(data.alertEvents[0].delivered, true);
+    assert.ok(warn.messages.some((m) => m.includes("dual-write failed")));
+  } finally {
+    warn.restore();
+    restore();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("recordAlerts dedups by id on retry: replaying the same event ids does not duplicate JSON-side records", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "taskloom-alert-dual-"));
+  const dbPath = join(tempDir, "taskloom.sqlite");
+  migrateDatabase({ dbPath });
+  const restore = withSqliteEnv(dbPath);
+  try {
+    const data = makeStore();
+    const events: AlertEvent[] = [makeEvent({ id: "evt_a" }), makeEvent({ id: "evt_b" })];
+    const options = { retentionDays: 0, now: () => new Date("2026-04-26T12:30:00.000Z") };
+
+    recordAlerts(events, true, undefined, options, makeStoreDeps(data));
+    // Evaluate-job retry replays the SAME event ids.
+    recordAlerts(events, true, undefined, options, makeStoreDeps(data));
+
+    const ids = data.alertEvents.map((entry) => entry.id).sort();
+    assert.deepEqual(ids, ["evt_a", "evt_b"]);
+    assert.equal(data.alertEvents.length, 2);
+    // Dedicated table is keyed by id (insert or replace) -> also no duplicates.
+    assert.equal(readDedicated(dbPath).length, 2);
+  } finally {
+    restore();
     rmSync(tempDir, { recursive: true, force: true });
   }
 });

@@ -238,6 +238,36 @@ test("rejects file-tree entries that try to escape the workspace", async () => {
   }
 });
 
+test("rejects hardened-validator vectors in the file tree", async () => {
+  const guard = silencingConsoleWarn();
+  try {
+    const runner: ValidationRunner = async () => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    // Each previously-missed vector must be rejected before any write happens.
+    // writeTree throws and validateFileTree does not swallow it.
+    const vectors: Array<{ path: string; label: RegExp }> = [
+      { path: "src/index\0.ts", label: /escapes workspace/ }, // NUL byte
+      { path: "foo/../../../etc/passwd", label: /escapes workspace/ }, // post-normalize ..
+      { path: "src/CON.ts", label: /escapes workspace/ }, // Windows reserved name
+      { path: "notes.txt:hidden.exe", label: /escapes workspace/ }, // NTFS ADS
+      { path: "src/index.ts.", label: /escapes workspace/ }, // trailing-dot aliasing
+      { path: "/etc/passwd", label: /escapes workspace/ }, // absolute
+    ];
+    for (const { path, label } of vectors) {
+      await assert.rejects(
+        () => validateFileTree([{ path, content: "" }], { env: smokeEnv(), runner }),
+        label,
+        `expected rejection for vector ${JSON.stringify(path)}`,
+      );
+    }
+  } finally {
+    guard.restore();
+  }
+});
+
 test("parseTscOutput unit: handles empty and noisy input", () => {
   const empty = parseTscOutput("");
   assert.deepEqual(empty, { errors: [], warnings: [] });

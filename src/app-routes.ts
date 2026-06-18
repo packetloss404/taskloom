@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { networkInterfaces as defaultNetworkInterfaces } from "node:os";
@@ -145,8 +146,10 @@ appRoutes.get("/auth/session", async (c) => {
 
 appRoutes.post("/auth/register", async (c) => {
   try {
-    await enforceRateLimit(c, "auth:register", AUTH_RATE_LIMIT);
     const body = (await c.req.json()) as { email?: string; password?: string; displayName?: string };
+    // Combine IP + submitted email so one attacker can't exhaust the shared
+    // login/register bucket and lock every account out (see clientKey()).
+    await enforceRateLimit(c, "auth:register", AUTH_RATE_LIMIT, body.email);
     const result = await registerAsync({
       email: body.email ?? "",
       password: body.password ?? "",
@@ -163,8 +166,10 @@ appRoutes.post("/auth/register", async (c) => {
 
 appRoutes.post("/auth/login", async (c) => {
   try {
-    await enforceRateLimit(c, "auth:login", AUTH_RATE_LIMIT);
     const body = (await c.req.json()) as { email?: string; password?: string };
+    // Combine IP + submitted email so one attacker can't exhaust the shared
+    // login/register bucket and lock every account out (see clientKey()).
+    await enforceRateLimit(c, "auth:login", AUTH_RATE_LIMIT, body.email);
     const result = await loginAsync({
       email: body.email ?? "",
       password: body.password ?? "",
@@ -2237,6 +2242,15 @@ function previewTokenSecret(): string {
   if (fromPreview) return fromPreview;
   const fromMaster = (process.env.TASKLOOM_MASTER_KEY ?? "").trim();
   if (fromMaster) return fromMaster;
+  // In production we MUST NOT sign/verify with a constant baked-in secret —
+  // anyone reading the source could forge preview tokens. Refuse outright so the
+  // operator is forced to configure a real secret.
+  if (process.env.NODE_ENV === "production") {
+    throw httpRouteError(
+      500,
+      "preview tokens are unavailable: set TASKLOOM_PREVIEW_TOKEN_SECRET or TASKLOOM_MASTER_KEY",
+    );
+  }
   if (!previewTokenFallbackWarned) {
     previewTokenFallbackWarned = true;
     console.warn(
@@ -2283,7 +2297,14 @@ async function verifyPreviewToken(
   if (!parsed) return { ok: false };
   if (parsed.appId !== routeAppId) return { ok: false };
   if (parsed.expirySec * 1000 < Date.now()) return { ok: false };
-  const expected = previewTokenHmac(parsed.appId, parsed.expirySec);
+  let expected: string;
+  try {
+    expected = previewTokenHmac(parsed.appId, parsed.expirySec);
+  } catch {
+    // No real secret configured in production: refuse to verify (rather than
+    // accept tokens forged against the baked-in dev fallback).
+    return { ok: false };
+  }
   const provided = parsed.hmac;
   if (expected.length !== provided.length) return { ok: false };
   let equal = false;
@@ -4008,10 +4029,15 @@ async function requireWorkspacePermission(context: AuthenticatedRouteContext, pe
   assertPermission(membership, permission);
 }
 
-async function enforceRateLimit(c: Context, scope: string, options: { maxAttempts: number; windowMs: number; maxAttemptsEnv: string; windowMsEnv: string }) {
+async function enforceRateLimit(
+  c: Context,
+  scope: string,
+  options: { maxAttempts: number; windowMs: number; maxAttemptsEnv: string; windowMsEnv: string },
+  identifier?: string | null,
+) {
   const timestamp = Date.now();
   const input = {
-    bucketId: `${scope}:${hashedClientKey(clientKey(c))}`,
+    bucketId: `${scope}:${hashedClientKey(clientKey(c, identifier))}`,
     scope,
     maxAttempts: configuredPositiveInteger(options.maxAttemptsEnv, options.maxAttempts),
     windowMs: configuredPositiveInteger(options.windowMsEnv, options.windowMs),
@@ -4109,11 +4135,63 @@ function distributedRateLimitFailOpen() {
   return ["1", "true", "yes"].includes((process.env.TASKLOOM_DISTRIBUTED_RATE_LIMIT_FAIL_OPEN ?? "").trim().toLowerCase());
 }
 
-function clientKey(c: Context) {
-  if (!trustedProxyEnabled()) return "local";
-  return c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
-    || c.req.header("x-real-ip")?.trim()
-    || "local";
+// Derive the rate-limit client identity.
+//
+// Security notes:
+//   * When a proxy IS trusted, `x-forwarded-for` is "client, proxy1, proxy2"
+//     (left-to-right, original client first). The left-most entry is fully
+//     attacker-controlled (a client can send any XFF it likes), so taking it
+//     blindly lets an attacker rotate the header to dodge the limiter. We walk
+//     the list RIGHT-TO-LEFT and skip a configurable number of trusted proxy
+//     hops (TASKLOOM_TRUSTED_PROXY_HOPS) to land on the real client IP. With no
+//     hop count configured we take the right-most entry (the address our own
+//     trusted edge proxy observed), which the client cannot forge.
+//   * When a proxy is NOT trusted, XFF is untrustworthy entirely, so we use the
+//     real peer/socket address from the connection. Falling back to a single
+//     constant ("local") would put every caller in one shared bucket, letting a
+//     single client lock everyone out (DoS).
+function clientNetworkIdentity(c: Context): string {
+  if (trustedProxyEnabled()) {
+    const forwarded = c.req.header("x-forwarded-for");
+    if (forwarded) {
+      const entries = forwarded.split(",").map((entry) => entry.trim()).filter(Boolean);
+      if (entries.length > 0) {
+        const hops = configuredNonNegativeInteger("TASKLOOM_TRUSTED_PROXY_HOPS", -1);
+        if (hops >= 0) {
+          // Skip `hops` trusted proxies counting from the right; clamp into range.
+          const index = Math.max(0, entries.length - 1 - hops);
+          return entries[index]!;
+        }
+        // No hop count configured: trust the right-most (closest trusted) entry.
+        return entries[entries.length - 1]!;
+      }
+    }
+    const realIp = c.req.header("x-real-ip")?.trim();
+    if (realIp) return realIp;
+  }
+
+  const socketAddress = socketRemoteAddress(c);
+  if (socketAddress) return socketAddress;
+
+  // No socket address available (e.g. in-process test requests). Fall back to
+  // a per-request-shape hint rather than a single global constant so unrelated
+  // callers aren't all collapsed into one shared bucket.
+  return `unknown:${c.req.header("user-agent")?.trim() || "noua"}`;
+}
+
+function socketRemoteAddress(c: Context): string | null {
+  try {
+    const address = getConnInfo(c)?.remote?.address;
+    return address ? address.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function clientKey(c: Context, identifier?: string | null) {
+  const network = clientNetworkIdentity(c);
+  const normalizedId = identifier?.trim().toLowerCase();
+  return normalizedId ? `${network}|${normalizedId}` : network;
 }
 
 function hashedClientKey(clientIdentity: string) {
@@ -4128,6 +4206,11 @@ function trustedProxyEnabled() {
 function configuredPositiveInteger(name: string, fallback: number) {
   const value = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function configuredNonNegativeInteger(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function httpRouteError(status: number, message: string) {

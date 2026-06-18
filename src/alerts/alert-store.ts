@@ -10,8 +10,19 @@ import {
 import { listAlertsViaRepository } from "./alert-store-read.js";
 // Phase 33C: dedicated alert_events table dual-write.
 import { createAlertEventsRepository, createAsyncAlertEventsRepository } from "../repositories/alert-events-repo.js";
+import type { AlertEventsRepository } from "../repositories/alert-events-repo.js";
+import { redactedErrorMessage } from "../security/redaction.js";
 
 const DAY_MS = 86_400_000;
+
+// The dedicated alert_events table is a secondary/derived copy of the canonical
+// JSON-side store. The canonical mutation commits first; the dual-write below is
+// best-effort. A failure here must NOT surface as a primary failure (the caller
+// already succeeded) nor diverge silently — log it (redacted) so the dedicated
+// table can be reconciled out-of-band. See repair/reconcile jobs in src/jobs.ts.
+function logAlertDualWriteFailure(operation: string, error: unknown): void {
+  console.warn(`[alert-store] dedicated alert_events dual-write failed during ${operation}: ${redactedErrorMessage(error)}`);
+}
 const DEFAULT_RETENTION_DAYS = 30;
 
 export interface RecordAlertsOptions {
@@ -21,10 +32,12 @@ export interface RecordAlertsOptions {
 
 export interface RecordAlertsDeps {
   mutateStore?: <T>(mutator: (data: TaskloomData) => T) => T;
+  alertEventsRepository?: AlertEventsRepository;
 }
 
 export interface RecordAlertsAsyncDeps {
   mutateStore?: <T>(mutator: (data: TaskloomData) => T | Promise<T>) => Promise<T>;
+  alertEventsRepository?: AlertEventsRepository;
 }
 
 export interface RecordAlertsResult {
@@ -52,6 +65,18 @@ function ensureAlertCollection(data: TaskloomData): AlertEventRecord[] {
     data.alertEvents = [];
   }
   return data.alertEvents;
+}
+
+// Idempotent insert keyed by record id: evaluate-job retries replay the same
+// event ids, so a plain push would create duplicates. Replace in place when the
+// id already exists, otherwise append.
+function upsertAlertRecord(collection: AlertEventRecord[], record: AlertEventRecord): void {
+  const index = collection.findIndex((entry) => entry.id === record.id);
+  if (index >= 0) {
+    collection[index] = record;
+  } else {
+    collection.push(record);
+  }
 }
 
 function toRecord(
@@ -95,7 +120,7 @@ export function recordAlerts(
     const collection = ensureAlertCollection(data);
     const records = events.map((event) => toRecord(event, deliveryOk, deliveryError, attemptedAt));
     for (const record of records) {
-      collection.push(record);
+      upsertAlertRecord(collection, record);
     }
 
     let pruned = 0;
@@ -114,12 +139,16 @@ export function recordAlerts(
   });
 
   if (process.env.TASKLOOM_STORE === "sqlite") {
-    const repo = createAlertEventsRepository({});
-    if (outcome.records.length > 0) {
-      repo.insertMany(outcome.records);
-    }
-    if (outcome.retainAfterIso !== null) {
-      repo.prune(outcome.retainAfterIso);
+    try {
+      const repo = deps.alertEventsRepository ?? createAlertEventsRepository({});
+      if (outcome.records.length > 0) {
+        repo.insertMany(outcome.records);
+      }
+      if (outcome.retainAfterIso !== null) {
+        repo.prune(outcome.retainAfterIso);
+      }
+    } catch (error) {
+      logAlertDualWriteFailure("recordAlerts", error);
     }
   }
 
@@ -142,7 +171,7 @@ export async function recordAlertsAsync(
     const collection = ensureAlertCollection(data);
     const records = events.map((event) => toRecord(event, deliveryOk, deliveryError, attemptedAt));
     for (const record of records) {
-      collection.push(record);
+      upsertAlertRecord(collection, record);
     }
 
     let pruned = 0;
@@ -161,12 +190,16 @@ export async function recordAlertsAsync(
   });
 
   if (process.env.TASKLOOM_STORE === "sqlite") {
-    const repo = createAlertEventsRepository({});
-    if (outcome.records.length > 0) {
-      repo.insertMany(outcome.records);
-    }
-    if (outcome.retainAfterIso !== null) {
-      repo.prune(outcome.retainAfterIso);
+    try {
+      const repo = deps.alertEventsRepository ?? createAlertEventsRepository({});
+      if (outcome.records.length > 0) {
+        repo.insertMany(outcome.records);
+      }
+      if (outcome.retainAfterIso !== null) {
+        repo.prune(outcome.retainAfterIso);
+      }
+    } catch (error) {
+      logAlertDualWriteFailure("recordAlertsAsync", error);
     }
   }
 
@@ -183,10 +216,12 @@ export interface UpdateAlertDeliveryStatusInput {
 
 export interface UpdateAlertDeliveryStatusDeps {
   mutateStore?: <T>(mutator: (data: TaskloomData) => T) => T;
+  alertEventsRepository?: AlertEventsRepository;
 }
 
 export interface UpdateAlertDeliveryStatusAsyncDeps {
   mutateStore?: <T>(mutator: (data: TaskloomData) => T | Promise<T>) => Promise<T>;
+  alertEventsRepository?: AlertEventsRepository;
 }
 
 export function updateAlertDeliveryStatus(
@@ -218,23 +253,27 @@ export function updateAlertDeliveryStatus(
   });
 
   if (updated && process.env.TASKLOOM_STORE === "sqlite") {
-    const repo = createAlertEventsRepository({});
-    const patch: {
-      delivered: boolean;
-      attemptedAt: string;
-      deliveryError?: string;
-      deadLettered?: boolean;
-    } = {
-      delivered: input.delivered,
-      attemptedAt: input.attemptedAt,
-    };
-    if (input.deliveryError !== undefined) {
-      patch.deliveryError = input.deliveryError;
+    try {
+      const repo = deps.alertEventsRepository ?? createAlertEventsRepository({});
+      const patch: {
+        delivered: boolean;
+        attemptedAt: string;
+        deliveryError?: string;
+        deadLettered?: boolean;
+      } = {
+        delivered: input.delivered,
+        attemptedAt: input.attemptedAt,
+      };
+      if (input.deliveryError !== undefined) {
+        patch.deliveryError = input.deliveryError;
+      }
+      if (input.deadLettered !== undefined) {
+        patch.deadLettered = input.deadLettered;
+      }
+      repo.updateDeliveryStatus(input.alertId, patch);
+    } catch (error) {
+      logAlertDualWriteFailure("updateAlertDeliveryStatus", error);
     }
-    if (input.deadLettered !== undefined) {
-      patch.deadLettered = input.deadLettered;
-    }
-    repo.updateDeliveryStatus(input.alertId, patch);
   }
 
   return updated;
@@ -269,23 +308,27 @@ export async function updateAlertDeliveryStatusAsync(
   });
 
   if (updated && process.env.TASKLOOM_STORE === "sqlite") {
-    const repo = createAlertEventsRepository({});
-    const patch: {
-      delivered: boolean;
-      attemptedAt: string;
-      deliveryError?: string;
-      deadLettered?: boolean;
-    } = {
-      delivered: input.delivered,
-      attemptedAt: input.attemptedAt,
-    };
-    if (input.deliveryError !== undefined) {
-      patch.deliveryError = input.deliveryError;
+    try {
+      const repo = deps.alertEventsRepository ?? createAlertEventsRepository({});
+      const patch: {
+        delivered: boolean;
+        attemptedAt: string;
+        deliveryError?: string;
+        deadLettered?: boolean;
+      } = {
+        delivered: input.delivered,
+        attemptedAt: input.attemptedAt,
+      };
+      if (input.deliveryError !== undefined) {
+        patch.deliveryError = input.deliveryError;
+      }
+      if (input.deadLettered !== undefined) {
+        patch.deadLettered = input.deadLettered;
+      }
+      repo.updateDeliveryStatus(input.alertId, patch);
+    } catch (error) {
+      logAlertDualWriteFailure("updateAlertDeliveryStatusAsync", error);
     }
-    if (input.deadLettered !== undefined) {
-      patch.deadLettered = input.deadLettered;
-    }
-    repo.updateDeliveryStatus(input.alertId, patch);
   }
 
   return updated;

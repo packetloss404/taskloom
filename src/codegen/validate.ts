@@ -28,10 +28,11 @@
 
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, isAbsolute } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { getDefaultSandboxService } from "../sandbox/sandbox-service.js";
+import { validateWorkspacePath } from "./path-validator.js";
 
 export interface GeneratedFile {
   path: string;
@@ -140,13 +141,21 @@ function skipped(durationMs = 0): ValidationResult {
  */
 async function writeTree(workspaceDir: string, files: GeneratedFile[]): Promise<void> {
   for (const file of files) {
-    if (isAbsolute(file.path)) {
-      throw new Error(`generated file path must be relative: ${file.path}`);
+    // Route every generated path through the shared hardened validator so the
+    // two codegen write paths (this one and the llm-author `write_file`
+    // handler) enforce one implementation. The validator rejects absolute,
+    // UNC/extended, NUL-byte, `..`-escaping, Windows-reserved-name, ADS (`:`)
+    // and trailing-dot/whitespace paths.
+    const check = validateWorkspacePath(file.path);
+    if (!check.ok) {
+      // Preserve the historical "escapes workspace" wording so existing
+      // callers/tests that match on it keep working, while surfacing the
+      // validator's specific reason for diagnostics.
+      throw new Error(
+        `generated file path escapes workspace: ${file.path} (${check.reason})`,
+      );
     }
-    const target = resolve(workspaceDir, file.path);
-    if (!target.startsWith(resolve(workspaceDir))) {
-      throw new Error(`generated file path escapes workspace: ${file.path}`);
-    }
+    const target = resolve(workspaceDir, check.normalized ?? file.path);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, file.content, "utf8");
   }
