@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint, typecheck, test & build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build web
+        run: npm run build:web
+
+      # Lint rules for legacy patterns are configured as warnings (see
+      # eslint.config.js), so this exits 0 and does not block CI yet.
+      - name: Lint
+        run: npm run lint
+
+      # The pre-existing codebase has not yet been run through Prettier, so
+      # format:check is non-blocking until a one-time `npm run format` lands.
+      # Remove continue-on-error once the codebase is formatted to enforce it.
+      - name: Check formatting
+        run: npm run format:check
+        continue-on-error: true
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t taskloom:ci .

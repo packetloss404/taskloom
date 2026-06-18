@@ -46,7 +46,9 @@ const DEFAULT_RUNTIME = "node-20";
 const NATIVE_INSECURE_NOTE =
   "Native driver is active. Commands run on the host with no isolation; use only on trusted dev hosts.";
 const NATIVE_PRODUCTION_BLOCK_MESSAGE =
-  "sandbox: native driver is blocked when NODE_ENV=production; use TASKLOOM_SANDBOX_DRIVER=docker or set TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX=true only for a trusted development host";
+  "sandbox: native driver is blocked; it runs untrusted code on the host with no isolation. Use TASKLOOM_SANDBOX_DRIVER=docker, or set TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX=true only for a trusted development host";
+const DOCKER_UNAVAILABLE_BLOCK_MESSAGE =
+  "sandbox: Docker is unavailable and the native fallback is disabled. Start Docker (TASKLOOM_SANDBOX_DRIVER=docker), or set TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX=true only for a trusted development host to allow the insecure native fallback";
 
 export interface SandboxExecRequest {
   workspaceId: string;
@@ -430,17 +432,27 @@ export class SandboxService {
   }
 
   async resolveDriver(): Promise<SandboxDriver> {
-    if (this.cachedDriver && this.cachedDriverAvailable !== null) return this.cachedDriver;
+    // Only a *positive* Docker selection is cached across the process lifetime.
+    // The native driver is never cached so the fail-closed guard is re-evaluated
+    // on every resolution and an out-of-band insecure opt-in can never be
+    // "stuck" past a config change.
+    if (this.cachedDriver === this.dockerDriver && this.cachedDriverAvailable) {
+      return this.dockerDriver;
+    }
     const requested = (this.forcedDriver ?? this.env.TASKLOOM_SANDBOX_DRIVER ?? "auto").toLowerCase();
     if (requested === "native") {
-      this.assertNativeAllowedInProduction();
-      this.cachedDriver = this.nativeDriver;
-      this.cachedDriverAvailable = true;
+      // Explicit native: refused unless the operator opted into the insecure flag.
+      this.assertNativeAllowed();
       return this.nativeDriver;
     }
     if (requested === "docker") {
+      const dockerOk = await this.dockerDriver.available().catch(() => false);
+      if (!dockerOk) {
+        // Fail closed: never silently run native when Docker was explicitly requested.
+        throw new Error(DOCKER_UNAVAILABLE_BLOCK_MESSAGE);
+      }
       this.cachedDriver = this.dockerDriver;
-      this.cachedDriverAvailable = await this.dockerDriver.available();
+      this.cachedDriverAvailable = true;
       return this.dockerDriver;
     }
     // auto
@@ -450,9 +462,12 @@ export class SandboxService {
       this.cachedDriverAvailable = true;
       return this.dockerDriver;
     }
-    this.assertNativeAllowedInProduction();
-    this.cachedDriver = this.nativeDriver;
-    this.cachedDriverAvailable = true;
+    // Docker unavailable under auto. Fail closed: only fall back to the
+    // insecure native driver when the operator explicitly opted in.
+    if (!this.nativeOptIn()) {
+      throw new Error(DOCKER_UNAVAILABLE_BLOCK_MESSAGE);
+    }
+    this.assertNativeAllowed();
     return this.nativeDriver;
   }
 
@@ -587,9 +602,18 @@ export class SandboxService {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
 
-  private assertNativeAllowedInProduction(): void {
-    if (this.env.NODE_ENV !== "production") return;
-    if (isTruthy(this.env.TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX)) return;
+  private nativeOptIn(): boolean {
+    return isTruthy(this.env.TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX);
+  }
+
+  /**
+   * Refuses the native (no-isolation) driver in ALL environments unless the
+   * operator explicitly opts in via TASKLOOM_ALLOW_INSECURE_NATIVE_SANDBOX.
+   * This is independent of NODE_ENV — the native driver runs untrusted code
+   * directly on the host, so it must always be opt-in (fail closed).
+   */
+  private assertNativeAllowed(): void {
+    if (this.nativeOptIn()) return;
     throw new Error(NATIVE_PRODUCTION_BLOCK_MESSAGE);
   }
 }

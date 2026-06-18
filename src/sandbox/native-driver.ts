@@ -66,6 +66,38 @@ export interface NativeDriverDeps {
   spawnImpl?: typeof spawn;
 }
 
+/**
+ * Non-secret host environment variables that are safe to forward to the
+ * untrusted child. We do NOT pass `...process.env` because that leaks secrets
+ * (MASTER_KEY, provider API keys, DATABASE_URL, etc.) into generated code.
+ * Only the minimum needed for binaries and the shell to resolve and run.
+ */
+const ALLOWED_HOST_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "TZ",
+  // Windows shell needs these to locate cmd.exe and system binaries.
+  "SystemRoot",
+  "windir",
+  "COMSPEC",
+  "PATHEXT",
+];
+
+function buildChildEnv(specEnv?: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ALLOWED_HOST_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // Caller-provided env wins and is the only channel for additional values.
+  return { ...env, ...(specEnv ?? {}) };
+}
+
 export function createNativeDriver(deps: NativeDriverDeps = {}): SandboxDriver {
   const spawnFn = deps.spawnImpl ?? spawn;
 
@@ -84,7 +116,7 @@ export function createNativeDriver(deps: NativeDriverDeps = {}): SandboxDriver {
       const emitter = new EventEmitter();
       const child = spawnFn(spec.command, {
         cwd: spec.workingDir,
-        env: { ...process.env, ...(spec.env ?? {}) },
+        env: buildChildEnv(spec.env),
         shell: true,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,

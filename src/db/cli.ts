@@ -378,6 +378,22 @@ export function migrateDatabase(options: DbCliOptions = {}): MigrationResult {
       }
 
       const sql = readFileSync(resolve(migrationsDir, name), "utf8");
+
+      // Safety net: any migration that drops a table or deletes rows can lose
+      // data if its in-SQL transform is wrong. Take a timestamped backup of the
+      // DB file before applying such a migration so the prior state is always
+      // recoverable. Backups land next to the db file as
+      // `<db>.pre-migrate-<name>-<timestamp>.bak`.
+      if (isDestructiveMigration(sql)) {
+        const backupPath = backupBeforeDestructiveMigration(db, dbPath, name);
+        if (backupPath) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[migrate] "${name}" contains a destructive statement; backed up DB to ${backupPath} before applying.`,
+          );
+        }
+      }
+
       db.exec("begin");
       try {
         db.exec(sql);
@@ -394,6 +410,45 @@ export function migrateDatabase(options: DbCliOptions = {}): MigrationResult {
   } finally {
     db.close();
   }
+}
+
+/**
+ * True when a migration's SQL contains a destructive statement (`drop table` or
+ * `delete from`). Comments are stripped first so a migration that only mentions
+ * "drop table" in a comment is not flagged.
+ */
+export function isDestructiveMigration(sql: string): boolean {
+  const withoutBlockComments = sql.replace(/\/\*[\s\S]*?\*\//g, " ");
+  const withoutLineComments = withoutBlockComments.replace(/--[^\n]*/g, " ");
+  const normalized = withoutLineComments.toLowerCase();
+  return /\bdrop\s+table\b/.test(normalized) || /\bdelete\s+from\b/.test(normalized);
+}
+
+/**
+ * Take a timestamped copy of the SQLite DB file before a destructive migration.
+ * Uses the already-open connection to checkpoint the WAL, then copies the file
+ * next to the db as `<db>.pre-migrate-<name>-<timestamp>.bak`. Returns the
+ * backup path, or null if there is no existing db file to back up (fresh db).
+ */
+function backupBeforeDestructiveMigration(
+  db: DatabaseSync,
+  dbPath: string,
+  migrationName: string,
+): string | null {
+  if (!existsSync(dbPath)) return null;
+
+  try {
+    db.exec("pragma wal_checkpoint(full)");
+  } catch {
+    // Best-effort: if checkpoint fails (e.g. no WAL), still copy the main file.
+  }
+
+  const safeName = migrationName.replace(/\.sql$/i, "").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = resolve(dirname(dbPath), `${basename(dbPath)}.pre-migrate-${safeName}-${timestamp}.bak`);
+  mkdirSync(dirname(backupPath), { recursive: true });
+  copyFileSync(dbPath, backupPath);
+  return backupPath;
 }
 
 export function migrationStatus(options: DbCliOptions = {}): MigrationStatusResult {

@@ -1,0 +1,22 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+web/dist
+
+# Runtime data, exports, coverage
+data
+exports
+coverage
+
+# Lockfiles and generated artifacts
+package-lock.json
+
+# Logs
+*.log
+
+# Misc
+tmp
+public
+.git
