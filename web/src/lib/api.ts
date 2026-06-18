@@ -34,7 +34,6 @@ import type {
   ConfirmWorkflowReleaseInput,
   ProviderRecord,
   PublicDashboardPayload,
-  ReleaseHistoryPayload,
   SaveAgentInput,
   SaveProviderInput,
   SaveWorkflowBlockerInput,
@@ -392,7 +391,6 @@ export const api = {
   updateEnvVar: (id: string, body: Partial<SaveWorkspaceEnvVarInput>) =>
     j<{ envVar: WorkspaceEnvVarRecord }>(`/api/app/env-vars/${id}`, { method: "PATCH", body: JSON.stringify(body) }).then((payload) => payload.envVar),
   deleteEnvVar: (id: string) => j<{ ok: boolean }>(`/api/app/env-vars/${id}`, { method: "DELETE" }),
-  getReleaseHistory: () => j<ReleaseHistoryPayload>("/api/app/release-history"),
   getWorkflowBrief: () => j<WorkflowBrief>("/api/app/workflow/brief"),
   saveWorkflowBrief: (body: SaveWorkflowBriefInput) => j<WorkflowBrief>("/api/app/workflow/brief", { method: "PUT", body: JSON.stringify(body) }),
   listWorkflowBriefTemplates: () => j<WorkflowBriefTemplate[]>("/api/app/workflow/brief/templates"),
@@ -484,7 +482,6 @@ export const api = {
     const qs = params.toString();
     return j<unknown>(`/api/app/operations/job-metrics/history${qs ? `?${qs}` : ""}`);
   },
-  getOperationsStatus: () => j<unknown>("/api/app/operations/status"),
   getSandboxStatus: () => j<SandboxStatus>("/api/app/sandbox/status"),
   listSandboxRuntimes: () =>
     j<{ runtimes: SandboxRuntimeInfo[] }>("/api/app/sandbox/runtimes").then((p) => p.runtimes),

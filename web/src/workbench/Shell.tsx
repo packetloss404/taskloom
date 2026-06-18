@@ -9,8 +9,8 @@ export type ViewKey =
   | "workflows" | "runs" | "integrations"
   | "operations" | "sandbox" | "activation" | "settings"
   | "billing" | "roles" | "sso" | "secrets"
-  | "webhooks" | "rate-limits" | "releases"
-  | "notifications" | "storage" | "backups"
+  | "webhooks" | "rate-limits"
+  | "notifications"
   | "admin";
 
 type NavSpec = { id: ViewKey; label: string; icon: IconKey; badge?: string; title?: string };

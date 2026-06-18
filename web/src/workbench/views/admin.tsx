@@ -2,18 +2,15 @@ import { useEffect, useMemo, type ComponentType } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ActivationView } from "./activation";
-import { BackupsView } from "./backups";
 import { BillingView } from "./billing";
 import { IntegrationsView } from "./integrations";
 import { NotificationsView } from "./notifications";
 import { OperationsView } from "./operations";
 import { RateLimitsView } from "./rate-limits";
-import { ReleasesView } from "./releases";
 import { RolesView } from "./roles";
 import { SandboxView } from "./sandbox";
 import { SecretsView } from "./secrets";
 import { SSOView } from "./sso";
-import { StorageView } from "./storage";
 import { WebhooksView } from "./webhooks";
 import { WorkflowsView } from "./workflows";
 
@@ -38,9 +35,6 @@ const ADMIN_TABS: AdminTab[] = [
   { id: "secrets", label: "Secrets vault", Component: SecretsView },
   { id: "rate-limits", label: "Rate limits", Component: RateLimitsView },
   { id: "webhooks", label: "Webhooks", Component: WebhooksView },
-  { id: "releases", label: "Releases", Component: ReleasesView },
-  { id: "storage", label: "Storage", Component: StorageView },
-  { id: "backups", label: "Backups", Component: BackupsView },
   { id: "notifications", label: "Notifications", Component: NotificationsView },
   { id: "operations", label: "Operations", Component: OperationsView },
   { id: "integrations", label: "Integrations", Component: IntegrationsView },

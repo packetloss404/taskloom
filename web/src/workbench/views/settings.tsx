@@ -43,10 +43,7 @@ const ADVANCED_GROUPS: Array<{ title: string; note: string; entries: AdvancedEnt
     note: "Advanced admin tools that usually sit behind the builder workflow.",
     entries: [
       { label: "Webhooks", path: "/webhooks", icon: "webhook", owner: "Admin", description: "Outbound events, retry state, and signing keys." },
-      { label: "Releases", path: "/releases", icon: "branch", owner: "Admin", description: "Version promotion, rollout state, and evidence." },
       { label: "Notifications", path: "/notifications", icon: "bell", owner: "Admin", description: "Email, inbox, and alert delivery settings." },
-      { label: "Storage", path: "/storage", icon: "database", owner: "Admin", description: "Database, file storage, and retention posture." },
-      { label: "Backups", path: "/backups", icon: "archive", owner: "Admin", description: "Exports, restore points, and data safeguards." },
     ],
   },
 ];

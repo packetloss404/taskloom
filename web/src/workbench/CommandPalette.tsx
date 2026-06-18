@@ -117,10 +117,7 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
       { id: "nav-secrets", label: "Secrets vault", group: "Advanced", keywords: "secrets vault env", icon: "vault", perform: () => go("/secrets") },
       { id: "nav-webhooks", label: "Webhooks", group: "Advanced", keywords: "webhooks triggers", icon: "webhook", perform: () => go("/webhooks") },
       { id: "nav-rate-limits", label: "Rate limits", group: "Advanced", keywords: "rate limits quota", icon: "gauge", perform: () => go("/rate-limits") },
-      { id: "nav-releases", label: "Releases", group: "Advanced", keywords: "releases deployments", icon: "branch", perform: () => go("/releases") },
       { id: "nav-notifications", label: "Notifications", group: "Advanced", keywords: "notifications channels alerts", icon: "bell", perform: () => go("/notifications") },
-      { id: "nav-storage", label: "Storage & DB", group: "Advanced", keywords: "storage database tables", icon: "database", perform: () => go("/storage") },
-      { id: "nav-backups", label: "Backups & data", group: "Advanced", keywords: "backups data export", icon: "archive", perform: () => go("/backups") },
     ];
     const agentCommands: PaletteCommand[] = agents.flatMap((a) => [{
       id: `open-agent-${a.id}`,

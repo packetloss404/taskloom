@@ -358,33 +358,6 @@ export type SaveWorkspaceEnvVarInput = {
   description?: string;
 };
 
-export interface ReleaseHistoryEntry {
-  id: string;
-  workspaceId: string;
-  versionLabel: string;
-  status: "pending" | "confirmed" | "rolled_back";
-  confirmed: boolean;
-  summary: string;
-  confirmedBy: string;
-  confirmedAt: string | null;
-  validationEvidenceIds: string[];
-  updatedAt: string;
-}
-
-export interface ReleasePreflight {
-  passedEvidence: number;
-  failedEvidence: number;
-  pendingEvidence: number;
-  openBlockers: number;
-  openQuestions: number;
-  ready: boolean;
-}
-
-export interface ReleaseHistoryPayload {
-  releases: ReleaseHistoryEntry[];
-  preflight: ReleasePreflight;
-}
-
 export type SaveAgentInput = {
   name: string;
   description?: string;

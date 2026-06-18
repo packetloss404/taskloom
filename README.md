@@ -1,10 +1,10 @@
 # Taskloom
 
-**Self-hosted, open-source workbench for building internal apps and agents — backed by a production-grade platform layer (provider router, agent runtime, encrypted vault, distributed scheduler, dual-write Postgres migration, and a release-readiness evidence framework). Bring your own LLM key, own your runtime, own your source code.**
+**Self-hosted, open-source workbench for building internal apps and agents — backed by a production-grade platform layer (provider router, agent runtime, encrypted vault, distributed scheduler, and dual-write Postgres migration). Bring your own LLM key, own your runtime, own your source code.**
 
 Taskloom is a self-hosted workbench for drafting internal apps and agents from natural-language prompts. The builder is a full-bleed surface at `/builder` — chat thread, streamed prose, draft, plan, generated files, and a saved local preview. The rest of the workbench (Projects, Runs, and a consolidated Admin) lives behind a four-item sidebar so operators can keep most of their day inside the builder.
 
-Underneath the builder sits a substantial internal-developer-platform: a Hono REST+SSE API (`src/server.ts`), a provider-agnostic LLM router across six backends, a tool-using agent loop with a cost ledger, a Playwright browser runtime, a Docker/native command sandbox, an AES-256-GCM secrets vault, RBAC, inbound/outbound webhooks, a job scheduler with distributed leader election, a zero-downtime SQLite→Postgres dual-write migration engine, and a release-gating / evidence platform. It is hand-built, multi-phase product engineering — roughly 73K LOC of non-test TypeScript source backed by ~1,500 test cases — not a scaffold.
+Underneath the builder sits a substantial internal-developer-platform: a Hono REST+SSE API (`src/server.ts`), a provider-agnostic LLM router across six backends, a tool-using agent loop with a cost ledger, a Playwright browser runtime, a Docker/native command sandbox, an AES-256-GCM secrets vault, RBAC, inbound/outbound webhooks, a job scheduler with distributed leader election, and a zero-downtime SQLite→Postgres dual-write migration engine. It is hand-built, multi-phase product engineering — roughly 73K LOC of non-test TypeScript source backed by ~1,500 test cases — not a scaffold.
 
 The builder routes through `ProviderRouter` and supports **six BYOK providers** end-to-end: Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM provider that can talk to Ollama, vLLM, LM Studio, or llama.cpp — on `localhost` or on a separate GPU box on your LAN. Anthropic stays the default; operators can re-order priority with `TASKLOOM_PROVIDER_PRIORITY` or pick the `local` preset to force the local provider. Without any key configured, the builder falls back to deterministic template-only generation, which is enough to verify the loop but not enough to produce real apps from open-ended prompts.
 
@@ -22,7 +22,6 @@ Taskloom's headline is "self-host app builder," but the surrounding platform is 
 - **AES-256-GCM secrets vault** (`src/security/vault.ts`). PBKDF2 100k iterations, auth-tag validation, masking, and a production `MASTER_KEY` enforcement guard. Backs the Integrations secret store.
 - **Zero-downtime SQLite→Postgres dual-write migration engine** (`src/repositories/*`, `src/db/`). Per-entity repositories (jobs, agent-runs, activities, alert-events, provider-calls, invitation-email-deliveries) with `*-read.ts` read models, dual-write handlers, and `*.dual-write.test.ts` + `*.read-parity.test.ts` suites proving SQLite/Postgres parity. `src/db/postgres-client.ts` pools connections; `db:backfill-*` / `db:verify-*` scripts cover 8+ entity types. 17 SQL migrations in `src/db/migrations`.
 - **Distributed job scheduler** (`src/jobs/`). Persisted queue with five-field cron, exponential retry, and dead-letter — plus three leader-election strategies for multi-node coordination: a file TTL lock (`scheduler-lock.ts`), an HTTP coordinator (`scheduler-http-coordinator.ts`), and a noop, selected via `scheduler-leader-selection.ts`. Registers cron, metrics-snapshot, and alert evaluate/deliver job types.
-- **Release-readiness / evidence platform** (`src/deployment/`, `operations-status.ts`). A release-gating, runtime-guard, and topology-verification framework (~17K LOC) with its own CLIs (`deployment:check-*`, `release-evidence-cli`) that emit release-gating evidence bundles. Managed-database topology and runtime guards, storage-topology checks, and release-evidence reporting back the Releases / Operations admin surfaces.
 - **Integration connector verifier** (`src/codegen/integration-sandbox.ts`). Deterministically pre-flights model / db / email / webhook / payment / github / browser connector readiness before preview/runtime.
 - **RBAC, webhooks, share links, activation analytics.** `rbac.ts` (viewer/member/admin/owner, server-enforced), API-key auth, inbound webhooks that trigger agent runs, outbound webhooks (alerts + invitation-email delivery) with retry/dead-letter/signing, public share links, and an onboarding/activation analytics subsystem (`src/activation/*`).
 
@@ -57,7 +56,7 @@ Taskloom is not trying to match hosted AI app builders (twin.so, Replit Agents, 
 
 ## Why Taskloom
 
-Most prompt-to-app builders are hosted SaaS that own your data, your runtime, your model relationships, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, behind your VPN, or on a colo box you own. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, audit, and release-readiness tooling included.
+Most prompt-to-app builders are hosted SaaS that own your data, your runtime, your model relationships, and your users. Taskloom is the opposite: a single Node app you can run on your laptop, in a container, behind your VPN, or on a colo box you own. The same workbench you use to draft an idea is the workbench your team uses to operate the result — agents, runs, secrets, webhooks, RBAC, and audit included.
 
 This is a deliberate category split. If a free public URL, pre-wired OAuth connectors, or one-click App Store submission is what you actually need, a hosted vendor will serve you better — those features are structurally easier when a vendor owns the runtime. See [CLOUD.md](CLOUD.md) for a full inventory of what self-host gives up. If instead you want to own your data, your source code, and your LLM key end-to-end with no vendor in the path, Taskloom is built for that.
 
@@ -149,7 +148,6 @@ You can also register a new account from the sign-up page. To reset local data b
 - **Audit log** for workspace actions, role changes, and sensitive mutations.
 - **Webhooks in and out.** Inbound public webhooks trigger agent runs; outbound webhooks deliver alerts and invitation events with retry, dead-letter, and shared-secret signing.
 - **Persistent jobs queue + cron + distributed leader election.** Five-field cron for any registered job type, exponential retry, dead-letter, plus three leader-election strategies (file TTL lock, HTTP coordinator, noop) for multi-process / multi-node deployments.
-- **Release-readiness & evidence tooling.** A release-gating / runtime-guard / topology-verification framework (`src/deployment/`, `operations-status.ts`) with CLIs (`deployment:check-*`, `release-evidence-cli`) that emit release-gating evidence bundles — surfaced through the Releases and Operations admin tabs.
 - **Alert engine.** `evaluateAlerts` + a delivery pipeline with metrics snapshots, scheduled as job types.
 - **SSE run streaming** for live transcripts and tool-call output.
 - **RBAC** with viewer / member / admin / owner roles, enforced server-side, plus API-key auth.
@@ -169,7 +167,7 @@ Taskloom runs on Node's built-in `node:sqlite` (`DatabaseSync`, WAL, foreign key
 
 - **Per-entity repositories** (`src/repositories/*`) for jobs, agent-runs, activities, alert-events, provider-calls, and invitation-email-deliveries, each with a `*-read.ts` read model.
 - **Dual-write handlers** that write to both SQLite and Postgres during migration, with `*.dual-write.test.ts` and `*.read-parity.test.ts` suites proving the two stores stay in parity.
-- **Pooled Postgres client** (`src/db/postgres-client.ts`) plus managed-database topology and runtime-guard checks under `src/deployment/`.
+- **Pooled Postgres client** (`src/db/postgres-client.ts`) plus a managed-database startup boot guard that enforces explicit opt-in before any Postgres writer is engaged.
 - **Backfill / verify CLIs** (`db:backfill-*`, `db:verify-*`) covering 8+ entity types, and 17 ordered SQL migrations in `src/db/migrations`.
 
 Managed Postgres is gated behind explicit startup flags; the distributed scheduler and these repositories are what make multi-node operation real rather than aspirational.
@@ -232,13 +230,13 @@ Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` / `GEMINI
 - **LLM layer.** `ProviderRouter` route-key dispatch over six BYOK clients, `preset-resolver` priority walking, and a cost `ledger`. A `stub` provider keeps the loop runnable with zero keys.
 - **Codegen + agents.** `src/codegen/` (plan/write/chunk orchestrator, path validator, derived-draft, app-builder/iteration services, generated-app runtime/workspace, preview/snapshot/publish-readiness) and `src/tools/` (agent loop, registry/executor, read/write/browser builtins, Playwright runtime) plus `src/sandbox/`.
 - **Persistence.** File-backed JSON for contributor flow; `node:sqlite` (WAL, foreign keys on, busy_timeout) for single-node; managed Postgres via per-entity repositories with dual-write + read-parity. 17 SQL migrations.
-- **Jobs / ops.** Persisted queue with five-field cron, exponential retry, dead-letter, three-way scheduler leader election, an alert engine, metrics snapshots, and a deployment release-readiness / evidence subsystem.
+- **Jobs / ops.** Persisted queue with five-field cron, exponential retry, dead-letter, three-way scheduler leader election, an alert engine, and metrics snapshots.
 
 ## Engineering & testing
 
-Taskloom is hand-crafted, senior-level TypeScript (ESM, Node ≥22.5): strict typing, narrow interfaces, dependency injection for testability (clock / spawn / prompt overrides), and consistent error redaction at the API boundary. Structure is feature-sliced (`providers/`, `tools/`, `jobs/`, `sandbox/`, `deployment/`, `repositories/`, `activation/`, `codegen/`, `security/`) with near-zero dead code.
+Taskloom is hand-crafted, senior-level TypeScript (ESM, Node ≥22.5): strict typing, narrow interfaces, dependency injection for testability (clock / spawn / prompt overrides), and consistent error redaction at the API boundary. Structure is feature-sliced (`providers/`, `tools/`, `jobs/`, `sandbox/`, `repositories/`, `activation/`, `codegen/`, `security/`) with near-zero dead code.
 
-Testing is first-class: **~1,500 test cases across ~143 test files** (node:test) — roughly a 0.7:1 test-to-source ratio — including SQLite/Postgres parity suites, async-boundary tests, and managed-Postgres transaction/concurrency tests. Biggest modules by LOC: `operations-status` (5,069), `taskloom-store` (4,941), `app-routes` (4,176), `release-readiness` (3,431), `app-builder-service` (3,255).
+Testing is first-class: **~1,500 test cases across ~143 test files** (node:test) — roughly a 0.7:1 test-to-source ratio — including SQLite/Postgres parity suites, async-boundary tests, and managed-Postgres transaction/concurrency tests. Biggest modules by LOC: `taskloom-store` (4,941), `app-routes` (4,176), `app-builder-service` (3,255).
 
 ## Development
 
@@ -286,7 +284,7 @@ npm run db:seed
 
 ## Project status
 
-Taskloom is in active development under the Fork B (self-host first) positioning. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox, release-readiness tooling) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates, backed by the dual-write migration engine; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
+Taskloom is in active development under the Fork B (self-host first) positioning. The builder loop (prompt-to-agent, prompt-to-app, scoped iteration, saved local preview, publish handoff) and the operate surface (workflows, runs, jobs, audit, secrets, webhooks, RBAC, sandbox) are stable and used end-to-end. Managed Postgres for horizontal app writers is supported behind explicit startup gates, backed by the dual-write migration engine; active-active multi-region writes, Taskloom-owned regional failover, hosted cloud deployment, and distributed SQLite are not.
 
 Multi-provider BYOK at the builder is done — six providers (Anthropic, OpenAI, Gemini, OpenRouter, MiniMax, and a generic local-LLM endpoint) route through `ProviderRouter`. File-tree codegen runs by default when a BYOK key is configured: plan-then-write orchestrator, chunked planning for larger apps, iteration parity, and `vite build` validation alongside `tsc --noEmit`. The remaining planned chunk — multi-round auto-fix on broken TypeScript, a real per-app SQLite runtime, a fuller outbound agent tool catalog, and the cross-cutting security hardening that goes with all of the above — is scoped in [docs/PHASE3_SCOPE.md](docs/PHASE3_SCOPE.md) (29–39 focused days, 6–9 calendar weeks for a solo engineer).
 

@@ -83,9 +83,6 @@ function WorkbenchInner() {
             <Route path="secrets" element={<Navigate to="/admin/secrets" replace />} />
             <Route path="rate-limits" element={<Navigate to="/admin/rate-limits" replace />} />
             <Route path="webhooks" element={<Navigate to="/admin/webhooks" replace />} />
-            <Route path="releases" element={<Navigate to="/admin/releases" replace />} />
-            <Route path="storage" element={<Navigate to="/admin/storage" replace />} />
-            <Route path="backups" element={<Navigate to="/admin/backups" replace />} />
             <Route path="notifications" element={<Navigate to="/admin/notifications" replace />} />
             <Route path="operations" element={<Navigate to="/admin/operations" replace />} />
             <Route path="integrations" element={<Navigate to="/admin/integrations" replace />} />

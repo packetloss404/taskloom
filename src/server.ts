@@ -435,12 +435,7 @@ if (existsSync("./web/dist/index.html")) {
 }
 
 export function assertServerStartupRuntimeSupported(env: NodeJS.ProcessEnv = process.env) {
-  return assertManagedDatabaseRuntimeSupported(env, {
-    phase51: {
-      remainingSyncCallSiteGroups: [],
-      managedPostgresStartupSupported: true,
-    },
-  });
+  return assertManagedDatabaseRuntimeSupported(env);
 }
 
 export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {

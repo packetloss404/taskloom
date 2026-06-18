@@ -17,281 +17,15 @@ function observedEnvValue(
   return entry;
 }
 
-const distributedRuntimePhase55Env = {
-  TASKLOOM_STORE: "postgres",
-  TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-  TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-  TASKLOOM_DATABASE_TOPOLOGY: "distributed",
-  TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
-  TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
-  TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
-  TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
-  TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
-  TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
-  TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
-  TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
-  TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
-  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "engineering-director",
-  TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
-  TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "docs/phase-55/scope.md",
-  TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety.md",
-} as const;
-
-const distributedRuntimePhase56DetailedEnv = {
-  ...distributedRuntimePhase55Env,
-  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN: "docs/phase-56/implementation.md",
-  TASKLOOM_MULTI_WRITER_ROLLOUT_PLAN: "docs/phase-56/rollout.md",
-  TASKLOOM_MULTI_WRITER_TEST_VALIDATION_PLAN: "docs/phase-56/test-validation.md",
-  TASKLOOM_MULTI_WRITER_DATA_SAFETY_PLAN: "docs/phase-56/data-safety.md",
-  TASKLOOM_MULTI_WRITER_CUTOVER_PLAN: "docs/phase-56/cutover.md",
-  TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE: "docs/phase-56/rollback-drill.md",
-} as const;
-
-const distributedRuntimePhase56BundledEnv = {
-  ...distributedRuntimePhase55Env,
-  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE: "docs/phase-56/readiness.md",
-  TASKLOOM_MULTI_WRITER_ROLLOUT_SAFETY_EVIDENCE: "docs/phase-56/rollout-safety.md",
-} as const;
-
-const distributedRuntimePhase57Env = {
-  TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK: "docs/phase-57/scope-lock.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_FEATURE_FLAG: "multi-writer-runtime-disabled",
-  TASKLOOM_MULTI_WRITER_VALIDATION_EVIDENCE: "docs/phase-57/validation.md",
-  TASKLOOM_MULTI_WRITER_MIGRATION_CUTOVER_LOCK: "docs/phase-57/migration-cutover-lock.md",
-  TASKLOOM_MULTI_WRITER_RELEASE_OWNER_SIGNOFF: "docs/phase-57/release-owner.md",
-} as const;
-
-const distributedRuntimePhase58Env = {
-  TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE: "docs/phase-58/runtime-implementation.md",
-  TASKLOOM_MULTI_WRITER_CONSISTENCY_VALIDATION_EVIDENCE: "docs/phase-58/consistency-validation.md",
-  TASKLOOM_MULTI_WRITER_FAILOVER_VALIDATION_EVIDENCE: "docs/phase-58/failover-validation.md",
-  TASKLOOM_MULTI_WRITER_DATA_INTEGRITY_VALIDATION_EVIDENCE: "docs/phase-58/data-integrity.md",
-  TASKLOOM_MULTI_WRITER_OPERATIONS_RUNBOOK: "docs/phase-58/operations-runbook.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF: "docs/phase-58/runtime-release-signoff.md",
-} as const;
-
-const distributedRuntimePhase59Env = {
-  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION: "docs/phase-59/decision.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER: "release-director",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ROLLOUT_WINDOW: "2026-05-05T02:00Z/2026-05-05T04:00Z",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_MONITORING_SIGNOFF: "docs/phase-59/monitoring.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_ABORT_PLAN: "docs/phase-59/abort-plan.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET: "REL-59",
-} as const;
-
-const distributedRuntimePhase60Env = {
-  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT: "docs/phase-60/implementation-present.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT: "docs/phase-60/support-statement.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_COMPATIBILITY_MATRIX: "docs/phase-60/compatibility-matrix.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_CUTOVER_EVIDENCE: "docs/phase-60/cutover-evidence.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_RELEASE_AUTOMATION_APPROVAL: "REL-AUTO-60",
-  TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE: "database-platform",
-} as const;
-
-const distributedRuntimePhase61Env = {
-  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION: "docs/phase-61/activation-decision.md",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER: "release-commander",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_WINDOW: "2026-05-06T02:00Z/2026-05-06T04:00Z",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_FLAG: "multi-writer-runtime-activation-disabled",
-  TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION: "REL-AUTO-61",
-} as const;
-
-const managedPostgresHorizontalWriterPhase62Env = {
-  TASKLOOM_STORE: "postgres",
-  TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-  TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-  TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
-  ...distributedRuntimePhase61Env,
-  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_HARDENING_IMPLEMENTATION:
-    "docs/phase-62/horizontal-writer-hardening.md",
-  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE:
-    "docs/phase-62/concurrency-tests.md",
-  TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE:
-    "docs/phase-62/transaction-retry.md",
-} as const;
-
-const managedPostgresHorizontalWriterPhase63Env = {
-  ...managedPostgresHorizontalWriterPhase62Env,
-  TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: "https://limits.example.com/taskloom/check",
-  TASKLOOM_SCHEDULER_LEADER_MODE: "http",
-  TASKLOOM_SCHEDULER_LEADER_HTTP_URL: "https://coord.example.com/taskloom/scheduler-leader",
-  TASKLOOM_ACCESS_LOG_MODE: "stdout",
-  TASKLOOM_DURABLE_JOB_EXECUTION_POSTURE: "managed-postgres-transactional-queue",
-  TASKLOOM_DURABLE_JOB_EXECUTION_EVIDENCE: "jobs://phase63/managed-postgres",
-  TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: "logs://phase63/stdout-shipper",
-  TASKLOOM_ALERT_EVALUATE_CRON: "*/5 * * * *",
-  TASKLOOM_ALERT_WEBHOOK_URL: "https://alerts.example.com/taskloom",
-  TASKLOOM_ALERT_DELIVERY_EVIDENCE: "alerts://phase63/webhook",
-  TASKLOOM_HEALTH_MONITORING_EVIDENCE: "monitoring://phase63/health",
-} as const;
-
-const managedPostgresHorizontalWriterPhase64Env = {
-  ...managedPostgresHorizontalWriterPhase63Env,
-  TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE: "docs/phase-64/backup-restore.md",
-  TASKLOOM_MANAGED_POSTGRES_PITR_REHEARSAL_EVIDENCE: "docs/phase-64/pitr-rehearsal.md",
-  TASKLOOM_MANAGED_POSTGRES_FAILOVER_REHEARSAL_EVIDENCE: "docs/phase-64/failover-rehearsal.md",
-  TASKLOOM_MANAGED_POSTGRES_DATA_INTEGRITY_VALIDATION_EVIDENCE: "docs/phase-64/data-integrity.md",
-  TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION: "RTO<=15m; RPO<=5m",
-} as const;
-
-const managedPostgresHorizontalWriterPhase65Env = {
-  ...managedPostgresHorizontalWriterPhase64Env,
-  TASKLOOM_CUTOVER_PREFLIGHT_STATUS: "passed",
-  TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE: "docs/phase-65/cutover-preflight.md",
-  TASKLOOM_ACTIVATION_DRY_RUN_STATUS: "passed",
-  TASKLOOM_ACTIVATION_DRY_RUN_EVIDENCE: "docs/phase-65/activation-dry-run.md",
-  TASKLOOM_POST_ACTIVATION_SMOKE_STATUS: "passed",
-  TASKLOOM_POST_ACTIVATION_SMOKE_EVIDENCE: "docs/phase-65/post-activation-smoke.md",
-  TASKLOOM_ROLLBACK_COMMAND_GUIDANCE: "npm run deployment:check-runtime-guard && rollback release REL-65",
-  TASKLOOM_MONITORING_THRESHOLDS: "5xx<1%; p95<750ms; job-lag<2m",
-} as const;
-
-const managedPostgresHorizontalWriterPhase66Env = {
-  ...managedPostgresHorizontalWriterPhase65Env,
-  TASKLOOM_FINAL_RELEASE_CLOSURE_STATUS: "passed",
-  TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE: "docs/phase-66/final-release-closure.md",
-  TASKLOOM_FINAL_RELEASE_CHECKLIST: "docs/phase-66/final-release-checklist.md",
-  TASKLOOM_RELEASE_APPROVAL: "REL-66",
-  TASKLOOM_DOCUMENTATION_FREEZE_ASSERTION: "docs/phase-66/documentation-freeze.md",
-  TASKLOOM_NO_HIDDEN_PHASE_ASSERTION: "docs/phase-66/no-hidden-phase.md",
-  TASKLOOM_FINAL_VERIFICATION_EVIDENCE: "docs/phase-66/final-validation.md",
-} as const;
-
-type Phase63DependencyKey =
-  | "distributedRateLimiting"
-  | "schedulerCoordination"
-  | "durableJobExecution"
-  | "accessLogShipping"
-  | "alertDelivery"
-  | "healthMonitoring";
-
-interface Phase63RuntimeGuardReportContract {
-  required: boolean;
-  phase62HorizontalWriterRuntimeSupported: boolean;
-  distributedRateLimitReady: boolean;
-  schedulerCoordinationReady: boolean;
-  durableJobExecutionPostureReady: boolean;
-  accessLogShippingConfigured: boolean;
-  alertDeliveryReady: boolean;
-  healthMonitoringConfigured: boolean;
-  distributedDependencyEnforcementReady: boolean;
-  dependencyEnforcementReady: boolean;
-  missingDependencies: Phase63DependencyKey[];
-  activationAllowed: boolean;
-  releaseAllowed: false;
-  strictBlocker: boolean;
-}
-
-function phase63Report(report: ReturnType<typeof assessManagedDatabaseRuntimeGuard>): Phase63RuntimeGuardReportContract {
-  const phase63 = (report as unknown as { phase63?: unknown }).phase63;
-  assert.ok(phase63 && typeof phase63 === "object", "expected Phase 63 dependency enforcement report");
-  return phase63 as Phase63RuntimeGuardReportContract;
-}
-
-interface Phase64RuntimeGuardReportContract {
-  required: boolean;
-  phase63DistributedDependencyEnforcementReady: boolean;
-  backupRestoreEvidenceConfigured: boolean;
-  pitrRehearsalEvidenceConfigured: boolean;
-  failoverRehearsalEvidenceConfigured: boolean;
-  dataIntegrityValidationEvidenceConfigured: boolean;
-  recoveryTimeExpectationConfigured: boolean;
-  recoveryValidationReady: boolean;
-  managedPostgresRecoveryClaimsValidated: boolean;
-  providerOwnedHaPitrRequired: true;
-  appOwnedRegionalFailoverSupported: false;
-  appOwnedPitrRuntimeSupported: false;
-  activeActiveSupported: false;
-  distributedSqliteSupported: false;
-  activationAllowed: boolean;
-  releaseAllowed: false;
-  strictBlocker: boolean;
-}
-
-function phase64Report(report: ReturnType<typeof assessManagedDatabaseRuntimeGuard>): Phase64RuntimeGuardReportContract {
-  const phase64 = (report as unknown as { phase64?: unknown }).phase64;
-  assert.ok(phase64 && typeof phase64 === "object", "expected Phase 64 recovery validation report");
-  return phase64 as Phase64RuntimeGuardReportContract;
-}
-
 test("local JSON runtime is allowed by default", () => {
   const report = assessManagedDatabaseRuntimeGuard({ env: {} });
 
-  assert.equal(report.phase, "46");
   assert.equal(report.allowed, true);
   assert.equal(report.status, "pass");
   assert.equal(report.classification, "local-json");
   assert.equal(report.observed.store, "json");
   assert.equal(report.observed.dbPath, null);
-  assert.equal(report.phase50?.asyncAdapterAvailable, false);
-  assert.equal(report.phase50?.backfillAvailable, false);
-  assert.equal(report.phase50?.syncStartupSupported, false);
-  assert.equal(report.phase51?.tracked, true);
-  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
-  assert.equal(report.phase51?.managedPostgresStartupSupported, false);
-  assert.deepEqual(report.phase51?.remainingSyncCallSiteGroups, []);
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase53?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase53?.requirementsEvidenceConfigured, false);
-  assert.equal(report.phase53?.designEvidenceConfigured, false);
-  assert.equal(report.phase53?.requirementsDesignGatePassed, true);
-  assert.equal(report.phase53?.runtimeSupport, false);
-  assert.equal(report.phase53?.strictBlocker, false);
-  assert.equal(report.phase54?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase54?.topologyOwnerConfigured, false);
-  assert.equal(report.phase54?.consistencyModelConfigured, false);
-  assert.equal(report.phase54?.failoverPitrPlanConfigured, false);
-  assert.equal(report.phase54?.migrationBackfillPlanConfigured, false);
-  assert.equal(report.phase54?.observabilityPlanConfigured, false);
-  assert.equal(report.phase54?.rollbackPlanConfigured, false);
-  assert.equal(report.phase54?.designPackageGatePassed, true);
-  assert.equal(report.phase54?.runtimeSupport, false);
-  assert.equal(report.phase54?.strictBlocker, false);
-  assert.equal(report.phase55?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase55?.designReviewerConfigured, false);
-  assert.equal(report.phase55?.implementationApproverConfigured, false);
-  assert.equal(report.phase55?.reviewStatus, null);
-  assert.equal(report.phase55?.reviewStatusConfigured, false);
-  assert.equal(report.phase55?.reviewStatusApproved, false);
-  assert.equal(report.phase55?.approvedImplementationScopeConfigured, false);
-  assert.equal(report.phase55?.safetySignoffConfigured, false);
-  assert.equal(report.phase55?.implementationAuthorizationGatePassed, true);
-  assert.equal(report.phase55?.runtimeSupport, false);
-  assert.equal(report.phase55?.strictBlocker, false);
-  assert.equal(report.phase56?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase56?.implementationAuthorizationGatePassed, true);
-  assert.equal(report.phase56?.implementationPlanConfigured, false);
-  assert.equal(report.phase56?.rolloutPlanConfigured, false);
-  assert.equal(report.phase56?.testValidationPlanConfigured, false);
-  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
-  assert.equal(report.phase56?.cutoverPlanConfigured, false);
-  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
-  assert.equal(report.phase56?.implementationReadinessGatePassed, true);
-  assert.equal(report.phase56?.runtimeSupport, false);
-  assert.equal(report.phase56?.strictBlocker, false);
-  assert.equal(report.phase57?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase57?.implementationReadinessGatePassed, true);
-  assert.equal(report.phase57?.implementationScopeLockConfigured, false);
-  assert.equal(report.phase57?.runtimeFeatureFlagConfigured, false);
-  assert.equal(report.phase57?.validationEvidenceConfigured, false);
-  assert.equal(report.phase57?.migrationCutoverLockConfigured, false);
-  assert.equal(report.phase57?.releaseOwnerSignoffConfigured, false);
-  assert.equal(report.phase57?.implementationScopeGatePassed, true);
-  assert.equal(report.phase57?.runtimeSupport, false);
-  assert.equal(report.phase57?.releaseAllowed, false);
-  assert.equal(report.phase57?.strictBlocker, false);
-  assert.equal(report.phase58?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase58?.implementationScopeGatePassed, true);
-  assert.equal(report.phase58?.runtimeImplementationEvidenceConfigured, false);
-  assert.equal(report.phase58?.consistencyValidationEvidenceConfigured, false);
-  assert.equal(report.phase58?.failoverValidationEvidenceConfigured, false);
-  assert.equal(report.phase58?.dataIntegrityValidationEvidenceConfigured, false);
-  assert.equal(report.phase58?.operationsRunbookConfigured, false);
-  assert.equal(report.phase58?.runtimeReleaseSignoffConfigured, false);
-  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
-  assert.equal(report.phase58?.runtimeSupport, false);
-  assert.equal(report.phase58?.releaseAllowed, false);
-  assert.equal(report.phase58?.strictBlocker, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("local JSON"));
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
@@ -310,9 +44,17 @@ test("single-node SQLite runtime is allowed", () => {
   assert.equal(report.observed.store, "sqlite");
   assert.equal(report.observed.dbPath, "/srv/taskloom/taskloom.sqlite");
   assert.equal(report.observed.databaseTopology, "single-node-sqlite");
-  assert.equal(report.phase50?.asyncAdapterConfigured, false);
   assert.equal(report.blockers.length, 0);
   assert.ok(report.summary.includes("single-node SQLite"));
+});
+
+test("SQLite without TASKLOOM_DB_PATH warns about the default path", () => {
+  const report = assessManagedDatabaseRuntimeGuard({ env: { TASKLOOM_STORE: "sqlite" } });
+
+  assert.equal(report.allowed, true);
+  assert.equal(report.classification, "single-node-sqlite");
+  assert.equal(report.observed.dbPath, "data/taskloom.sqlite");
+  assert.ok(report.warnings.some((warning) => warning.includes("TASKLOOM_DB_PATH is not set")));
 });
 
 test("managed database URL is redacted and blocked", () => {
@@ -332,12 +74,12 @@ test("managed database URL is redacted and blocked", () => {
   assert.equal(urlEntry.redacted, true);
   assert.equal(urlEntry.value, "[redacted]");
   assert.equal(report.observed.databaseUrl, "[redacted]");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 52 managed Postgres startup support requires")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("recognized managed Postgres adapter")));
   assert.ok(report.warnings.some((warning) => warning.includes("redacted")));
   assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MANAGED_DATABASE_ADAPTER=postgres")));
 });
 
-test("Phase 50 postgres adapter and managed URL allow Phase 52 managed Postgres startup", () => {
+test("recognized postgres adapter and managed URL allow managed Postgres startup", () => {
   const report = assessManagedDatabaseRuntimeGuard({
     env: {
       TASKLOOM_STORE: "sqlite",
@@ -350,55 +92,19 @@ test("Phase 50 postgres adapter and managed URL allow Phase 52 managed Postgres 
   assert.equal(report.managedDatabaseRuntimeBlocked, false);
   assert.equal(report.status, "pass");
   assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase50?.asyncAdapterConfigured, true);
-  assert.equal(report.phase50?.asyncAdapterAvailable, true);
-  assert.equal(report.phase50?.backfillAvailable, true);
-  assert.equal(report.phase50?.syncStartupSupported, false);
-  assert.equal(report.phase50?.adapter, "postgres");
-  assert.equal(report.phase51?.runtimeCallSitesMigrated, true);
-  assert.equal(report.phase51?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase51?.strictBlocker, false);
-  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
-  assert.equal(report.phase52?.strictBlocker, false);
-  assert.equal(report.phase53?.multiWriterTopologyRequested, false);
-  assert.equal(report.phase53?.runtimeSupport, false);
-  assert.ok(report.phase51?.summary.includes("Phase 52 separately decides"));
   assert.equal(report.observed.managedDatabaseAdapter, "postgres");
-  assert.ok(report.summary.includes("Phase 52"));
   assert.equal(report.blockers.length, 0);
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 50 async managed adapter/backfill capability")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 52 managed Postgres startup support is asserted")));
-  assert.doesNotThrow(
-    () =>
-      assertManagedDatabaseRuntimeSupported({
-        TASKLOOM_STORE: "sqlite",
-        TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-        TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-      }),
-  );
-});
-
-test("Phase 51 incomplete migration blocks Phase 52 startup support", () => {
-  const report = assessManagedDatabaseRuntimeGuard({
-    env: {
+  assert.ok(report.summary.includes("managed Postgres"));
+  assert.doesNotThrow(() =>
+    assertManagedDatabaseRuntimeSupported({
       TASKLOOM_STORE: "sqlite",
       TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
       TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-    },
-    phase51: {
-      remainingSyncCallSiteGroups: ["startup-store"],
-    },
-  });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.phase51?.runtimeCallSitesMigrated, false);
-  assert.equal(report.phase51?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase51?.strictBlocker, true);
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 51 runtime call-site migration is complete")));
+    }),
+  );
 });
 
-test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () => {
+test("TASKLOOM_STORE=postgres without adapter is blocked at the managed runtime boundary", () => {
   const report = assessManagedDatabaseRuntimeGuard({
     env: {
       TASKLOOM_STORE: "postgres",
@@ -410,8 +116,7 @@ test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () =>
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-database-blocked");
   assert.equal(report.observed.store, "postgres");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("synchronous managed database runtime boundary")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("sync app startup path supported")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("managed database runtime boundary")));
   assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MANAGED_DATABASE_ADAPTER=postgres")));
   assert.throws(
     () =>
@@ -420,6 +125,22 @@ test("TASKLOOM_STORE=postgres is blocked at the managed runtime boundary", () =>
       }),
     ManagedDatabaseRuntimeGuardError,
   );
+});
+
+test("sync managed-postgres store without adapter throws (re-pointed multi-writer posture)", () => {
+  const env = {
+    TASKLOOM_STORE: "postgres",
+    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
+    TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+  } as const;
+  const report = assessManagedDatabaseRuntimeGuard({ env });
+
+  assert.equal(report.allowed, false);
+  assert.equal(report.managedDatabaseRuntimeBlocked, true);
+  assert.equal(report.status, "fail");
+  assert.equal(report.classification, "managed-database-blocked");
+  assert.ok(report.blockers.some((blocker) => blocker.includes("managed Postgres adapter")));
+  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
 });
 
 test("TASKLOOM_STORE=postgres is allowed when managed Postgres adapter and URL are configured", () => {
@@ -435,11 +156,10 @@ test("TASKLOOM_STORE=postgres is allowed when managed Postgres adapter and URL a
   assert.equal(report.status, "pass");
   assert.equal(report.classification, "managed-postgres");
   assert.equal(report.observed.store, "postgres");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
   assert.ok(report.checks.some((check) => check.id === "supported-runtime-store" && check.status === "pass"));
 });
 
-test("TASKLOOM_STORE=managed is blocked at the managed runtime boundary", () => {
+test("TASKLOOM_STORE=managed without adapter is blocked at the managed runtime boundary", () => {
   const report = assessManagedDatabaseRuntimeGuard({
     env: {
       TASKLOOM_STORE: "managed",
@@ -451,7 +171,7 @@ test("TASKLOOM_STORE=managed is blocked at the managed runtime boundary", () => 
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "managed-database-blocked");
   assert.equal(report.observed.store, "managed");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("sync app startup path supported")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("managed database runtime boundary")));
 });
 
 test("TASKLOOM_STORE=managed is allowed when managed Postgres adapter and URL are configured", () => {
@@ -467,7 +187,6 @@ test("TASKLOOM_STORE=managed is allowed when managed Postgres adapter and URL ar
   assert.equal(report.status, "pass");
   assert.equal(report.classification, "managed-postgres");
   assert.equal(report.observed.store, "managed");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
 });
 
 test("managed URL hints are redacted and block strict startup", () => {
@@ -489,7 +208,7 @@ test("managed URL hints are redacted and block strict startup", () => {
   assert.equal(managedUrl.redacted, true);
   assert.equal(taskloomDatabaseUrl.value, "[redacted]");
   assert.equal(taskloomDatabaseUrl.redacted, true);
-  assert.ok(report.warnings.some((warning) => warning.includes("require Phase 52 managed Postgres startup support")));
+  assert.ok(report.warnings.some((warning) => warning.includes("recognized managed Postgres adapter")));
   assert.throws(
     () =>
       assertManagedDatabaseRuntimeSupported({
@@ -500,1255 +219,21 @@ test("managed URL hints are redacted and block strict startup", () => {
   );
 });
 
-test("multi-writer topology is blocked", () => {
-  const report = assessManagedDatabaseRuntimeGuard({
-    env: {
-      TASKLOOM_STORE: "sqlite",
-      TASKLOOM_DATABASE_TOPOLOGY: "multi-writer",
-    },
-  });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.observed.databaseTopology, "multi-writer");
-  assert.equal(report.phase53?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase53?.requirementsEvidenceConfigured, false);
-  assert.equal(report.phase53?.designEvidenceConfigured, false);
-  assert.equal(report.phase53?.requirementsDesignGatePassed, false);
-  assert.equal(report.phase53?.runtimeSupport, false);
-  assert.equal(report.phase53?.strictBlocker, true);
-  assert.equal(report.phase54?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase54?.topologyOwnerConfigured, false);
-  assert.equal(report.phase54?.consistencyModelConfigured, false);
-  assert.equal(report.phase54?.failoverPitrPlanConfigured, false);
-  assert.equal(report.phase54?.migrationBackfillPlanConfigured, false);
-  assert.equal(report.phase54?.observabilityPlanConfigured, false);
-  assert.equal(report.phase54?.rollbackPlanConfigured, false);
-  assert.equal(report.phase54?.designPackageGatePassed, false);
-  assert.equal(report.phase54?.runtimeSupport, false);
-  assert.equal(report.phase54?.strictBlocker, true);
-  assert.equal(report.phase55?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase55?.designReviewerConfigured, false);
-  assert.equal(report.phase55?.implementationApproverConfigured, false);
-  assert.equal(report.phase55?.reviewStatusConfigured, false);
-  assert.equal(report.phase55?.reviewStatusApproved, false);
-  assert.equal(report.phase55?.approvedImplementationScopeConfigured, false);
-  assert.equal(report.phase55?.safetySignoffConfigured, false);
-  assert.equal(report.phase55?.implementationAuthorizationGatePassed, false);
-  assert.equal(report.phase55?.runtimeSupport, false);
-  assert.equal(report.phase55?.strictBlocker, true);
-  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase56?.implementationAuthorizationGatePassed, false);
-  assert.equal(report.phase56?.implementationPlanConfigured, false);
-  assert.equal(report.phase56?.rolloutPlanConfigured, false);
-  assert.equal(report.phase56?.testValidationPlanConfigured, false);
-  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
-  assert.equal(report.phase56?.cutoverPlanConfigured, false);
-  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
-  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
-  assert.equal(report.phase56?.runtimeSupport, false);
-  assert.equal(report.phase56?.strictBlocker, true);
-  assert.ok(report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"));
-  assert.ok(report.checks.some((check) => check.id === "phase53-multi-writer-design" && check.status === "fail"));
-  assert.ok(report.checks.some((check) => check.id === "phase54-multi-writer-design-package" && check.status === "fail"));
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase55-multi-writer-implementation-authorization" && check.status === "fail",
-    ),
-  );
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase56-multi-writer-implementation-readiness" && check.status === "fail",
-    ),
-  );
-  assert.ok(report.nextSteps.some((step) => step.includes("multi-writer runtime support")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_MULTI_WRITER_ROLLBACK_DRILL_EVIDENCE")));
-});
-
-test("active-active topology is blocked even with managed Postgres startup support", () => {
+test("unrecognized adapter does not unlock managed Postgres startup", () => {
   const report = assessManagedDatabaseRuntimeGuard({
     env: {
       TASKLOOM_STORE: "postgres",
-      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
+      TASKLOOM_MANAGED_DATABASE_ADAPTER: "mysql",
       TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-      TASKLOOM_DATABASE_TOPOLOGY: "active-active",
     },
   });
 
   assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase53?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase53?.runtimeSupport, false);
-  assert.ok(report.blockers.some((blocker) => blocker.includes("active-active")));
+  assert.equal(report.classification, "managed-database-blocked");
+  assert.ok(report.warnings.some((warning) => warning.includes("recognized postgres adapter value")));
 });
 
-test("distributed topology with Phase 53 and Phase 54 evidence remains blocked for runtime support", () => {
-  const report = assessManagedDatabaseRuntimeGuard({
-    env: {
-      TASKLOOM_STORE: "postgres",
-      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
-      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
-      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
-      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
-      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
-      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
-      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
-      TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
-      TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
-    },
-  });
-  const owner = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase53?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase53?.requirementsEvidenceConfigured, true);
-  assert.equal(report.phase53?.designEvidenceConfigured, true);
-  assert.equal(report.phase53?.requirementsDesignGatePassed, true);
-  assert.equal(report.phase53?.runtimeSupport, false);
-  assert.equal(report.phase53?.strictBlocker, false);
-  assert.equal(report.phase54?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase54?.topologyOwnerConfigured, true);
-  assert.equal(report.phase54?.consistencyModelConfigured, true);
-  assert.equal(report.phase54?.failoverPitrPlanConfigured, true);
-  assert.equal(report.phase54?.migrationBackfillPlanConfigured, true);
-  assert.equal(report.phase54?.observabilityPlanConfigured, true);
-  assert.equal(report.phase54?.rollbackPlanConfigured, true);
-  assert.equal(report.phase54?.designPackageGatePassed, true);
-  assert.equal(report.phase54?.runtimeSupport, false);
-  assert.equal(report.phase54?.strictBlocker, false);
-  assert.equal(report.phase55?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase55?.designReviewerConfigured, false);
-  assert.equal(report.phase55?.implementationApproverConfigured, false);
-  assert.equal(report.phase55?.reviewStatus, null);
-  assert.equal(report.phase55?.reviewStatusConfigured, false);
-  assert.equal(report.phase55?.reviewStatusApproved, false);
-  assert.equal(report.phase55?.approvedImplementationScopeConfigured, false);
-  assert.equal(report.phase55?.safetySignoffConfigured, false);
-  assert.equal(report.phase55?.implementationAuthorizationGatePassed, false);
-  assert.equal(report.phase55?.runtimeSupport, false);
-  assert.equal(report.phase55?.strictBlocker, true);
-  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase56?.implementationAuthorizationGatePassed, false);
-  assert.equal(report.phase56?.implementationPlanConfigured, false);
-  assert.equal(report.phase56?.rolloutPlanConfigured, false);
-  assert.equal(report.phase56?.testValidationPlanConfigured, false);
-  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
-  assert.equal(report.phase56?.cutoverPlanConfigured, false);
-  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
-  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
-  assert.equal(report.phase56?.runtimeSupport, false);
-  assert.equal(report.phase56?.strictBlocker, true);
-  assert.equal(owner.configured, true);
-  assert.equal(owner.value, "database-platform");
-  assert.equal(owner.redacted, false);
-  assert.ok(report.checks.some((check) => check.id === "phase53-multi-writer-design" && check.status === "pass"));
-  assert.ok(report.checks.some((check) => check.id === "phase54-multi-writer-design-package" && check.status === "pass"));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
-});
-
-test("distributed topology with Phase 55 authorization evidence still keeps runtime support blocked", () => {
-  const report = assessManagedDatabaseRuntimeGuard({
-    env: {
-      TASKLOOM_STORE: "postgres",
-      TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-      TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-      TASKLOOM_DATABASE_TOPOLOGY: "distributed",
-      TASKLOOM_MULTI_WRITER_REQUIREMENTS_EVIDENCE: "docs/phase-53/requirements.md",
-      TASKLOOM_MULTI_WRITER_DESIGN_EVIDENCE: "docs/phase-53/design.md",
-      TASKLOOM_MULTI_WRITER_TOPOLOGY_OWNER: "database-platform",
-      TASKLOOM_MULTI_WRITER_CONSISTENCY_MODEL: "docs/phase-54/consistency.md",
-      TASKLOOM_MULTI_WRITER_FAILOVER_PITR_PLAN: "docs/phase-54/failover-pitr.md",
-      TASKLOOM_MULTI_WRITER_MIGRATION_BACKFILL_PLAN: "docs/phase-54/migration-backfill.md",
-      TASKLOOM_MULTI_WRITER_OBSERVABILITY_PLAN: "docs/phase-54/observability.md",
-      TASKLOOM_MULTI_WRITER_ROLLBACK_PLAN: "docs/phase-54/rollback.md",
-      TASKLOOM_MULTI_WRITER_DESIGN_REVIEWER: "principal-architect",
-      TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER: "engineering-director",
-      TASKLOOM_MULTI_WRITER_REVIEW_STATUS: "approved",
-      TASKLOOM_MULTI_WRITER_APPROVED_IMPLEMENTATION_SCOPE: "docs/phase-55/scope.md",
-      TASKLOOM_MULTI_WRITER_SAFETY_SIGNOFF: "docs/phase-55/safety.md",
-    },
-  });
-  const approver = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_APPROVER");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase55?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase55?.designReviewerConfigured, true);
-  assert.equal(report.phase55?.implementationApproverConfigured, true);
-  assert.equal(report.phase55?.reviewStatus, "approved");
-  assert.equal(report.phase55?.reviewStatusConfigured, true);
-  assert.equal(report.phase55?.reviewStatusApproved, true);
-  assert.equal(report.phase55?.approvedImplementationScopeConfigured, true);
-  assert.equal(report.phase55?.safetySignoffConfigured, true);
-  assert.equal(report.phase55?.implementationAuthorizationGatePassed, true);
-  assert.equal(report.phase55?.runtimeSupport, false);
-  assert.equal(report.phase55?.strictBlocker, false);
-  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase56?.implementationAuthorizationGatePassed, true);
-  assert.equal(report.phase56?.implementationPlanConfigured, false);
-  assert.equal(report.phase56?.rolloutPlanConfigured, false);
-  assert.equal(report.phase56?.testValidationPlanConfigured, false);
-  assert.equal(report.phase56?.dataSafetyPlanConfigured, false);
-  assert.equal(report.phase56?.cutoverPlanConfigured, false);
-  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, false);
-  assert.equal(report.phase56?.implementationReadinessGatePassed, false);
-  assert.equal(report.phase56?.runtimeSupport, false);
-  assert.equal(report.phase56?.strictBlocker, true);
-  assert.equal(approver.configured, true);
-  assert.equal(approver.value, "engineering-director");
-  assert.equal(approver.redacted, false);
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase55-multi-writer-implementation-authorization" && check.status === "pass",
-    ),
-  );
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase56-multi-writer-implementation-readiness" && check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 56 requires")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
-});
-
-test("distributed topology with Phase 56 rollout-safety evidence still keeps runtime support blocked", () => {
-  const report = assessManagedDatabaseRuntimeGuard({
-    env: distributedRuntimePhase56DetailedEnv,
-  });
-  const implementationPlan = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_PLAN");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase55?.implementationAuthorizationGatePassed, true);
-  assert.equal(report.phase55?.runtimeSupport, false);
-  assert.equal(report.phase56?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase56?.implementationAuthorizationGatePassed, true);
-  assert.equal(report.phase56?.implementationPlanConfigured, true);
-  assert.equal(report.phase56?.rolloutPlanConfigured, true);
-  assert.equal(report.phase56?.testValidationPlanConfigured, true);
-  assert.equal(report.phase56?.dataSafetyPlanConfigured, true);
-  assert.equal(report.phase56?.cutoverPlanConfigured, true);
-  assert.equal(report.phase56?.rollbackDrillEvidenceConfigured, true);
-  assert.equal(report.phase56?.implementationReadinessGatePassed, true);
-  assert.equal(report.phase56?.runtimeSupport, false);
-  assert.equal(report.phase56?.strictBlocker, false);
-  assert.equal(report.phase57?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase57?.implementationReadinessGatePassed, true);
-  assert.equal(report.phase57?.implementationScopeLockConfigured, false);
-  assert.equal(report.phase57?.runtimeFeatureFlagConfigured, false);
-  assert.equal(report.phase57?.validationEvidenceConfigured, false);
-  assert.equal(report.phase57?.migrationCutoverLockConfigured, false);
-  assert.equal(report.phase57?.releaseOwnerSignoffConfigured, false);
-  assert.equal(report.phase57?.implementationScopeGatePassed, false);
-  assert.equal(report.phase57?.runtimeSupport, false);
-  assert.equal(report.phase57?.releaseAllowed, false);
-  assert.equal(report.phase57?.strictBlocker, true);
-  assert.equal(implementationPlan.configured, true);
-  assert.equal(implementationPlan.value, "docs/phase-56/implementation.md");
-  assert.equal(implementationPlan.redacted, false);
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase56-multi-writer-implementation-readiness" && check.status === "pass",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 57 requires")));
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase57-multi-writer-implementation-scope" && check.status === "fail",
-    ),
-  );
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 56")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 57 requires")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support remains blocked")));
-  assert.throws(
-    () =>
-      assertManagedDatabaseRuntimeSupported(distributedRuntimePhase56DetailedEnv),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("distributed topology with Phase 57 implementation scope evidence still does not allow runtime", () => {
-  const report = assessManagedDatabaseRuntimeGuard({
-    env: {
-      ...distributedRuntimePhase56BundledEnv,
-      ...distributedRuntimePhase57Env,
-    },
-  });
-  const scopeLock = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_SCOPE_LOCK");
-  const bundledReadiness = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_IMPLEMENTATION_READINESS_EVIDENCE",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase56?.implementationPlanConfigured, false);
-  assert.equal(report.phase56?.implementationReadinessEvidenceConfigured, true);
-  assert.equal(report.phase56?.rolloutSafetyEvidenceConfigured, true);
-  assert.equal(report.phase56?.implementationReadinessGatePassed, true);
-  assert.equal(report.phase56?.runtimeSupport, false);
-  assert.equal(report.phase57?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase57?.implementationReadinessGatePassed, true);
-  assert.equal(report.phase57?.implementationScopeLockConfigured, true);
-  assert.equal(report.phase57?.runtimeFeatureFlagConfigured, true);
-  assert.equal(report.phase57?.validationEvidenceConfigured, true);
-  assert.equal(report.phase57?.migrationCutoverLockConfigured, true);
-  assert.equal(report.phase57?.releaseOwnerSignoffConfigured, true);
-  assert.equal(report.phase57?.implementationScopeGatePassed, true);
-  assert.equal(report.phase57?.runtimeSupport, false);
-  assert.equal(report.phase57?.releaseAllowed, false);
-  assert.equal(report.phase57?.strictBlocker, false);
-  assert.equal(report.phase58?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase58?.implementationScopeGatePassed, true);
-  assert.equal(report.phase58?.runtimeImplementationEvidenceConfigured, false);
-  assert.equal(report.phase58?.consistencyValidationEvidenceConfigured, false);
-  assert.equal(report.phase58?.failoverValidationEvidenceConfigured, false);
-  assert.equal(report.phase58?.dataIntegrityValidationEvidenceConfigured, false);
-  assert.equal(report.phase58?.operationsRunbookConfigured, false);
-  assert.equal(report.phase58?.runtimeReleaseSignoffConfigured, false);
-  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, false);
-  assert.equal(report.phase58?.runtimeSupport, false);
-  assert.equal(report.phase58?.releaseAllowed, false);
-  assert.equal(report.phase58?.strictBlocker, true);
-  assert.equal(scopeLock.configured, true);
-  assert.equal(scopeLock.value, "docs/phase-57/scope-lock.md");
-  assert.equal(scopeLock.redacted, false);
-  assert.equal(bundledReadiness.configured, true);
-  assert.equal(bundledReadiness.value, "docs/phase-56/readiness.md");
-  assert.equal(bundledReadiness.redacted, false);
-  assert.ok(
-    report.checks.some(
-      (check) => check.id === "phase57-multi-writer-implementation-scope" && check.status === "pass",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("distributed")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 58 requires")));
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase58-multi-writer-runtime-implementation-validation" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE"),
-    ),
-  );
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 57")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 58 requires")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
-  assert.throws(
-    () =>
-      assertManagedDatabaseRuntimeSupported({
-        ...distributedRuntimePhase56BundledEnv,
-        ...distributedRuntimePhase57Env,
-      }),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("distributed topology with Phase 58 runtime implementation evidence records validation but remains blocked", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const runtimeEvidence = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_IMPLEMENTATION_EVIDENCE",
-  );
-  const releaseSignoff = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_RUNTIME_RELEASE_SIGNOFF");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase57?.implementationScopeGatePassed, true);
-  assert.equal(report.phase57?.runtimeSupport, false);
-  assert.equal(report.phase57?.releaseAllowed, false);
-  assert.equal(report.phase58?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase58?.implementationScopeGatePassed, true);
-  assert.equal(report.phase58?.runtimeImplementationEvidenceConfigured, true);
-  assert.equal(report.phase58?.consistencyValidationEvidenceConfigured, true);
-  assert.equal(report.phase58?.failoverValidationEvidenceConfigured, true);
-  assert.equal(report.phase58?.dataIntegrityValidationEvidenceConfigured, true);
-  assert.equal(report.phase58?.operationsRunbookConfigured, true);
-  assert.equal(report.phase58?.runtimeReleaseSignoffConfigured, true);
-  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
-  assert.equal(report.phase58?.runtimeSupport, false);
-  assert.equal(report.phase58?.releaseAllowed, false);
-  assert.equal(report.phase58?.strictBlocker, true);
-  assert.equal(runtimeEvidence.configured, true);
-  assert.equal(runtimeEvidence.value, "docs/phase-58/runtime-implementation.md");
-  assert.equal(runtimeEvidence.redacted, false);
-  assert.equal(releaseSignoff.configured, true);
-  assert.equal(releaseSignoff.value, "docs/phase-58/runtime-release-signoff.md");
-  assert.equal(releaseSignoff.redacted, false);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase58-multi-writer-runtime-implementation-validation" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 58")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 58")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("Phase 58 records implementation validation evidence only"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("distributed topology with Phase 58 complete requires Phase 59 release-enable approval evidence", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const decision = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
-  assert.equal(report.phase59?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase59?.runtimeImplementationValidationGatePassed, true);
-  assert.equal(report.phase59?.runtimeEnablementDecisionConfigured, false);
-  assert.equal(report.phase59?.runtimeEnablementApproverConfigured, false);
-  assert.equal(report.phase59?.runtimeEnablementRolloutWindowConfigured, false);
-  assert.equal(report.phase59?.runtimeEnablementMonitoringSignoffConfigured, false);
-  assert.equal(report.phase59?.runtimeEnablementAbortPlanConfigured, false);
-  assert.equal(report.phase59?.runtimeEnablementReleaseTicketConfigured, false);
-  assert.equal(report.phase59?.runtimeReleaseEnablementApprovalGatePassed, false);
-  assert.equal(report.phase59?.runtimeSupport, false);
-  assert.equal(report.phase59?.runtimeSupported, false);
-  assert.equal(report.phase59?.multiWriterSupported, false);
-  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
-  assert.equal(report.phase59?.runtimeSupportBlocked, true);
-  assert.equal(report.phase59?.releaseAllowed, false);
-  assert.equal(report.phase59?.strictBlocker, true);
-  assert.equal(decision.configured, false);
-  assert.equal(decision.value, null);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase59-multi-writer-runtime-release-enable-approval" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 59 requires complete Phase 58")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_DECISION"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("distributed topology with Phase 59 release-enable approval evidence still remains blocked", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const approver = observedEnvValue(report, "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_APPROVER");
-  const releaseTicket = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_ENABLEMENT_RELEASE_TICKET",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase58?.runtimeImplementationValidationGatePassed, true);
-  assert.equal(report.phase59?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase59?.runtimeImplementationValidationGatePassed, true);
-  assert.equal(report.phase59?.runtimeEnablementDecisionConfigured, true);
-  assert.equal(report.phase59?.runtimeEnablementApproverConfigured, true);
-  assert.equal(report.phase59?.runtimeEnablementRolloutWindowConfigured, true);
-  assert.equal(report.phase59?.runtimeEnablementMonitoringSignoffConfigured, true);
-  assert.equal(report.phase59?.runtimeEnablementAbortPlanConfigured, true);
-  assert.equal(report.phase59?.runtimeEnablementReleaseTicketConfigured, true);
-  assert.equal(report.phase59?.runtimeReleaseEnablementApprovalGatePassed, true);
-  assert.equal(report.phase59?.runtimeSupport, false);
-  assert.equal(report.phase59?.runtimeSupported, false);
-  assert.equal(report.phase59?.multiWriterSupported, false);
-  assert.equal(report.phase59?.runtimeImplementationBlocked, true);
-  assert.equal(report.phase59?.runtimeSupportBlocked, true);
-  assert.equal(report.phase59?.releaseAllowed, false);
-  assert.equal(report.phase59?.strictBlocker, true);
-  assert.equal(approver.configured, true);
-  assert.equal(approver.value, "release-director");
-  assert.equal(approver.redacted, false);
-  assert.equal(releaseTicket.configured, true);
-  assert.equal(releaseTicket.value, "REL-59");
-  assert.equal(releaseTicket.redacted, false);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase59-multi-writer-runtime-release-enable-approval" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 59")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 59")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("Phase 59 records release-enable approval evidence only"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("distributed topology with Phase 59 complete requires Phase 60 runtime support presence assertion evidence", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const implementationPresent = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase59?.runtimeReleaseEnablementApprovalGatePassed, true);
-  assert.equal(report.phase60?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase60?.runtimeReleaseEnablementApprovalGatePassed, true);
-  assert.equal(report.phase60?.runtimeSupportImplementationPresentConfigured, false);
-  assert.equal(report.phase60?.runtimeSupportExplicitSupportStatementConfigured, false);
-  assert.equal(report.phase60?.runtimeSupportCompatibilityMatrixConfigured, false);
-  assert.equal(report.phase60?.runtimeSupportCutoverEvidenceConfigured, false);
-  assert.equal(report.phase60?.runtimeSupportReleaseAutomationApprovalConfigured, false);
-  assert.equal(report.phase60?.runtimeSupportOwnerAcceptanceConfigured, false);
-  assert.equal(report.phase60?.runtimeSupportPresenceAssertionGatePassed, false);
-  assert.equal(report.phase60?.runtimeSupport, false);
-  assert.equal(report.phase60?.runtimeSupported, false);
-  assert.equal(report.phase60?.multiWriterSupported, false);
-  assert.equal(report.phase60?.runtimeImplementationBlocked, true);
-  assert.equal(report.phase60?.runtimeSupportBlocked, true);
-  assert.equal(report.phase60?.releaseAllowed, false);
-  assert.equal(report.phase60?.strictBlocker, true);
-  assert.equal(implementationPresent.configured, false);
-  assert.equal(implementationPresent.value, null);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase60-multi-writer-runtime-support-presence-assertion" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 60 requires complete Phase 59")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_IMPLEMENTATION_PRESENT"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("distributed topology with Phase 60 runtime support presence assertion evidence still remains blocked", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-    ...distributedRuntimePhase60Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const supportStatement = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_EXPLICIT_SUPPORT_STATEMENT",
-  );
-  const ownerAcceptance = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_SUPPORT_OWNER_ACCEPTANCE",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase59?.runtimeReleaseEnablementApprovalGatePassed, true);
-  assert.equal(report.phase60?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase60?.runtimeReleaseEnablementApprovalGatePassed, true);
-  assert.equal(report.phase60?.runtimeSupportImplementationPresentConfigured, true);
-  assert.equal(report.phase60?.runtimeSupportExplicitSupportStatementConfigured, true);
-  assert.equal(report.phase60?.runtimeSupportCompatibilityMatrixConfigured, true);
-  assert.equal(report.phase60?.runtimeSupportCutoverEvidenceConfigured, true);
-  assert.equal(report.phase60?.runtimeSupportReleaseAutomationApprovalConfigured, true);
-  assert.equal(report.phase60?.runtimeSupportOwnerAcceptanceConfigured, true);
-  assert.equal(report.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
-  assert.equal(report.phase60?.runtimeSupport, false);
-  assert.equal(report.phase60?.runtimeSupported, false);
-  assert.equal(report.phase60?.multiWriterSupported, false);
-  assert.equal(report.phase60?.runtimeImplementationBlocked, true);
-  assert.equal(report.phase60?.runtimeSupportBlocked, true);
-  assert.equal(report.phase60?.releaseAllowed, false);
-  assert.equal(report.phase60?.strictBlocker, true);
-  assert.equal(supportStatement.configured, true);
-  assert.equal(supportStatement.value, "docs/phase-60/support-statement.md");
-  assert.equal(supportStatement.redacted, false);
-  assert.equal(ownerAcceptance.configured, true);
-  assert.equal(ownerAcceptance.value, "database-platform");
-  assert.equal(ownerAcceptance.redacted, false);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase60-multi-writer-runtime-support-presence-assertion" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 60")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 60")));
-  assert.ok(report.warnings.some((warning) => warning.includes("runtime support and release remain blocked")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("Phase 60 records runtime support presence assertion evidence only"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("distributed topology with Phase 60 complete requires Phase 61 runtime activation controls", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-    ...distributedRuntimePhase60Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const activationDecision = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase60?.runtimeSupportPresenceAssertionGatePassed, true);
-  assert.equal(report.phase61?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase61?.runtimeSupportPresenceAssertionGatePassed, true);
-  assert.equal(report.phase61?.runtimeActivationDecisionConfigured, false);
-  assert.equal(report.phase61?.runtimeActivationOwnerConfigured, false);
-  assert.equal(report.phase61?.runtimeActivationWindowConfigured, false);
-  assert.equal(report.phase61?.runtimeActivationFlagConfigured, false);
-  assert.equal(report.phase61?.runtimeActivationReleaseAutomationAssertionConfigured, false);
-  assert.equal(report.phase61?.activationControlsReady, false);
-  assert.equal(report.phase61?.activationGatePassed, false);
-  assert.equal(report.phase61?.runtimeSupported, false);
-  assert.equal(report.phase61?.releaseAllowed, false);
-  assert.equal(report.phase61?.strictBlocker, true);
-  assert.equal(activationDecision.configured, false);
-  assert.equal(activationDecision.value, null);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase61-multi-writer-runtime-activation-controls" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 61 requires complete Phase 60")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_DECISION"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("distributed topology with Phase 61 activation controls records readiness but still blocks runtime", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-    ...distributedRuntimePhase60Env,
-    ...distributedRuntimePhase61Env,
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-  const activationOwner = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_OWNER",
-  );
-  const activationAutomation = observedEnvValue(
-    report,
-    "TASKLOOM_MULTI_WRITER_RUNTIME_ACTIVATION_RELEASE_AUTOMATION_ASSERTION",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase61?.runtimeSupportPresenceAssertionGatePassed, true);
-  assert.equal(report.phase61?.runtimeActivationDecisionConfigured, true);
-  assert.equal(report.phase61?.runtimeActivationOwnerConfigured, true);
-  assert.equal(report.phase61?.runtimeActivationWindowConfigured, true);
-  assert.equal(report.phase61?.runtimeActivationFlagConfigured, true);
-  assert.equal(report.phase61?.runtimeActivationReleaseAutomationAssertionConfigured, true);
-  assert.equal(report.phase61?.activationControlsReady, true);
-  assert.equal(report.phase61?.activationGatePassed, true);
-  assert.equal(report.phase61?.runtimeSupport, false);
-  assert.equal(report.phase61?.runtimeSupported, false);
-  assert.equal(report.phase61?.multiWriterSupported, false);
-  assert.equal(report.phase61?.runtimeImplementationBlocked, true);
-  assert.equal(report.phase61?.runtimeSupportBlocked, true);
-  assert.equal(report.phase61?.releaseAllowed, false);
-  assert.equal(report.phase61?.strictBlocker, true);
-  assert.equal(activationOwner.configured, true);
-  assert.equal(activationOwner.value, "release-commander");
-  assert.equal(activationOwner.redacted, false);
-  assert.equal(activationAutomation.configured, true);
-  assert.equal(activationAutomation.value, "REL-AUTO-61");
-  assert.equal(activationAutomation.redacted, false);
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 61")));
-  assert.ok(report.warnings.some((warning) => warning.includes("activation controls are ready")));
-  assert.ok(
-    report.nextSteps.some((step) => step.includes("Phase 61 records activation controls only")),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("Phase 61 activation controls do not bypass SQLite regional PITR runtime", () => {
-  const env = {
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-    ...distributedRuntimePhase60Env,
-    ...distributedRuntimePhase61Env,
-    TASKLOOM_STORE: "sqlite",
-    TASKLOOM_MANAGED_DATABASE_ADAPTER: undefined,
-    TASKLOOM_MANAGED_DATABASE_URL: undefined,
-    TASKLOOM_DATABASE_TOPOLOGY: "regional-pitr",
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.observed.databaseTopology, "regional-pitr");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, false);
-  assert.equal(report.phase61?.activationControlsReady, true);
-  assert.equal(report.phase61?.activationGatePassed, true);
-  assert.equal(report.phase61?.runtimeSupported, false);
-  assert.equal(report.phase61?.releaseAllowed, false);
-  assert.ok(
-    report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("multi-region")));
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("managed Postgres horizontal app-writer runtime requires Phase 61 controls and Phase 62 evidence", () => {
-  const env = {
-    TASKLOOM_STORE: "postgres",
-    TASKLOOM_MANAGED_DATABASE_ADAPTER: "postgres",
-    TASKLOOM_MANAGED_DATABASE_URL: "postgres://taskloom:secret@db.example.com/taskloom",
-    TASKLOOM_DATABASE_TOPOLOGY: "managed-postgres-horizontal-app-writers",
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
-  assert.equal(report.phase61?.activationControlsReady, false);
-  assert.equal(report.phase61?.activationGatePassed, true);
-  assert.equal(report.phase62?.horizontalWriterTopologyRequested, true);
-  assert.equal(report.phase62?.managedPostgresStartupSupported, true);
-  assert.equal(report.phase62?.phase61ActivationReady, false);
-  assert.equal(report.phase62?.horizontalWriterHardeningImplementationConfigured, false);
-  assert.equal(report.phase62?.horizontalWriterConcurrencyTestEvidenceConfigured, false);
-  assert.equal(report.phase62?.horizontalWriterTransactionRetryEvidenceConfigured, false);
-  assert.equal(report.phase62?.horizontalWriterHardeningReady, false);
-  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, false);
-  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
-  assert.equal(report.phase62?.activeActiveSupported, false);
-  assert.equal(report.phase62?.regionalFailoverSupported, false);
-  assert.equal(report.phase62?.pitrRuntimeSupported, false);
-  assert.equal(report.phase62?.distributedSqliteSupported, false);
-  assert.equal(report.phase62?.strictBlocker, true);
-  assert.ok(
-    report.checks.some(
-      (check) =>
-        check.id === "phase62-managed-postgres-horizontal-writer-hardening" &&
-        check.status === "fail",
-    ),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 62 requires Phase 61 activation controls")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE"),
-    ),
-  );
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("managed Postgres horizontal app-writer runtime is blocked until Phase 63 distributed dependencies", () => {
-  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase62Env });
-  const concurrencyEvidence = observedEnvValue(
-    report,
-    "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_CONCURRENCY_TEST_EVIDENCE",
-  );
-  const retryEvidence = observedEnvValue(
-    report,
-    "TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE",
-  );
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase52?.managedPostgresStartupSupported, true);
-  assert.equal(report.phase62?.horizontalWriterTopologyRequested, true);
-  assert.equal(report.phase62?.managedPostgresStartupSupported, true);
-  assert.equal(report.phase62?.phase61ActivationControlsReady, true);
-  assert.equal(report.phase62?.phase61ActivationGatePassed, true);
-  assert.equal(report.phase62?.phase61ActivationReady, true);
-  assert.equal(report.phase62?.horizontalWriterHardeningImplementationConfigured, true);
-  assert.equal(report.phase62?.horizontalWriterConcurrencyTestEvidenceConfigured, true);
-  assert.equal(report.phase62?.horizontalWriterTransactionRetryEvidenceConfigured, true);
-  assert.equal(report.phase62?.horizontalWriterHardeningReady, true);
-  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
-  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
-  assert.equal(report.phase62?.activeActiveSupported, false);
-  assert.equal(report.phase62?.regionalFailoverSupported, false);
-  assert.equal(report.phase62?.pitrRuntimeSupported, false);
-  assert.equal(report.phase62?.distributedSqliteSupported, false);
-  assert.equal(report.phase62?.strictBlocker, false);
-  assert.equal(report.phase63?.horizontalWriterTopologyRequested, true);
-  assert.equal(report.phase63?.phase62HorizontalWriterRuntimeSupported, true);
-  assert.equal(report.phase63?.distributedRateLimitReady, false);
-  assert.equal(report.phase63?.schedulerCoordinationReady, false);
-  assert.equal(report.phase63?.durableJobExecutionPostureReady, false);
-  assert.equal(report.phase63?.accessLogShippingConfigured, false);
-  assert.equal(report.phase63?.alertDeliveryReady, false);
-  assert.equal(report.phase63?.healthMonitoringConfigured, false);
-  assert.equal(report.phase63?.distributedDependencyEnforcementReady, false);
-  assert.equal(report.phase63?.activationAllowed, false);
-  assert.equal(report.phase63?.strictBlocker, true);
-  assert.equal(concurrencyEvidence.value, "docs/phase-62/concurrency-tests.md");
-  assert.equal(concurrencyEvidence.redacted, false);
-  assert.equal(retryEvidence.value, "docs/phase-62/transaction-retry.md");
-  assert.equal(retryEvidence.redacted, false);
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 63")));
-  assert.ok(report.warnings.some((warning) => warning.includes("horizontal app-writer")));
-  assert.ok(report.warnings.some((warning) => warning.includes("Phase 63")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL")));
-  assert.throws(
-    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase62Env),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("managed Postgres horizontal app-writer runtime is blocked until Phase 64 recovery validation", () => {
-  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase63Env });
-  const limiterUrl = observedEnvValue(report, "TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL");
-  const schedulerUrl = observedEnvValue(report, "TASKLOOM_SCHEDULER_LEADER_HTTP_URL");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
-  assert.equal(report.phase63?.horizontalWriterTopologyRequested, true);
-  assert.equal(report.phase63?.phase62HorizontalWriterRuntimeSupported, true);
-  assert.equal(report.phase63?.distributedRateLimitConfigured, true);
-  assert.equal(report.phase63?.distributedRateLimitFailClosed, true);
-  assert.equal(report.phase63?.distributedRateLimitReady, true);
-  assert.equal(report.phase63?.schedulerHttpLeaderConfigured, true);
-  assert.equal(report.phase63?.schedulerHttpLeaderFailClosed, true);
-  assert.equal(report.phase63?.schedulerCoordinationReady, true);
-  assert.equal(report.phase63?.durableJobExecutionPostureReady, true);
-  assert.equal(report.phase63?.accessLogShippingConfigured, true);
-  assert.equal(report.phase63?.alertEvaluationConfigured, true);
-  assert.equal(report.phase63?.alertDeliveryConfigured, true);
-  assert.equal(report.phase63?.alertDeliveryReady, true);
-  assert.equal(report.phase63?.healthMonitoringConfigured, true);
-  assert.equal(report.phase63?.distributedDependencyEnforcementReady, true);
-  assert.equal(report.phase63?.activationAllowed, true);
-  assert.equal(report.phase63?.strictBlocker, false);
-  assert.equal(report.phase64?.phase63DistributedDependencyEnforcementReady, true);
-  assert.equal(report.phase64?.backupRestoreEvidenceConfigured, false);
-  assert.equal(report.phase64?.pitrRehearsalEvidenceConfigured, false);
-  assert.equal(report.phase64?.failoverRehearsalEvidenceConfigured, false);
-  assert.equal(report.phase64?.dataIntegrityValidationEvidenceConfigured, false);
-  assert.equal(report.phase64?.recoveryTimeExpectationConfigured, false);
-  assert.equal(report.phase64?.recoveryValidationReady, false);
-  assert.equal(report.phase64?.managedPostgresRecoveryClaimsValidated, false);
-  assert.equal(report.phase64?.providerOwnedHaPitrRequired, true);
-  assert.equal(report.phase64?.appOwnedRegionalFailoverSupported, false);
-  assert.equal(report.phase64?.appOwnedPitrRuntimeSupported, false);
-  assert.equal(report.phase64?.activeActiveSupported, false);
-  assert.equal(report.phase64?.distributedSqliteSupported, false);
-  assert.equal(report.phase64?.activationAllowed, false);
-  assert.equal(report.phase64?.releaseAllowed, false);
-  assert.equal(report.phase64?.strictBlocker, true);
-  assert.equal(limiterUrl.value, "[redacted]");
-  assert.equal(limiterUrl.redacted, true);
-  assert.equal(schedulerUrl.value, "[redacted]");
-  assert.equal(schedulerUrl.redacted, true);
-  assert.ok(report.summary.includes("blocked"));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 64")));
-  assert.ok(
-    report.nextSteps.some((step) =>
-      step.includes("TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE"),
-    ),
-  );
-  assert.throws(
-    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase63Env),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("managed Postgres horizontal app-writer runtime is blocked until Phase 65 cutover automation", () => {
-  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase64Env });
-  const backupRestore = observedEnvValue(report, "TASKLOOM_MANAGED_POSTGRES_BACKUP_RESTORE_EVIDENCE");
-  const recoveryTime = observedEnvValue(report, "TASKLOOM_MANAGED_POSTGRES_RECOVERY_TIME_EXPECTATION");
-  const phase64 = phase64Report(report);
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase63?.distributedDependencyEnforcementReady, true);
-  assert.equal(phase64.required, true);
-  assert.equal(phase64.phase63DistributedDependencyEnforcementReady, true);
-  assert.equal(phase64.backupRestoreEvidenceConfigured, true);
-  assert.equal(phase64.pitrRehearsalEvidenceConfigured, true);
-  assert.equal(phase64.failoverRehearsalEvidenceConfigured, true);
-  assert.equal(phase64.dataIntegrityValidationEvidenceConfigured, true);
-  assert.equal(phase64.recoveryTimeExpectationConfigured, true);
-  assert.equal(phase64.recoveryValidationReady, true);
-  assert.equal(phase64.managedPostgresRecoveryClaimsValidated, true);
-  assert.equal(phase64.providerOwnedHaPitrRequired, true);
-  assert.equal(phase64.appOwnedRegionalFailoverSupported, false);
-  assert.equal(phase64.appOwnedPitrRuntimeSupported, false);
-  assert.equal(phase64.activeActiveSupported, false);
-  assert.equal(phase64.distributedSqliteSupported, false);
-  assert.equal(phase64.activationAllowed, true);
-  assert.equal(phase64.releaseAllowed, false);
-  assert.equal(phase64.strictBlocker, false);
-  assert.equal(backupRestore.value, "docs/phase-64/backup-restore.md");
-  assert.equal(backupRestore.redacted, false);
-  assert.equal(recoveryTime.value, "RTO<=15m; RPO<=5m");
-  assert.equal(recoveryTime.redacted, false);
-  assert.equal(report.phase65?.phase64RecoveryValidationReady, true);
-  assert.equal(report.phase65?.cutoverAutomationGatePassed, false);
-  assert.equal(report.phase65?.activationAllowed, false);
-  assert.equal(report.phase65?.operationsHealthStatus, "blocked");
-  assert.equal(report.phase65?.releaseEvidenceStatus, "blocked");
-  assert.equal(report.phase65?.finalReleaseApprovalGranted, false);
-  assert.equal(report.phase65?.releaseAllowed, false);
-  assert.ok(report.summary.includes("blocked"));
-  assert.ok(report.warnings.some((warning) => warning.includes("provider-owned HA/PITR")));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 65")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_CUTOVER_PREFLIGHT_STATUS=passed")));
-  assert.throws(
-    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase64Env),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("managed Postgres horizontal app-writer runtime requires Phase 66 closure after Phase 65 cutover automation", () => {
-  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase65Env });
-  const cutoverPreflight = observedEnvValue(report, "TASKLOOM_CUTOVER_PREFLIGHT_EVIDENCE");
-  const monitoringThresholds = observedEnvValue(report, "TASKLOOM_MONITORING_THRESHOLDS");
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase64?.recoveryValidationReady, true);
-  assert.equal(report.phase65?.required, true);
-  assert.equal(report.phase65?.phase64RecoveryValidationReady, true);
-  assert.equal(report.phase65?.cutoverPreflightPassed, true);
-  assert.equal(report.phase65?.activationDryRunPassed, true);
-  assert.equal(report.phase65?.postActivationSmokePassed, true);
-  assert.equal(report.phase65?.rollbackCommandGuidanceConfigured, true);
-  assert.equal(report.phase65?.monitoringThresholdsConfigured, true);
-  assert.equal(report.phase65?.rollbackRequired, false);
-  assert.equal(report.phase65?.cutoverAutomationGatePassed, true);
-  assert.equal(report.phase65?.activationAllowed, true);
-  assert.equal(report.phase65?.operationsHealthStatus, "ready");
-  assert.equal(report.phase65?.releaseEvidenceStatus, "ready");
-  assert.equal(report.phase65?.activeActiveSupported, false);
-  assert.equal(report.phase65?.appOwnedRegionalFailoverSupported, false);
-  assert.equal(report.phase65?.appOwnedPitrRuntimeSupported, false);
-  assert.equal(report.phase65?.distributedSqliteSupported, false);
-  assert.equal(report.phase65?.finalReleaseApprovalGranted, false);
-  assert.equal(report.phase65?.releaseAllowed, false);
-  assert.equal(report.phase66?.required, true);
-  assert.equal(report.phase66?.phase65CutoverAutomationGatePassed, true);
-  assert.equal(report.phase66?.finalReleaseClosureStatusPassed, true);
-  assert.equal(report.phase66?.finalReleaseClosureEvidenceConfigured, false);
-  assert.equal(report.phase66?.finalReleaseChecklistConfigured, false);
-  assert.equal(report.phase66?.releaseApprovalConfigured, false);
-  assert.equal(report.phase66?.documentationFreezeEvidenceConfigured, false);
-  assert.equal(report.phase66?.noHiddenPhaseAssertionConfigured, false);
-  assert.equal(report.phase66?.finalReleaseValidationEvidenceConfigured, false);
-  assert.equal(report.phase66?.finalReleaseClosureReady, false);
-  assert.equal(report.phase66?.activationAllowed, false);
-  assert.equal(report.phase66?.releaseAllowed, false);
-  assert.equal(report.phase66?.finalReleaseApprovalGranted, false);
-  assert.equal(cutoverPreflight.value, "docs/phase-65/cutover-preflight.md");
-  assert.equal(cutoverPreflight.redacted, false);
-  assert.equal(monitoringThresholds.value, "5xx<1%; p95<750ms; job-lag<2m");
-  assert.equal(monitoringThresholds.redacted, false);
-  assert.ok(report.summary.includes("blocked"));
-  assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 66")));
-  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE")));
-  assert.throws(
-    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase65Env),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("managed Postgres horizontal app-writer runtime is allowed after Phase 66 final release closure", () => {
-  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase66Env });
-  const closureEvidence = observedEnvValue(report, "TASKLOOM_FINAL_RELEASE_CLOSURE_EVIDENCE");
-  const validationEvidence = observedEnvValue(report, "TASKLOOM_FINAL_VERIFICATION_EVIDENCE");
-
-  assert.equal(report.allowed, true);
-  assert.equal(report.managedDatabaseRuntimeBlocked, false);
-  assert.equal(report.status, "pass");
-  assert.equal(report.classification, "managed-postgres");
-  assert.equal(report.phase65?.cutoverAutomationGatePassed, true);
-  assert.equal(report.phase66?.required, true);
-  assert.equal(report.phase66?.phase65CutoverAutomationGatePassed, true);
-  assert.equal(report.phase66?.finalReleaseClosureStatus, "passed");
-  assert.equal(report.phase66?.finalReleaseClosureStatusPassed, true);
-  assert.equal(report.phase66?.finalReleaseClosureEvidenceConfigured, true);
-  assert.equal(report.phase66?.finalReleaseChecklistConfigured, true);
-  assert.equal(report.phase66?.releaseApprovalConfigured, true);
-  assert.equal(report.phase66?.documentationFreezeEvidenceConfigured, true);
-  assert.equal(report.phase66?.noHiddenPhaseAssertionConfigured, true);
-  assert.equal(report.phase66?.finalReleaseValidationEvidenceConfigured, true);
-  assert.equal(report.phase66?.finalReleaseClosureReady, true);
-  assert.equal(report.phase66?.activationAllowed, true);
-  assert.equal(report.phase66?.releaseAllowed, true);
-  assert.equal(report.phase66?.finalReleaseApprovalGranted, true);
-  assert.equal(report.phase66?.activeActiveSupported, false);
-  assert.equal(report.phase66?.appOwnedRegionalFailoverSupported, false);
-  assert.equal(report.phase66?.appOwnedPitrRuntimeSupported, false);
-  assert.equal(report.phase66?.distributedSqliteSupported, false);
-  assert.equal(closureEvidence.value, "docs/phase-66/final-release-closure.md");
-  assert.equal(closureEvidence.redacted, false);
-  assert.equal(validationEvidence.value, "docs/phase-66/final-validation.md");
-  assert.equal(validationEvidence.redacted, false);
-  assert.ok(report.summary.includes("Phase 66"));
-  assert.equal(report.blockers.length, 0);
-  assert.doesNotThrow(() =>
-    assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase66Env),
-  );
-});
-
-test("Phase 65 failed preflight keeps horizontal activation blocked", () => {
-  const env = {
-    ...managedPostgresHorizontalWriterPhase65Env,
-    TASKLOOM_CUTOVER_PREFLIGHT_STATUS: "failed",
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.phase65?.cutoverPreflightFailed, true);
-  assert.equal(report.phase65?.cutoverPreflightPassed, false);
-  assert.equal(report.phase65?.rollbackRequired, true);
-  assert.equal(report.phase65?.activationAllowed, false);
-  assert.equal(report.phase65?.operationsHealthStatus, "rollback-required");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("failed preflight")));
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("Phase 65 failed smoke check blocks activation and records prior safe posture rollback", () => {
-  const env = {
-    ...managedPostgresHorizontalWriterPhase65Env,
-    TASKLOOM_POST_ACTIVATION_SMOKE_STATUS: "failed",
-    TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE: "docs/phase-65/smoke-rollback.md",
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.phase65?.postActivationSmokeFailed, true);
-  assert.equal(report.phase65?.postActivationSmokePassed, false);
-  assert.equal(report.phase65?.rollbackRequired, true);
-  assert.equal(report.phase65?.rollbackToPriorSafePostureReady, true);
-  assert.equal(report.phase65?.activationAllowed, false);
-  assert.equal(report.phase65?.operationsHealthStatus, "rollback-required");
-  assert.equal(observedEnvValue(report, "TASKLOOM_SMOKE_FAILURE_ROLLBACK_EVIDENCE").value, "docs/phase-65/smoke-rollback.md");
-  assert.ok(report.nextSteps.some((step) => step.includes("Keep activation blocked")));
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("Phase 63 distributed dependency enforcement blocks horizontal activation when any dependency is missing or local-only", () => {
-  const cases: Array<{
-    name: string;
-    env: NodeJS.ProcessEnv;
-    missingFlag: keyof Phase63RuntimeGuardReportContract;
-  }> = [
-    {
-      name: "distributed rate limiting missing",
-      env: { ...managedPostgresHorizontalWriterPhase63Env, TASKLOOM_DISTRIBUTED_RATE_LIMIT_URL: undefined },
-      missingFlag: "distributedRateLimitReady",
-    },
-    {
-      name: "scheduler coordination local-only",
-      env: { ...managedPostgresHorizontalWriterPhase63Env, TASKLOOM_SCHEDULER_LEADER_MODE: "file" },
-      missingFlag: "schedulerCoordinationReady",
-    },
-    {
-      name: "durable job execution posture missing Phase 62 hardening",
-      env: {
-        ...managedPostgresHorizontalWriterPhase63Env,
-        TASKLOOM_MANAGED_POSTGRES_HORIZONTAL_WRITER_TRANSACTION_RETRY_EVIDENCE: undefined,
-      },
-      missingFlag: "durableJobExecutionPostureReady",
-    },
-    {
-      name: "access log shipping local-only",
-      env: {
-        ...managedPostgresHorizontalWriterPhase63Env,
-        TASKLOOM_ACCESS_LOG_MODE: "file",
-        TASKLOOM_ACCESS_LOG_SHIPPING_EVIDENCE: undefined,
-      },
-      missingFlag: "accessLogShippingConfigured",
-    },
-    {
-      name: "alert delivery missing",
-      env: { ...managedPostgresHorizontalWriterPhase63Env, TASKLOOM_ALERT_WEBHOOK_URL: undefined },
-      missingFlag: "alertDeliveryReady",
-    },
-    {
-      name: "health monitoring missing",
-      env: { ...managedPostgresHorizontalWriterPhase63Env, TASKLOOM_HEALTH_MONITORING_EVIDENCE: undefined },
-      missingFlag: "healthMonitoringConfigured",
-    },
-  ];
-
-  for (const { name, env, missingFlag } of cases) {
-    const report = assessManagedDatabaseRuntimeGuard({ env });
-    const phase63 = phase63Report(report);
-
-    assert.equal(phase63[missingFlag], false, name);
-    assert.equal(phase63.distributedDependencyEnforcementReady, false, name);
-    assert.equal(phase63.activationAllowed, false, name);
-    assert.equal(phase63.strictBlocker, true, name);
-    assert.equal(report.allowed, false, name);
-    assert.ok(report.blockers.some((blocker) => blocker.includes("Phase 63")), name);
-    assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError, name);
-  }
-});
-
-test("Phase 63 distributed dependency enforcement allows activation posture only when all six dependencies are production-safe", () => {
-  const report = assessManagedDatabaseRuntimeGuard({ env: managedPostgresHorizontalWriterPhase63Env });
-  const phase63 = phase63Report(report);
-  const phase64 = phase64Report(report);
-
-  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, true);
-  assert.equal(phase63.phase62HorizontalWriterRuntimeSupported, true);
-  assert.equal(phase63.distributedRateLimitReady, true);
-  assert.equal(phase63.schedulerCoordinationReady, true);
-  assert.equal(phase63.durableJobExecutionPostureReady, true);
-  assert.equal(phase63.accessLogShippingConfigured, true);
-  assert.equal(phase63.alertDeliveryReady, true);
-  assert.equal(phase63.healthMonitoringConfigured, true);
-  assert.equal(phase63.distributedDependencyEnforcementReady, true);
-  assert.equal(phase63.activationAllowed, true);
-  assert.equal(phase63.strictBlocker, false);
-  assert.equal(phase64.recoveryValidationReady, false);
-  assert.equal(report.allowed, false);
-  assert.throws(
-    () => assertManagedDatabaseRuntimeSupported(managedPostgresHorizontalWriterPhase63Env),
-    ManagedDatabaseRuntimeGuardError,
-  );
-});
-
-test("Phase 62 horizontal app-writer evidence does not unblock active-active runtime", () => {
-  const env = {
-    ...managedPostgresHorizontalWriterPhase62Env,
-    ...distributedRuntimePhase56BundledEnv,
-    ...distributedRuntimePhase57Env,
-    ...distributedRuntimePhase58Env,
-    ...distributedRuntimePhase59Env,
-    ...distributedRuntimePhase60Env,
-    ...distributedRuntimePhase61Env,
-    TASKLOOM_DATABASE_TOPOLOGY: "active-active",
-  };
-  const report = assessManagedDatabaseRuntimeGuard({ env });
-
-  assert.equal(report.allowed, false);
-  assert.equal(report.managedDatabaseRuntimeBlocked, true);
-  assert.equal(report.status, "fail");
-  assert.equal(report.classification, "multi-writer-blocked");
-  assert.equal(report.phase62?.horizontalWriterTopologyRequested, false);
-  assert.equal(report.phase62?.horizontalWriterRuntimeSupported, false);
-  assert.equal(report.phase62?.activeActiveSupported, false);
-  assert.equal(report.phase62?.genericMultiWriterDatabaseSupported, false);
-  assert.equal(report.phase61?.multiWriterTopologyRequested, true);
-  assert.equal(report.phase61?.runtimeSupported, false);
-  assert.equal(report.phase61?.multiWriterSupported, false);
-  assert.ok(
-    report.checks.some((check) => check.id === "single-writer-runtime" && check.status === "fail"),
-  );
-  assert.ok(report.blockers.some((blocker) => blocker.includes("active-active")));
-  assert.throws(() => assertManagedDatabaseRuntimeSupported(env), ManagedDatabaseRuntimeGuardError);
-});
-
-test("unsupported store is blocked", () => {
+test("unsupported store is classified and blocked", () => {
   const report = assessManagedDatabaseRuntimeGuard({
     env: {
       TASKLOOM_STORE: "memory",
@@ -1759,10 +244,11 @@ test("unsupported store is blocked", () => {
   assert.equal(report.status, "fail");
   assert.equal(report.classification, "unsupported-store");
   assert.equal(report.observed.store, "memory");
-  assert.ok(report.blockers.some((blocker) => blocker.includes("TASKLOOM_STORE=memory")));
+  assert.ok(report.blockers.some((blocker) => blocker.includes("not a supported runtime storage mode")));
+  assert.ok(report.nextSteps.some((step) => step.includes("TASKLOOM_STORE=json")));
 });
 
-test("explicit bypass warns but allows assert helper to continue", () => {
+test("bypass flag downgrades a blocked managed runtime to a warning", () => {
   const report = assessManagedDatabaseRuntimeGuard({
     env: {
       TASKLOOM_STORE: "postgres",
@@ -1777,7 +263,8 @@ test("explicit bypass warns but allows assert helper to continue", () => {
   assert.equal(report.observed.bypassEnabled, true);
   assert.equal(observedEnvValue(report, "TASKLOOM_MANAGED_DATABASE_URL").value, "[redacted]");
   assert.ok(report.blockers.length > 0);
-  assert.ok(report.warnings.some((warning) => warning.includes("bypassed")));
+  assert.ok(report.warnings.some((warning) => warning.includes("bypassed the managed database runtime guard")));
+  assert.ok(report.summary.includes("bypassed"));
   assert.doesNotThrow(() =>
     assertManagedDatabaseRuntimeSupported({
       TASKLOOM_STORE: "postgres",
@@ -1790,13 +277,13 @@ test("assert helper throws when unsupported runtime is not bypassed", () => {
   assert.throws(
     () =>
       assertManagedDatabaseRuntimeSupported({
-        TASKLOOM_DATABASE_TOPOLOGY: "distributed",
+        TASKLOOM_STORE: "postgres",
+        TASKLOOM_DATABASE_URL: "postgres://taskloom:secret@taskloom.internal/app",
       }),
     (error) => {
       assert.ok(error instanceof ManagedDatabaseRuntimeGuardError);
-      assert.equal(error.report.phase, "46");
       assert.equal(error.report.allowed, false);
-      assert.equal(error.report.classification, "multi-writer-blocked");
+      assert.equal(error.report.classification, "managed-database-blocked");
       return true;
     },
   );
